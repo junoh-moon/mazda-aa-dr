@@ -126,6 +126,25 @@ class PackagingTests(unittest.TestCase):
         self.run_script('uninstall.sh')
         self.assertEqual(self.preload(), [TOUCH])
 
+    def test_bundle_manifest_is_checked_without_separate_user_command(self):
+        manifest = self.bundle / 'SHA256SUMS'
+        content = self.bundle / 'start_collector.sh'
+        manifest.write_text(hashlib.sha256(content.read_bytes()).hexdigest() + '  start_collector.sh\n')
+        self.run_script('install.sh')
+        self.run_script('uninstall.sh')
+        content.write_text(content.read_text() + '\n# synthetic damage\n')
+        result = self.run_script('install.sh', ok=False)
+        self.assertIn('Bundle checksum mismatch', result.stderr)
+        self.assertEqual(self.sm.read_bytes(), self.original)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+
+    def test_symlink_manifest_rejected_before_installation(self):
+        source = self.root / 'checksums'
+        source.write_text('')
+        (self.bundle / 'SHA256SUMS').symlink_to(source)
+        self.run_script('install.sh', ok=False)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+
     def test_existing_touch_multiline_and_repeat(self):
         self.add_touch(multiline=True)
         self.run_script('install.sh', '--mode=SCRUB')

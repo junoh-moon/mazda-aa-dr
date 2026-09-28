@@ -6,6 +6,11 @@
 
 [첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. 같은 실행 중인 SM의 재시도와 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
+이 브랜치의 설치 묶음은 CMU root 셸에서 압축을 푼 뒤 `sh ./install.sh` 한 줄로
+OBSERVE 설치·검사·일회성 예약을 수행한다. [한 줄 설치 설명](docs/ONE_COMMAND_INSTALL_KO.md).
+이미 배포한 `v0.2.0-observe.1` ZIP에는 아직 이 변경이 없으며, 그 ZIP의 명령은
+`sh ./install.sh --remount`다. 설치 성공 후 정상적인 전원 종료·다음 기동이 필요하다.
+
 ## 문서 읽는 순서
 
 1. [현재 상태와 인계](docs/STATUS_KO.md): 목표, 증거 수준, 구현 범위, 남은 일.
