@@ -1,0 +1,17 @@
+core tests: 1425 checks passed (synthetic fixtures; no vehicle claims)
+pipeline tests: core -> qualified bridge -> fake OEM, 8 exactly-once sends passed (synthetic only)
+Runtime config/SHA: 27 checks passed
+Journal tests: bounded rotation, open/flush/rotation/size failures and queue loss disable mutation
+Preload loader smoke: 400 concurrent non-target loads, null path and NOLOAD passed; no OEM module executed
+PASS observe
+PASS scrub
+PASS native
+PASS malformed
+PASS nested
+PASS assist
+PASS epoch
+PASS reacquire
+PASS expiry
+PASS encoder
+PASS backend
+PASS ARM veneer arguments, nested TLS correlation, r0-r3 return and errno
