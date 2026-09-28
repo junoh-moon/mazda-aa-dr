@@ -3,16 +3,26 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
 MODE=OBSERVE
 WITH_WCP=0
-ALLOW_REMOUNT=0
+# Running the installer authorizes the temporary writes it needs. Restore every
+# mount we changed in common.sh's exit trap, including on installation failure.
+ALLOW_REMOUNT=1
+[ -z "$ROOT" ] || ALLOW_REMOUNT=0 # Fixtures must never remount the host.
 for arg in "$@"; do
     case "$arg" in
       --with-wcp) WITH_WCP=1;;
       --remount) ALLOW_REMOUNT=1;;
+      --no-remount) ALLOW_REMOUNT=0;;
       --mode=OBSERVE|--mode=SCRUB|--mode=SHADOW|--mode=OFF) MODE=${arg#--mode=};;
       *) fail "Unknown option $arg (ASSIST is not deployable)";;
     esac
 done
 [ -z "$ROOT" ] || [ "$ALLOW_REMOUNT" = 0 ] || fail 'No remounts permitted for fixtures'
+# Published bundles carry a full manifest; developer bundles still use the
+# mandatory per-binary hashes below. Do not require a separate user command.
+if [ -e "$HERE/SHA256SUMS" ] || [ -L "$HERE/SHA256SUMS" ]; then
+    regular "$HERE/SHA256SUMS"
+    (cd "$HERE" && sha256sum -c SHA256SUMS) || fail 'Bundle checksum mismatch; no installation changes made'
+fi
 verify_firmware
 regular "$HERE/libmx5dr.so"
 regular "$HERE/libmx5dr.so.sha256"
@@ -118,3 +128,7 @@ else
     echo 'Fixture staged only; target guard not executed.'
 fi
 echo "Staged $MODE for one guarded boot. Persistent service configs retain existing touch only. No processes restarted."
+if [ -z "$ROOT" ] && [ "$MODE" = OBSERVE ]; then
+    echo 'Install steps finished. After successful command exit, power off normally and start again.'
+    echo 'The next guarded boot collects OBSERVE logs automatically; no driving-time commands are needed.'
+fi
