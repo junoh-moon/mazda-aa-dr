@@ -3,6 +3,7 @@
 #endif
 #include "../adapter/adapter.h"
 #include "config.h"
+#include "loader.h"
 #include "sha256.h"
 #include <dbus/dbus.h>
 #include <dlfcn.h>
@@ -25,12 +26,6 @@
 namespace {
 namespace A = mx5::adapter;
 const char *const ROOT = "/data_persist/mx5-aa-dr";
-const char *const BLM = "/jci/aapa/blmjciaapa.so";
-typedef void *(*Dlopen)(const char *, int);
-Dlopen next_dlopen = 0;
-pthread_mutex_t boot_mu = PTHREAD_MUTEX_INITIALIZER;
-bool boot_attempted = false;
-__thread bool inside_dlopen = false;
 A::Observation queue[256];
 unsigned qhead = 0, qtail = 0, qsize = 0;
 pthread_mutex_t queue_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -527,13 +522,6 @@ void *worker(void *) {
 }
 
 void bootstrap(void *h) {
-  char cfg[256];
-  snprintf(cfg, sizeof cfg, "%s/mx5dr.conf", ROOT);
-  config = mx5::runtime::read_config(cfg);
-  if (!config.valid || config.mode == 0)
-    return;
-  if (access("/data_persist/mx5-aa-dr/logs/disable-next-start", F_OK) == 0)
-    return;
   void *entry = dlsym(h, "GetServiceInterfaces");
   void *send = dlsym(h, "aap_send_vehicle_data");
   Dl_info bi, ai;
@@ -549,6 +537,8 @@ void bootstrap(void *h) {
     io.interface_path = ai.dli_fname;
     io.verify_file_hash = mx5_verify_file_sha256;
     io.verified_cold_start = true;
+    io.begin_patch = mx5::runtime::loader_begin_patch;
+    io.end_patch = mx5::runtime::loader_end_patch;
     io.runtime.sink = sink;
     io.runtime.clock = clock_ns;
     io.runtime.provenance = provenance;
@@ -583,45 +573,11 @@ void bootstrap(void *h) {
 }
 } // namespace
 
-extern "C" __attribute__((visibility("default"))) void *dlopen(const char *path,
-                                                               int flags) {
-  int incoming_errno = errno;
-  // The resolver does not interpose dlsym. No untrusted symbol-name guessing.
-  Dlopen real = __atomic_load_n(&next_dlopen, __ATOMIC_ACQUIRE);
-  if (!real) {
-    real = reinterpret_cast<Dlopen>(dlsym(RTLD_NEXT, "dlopen"));
-    if (real)
-      __atomic_store_n(&next_dlopen, real, __ATOMIC_RELEASE);
-  }
-  if (!real) {
-    errno = ENOSYS;
-    return 0;
-  }
-  if (inside_dlopen || !path || strcmp(path, BLM) || (flags & RTLD_NOLOAD)) {
-    errno = incoming_errno;
-    return real(path, flags);
-  }
-  inside_dlopen = true;
-  pthread_mutex_lock(&boot_mu);
-  bool first = !boot_attempted;
-  void *existing = 0;
-  if (first)
-    existing = real(path, RTLD_NOW | RTLD_NOLOAD);
-  // Resolve this first target's GOT before replacing its verified send slot.
-  int load_flags =
-      (first && !existing) ? ((flags & ~RTLD_LAZY) | RTLD_NOW) : flags;
-  errno = incoming_errno;
-  void *h = real(path, load_flags);
-  int original_errno = errno;
-  if (first && h) {
-    boot_attempted = true;
-    if (!existing)
-      bootstrap(h); /* already initialized: never patch live code */
-  }
-  if (existing)
-    dlclose(existing);
-  pthread_mutex_unlock(&boot_mu);
-  inside_dlopen = false;
-  errno = original_errno;
-  return h;
+namespace mx5 { namespace runtime {
+bool loader_enabled() {
+  char cfg[256];
+  snprintf(cfg, sizeof cfg, "%s/mx5dr.conf", ROOT);
+  return startup_enabled(cfg, "/data_persist/mx5-aa-dr/logs/disable-next-start", &config);
 }
+void loader_bootstrap(void* h) { bootstrap(h); }
+} }

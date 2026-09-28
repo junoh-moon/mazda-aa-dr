@@ -10,6 +10,8 @@ struct Config {
   bool valid;
 };
 Config read_config(const char *path);
+// Fail closed unless valid enabled configuration and a definitely absent marker.
+bool startup_enabled(const char *config_path, const char *disable_path, Config *out);
 } // namespace runtime
 } // namespace mx5
 #endif

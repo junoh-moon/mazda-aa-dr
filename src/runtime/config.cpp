@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
 namespace mx5 {
 namespace runtime {
 static char *trim(char *p) {
@@ -99,6 +101,13 @@ Config read_config(const char *path) {
   if (!c.valid)
     c.mode = 0;
   return c;
+}
+bool startup_enabled(const char *config_path, const char *disable_path, Config *out) {
+  *out = read_config(config_path);
+  if (!out->valid || out->mode == 0) return false;
+  struct stat marker;
+  if (lstat(disable_path, &marker) == 0) return false;
+  return errno == ENOENT;
 }
 } // namespace runtime
 } // namespace mx5

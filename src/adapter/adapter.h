@@ -87,7 +87,7 @@ enum InstallResult {
     INSTALL_OK = 0, ALREADY_INSTALLED, UNSUPPORTED_ARCH,
     INVALID_INSTALL_ARGUMENT, FILE_IDENTITY_MISMATCH, MODULE_MISMATCH,
     ORIGINAL_BYTES_MISMATCH, NEXT_CHAIN_MISMATCH, MEMORY_PROTECTION_FAILED,
-    TRAMPOLINE_ALLOCATION_FAILED, CONFIGURATION_FAILED, RESTORE_FAILED_FATAL
+    TRAMPOLINE_ALLOCATION_FAILED, CONFIGURATION_FAILED, RESTORE_FAILED_FATAL, COLD_START_LOST
 };
 typedef bool (*VerifyFileHash)(const char* path, const char* expected_sha256);
 struct InstallOptions {
@@ -99,6 +99,11 @@ struct InstallOptions {
     // Bootstrap must establish this before GetServiceInterfaces initializes
     // objects/producer threads. This is not an arbitrary hot-patch API.
     bool verified_cold_start;
+    // Optional pair for loader-coordinated cold installation. Acquired only
+    // after all dynamic-loader/hash queries; released after the final patch.
+    // end(false) requires the caller to stop the process on fatal RX failure.
+    bool (*begin_patch)();
+    void (*end_patch)(bool executable_restored);
 };
 InstallResult install_v74(const InstallOptions&);
 const char* install_result_name(InstallResult);

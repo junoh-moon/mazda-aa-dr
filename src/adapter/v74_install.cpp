@@ -77,7 +77,8 @@ InstallResult install_v74(const InstallOptions& in) {
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     if (installed) return ALREADY_INSTALLED;
     if (!in.verified_cold_start || !in.verify_file_hash || !in.blm_path ||
-        !in.interface_path || !in.blm_load_bias || !in.interface_load_bias)
+        !in.interface_path || !in.blm_load_bias || !in.interface_load_bias ||
+        ((in.begin_patch == 0) != (in.end_patch == 0)))
         return INVALID_INSTALL_ARGUMENT;
     if (!target_elf(in.blm_path) || !target_elf(in.interface_path) ||
         !in.verify_file_hash(in.blm_path, kBlmHash) ||
@@ -99,6 +100,14 @@ InstallResult install_v74(const InstallOptions& in) {
     // Binding must already be eager (RTLD_NOW or process LD_BIND_NOW=1).
     // A lazy PLT resolver or another shim is intentionally not skipped.
     if (*slot != expected_next) return NEXT_CHAIN_MISMATCH;
+    if (in.begin_patch && !in.begin_patch()) return COLD_START_LOST;
+    struct PatchLease {
+        void (*release)(bool);
+        bool safe;
+        ~PatchLease() { if (release) release(safe); }
+    } lease = {in.end_patch, true};
+    // No dynamic-loader API or hash/file access below this point. The preload
+    // itself is linked -z now, so these calls do not need lazy PLT resolution.
     const long page_size = sysconf(_SC_PAGESIZE);
     if (page_size <= 0 || (page_size & (page_size - 1))) return MEMORY_PROTECTION_FAILED;
     const uintptr_t got_page = slot_address & ~(uintptr_t(page_size) - 1);
@@ -126,11 +135,13 @@ InstallResult install_v74(const InstallOptions& in) {
         std::memcmp(reinterpret_cast<void*>(entry), kPrologue, sizeof kPrologue)) {
         const bool restored = !mprotect(reinterpret_cast<void*>(page), size_t(page_size), PROT_READ|PROT_EXEC);
         munmap(trampoline, size_t(page_size));
+        lease.safe = restored;
         return restored ? ORIGINAL_BYTES_MISMATCH : RESTORE_FAILED_FATAL;
     }
     if (!configure(reinterpret_cast<SendFunction>(expected_next), in.runtime)) {
         const bool restored = !mprotect(reinterpret_cast<void*>(page), size_t(page_size), PROT_READ|PROT_EXEC);
         munmap(trampoline, size_t(page_size));
+        lease.safe = restored;
         return restored ? CONFIGURATION_FAILED : RESTORE_FAILED_FATAL;
     }
     mx5_position_trampoline = trampoline;
@@ -145,6 +156,7 @@ InstallResult install_v74(const InstallOptions& in) {
         const bool restored = !mprotect(reinterpret_cast<void*>(page), size_t(page_size), PROT_READ|PROT_EXEC);
         mx5_position_trampoline = 0;
         munmap(trampoline, size_t(page_size));
+        lease.safe = restored;
         return restored ? MEMORY_PROTECTION_FAILED : RESTORE_FAILED_FATAL;
     }
     // The verified stock GOT segment is writable; no changes to touch symbols.
@@ -170,6 +182,7 @@ const char* install_result_name(InstallResult r) {
     case MEMORY_PROTECTION_FAILED: return "memory_protection_failed";
     case TRAMPOLINE_ALLOCATION_FAILED: return "trampoline_allocation_failed";
     case CONFIGURATION_FAILED: return "configuration_failed";
+    case COLD_START_LOST: return "cold_start_lost_to_concurrent_load";
     case RESTORE_FAILED_FATAL: return "fatal_cannot_restore_oem_execute_permission";
     }
     return "unknown_install_result";
