@@ -1,0 +1,66 @@
+mkdir -p build
+cc -std=c99 -O2 -Wall -Wextra -Werror -pedantic -Isrc/core src/core/dr_core.c tests/core/test_core.c -lm -o build/test_core
+cc -std=c99 -O2 -Wall -Wextra -Werror -pedantic -Isrc/core src/core/dr_core.c tests/core/replay.c -lm -o build/replay
+build/test_core
+core tests: 1425 checks passed (synthetic fixtures; no vehicle claims)
+python3 tests/core/test_replay.py build/replay
+replay tests: deterministic output, stale/reacquire, sentinel bypass and six malformed inputs passed
+g++ -std=c++11 -O2 -Wall -Wextra -Werror -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp tests/adapter/adapter_test.cpp -ldl -pthread -o build/test_adapter
+PASS observe
+PASS scrub
+PASS native
+PASS malformed
+PASS nested
+PASS assist
+PASS epoch
+PASS reacquire
+PASS expiry
+PASS encoder
+PASS backend
+cc -std=c99 -O2 -Wall -Wextra -Werror -pedantic -c src/core/dr_core.c -o build/core_host.o
+g++ -std=c++11 -O2 -Wall -Wextra -Werror -Isrc src/runtime/core_bridge.cpp tests/integration/test_pipeline.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp build/core_host.o -lm -ldl -pthread -o build/test_pipeline
+build/test_pipeline
+pipeline tests: core -> qualified bridge -> fake OEM, 8 exactly-once sends passed (synthetic only)
+python3 -m unittest discover -s tests/tools -v
+test_cli_json_and_exit_codes (test_analyze_logs.AnalyzeTests.test_cli_json_and_exit_codes) ... ok
+test_counts_do_not_infer_poll_provenance (test_analyze_logs.AnalyzeTests.test_counts_do_not_infer_poll_provenance) ... ok
+test_directory_rotation_read_oldest_first (test_analyze_logs.AnalyzeTests.test_directory_rotation_read_oldest_first) ... ok
+test_dr_unexpected_even_when_bytes_identical (test_analyze_logs.AnalyzeTests.test_dr_unexpected_even_when_bytes_identical) ... ok
+test_drops_and_install_failure (test_analyze_logs.AnalyzeTests.test_drops_and_install_failure) ... ok
+test_incomplete_evidence_not_pass (test_analyze_logs.AnalyzeTests.test_incomplete_evidence_not_pass) ... ok
+test_invalid_hex_is_inconclusive (test_analyze_logs.AnalyzeTests.test_invalid_hex_is_inconclusive) ... ok
+test_malformed_truncated_and_duplicate_json (test_analyze_logs.AnalyzeTests.test_malformed_truncated_and_duplicate_json) ... ok
+test_native_modes_unchanged (test_analyze_logs.AnalyzeTests.test_native_modes_unchanged) ... ok
+test_original_change_is_violation (test_analyze_logs.AnalyzeTests.test_original_change_is_violation) ... ok
+test_original_pass_scope_is_local (test_analyze_logs.AnalyzeTests.test_original_pass_scope_is_local) ... ok
+test_partial_record_and_line_limit (test_analyze_logs.AnalyzeTests.test_partial_record_and_line_limit) ... ok
+test_runtime_health_fault_and_poll_qualification (test_analyze_logs.AnalyzeTests.test_runtime_health_fault_and_poll_qualification) ... ok
+test_scrub_configuration_and_nonfinite_json (test_analyze_logs.AnalyzeTests.test_scrub_configuration_and_nonfinite_json) ... ok
+test_scrub_exact_bytes (test_analyze_logs.AnalyzeTests.test_scrub_exact_bytes) ... ok
+test_scrub_must_clear_every_target (test_analyze_logs.AnalyzeTests.test_scrub_must_clear_every_target) ... ok
+test_tar_rejects_traversal_links_and_duplicate_members (test_analyze_logs.AnalyzeTests.test_tar_rejects_traversal_links_and_duplicate_members) ... ok
+test_tar_rotation_without_extraction (test_analyze_logs.AnalyzeTests.test_tar_rotation_without_extraction) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.181s
+
+OK
+python3 -m unittest discover -s tests/packaging -v
+test_duplicate_preload_rejected (test_packaging.PackagingTests.test_duplicate_preload_rejected) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_existing_touch_multiline_and_repeat (test_packaging.PackagingTests.test_existing_touch_multiline_and_repeat) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_explicit_wcp_and_pending_recovery (test_packaging.PackagingTests.test_explicit_wcp_and_pending_recovery) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_export_is_local_and_preserves_source (test_packaging.PackagingTests.test_export_is_local_and_preserves_source) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_invalid_second_config_stages_nothing_live (test_packaging.PackagingTests.test_invalid_second_config_stages_nothing_live) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_mode_and_fixture_mount_guard (test_packaging.PackagingTests.test_mode_and_fixture_mount_guard) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_release_payload_with_existing_touch (test_packaging.PackagingTests.test_release_payload_with_existing_touch) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_stock_and_uninstall_round_trip (test_packaging.PackagingTests.test_stock_and_uninstall_round_trip) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_uninstall_preserves_unrelated_drift (test_packaging.PackagingTests.test_uninstall_preserves_unrelated_drift) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_wrong_firmware_hash_no_launcher_writes (test_packaging.PackagingTests.test_wrong_firmware_hash_no_launcher_writes) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+test_wrong_payload_arch_and_checksum (test_packaging.PackagingTests.test_wrong_payload_arch_and_checksum) ... skipped 'Stock identity fixture unavailable: <WORKSPACE>/design_inputs/evidence/stock_reference/jci/aapa/blmjciaapa.so'
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.016s
+
+OK (skipped=11)
+g++ -std=c++11 -O2 -Wall -Wextra -Werror -Isrc src/runtime/config.cpp src/runtime/sha256.cpp tests/runtime/test_runtime.cpp -o build/test_runtime
+Runtime config/SHA: 27 checks passed

@@ -1,0 +1,216 @@
+{
+  "source_archive_sha256": "e2faf183de1c71c32b0afc3580e86571e589a1f5b4952581099ae73261423c7b",
+  "source_release": "0.1-experimental",
+  "import_date": "2026-09-28",
+  "note": "Hashes describe original archive files before public-document annotations. src/, tests/, tools/, packaging/, and Makefile must remain byte-identical in this baseline. Generated bundle and extracted OEM research artifacts are omitted.",
+  "original_files": [
+    {
+      "path": "src/adapter/README.md",
+      "sha256": "589d9f09f198408682cfafc3e5c9561e222e24c66c309f30eac2cc07d53cc79e"
+    },
+    {
+      "path": "src/adapter/adapter.cpp",
+      "sha256": "97e4d33b331d0b8f372c43da6bf18dccc6ba8e14fb8edfe750586bb70de0f268"
+    },
+    {
+      "path": "src/adapter/adapter.h",
+      "sha256": "0c325f4c1f6f9d3814c49989a572b81b70ff13e434d971c9979f1afa3ec615dc"
+    },
+    {
+      "path": "src/adapter/arm_veneer.S",
+      "sha256": "746c0baf31ce41209e825bdcb9ce8f086882a01870a621ad4e21be8cde5974dd"
+    },
+    {
+      "path": "src/adapter/v74_install.cpp",
+      "sha256": "1ad288a65695989f7edc35ffd7d2e30ca9a1690f758ed5183843567ec8b8fd62"
+    },
+    {
+      "path": "src/core/README.md",
+      "sha256": "c1cd63f85d0d6e515862e1f2ea5f6a4f0e87740267ac97b76afe1caa1e4edc15"
+    },
+    {
+      "path": "src/core/dr_core.c",
+      "sha256": "6814d1a2185f25bf91a85af96fccb8593015e3fb1641ae1f0834d70bfd49b18f"
+    },
+    {
+      "path": "src/core/dr_core.h",
+      "sha256": "910054e65a0f5b853c40dc5869f9ddb4d1ad262762b283f580cb682e3966bddb"
+    },
+    {
+      "path": "src/runtime/config.cpp",
+      "sha256": "792846c28b4bda43f21a8b4dc65d21b84d9c1c25cde5a6af518b333577f7562f"
+    },
+    {
+      "path": "src/runtime/config.h",
+      "sha256": "f379e47fa5ccc6721f2263b48ad9181f37288a9031d6cc59a91294f02b241d3f"
+    },
+    {
+      "path": "src/runtime/core_bridge.cpp",
+      "sha256": "41c6f9ce2e6e4fa22b7c73aefaf2e14d2dae842f47e9a399e0de08cbfad525cc"
+    },
+    {
+      "path": "src/runtime/core_bridge.h",
+      "sha256": "43c59875e29d88898a6bd390d94310b62e92adbd54f1f1dceff2ee988fdfe48c"
+    },
+    {
+      "path": "src/runtime/runtime.cpp",
+      "sha256": "86142b4d85f17e1d561a369253484faebc1a8b99d637a6e16109cf84017e8480"
+    },
+    {
+      "path": "src/runtime/sha256.cpp",
+      "sha256": "7f0727294ffe8e8c703fcd127ebb17c8bd6b319872835cb5decbe70d9125269a"
+    },
+    {
+      "path": "src/runtime/sha256.h",
+      "sha256": "ad764dd52588dff0c7f525ce3f131a2677404502b370c5f3ab07b190bc3de63c"
+    },
+    {
+      "path": "tests/adapter/adapter_test.cpp",
+      "sha256": "972b22c2c7e91039af9e0a7f067abc86e2f8814ea5586fb69b4a0235245e02a8"
+    },
+    {
+      "path": "tests/adapter/run_arm.sh",
+      "sha256": "93fb6ecc9fecb9accf95a440b1dddbfc9adbb34981e61b8abbd2399ad10478ea"
+    },
+    {
+      "path": "tests/adapter/veneer_arm_fixture.S",
+      "sha256": "22beb037ece79639b85b797d00a5762b29e9a8f572114a5a8902076aeb6005f7"
+    },
+    {
+      "path": "tests/adapter/veneer_arm_test.cpp",
+      "sha256": "3f7f29b04435ed7083ef90a631c9f52f152ae7b2ee59681a7cabca59f7d5b615"
+    },
+    {
+      "path": "tests/core/README.md",
+      "sha256": "c8b994fbb88fd611ac2b76cebd8328c14b815f19d2018f2798c41ad7681d3050"
+    },
+    {
+      "path": "tests/core/replay.c",
+      "sha256": "910259fefb59bffea4ab6f075dbbacfc55f25a5e8a8f5d50b57f5081929afb27"
+    },
+    {
+      "path": "tests/core/synthetic_straight.csv",
+      "sha256": "c8d4e32270bd5bcb79963ec3c929254a9fa0258f6c4fa449bde0d63b60a71c76"
+    },
+    {
+      "path": "tests/core/test_core.c",
+      "sha256": "e00826721cf41400262f1276c7071a69a1ce96fc4539553753cb07e788d43313"
+    },
+    {
+      "path": "tests/core/test_replay.py",
+      "sha256": "01a993edc9d2f97d108bac3ecb2de3cf12e1b6919ee772734c64fa02147d16b1"
+    },
+    {
+      "path": "tests/integration/test_pipeline.cpp",
+      "sha256": "e4933ba0a1d29026665c71d8b13436d90dcf1247f2a7379e920fa390e4e23681"
+    },
+    {
+      "path": "tests/packaging/test_packaging.py",
+      "sha256": "cb6909ce59e7202a35019b1cd3abd943b9e29e655e31d64a4981296ec3e616c9"
+    },
+    {
+      "path": "tests/run_arm_all.sh",
+      "sha256": "59ba81c205a79d798c4a31a031e6f6bf38e3cb714c728722c3fcd1f661a1a09c"
+    },
+    {
+      "path": "tests/runtime/test_journal.cpp",
+      "sha256": "372da84a7f93a003284c45db0461b357029cc661c86d2f536ed495d3f4fe8253"
+    },
+    {
+      "path": "tests/runtime/test_loader.cpp",
+      "sha256": "9390e706c5b08906a810bac086bb89dbc173539cda27924c1b7e68523f7dbf53"
+    },
+    {
+      "path": "tests/runtime/test_runtime.cpp",
+      "sha256": "cc07ad2cf2b1322d21c0b228c0452c71ff46f70ea9d0354efeb1630c2b0a0751"
+    },
+    {
+      "path": "tests/tools/test_analyze_logs.py",
+      "sha256": "eaf769361e59c064cf2a3a7baa9b7b2e47618372d448fa273e4cfe5b03d83a89"
+    },
+    {
+      "path": "tools/analyze_logs.py",
+      "sha256": "9d6f06061ed8e5c76d24640bae5dc41dc3c771380379ef810bbd981de06fe0de"
+    },
+    {
+      "path": "tools/fetch_m3_toolchain.py",
+      "sha256": "bb73b856de3b80881cba1a7832b1e2833375d95c0e9891272eb40638a3376c57"
+    },
+    {
+      "path": "packaging/common.sh",
+      "sha256": "07b0fa01f387dafa7e7003e4e1d2f144a89ad21ef6bc63c2485e617961a0809a"
+    },
+    {
+      "path": "packaging/edit_service.awk",
+      "sha256": "d9727d431fdf39f6dbe26129bdaa9d4821a4977157e94daf5320f79d3fde9519"
+    },
+    {
+      "path": "packaging/export_logs.sh",
+      "sha256": "0768d47f45df1bac8e893a827175573ef24c376d0866b7e92bf5cd270014bfd4"
+    },
+    {
+      "path": "packaging/firmware.sha256",
+      "sha256": "2f4c475a9e7afb78d3a5584e1b478b31f0c9dda211fde40686b5911fd30c4be5"
+    },
+    {
+      "path": "packaging/install.sh",
+      "sha256": "6a32aa1530735968ad03b95c8b7801e33e264b149b63eec97ca5abd8d927a569"
+    },
+    {
+      "path": "packaging/make_bundle.sh",
+      "sha256": "6ad483334dc3f031d5a08f936356b4f3cbd02701174ec758e1e7830641800584"
+    },
+    {
+      "path": "packaging/mx5dr.conf",
+      "sha256": "a21dd63f554ad0511e07c080731b770c5685d6751322a69424cdfe6e2589ae0c"
+    },
+    {
+      "path": "packaging/uninstall.sh",
+      "sha256": "a7fd34d4871fe7295017266d78c1d0c229f445938d70b1b48ddab8548fc041d5"
+    },
+    {
+      "path": "docs/IMPLEMENTATION_REVIEW_KO.md",
+      "sha256": "5d10911b460a14911e3899fc6b61775987f8b744204434cfdd5d884b571cff3e"
+    },
+    {
+      "path": "docs/VALIDATION.md",
+      "sha256": "ed880facfdd3730ec731814764f970b712aed1f55a34c445ec6ab86b2131c3db"
+    },
+    {
+      "path": "docs/install_notes.md",
+      "sha256": "497ec0a81f7b9707f05630f29274099e43b81e73e85eba9317ab7f574c860bcd"
+    },
+    {
+      "path": "docs/native_dr_followup.md",
+      "sha256": "6c048bd78f95926d522a2a4ad80c692e10b0d53f5e7e8f647462a60555a2bab5"
+    },
+    {
+      "path": "docs/toolchain.md",
+      "sha256": "d3aa4b9d2c477343bca3628ddaddda99ad772580aef1acc1acf7999f961131ee"
+    },
+    {
+      "path": "validation/arm-build.txt",
+      "sha256": "3bfa662d26fa2379c065286049aa8e4c48d9cb37c7c55d1f84eecec34661649b"
+    },
+    {
+      "path": "validation/arm-tests.txt",
+      "sha256": "cda5319efcdcfa98667bbf5d4c181aeece536419d43e20fa52faa65afbb85c62"
+    },
+    {
+      "path": "validation/build-info.json",
+      "sha256": "45f196d86e5b3b0a5bc6a98d469b02f1c839941b840d91ea4cf8af90f793f50b"
+    },
+    {
+      "path": "validation/elf.txt",
+      "sha256": "9bc7e205a306a6605a4952bcb658c64338c069f32824585f4a0815af771a72b3"
+    },
+    {
+      "path": "validation/host-tests.txt",
+      "sha256": "a9e47b1359b55ed6aee1a16ef1e484d74a810403669b79c46a583f4c1f313bfb"
+    },
+    {
+      "path": "Makefile",
+      "sha256": "20ab8aca421c84e81df1dcf785e3b437f71dd18975a8f2930682c26d98c4f8f3"
+    }
+  ]
+}

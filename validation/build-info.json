@@ -1,0 +1,20 @@
+{
+  "release": "0.1-experimental",
+  "date_utc": "2026-09-27",
+  "target_firmware": "NA 74.00.324A",
+  "compiler": "GCC 4.9.1",
+  "toolchain_repository": "https://github.com/lmagder/m3-toolchain",
+  "toolchain_commit": "61ec0343de84f6fc7c46840056df1d600d44be8a",
+  "cpu": "ARMv7 Cortex-A9 NEON softfp",
+  "library_bytes": 64630,
+  "library_sha256": "726a7dfc647bf64a5d56e21c4b1323d9470cc02cdf252804cf3e21c1351b3229",
+  "live_modes": [
+    "OFF",
+    "OBSERVE",
+    "SCRUB",
+    "SHADOW (observation only)"
+  ],
+  "live_assist_enabled": false,
+  "vehicle_tested": false,
+  "phone_app_acceptance_tested": false
+}
