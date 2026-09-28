@@ -35,6 +35,10 @@ class PackagingTests(unittest.TestCase):
         fake[16:20] = b'\x03\x00\x28\x00'
         (self.bundle / 'libmx5dr.so').write_bytes(fake)
         self.set_payload_hash()
+        fake[16] = 2  # Separate test-only ARM ET_EXEC header; never run.
+        (self.bundle / 'mx5dr-collector').write_bytes(fake)
+        digest = hashlib.sha256(fake).hexdigest()
+        (self.bundle / 'mx5dr-collector.sha256').write_text(digest + '  mx5dr-collector\n')
         files = [line.split()[1] for line in (PACK / 'firmware.sha256').read_text().splitlines()]
         files += ['jci/version.ini', 'jci/sm/sm.conf', 'jci/sm/sm_WCP.conf']
         for file in files:
@@ -89,6 +93,11 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(self.sm.read_bytes(), self.original)
         self.assertTrue((base / 'libmx5dr.so').exists())  # retain mapped inode/file
         self.assertIn('mode=OFF', (base / 'mx5dr.conf').read_text())
+
+    def test_collector_payload_checksum_is_guarded_before_launcher_write(self):
+        (self.bundle / 'mx5dr-collector').write_bytes(b'wrong collector')
+        self.run_script('install.sh', ok=False)
+        self.assertEqual(self.sm.read_bytes(), self.original)
 
     def test_release_payload_with_existing_touch(self):
         release = REPO / 'bundle/libmx5dr.so'

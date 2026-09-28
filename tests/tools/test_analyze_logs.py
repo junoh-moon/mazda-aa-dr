@@ -238,6 +238,34 @@ class AnalyzeTests(unittest.TestCase):
             self.assertEqual(proc.returncode, expected, proc.stderr)
             self.assertEqual(json.loads(proc.stdout)["report_schema"], 1)
 
+    def test_collector_boot_identity_is_separate_from_request_provenance(self):
+        kernel_id = "12345678-1234-1234-1234-123456789abc"
+        other_id = "87654321-1234-1234-1234-123456789abc"
+        for collector_id in (kernel_id, other_id):
+            with self.subTest(collector_id=collector_id):
+                rows = records()
+                rows[0]["boot_id"] = kernel_id
+                envelope = dict(stream="collector", collector_pid=123, observed_at_mono_ns=20,
+                                producer_mono_ns=None, producer_time_status="unknown")
+                rows.extend([
+                    dict(envelope, kind="collector_boot", schema=1, sample_ms=1000,
+                         session_seconds=28800, boot_id=collector_id),
+                    dict(envelope, kind="collector_stop", samples=0, reason="stop_marker"),
+                ])
+                report = self.audit(rows)
+                self.assertEqual(report["status"], "local_checks_pass")
+                expected = [kernel_id] if collector_id == kernel_id else []
+                self.assertEqual(report["stream_correlation"]["shared_kernel_boot_ids"], expected)
+                self.assertEqual(report["collector"]["request_provenance"], "not_established")
+
+    def test_collector_cannot_claim_hook_or_producer_time(self):
+        row = dict(stream="collector", collector_pid=123, observed_at_mono_ns=20,
+                   producer_mono_ns=17, producer_time_status="verified", kind="send")
+        report = self.audit(records() + [row])
+        self.assertEqual(report["status"], "violation")
+        self.assertIn("unexpected_collector_record", self.codes(report))
+        self.assertIn("unexpected_poll_qualification", self.codes(report))
+
 
 if __name__ == "__main__":
     unittest.main()

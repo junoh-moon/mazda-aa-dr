@@ -23,6 +23,15 @@ want=$(awk 'NR==1{print $1}' "$HERE/libmx5dr.so.sha256")
 magic=$(od -An -t u1 -N 7 "$HERE/libmx5dr.so" | tr -s ' ' | sed 's/^ //;s/ $//')
 arch=$(od -An -t u1 -j 16 -N 4 "$HERE/libmx5dr.so" | tr -s ' ' | sed 's/^ //;s/ $//')
 [ "$magic" = '127 69 76 70 1 1 1' ] && [ "$arch" = '3 0 40 0' ] || fail 'Payload must be little-endian ARM32 ELF shared object'
+regular "$HERE/mx5dr-collector"
+regular "$HERE/mx5dr-collector.sha256"
+[ "$(wc -c < "$HERE/mx5dr-collector")" -ge 52 ] || fail 'Truncated collector ELF header'
+collector_want=$(awk 'NR==1{print $1}' "$HERE/mx5dr-collector.sha256")
+[ "$(hash "$HERE/mx5dr-collector")" = "$collector_want" ] || fail 'Collector checksum mismatch'
+magic=$(od -An -t u1 -N 7 "$HERE/mx5dr-collector" | tr -s ' ' | sed 's/^ //;s/ $//')
+arch=$(od -An -t u1 -j 16 -N 4 "$HERE/mx5dr-collector" | tr -s ' ' | sed 's/^ //;s/ $//')
+[ "$magic" = '127 69 76 70 1 1 1' ] || fail 'Collector must be little-endian ARM32 ELF'
+case "$arch" in '2 0 40 0'|'3 0 40 0') ;; *) fail 'Collector must be ARM32 executable';; esac
 prepare_storage
 [ ! -e "$BASE/pending" ] || fail 'Incomplete transaction: run uninstall.sh before retrying'
 TARGETS=sm.conf
@@ -42,10 +51,13 @@ done
 cp "$HERE/libmx5dr.so" "$BASE/libmx5dr.so.new.$$"
 chmod 0644 "$BASE/libmx5dr.so.new.$$"
 mv -f "$BASE/libmx5dr.so.new.$$" "$BASE/libmx5dr.so"
+cp "$HERE/mx5dr-collector" "$BASE/mx5dr-collector.new.$$"
+chmod 0755 "$BASE/mx5dr-collector.new.$$"
+mv -f "$BASE/mx5dr-collector.new.$$" "$BASE/mx5dr-collector"
 set_config
 [ ! -L "$BASE/tools" ] || fail 'Symlink tools directory'
 mkdir -p "$BASE/tools"
-for name in common.sh edit_service.awk uninstall.sh export_logs.sh firmware.sha256; do
+for name in common.sh edit_service.awk uninstall.sh export_logs.sh start_collector.sh stop_collector.sh firmware.sha256; do
     cp "$HERE/$name" "$BASE/tools/$name.new.$$"
     chmod 0644 "$BASE/tools/$name.new.$$"
     mv -f "$BASE/tools/$name.new.$$" "$BASE/tools/$name"
