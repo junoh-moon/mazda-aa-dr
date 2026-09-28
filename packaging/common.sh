@@ -8,6 +8,7 @@ if [ -n "$ROOT" ]; then
     [ "$ROOT" != / ] && [ -f "$ROOT/.mx5dr-fixture" ] || { echo 'Not a marked fixture root' >&2; exit 2; }
     ROOT=${ROOT%/}
 fi
+[ -n "$ROOT" ] || [ "$(id -u)" = 0 ] || { echo "Root installation shell required" >&2; exit 2; }
 BASE=$ROOT/data_persist/mx5-aa-dr
 TOKEN=/data_persist/mx5-aa-dr/libmx5dr.so
 LOCK=$ROOT/data_persist/.mx5dr-install-lock
@@ -74,6 +75,6 @@ set_config() {
     tmp=$BASE/mx5dr.conf.new.$$
     printf 'mode=%s\nmax_log_bytes=8388608\nmax_log_files=3\nsample_ms=1000\n' "$MODE" > "$tmp"
     chmod 0644 "$tmp"
-    if [ -z "$ROOT" ]; then chown cmu "$tmp"; fi
+    if [ -z "$ROOT" ]; then chown root "$tmp"; fi
     mv -f "$tmp" "$BASE/mx5dr.conf"
 }

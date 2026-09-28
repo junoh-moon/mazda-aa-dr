@@ -1,6 +1,6 @@
 # 현재 상태와 인계 — 2026-09-28
 
-이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 0.1 설치 가능 판단보다 우선한다. 현재 소스는 0.1 기준선이며 아래 수정 사항은 아직 구현하지 않았다.
+이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 0.1 설치 가능 판단보다 우선한다. 현재 통합 브랜치는 0.2 시험 후보이며 OFF·폴링 분리·일회성 기동 보호를 구현하고 검증했다. master에 병합됐는지는 PR 상태와 구분한다.
 
 ## 목표와 범위
 
@@ -10,14 +10,14 @@
 
 ## 설치 판정
 
-**OBSERVE를 포함해 실차 설치를 보류한다.**
+**주차 상태의 첫 OBSERVE 시험을 위한 패키지와 절차를 준비했다. 실차 검증은 아직 수행하지 않았다.** 터널 DR 완성판이나 상시 설치 승인으로 해석하지 않는다.
 
-1. OFF/잘못된 설정/disable 표식을 확인하기 전에 BLM에 RTLD_NOW를 강제한다.
-2. RTLD_NOW 실패 시 원래 flags로 돌아가는 로드 경로가 없다.
-3. 일반 크래시와 preload 자체의 로더 실패에 대한 재부팅 반복 복구가 없다.
-4. 관찰용 D-Bus/SMDB 폴링이 OEM AA 프로세스 안에서 동작한다.
+- OFF/무효 설정/disable은 추가 로딩 전에 판단한다. 추가 NOW 실패 시 원 flags 1회 재시도 후 후크를 포기한다. 동시·재진입·NOLOAD 경쟁도 검사한다.
+- D-Bus/SMDB 폴링은 별도 collector로 옮겼다. AA 안에는 후크·queue·writer만 남고 D-Bus 링크/자식 생성은 없다.
+- `/usr/bin/autostart`의 SM 실행 직전 외부 가드가 시험 권한을 소비·동기화한 후 임시 설정을 반환한다. 영구 SM 설정에는 우리 preload를 남기지 않는다. 성공 여부와 관계없이 자동 재예약은 없다.
+- 보장 경계는 **다음 가드 경유 기동**이다. 같은 실행 중인 SM의 내부 재시도와 파일시스템 고장까지 해결했다고 주장하지 않는다.
 
-OFF 처리와 폴링 분리의 수정 방향은 확정적이다. 재부팅 복구는 필요성은 확정됐지만 실제 CMU 기동 경로에서 외부 보호 장치를 적용할 위치·방식은 아직 확정하지 않았다. 앞 두 가지를 고쳤다는 이유만으로 설치 보류를 해제하지 않는다.
+[첫 시험 절차](FIRST_TRIAL_KO.md), [복구 설계](RECOVERY_2026-09-28.md), [통합 검증](../validation/INTEGRATION_2026-09-28.md)을 함께 읽는다. 첫 실제 부팅·기존 touch 공존·collector 버스 권한·다음 부팅 복귀·폰 수용은 남은 실차 확인이다. 운전 중 조작은 없다.
 
 ## 이미 확인한 것과 확인하지 못한 것
 
@@ -38,26 +38,27 @@ OFF 처리와 폴링 분리의 수정 방향은 확정적이다. 재부팅 복�
 
 - `src/core/`: 외부 I/O 없는 C99 DR 상태 기계. 품질·시간·후진·재획득·오차 제한과 합성 리플레이.
 - `src/adapter/`: 상위 ARM veneer/TLS와 하위 GOT 후크. 원본 입력 복사, LOCATION 선택, 정확히 한 번 원본 send 호출.
-- `src/runtime/`: dlopen 경계 설치, bounded queue/journal, 자동 관찰. 문제가 있는 in-process 폴링도 그대로 남아 있음.
-- `packaging/`: 펌웨어 해시 검사, 서비스별 preload 토큰 추가·제거, 기존 touch 항목 보존. source baseline의 검토 대상이며 설치 승인 아님.
+- `src/runtime/`: 설정 우선 dlopen 경계 설치, bounded queue/journal. 별도 `src/collector/`가 관찰용 폴링을 맡는다.
+- `packaging/`: 펌웨어 해시 검사, 기존 touch 보존, 영구 preload 없는 일회성 기동 가드, 명시적 arm·제거. 상시 설치 승인 아님.
 - `tools/analyze_logs.py`: 실제 이벤트·health·drop 등 분석. `audit_fault`를 이미 불완전 실험으로 판정함.
 
 SCRUB은 mode=0 캐시 LOCATION에서 `hasSpeed=false`, `hasBearing=false`로 만들고 값도 0으로 지운다. 유효한 speed=0을 제공하는 것과 다르다. 오래된 좌표는 계속 남는다. SHADOW는 관찰만 하는 예약 모드다. ASSIST는 `allow_assist=false`와 항상 false인 provenance 검사 등으로 차단되어 있다.
 
 ## 다음 작업과 종료 경로
 
-| 작업 | 완료 조건 |
+OFF/로더, collector 분리, 외부 가드는 코드와 호스트/합성 ARM 검증이 완료됐다. 상세 근거는 [로더](../validation/LOADER_FIX_2026-09-28.md), [collector](COLLECTOR_2026-09-28.md), [통합 검증](../validation/INTEGRATION_2026-09-28.md)에 있다.
+
+| 남은 확인 | 완료 조건 |
 | --- | --- |
-| OFF/로더 수정 | 설정·disable 판정을 대상 부가 로딩 전에 수행. NOW 실패 시 원 flags 1회 재시도 후 후크 포기. 오류/errno/다음 호출 계약 테스트 |
-| 폴링 분리 | 별도 프로세스에 D-Bus/SMDB 관찰 이동. AA에는 후크·ring·writer만 유지. 관찰 실패가 AA로 전파되지 않음 |
-| 외부 복구 설계 | preload 매핑 전 보호 위치 확인. 조기/지연 크래시와 로더 실패 후 다음 시작에 원래 경로로 복귀하는 증거 |
-| SCRUB/DROP 비교 설계 | 실제 변형 이벤트·audit 상태로 유효 구간 판정. DROP은 caller/반환값/상태 부작용 분석 후 별도 계약으로 구현 여부 결정 |
-| 센서/순정 DR/앱 검증 | 생산자 시간·품질과 앱 수용을 독립적으로 증명. 단순 poll 값이나 send 성공으로 대체하지 않음 |
+| 첫 주차 OBSERVE 시험 | AA/touch 시작, 정상 hook/health 로그, collector 버스 권한과 별도 로그, 다음 부팅 baseline 복귀 |
+| 순정 DR/폰 수용 | native provider의 mode·위치와 폰/앱 로그를 같은 부팅·세션에서 비교. send 성공으로 폰 수용을 대체하지 않음 |
+| SCRUB/DROP 비교 | 실제 변형 이벤트·audit 상태로 유효 구간 판정. DROP은 caller/반환값/상태 부작용 분석 후 별도 계약 결정 |
+| 자체 ASSIST | 생산자 시각·품질·보정·후진·오차 한계 확보. poll receipt로 대체하지 않음 |
 
 NNG의 순정 DR이 실제로 충분하면 자체 ASSIST보다 기존 경로 확인을 우선한다. SD 없는 구성에서 yaw가 없거나 생산 시각·품질 계약을 확보하지 못하면 **현재 SMDB 기반 ASSIST 경로는 폐기**한다. 정상 차량 LOCATION을 폰/앱이 쓰지 않는다면 CMU 좌표 생성만으로 최종 목표를 해결할 수 없다.
 
 ## 검증 기록의 해석
 
-0.1의 호스트/ARM 합성 시험 기록은 [VALIDATION.md](VALIDATION.md)에 보존했다. 이 공개 이관에서 실행한 검사는 [PUBLIC_IMPORT.md](../validation/PUBLIC_IMPORT.md)에 따로 적는다. QEMU는 합성 프로그램을 실행한 것이며 OEM 실행 또는 차량 시험이 아니다. 새 커밋의 검사 결과와 과거 결과를 섞지 않는다.
+0.1의 호스트/ARM 합성 시험 기록은 [VALIDATION.md](VALIDATION.md)에 보존했다. 공개 이관 검사는 [PUBLIC_IMPORT.md](../validation/PUBLIC_IMPORT.md), 후속 수정 검사는 [INTEGRATION_2026-09-28.md](../validation/INTEGRATION_2026-09-28.md)에 따로 적는다. QEMU는 합성 프로그램을 실행한 것이며 OEM 실행 또는 차량 시험이 아니다. 새 커밋의 검사 결과와 과거 결과를 섞지 않는다.
 
 과거 검토에는 Astra 하위 에이전트가 참여했다. Claude를 실행했다고 주장하지 않는다. 호출 가능한 Claude 경로는 확보되지 않았다.

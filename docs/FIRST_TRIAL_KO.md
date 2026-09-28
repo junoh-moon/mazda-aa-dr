@@ -1,0 +1,72 @@
+# 0.2 후보 — 주차 상태에서 첫 OBSERVE 시험
+
+대상은 1세대 Mazda Connect **NA 74.00.324A**다. 이 패키지는 OFF 로딩 수정, 별도 collector, 일회성 부팅 가드를 통합한 개발 시험판이다. 터널 DR을 제공하는 완성판은 아니다. 실차 실행 이력은 아직 없으며 ASSIST는 차단되어 있다.
+
+첫 시험의 목적은 기존 터치 패치와 함께 AA가 시작되는지, 관측 로그가 자동으로 남는지, 다음 부팅에서 이번 패치가 빠지는지를 확인하는 것이다. 설치·설정·확인·로그 회수는 모두 **주차 중**에 한다. 주행 중 CMU 명령 실행은 필요 없다.
+
+## 설치 전
+
+- 이미 사용하는 root 접근 경로에서 실행한다. USB에 복사하는 것만으로 자동 설치되는 패키지가 아니다. 새로운 root 접근 방법이나 서비스 강제 재시작은 포함하지 않는다.
+- 하위 USB가 고장 난 차량에서는 설치 파일을 CMU에 복사한 뒤 상위 USB를 AA에 다시 사용할 수 있다. 설치 후 실행 파일과 helper는 `/data_persist/mx5-aa-dr/`에 남는다.
+- 예전 0.1이 영구 preload로 설치돼 있으면 새 installer가 변경 전에 거부한다. 먼저 해당 패키지의 `uninstall.sh`로 자기 토큰을 제거하고, 정상적인 다음 부팅에서 기존 코드가 내려간 뒤 진행한다. 기존 OEM AA 터치 패치는 제거 대상이 아니다.
+- `pending` 또는 installer lock 오류가 나면 반복 실행하지 말고 기록된 상태를 확인한다. 임의 wildcard 삭제나 전체 설정 복원은 하지 않는다.
+
+## 첫 설치와 두 번의 부팅 확인
+
+1. 제공된 묶음을 풀고 그 디렉터리에서 체크섬을 확인한다.
+
+   ```sh
+   sha256sum -c libmx5dr.so.sha256
+   sha256sum -c mx5dr-collector.sha256
+   sha256sum -c mx5dr-guard.sha256
+   ```
+
+2. 주차 상태의 root shell에서 실행한다. 읽기 전용 마운트는 이 명시적 옵션으로 잠시 쓰기 가능하게 바꾸고 종료 때 원상 복구한다.
+
+   ```sh
+   sh install.sh --mode=OBSERVE --remount
+   ```
+
+   펌웨어 해시·ELF·기동 스크립트 구조가 다르면 중단한다. 검사를 우회하지 않는다. installer는 AA를 죽이거나 CMU를 재부팅하지 않는다.
+
+3. 차량의 정상적인 전원 종료·다음 기동으로 시험한다. 부팅 전에 가드가 권한을 소비하고 임시 SM 설정에만 우리 preload를 넣는다. collector도 자동 시작된다. **계속 주차한 상태에서** AA와 기존 터치 동작을 확인한다.
+
+4. 주차 상태의 root shell로 아래 상태를 확인한다. 실패하면 주행 실험으로 넘어가지 않는다.
+
+   - `guard/arm`이 사라지고 `guard/consumed`와 `guard/last-boot`가 생겼다.
+   - `logs/trace.*.jsonl`에 `boot`와 정상 `health`, 연결 후 관측 이벤트가 있다. `install` 값과 `audit_fault`, `drop`을 함께 확인한다.
+   - `logs/collector.*.jsonl`에 `collector_boot`와 관측 기록이 있다. AA/collector의 `boot_id`가 같은지 확인한다. 시간이나 속도 값이 존재해도 센서 생산 시각이 증명된 것은 아니다.
+   - trace가 없으면 “문제 없음”으로 판정하지 않는다. 가드가 시험을 거부했거나 후크가 설치되지 않았을 수 있다. collector 시작 요청 성공만으로 수집 성공을 판단하지 않는다.
+
+5. **다시 arm하지 않고** 정상적인 다음 전원 주기를 거친다. 영구 `sm.conf`, `sm_WCP.conf`에는 우리 preload가 없어야 하고, 새 부팅 ID의 mx5dr 관측 세션이 생기지 않아야 한다. 이전 로그 파일이 남는 것은 정상이다. 기존 AA/터치가 작동하는지 확인한다.
+
+정해진 몇 분을 견뎠다는 이유로 전체 세션의 안정성이 증명되지는 않는다. 위 두 부팅 확인은 첫 실차 검증이며, 아직 수행했다고 기록하지 않았다.
+
+## 재시험·중지·회수
+
+다음 시험을 명시적으로 한 번 더 예약할 때만, 주차 중 실행한다.
+
+```sh
+sh /data_persist/mx5-aa-dr/tools/arm.sh --mode=OBSERVE
+```
+
+SCRUB은 현재 선택하지 않는다. 먼저 OBSERVE로 순정 위치 전달·native DR·폰 위치 사용 여부를 확인해야 한다. 재시험 예약은 같은 부팅에서 두 번째 후크 설치를 허용하지 않는다.
+
+수집 종료와 로컬 USB 회수도 주차 중 수행한다. 아래 경로는 실제 장착된 USB 디렉터리로 바꾼다.
+
+```sh
+sh /data_persist/mx5-aa-dr/tools/stop_collector.sh
+sh /data_persist/mx5-aa-dr/tools/export_logs.sh /actual/mounted/usb
+```
+
+collector 정지는 협조 요청이므로 현재 폴링이 끝난 후 적용된다. PC에서 `python3 tools/analyze_logs.py --help`로 입력 방법을 확인하고 회수 파일을 분석한다. 실차 좌표 로그는 public repo에 올리지 않는다.
+
+제거할 때는 다음을 실행한다. 자기 표식·토큰을 제거하고 OFF 설정을 쓰며, 이미 매핑된 코드를 강제로 내리지 않는다.
+
+```sh
+sh /data_persist/mx5-aa-dr/tools/uninstall.sh --remount
+```
+
+## 복구 범위
+
+소비된 arm은 자동으로 다시 생기지 않는다. preload 생성자 실패, 첫 AA 연결에서의 실패, 한참 뒤의 실패 모두 **다음 가드 경유 기동**에는 우리 preload를 빼는 구조다. 같은 실행 중인 SM이 임시 설정으로 재시도하는 동작은 해결했다고 주장하지 않는다. 가드 자체의 정지, 파일시스템 고장, OEM 기동 경로 변경까지 포괄하는 복구 장치는 아니다. 상세 근거는 [복구 설계](RECOVERY_2026-09-28.md)와 [통합 검증](../validation/INTEGRATION_2026-09-28.md)에 있다.

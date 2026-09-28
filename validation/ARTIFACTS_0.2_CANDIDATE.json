@@ -1,0 +1,19 @@
+{
+  "status": "stationary-observe-trial-candidate-not-vehicle-tested",
+  "toolchain_commit": "61ec0343de84f6fc7c46840056df1d600d44be8a",
+  "firmware": "NA 74.00.324A",
+  "artifacts": {
+    "libmx5dr.so": {
+      "bytes": 49264,
+      "sha256": "9847c4c99a165a0579c777bcbe1ee1b4e237dc474c1abcb188d2550600aeaf4f"
+    },
+    "mx5dr-collector": {
+      "bytes": 35888,
+      "sha256": "bbdd46415ce82b0780b33cfb8d9e69ea0bc2b13316f3bba3d65baab4cf36420e"
+    },
+    "mx5dr-guard": {
+      "bytes": 2596969,
+      "sha256": "d4e79f8898b697b84765ac2e8145f542b6844525de524786f641a82e88c1398a"
+    }
+  }
+}
