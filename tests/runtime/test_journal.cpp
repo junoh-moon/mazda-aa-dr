@@ -10,12 +10,6 @@ static void arm_test_mode() {
   assert(A::set_mode(A::SCRUB_STALE));
 }
 int main() {
-  char a[] = "LD_PRELOAD=/fixture.so", b[] = "LD_LIBRARY_PATH=/jci/lib",
-       c[] = "JCI_FIXTURE=data", d[] = "LD_AUDIT=/audit.so";
-  char *input[] = {a, b, c, d, 0}, *output[3];
-  assert(child_environment(input, output, 3));
-  assert(output[0] == b && output[1] == c && !output[2]);
-  assert(!child_environment(input, output, 2));
   A::Options opt = A::Options();
   assert(A::configure(unused_next, opt));
   config.max_log_bytes = 64;

@@ -19,7 +19,7 @@ ARM_CXXFLAGS = -std=c++11 -Os -Wall -Wextra -Werror -fPIC -fvisibility=hidden -f
 ARM_SOURCES = src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/core_bridge.cpp
 ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o
 
-.PHONY: all test test-loader test-core test-adapter test-runtime test-packaging test-tools test-integration arm clean
+.PHONY: all test test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration arm clean
 all: test
 $(BUILD):
 	mkdir -p $@
@@ -32,7 +32,16 @@ $(BUILD)/test_adapter: $(ADAPTER) src/adapter/adapter.h tests/adapter/adapter_te
 $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
 $(BUILD)/test_journal: $(RUNTIME_SUPPORT) src/runtime/runtime.cpp tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(RUNTIME_SUPPORT) $(ADAPTER) src/runtime/loader.cpp tests/runtime/test_journal.cpp $(HOST_DBUS_LIBS) -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
+$(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $^ $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+$(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) -DMX5_COLLECTOR_TESTING $(HOST_DBUS_FLAGS) $^ $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+$(BUILD)/test_collector_journal: tests/collector/test_journal.cpp src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) tests/collector/test_journal.cpp src/runtime/config.cpp $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+test-collector: $(BUILD)/test_collector $(BUILD)/mx5dr-collector-host $(BUILD)/test_collector_journal $(BUILD)/test_journal $(BUILD)/test_adapter
+	$(BUILD)/test_collector_journal
+	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/collector -v
 test-core: $(BUILD)/test_core $(BUILD)/replay
 	$(BUILD)/test_core
 	$(PYTHON) tests/core/test_replay.py $(BUILD)/replay
@@ -54,9 +63,9 @@ $(BUILD)/test_pipeline: $(BUILD)/core_host.o src/runtime/core_bridge.cpp tests/i
 test-loader:
 	$(PYTHON) tests/runtime/test_loader_interposer.py
 
-test: test-loader test-core test-adapter test-runtime test-packaging test-tools test-integration
+test: test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
 
-arm: $(BUILD)/libmx5dr.so
+arm: $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector
 $(BUILD)/arm/%.o: %.cpp
 	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo 'Set ARM_PREFIX and ARM_SYSROOT'; exit 1; }
 	mkdir -p $(dir $@)
@@ -68,6 +77,8 @@ $(BUILD)/arm/%.o: %.S
 	mkdir -p $(dir $@)
 	$(ARM_PREFIX)gcc -fPIC $(ARM_FLAGS) -c $< -o $@
 $(BUILD)/libmx5dr.so: $(ARM_OBJECTS)
-	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr.so -static-libstdc++ -static-libgcc $(ARM_OBJECTS) -ldbus-1 -ldl -lpthread -lrt -lm -o $@
+	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr.so -static-libstdc++ -static-libgcc $(ARM_OBJECTS) -ldl -lpthread -lrt -lm -o $@
+$(BUILD)/mx5dr-collector: $(BUILD)/arm/src/collector/collector.o $(BUILD)/arm/src/runtime/config.o
+	$(ARM_PREFIX)g++ $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -static-libstdc++ -static-libgcc $^ -ldbus-1 -lpthread -lrt -o $@
 clean:
 	rm -rf $(BUILD)

@@ -33,8 +33,8 @@ LIMITATIONS = [
 
 def rotation_key(name):
     p = PurePosixPath(name)
-    m = re.fullmatch(r"trace\.(\d+)\.jsonl", p.name)
-    return (str(p.parent), 0 if m else 1, -int(m[1]) if m else 0, p.name)
+    m = re.fullmatch(r"(trace|collector)\.(\d+)\.jsonl", p.name)
+    return (str(p.parent), m[1] if m else p.name, -int(m[2]) if m else 0, p.name)
 
 
 def strict_object(pairs):
@@ -81,6 +81,10 @@ class Auditor:
         self.sessions = []
         self.positions = {}
         self.checked = 0
+        self.collector_counts = Counter()
+        self.collector_boots = []
+        self.collector_stops = []
+        self.collector_pids = set()
 
     def issue(self, code, source, detail, violation=False):
         severity = "violation" if violation else "inconclusive"
@@ -114,6 +118,26 @@ class Auditor:
             return
         kind = row["kind"]
         self.counts[kind] += 1
+        collector = row.get("stream") == "collector"
+        if collector:
+            self.collector_counts[kind] += 1
+            if not self.validate(row, source, ("collector_pid", "observed_at_mono_ns"),
+                                 ("producer_time_status",)):
+                return
+            self.collector_pids.add(row["collector_pid"])
+            if "producer_mono_ns" not in row or row["producer_mono_ns"] is not None or row["producer_time_status"] != "unknown":
+                self.issue("unexpected_poll_qualification", source, "Collector cannot establish producer measurement time", True)
+            if kind == "collector_boot":
+                self.validate(row, source, ("schema", "sample_ms", "session_seconds"), ("boot_id",))
+                self.collector_boots.append(row)
+                return
+            if kind == "collector_stop":
+                self.validate(row, source, ("samples",), ("reason",))
+                self.collector_stops.append(row)
+                return
+            if kind not in ("poll", "position_poll", "position_poll_error", "owner_poll", "receiver_poll"):
+                self.issue("unexpected_collector_record", source, "Collector cannot emit AA hook/health records", True)
+                return
         if kind == "boot":
             self.new_session(row)
             self.boots.append(row)
@@ -130,7 +154,7 @@ class Auditor:
             if row["assist_ready"] or row["wire_timestamp_modified"]:
                 self.issue("impossible_live_capability", source, "r0.1 boot claims unsupported capability", True)
             return
-        if self.session is None:
+        if self.session is None and not collector:
             self.new_session()
         if kind == "position":
             if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "utc_s")):
@@ -332,8 +356,18 @@ class Auditor:
                 self.issue("uncovered_trace_tail", source, "No health record at/after final send")
         if not self.checked:
             self.issue("no_location_samples", "inputs", "No complete type1 length48 payload pair checked")
+        if self.collector_counts and not self.collector_boots:
+            self.issue("collector_missing_boot", "collector", "Collector rotation/start boundary is missing")
+        if len(self.collector_stops) < len(self.collector_boots):
+            self.issue("collector_open_session", "collector", "Collector shutdown is not recorded; observation coverage is incomplete")
         status = ("violation" if self.issue_counts["violation"] else
                   "inconclusive" if self.issue_counts["inconclusive"] else "local_checks_pass")
+        def boot_ids(rows):
+            return sorted({row["boot_id"] for row in rows
+                           if isinstance(row.get("boot_id"), str) and
+                           re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", row["boot_id"])})
+        aa_boot_ids = boot_ids(self.boots)
+        collector_boot_ids = boot_ids(self.collector_boots)
         return dict(report_schema=1, runtime_release="r0.1", status=status,
                     scope="recorded_window_local_invariants_only", phone_acceptance="not_established",
                     dr_accuracy="not_established", limitations=LIMITATIONS,
@@ -346,6 +380,13 @@ class Auditor:
                                      per_session_max=[s["dropped_max"] for s in self.sessions],
                                      audit_fault_counts=dict(self.audit_faults)),
                     actual_runtime_modes=dict(self.runtime_modes),
+                    stream_correlation=dict(aa_boot_ids=aa_boot_ids, collector_boot_ids=collector_boot_ids,
+                                            shared_kernel_boot_ids=sorted(set(aa_boot_ids) & set(collector_boot_ids)),
+                                            meaning="same_kernel_boot_only_not_request_or_producer_provenance"),
+                    collector=dict(record_counts=dict(self.collector_counts),
+                                   pids=sorted(self.collector_pids), boots=self.collector_boots,
+                                   stops=self.collector_stops, producer_time="unknown",
+                                   request_provenance="not_established"),
                     owner_pid_comm=[dict(owner=k[0], pid=k[1], comm=k[2], count=v) for k, v in sorted(self.owners.items())],
                     receiver_counts=dict(self.receivers), install_counts=dict(self.installs), boots=self.boots,
                     issue_counts=dict(self.issue_counts), issues=self.issues,
