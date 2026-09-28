@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 
 REPO = Path(__file__).resolve().parents[2]
 PACK = REPO / 'packaging'
-STOCK = REPO.parent / 'design_inputs/evidence/stock_reference'
+STOCK = Path(os.environ.get('MX5DR_STOCK_ROOT', str(REPO.parent / 'design_inputs/evidence/stock_reference')))
 TOKEN = '/data_persist/mx5-aa-dr/libmx5dr.so'
 TOUCH = '/data_persist/oem-aa-mod/libpatch-blmjciaapa.so'
 
@@ -39,8 +39,10 @@ class PackagingTests(unittest.TestCase):
         (self.bundle / 'mx5dr-collector').write_bytes(fake)
         digest = hashlib.sha256(fake).hexdigest()
         (self.bundle / 'mx5dr-collector.sha256').write_text(digest + '  mx5dr-collector\n')
+        (self.bundle / 'mx5dr-guard').write_bytes(fake)
+        (self.bundle / 'mx5dr-guard.sha256').write_text(hashlib.sha256(fake).hexdigest() + '  mx5dr-guard\n')
         files = [line.split()[1] for line in (PACK / 'firmware.sha256').read_text().splitlines()]
-        files += ['jci/version.ini', 'jci/sm/sm.conf', 'jci/sm/sm_WCP.conf']
+        files += ['jci/version.ini', 'jci/sm/sm.conf', 'jci/sm/sm_WCP.conf', 'usr/bin/autostart']
         for file in files:
             source = STOCK / file
             if not source.exists():
@@ -52,6 +54,9 @@ class PackagingTests(unittest.TestCase):
         self.wcp = self.root / 'jci/sm/sm_WCP.conf'
         self.original = self.sm.read_bytes()
         self.original_wcp = self.wcp.read_bytes()
+        self.autostart = self.root / 'usr/bin/autostart'
+        self.original_autostart = self.autostart.read_bytes()
+        self.trial = self.root / 'data_persist/mx5-aa-dr/guard/normal.trial'
 
     def set_payload_hash(self):
         digest = hashlib.sha256((self.bundle / 'libmx5dr.so').read_bytes()).hexdigest()
@@ -84,13 +89,16 @@ class PackagingTests(unittest.TestCase):
 
     def test_stock_and_uninstall_round_trip(self):
         self.run_script('install.sh')
-        self.assertEqual(self.preload(), [TOKEN])
+        self.assertEqual(self.preload(), [])
+        self.assertEqual(self.preload(self.trial), [TOKEN])
+        self.assertEqual(self.autostart.read_text().count('ONE-BOOT BEGIN'), 2)
         self.assertEqual(self.wcp.read_bytes(), self.original_wcp)
         base = self.root / 'data_persist/mx5-aa-dr'
         self.assertTrue((base / 'tools/uninstall.sh').exists())
         self.assertIn('mode=OBSERVE', (base / 'mx5dr.conf').read_text())
         self.run_script('uninstall.sh')
         self.assertEqual(self.sm.read_bytes(), self.original)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
         self.assertTrue((base / 'libmx5dr.so').exists())  # retain mapped inode/file
         self.assertIn('mode=OFF', (base / 'mx5dr.conf').read_text())
 
@@ -103,13 +111,18 @@ class PackagingTests(unittest.TestCase):
         release = REPO / 'bundle/libmx5dr.so'
         if not release.exists():
             self.skipTest('Release bundle has not been built')
-        shutil.copyfile(release, self.bundle / 'libmx5dr.so')
-        self.set_payload_hash()
+        for name in ('libmx5dr.so', 'mx5dr-collector', 'mx5dr-guard'):
+            artifact = release.parent / name
+            self.assertTrue(artifact.is_file(), str(artifact))
+            shutil.copyfile(artifact, self.bundle / name)
+            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            (self.bundle / (name + '.sha256')).write_text(digest + '  ' + name + '\n')
         self.add_touch(multiline=True)
         self.run_script('install.sh')
         installed = self.root / 'data_persist/mx5-aa-dr/libmx5dr.so'
         self.assertEqual(installed.read_bytes(), release.read_bytes())
-        self.assertEqual(self.preload(), [TOKEN + ':' + TOUCH])
+        self.assertEqual(self.preload(), [TOUCH])
+        self.assertEqual(self.preload(self.trial), [TOKEN + ':' + TOUCH])
         self.run_script('uninstall.sh')
         self.assertEqual(self.preload(), [TOUCH])
 
@@ -117,7 +130,8 @@ class PackagingTests(unittest.TestCase):
         self.add_touch(multiline=True)
         self.run_script('install.sh', '--mode=SCRUB')
         once = self.sm.read_bytes()
-        self.assertEqual(self.preload(), [TOKEN + ':' + TOUCH])
+        self.assertEqual(self.preload(), [TOUCH])
+        self.assertEqual(self.preload(self.trial), [TOKEN + ':' + TOUCH])
         self.run_script('install.sh', '--mode=SCRUB')
         self.assertEqual(self.sm.read_bytes(), once)
         self.run_script('uninstall.sh')
@@ -129,11 +143,24 @@ class PackagingTests(unittest.TestCase):
         self.add_touch()
         self.run_script('install.sh')
         text = self.sm.read_text().replace('</sm_config>', '<!-- later edit -->\n</sm_config>')
-        text = text.replace(TOKEN + ':' + TOUCH, TOKEN + ':' + TOUCH + ':/data_persist/later.so')
+        text = text.replace(TOUCH, TOUCH + ':/data_persist/later.so')
         self.sm.write_text(text)
         self.run_script('uninstall.sh')
         self.assertEqual(self.preload(), [TOUCH + ':/data_persist/later.so'])
         self.assertIn('later edit', self.sm.read_text())
+
+    def test_legacy_permanent_install_rejected_before_replacement(self):
+        self.add_touch()
+        self.sm.write_text(self.sm.read_text().replace(TOUCH, TOKEN + ':' + TOUCH))
+        before = self.sm.read_bytes()
+        old_payload = self.root / 'data_persist/mx5-aa-dr/libmx5dr.so'
+        old_payload.parent.mkdir()
+        old_payload.write_bytes(b'legacy-payload-must-not-be-replaced')
+        r = self.run_script('install.sh', ok=False)
+        self.assertIn('run uninstall.sh first', r.stderr)
+        self.assertEqual(old_payload.read_bytes(), b'legacy-payload-must-not-be-replaced')
+        self.assertEqual(self.sm.read_bytes(), before)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
 
     def test_wrong_firmware_hash_no_launcher_writes(self):
         with (self.root / 'jci/aapa/blmjciaapa.so').open('ab') as f:
@@ -151,7 +178,8 @@ class PackagingTests(unittest.TestCase):
 
     def test_explicit_wcp_and_pending_recovery(self):
         self.run_script('install.sh', '--with-wcp')
-        self.assertEqual(self.preload(self.wcp), [TOKEN])
+        self.assertEqual(self.preload(self.wcp), [])
+        self.assertEqual(self.preload(self.trial.with_name('wcp.trial')), [TOKEN])
         pending = self.root / 'data_persist/mx5-aa-dr/pending'
         pending.write_text('sm.conf sm_WCP.conf\n')  # simulated interrupted commit
         self.run_script('install.sh', ok=False)

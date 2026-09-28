@@ -2,7 +2,9 @@
 
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
-**Vehicle installation is on hold.** The imported 0.1 code has unresolved loader and crash-recovery defects, including a possible reboot loop. No vehicle or phone validation has been performed. Live ASSIST is disabled; this is not a working tunnel-navigation solution.
+**This integration branch is a 0.2 candidate for a first stationary OBSERVE trial.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented and checked on host and synthetic ARM/QEMU fixtures. No vehicle or phone validation has been performed. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
+
+See [first stationary trial](docs/FIRST_TRIAL_KO.md) and [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate removes our preload from persistent service configurations and consumes one explicit authorization before exposing a trial. Same-running-SM retry behavior is not established.
 
 [한국어](README_KO.md) · [Current status / handoff](docs/STATUS_KO.md) · [Review corrections](docs/REVIEW_2026-09-28_KO.md)
 
@@ -12,7 +14,7 @@ The goal is to let Android Auto navigation, initially Naver Map, benefit from ve
 
 The source baseline contains an offline DR core, version-specific ARM hooks, automatic observation, a bounded journal, an installer, and a PC log analyzer. SCRUB removes optional stale speed/bearing fields from selected mode-0 cached locations; it does not generate a new position. SHADOW currently behaves as observation only. Runtime ASSIST is blocked in code and configuration.
 
-The baseline preserves the implementation reviewed as experimental 0.1. **The subsequent OFF, polling, and recovery fixes have not been applied.** Each should receive its own change and validation record.
+The original 0.1 baseline is retained in Git history. The subsequent loader, collector and recovery changes have separate PRs and verification records. Branch contents do not imply that those PRs have been merged into master.
 
 ## Start here
 

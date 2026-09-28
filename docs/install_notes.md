@@ -1,4 +1,4 @@
-> **2026-09-28: installation on hold.** Historical 0.1 analysis/instructions follow. [Current status](STATUS_KO.md) and [review corrections](REVIEW_2026-09-28_KO.md) supersede installation GO statements. No vehicle or phone validation has been performed.
+> **2026-09-28: experimental one-boot packaging.** [Recovery contract](RECOVERY_2026-09-28.md) describes the implemented guard and its limits. [Current status](STATUS_KO.md) still controls release readiness. No vehicle or phone validation has been performed.
 
 # Scoped CMU package: installation, removal and parked export
 
@@ -23,7 +23,7 @@ sh packaging/make_bundle.sh build/libmx5dr.so dist/mx5dr-bundle
 ```
 
 `dist/mx5dr-bundle` must not already exist. It contains the installer, narrow XML
-editor, fixed firmware identity manifest, runtime library and its SHA-256 sidecar.
+editor, fixed firmware identity manifest, runtime library, sibling-built standalone guard and their SHA-256 sidecars.
 The SHA-256 sidecar detects damage; it is not a release signature or a trust root.
 The installer never executes an uploaded OEM binary or firmware updater.
 
@@ -51,9 +51,10 @@ Every invocation explicitly stages the requested mode (default OBSERVE) and
 these limits; it does not silently preserve a former SCRUB choice. Runtime reads
 the configuration at cold load; scripts make no promise of immediate hot disable.
 
-The default edits only `/jci/sm/sm.conf`. Add `--with-wcp` only when deliberately
-installing for both known startup configurations. `/jci/sm/sm_WCP.conf` is never
-auto-selected from a guess about the receiver or board. The installer checks the
+Both persistent SM configs remain free of this package's token. OEM autostart's
+existing normal/WCP branch chooses which one-use temporary config the guard may
+select. `--with-wcp` is accepted for compatibility; both baselines are always kept
+clean. Explicit `arm.sh` authorizes another boot after the first arm is consumed. The installer checks the
 real version/region/patch and SHA-256 of the four original firmware files:
 
 - `/jci/aapa/blmjciaapa.so`
@@ -68,8 +69,12 @@ manifest hashes to force another firmware through the check.
 
 ## What changes
 
+An old permanent mx5dr token in either SM config makes installation refuse before
+replacing the payload. Run removal first, then install this one-boot package.
+
 The library is copied locally to `/data_persist/mx5-aa-dr/libmx5dr.so`. Only the
-`jciAAPA` service receives the exact additional token, prepended to any existing
+`jciAAPA` service in the one-use temporary SM config receives the exact additional
+token, prepended to any existing
 `LD_PRELOAD` list. Existing library tokens retain order and remain present; list
 separators may be normalized to colons. Example:
 
@@ -78,11 +83,12 @@ separators may be normalized to colons. Example:
  env_value="/data_persist/mx5-aa-dr/libmx5dr.so:/data_persist/oem-aa-mod/libpatch-blmjciaapa.so"/>
 ```
 
+Only marked pre-launch guard blocks are added to `/usr/bin/autostart`.
 No OEM `.so`, `/etc/ld.so.preload`, launcher executable, CAN configuration, touch
 shim, HUD service or AA attribute XML is replaced. The library and helper scripts
 are local after installation, so the transfer medium can be removed and the
 single working USB port used for Android Auto. No kill, restart or reboot command
-is issued; the change applies at the next normal service start.
+is issued; a valid arm applies at the next guarded SM launch, ordinarily the next boot.
 
 The editor deliberately supports the observed double-quoted, single
 `LD_PRELOAD`, normal `jciAAPA` stanza, including multiline tags. Duplicate
@@ -98,8 +104,8 @@ all chosen launchers before replacing one. It compares the source file hash agai
 before rename to detect intervening edits. Existing configuration snapshots are
 saved under `/data_persist/mx5-aa-dr/backups/`; removal does **not** restore these
 snapshots over newer changes. The new library is copied and atomically renamed,
-never truncated while it might be mapped. Logs and configuration are owned by
-the existing `cmu` user; the service is not changed to run as root.
+never truncated while it might be mapped. Logs are owned by the existing `cmu` user; configuration, tools, guard and payload
+are root-owned; the service is not changed to run as root.
 
 On the CMU, read-only mounts are detected through `/proc/mounts`. Default operation
 refuses a read-only mount. From the authorized root shell, `--remount` explicitly
@@ -114,8 +120,9 @@ Renames are atomic per file, not an atomic transaction across both launcher file
 can leave one launcher changed; rerunning install refuses that pending state.
 Run the removal script to remove this package's token from current launchers,
 then retry. This preserves unrelated changes rather than overwriting from backup.
-There is no validated crash-loop rescue or unattended autostart health monitor;
-keep the existing authorized recovery access available for experimental loads.
+The pre-launch arm is durably consumed before returning a trial path; the next
+guarded launch uses baseline. This does not repair retries inside a running SM.
+Read the precise [recovery boundaries](RECOVERY_2026-09-28.md).
 
 An orphaned lock is not automatically deleted. Confirm no installer is active,
 inspect `/data_persist/.mx5dr-install-lock/pid`, and only then remove that lock
@@ -130,7 +137,8 @@ sh /data_persist/mx5-aa-dr/tools/uninstall.sh
 
 Use `--remount` under the same explicit rules if needed. Both pinned launcher
 files are inspected, and only the exact mx5dr preload token is removed from
-`jciAAPA`. Other tokens and unrelated edits remain. Runtime mode OFF is staged.
+`jciAAPA`, along with this package's marked autostart blocks. The arm is removed
+first. Other tokens and unrelated edits remain. Runtime mode OFF is staged.
 Removal intentionally does not require matching firmware: it must remain usable
 after a firmware update. Unsupported launcher syntax still requires inspection;
 the script does not blindly restore a historical whole-file backup.

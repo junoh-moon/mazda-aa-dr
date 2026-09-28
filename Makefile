@@ -19,7 +19,7 @@ ARM_CXXFLAGS = -std=c++11 -Os -Wall -Wextra -Werror -fPIC -fvisibility=hidden -f
 ARM_SOURCES = src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/core_bridge.cpp
 ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o
 
-.PHONY: all test test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration arm clean
+.PHONY: all test test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration arm clean
 all: test
 $(BUILD):
 	mkdir -p $@
@@ -63,9 +63,12 @@ $(BUILD)/test_pipeline: $(BUILD)/core_host.o src/runtime/core_bridge.cpp tests/i
 test-loader:
 	$(PYTHON) tests/runtime/test_loader_interposer.py
 
-test: test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
+test-recovery:
+	$(PYTHON) tests/recovery/test_guard.py
 
-arm: $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector
+test: test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
+
+arm: $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $(BUILD)/mx5dr-guard
 $(BUILD)/arm/%.o: %.cpp
 	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo 'Set ARM_PREFIX and ARM_SYSROOT'; exit 1; }
 	mkdir -p $(dir $@)
@@ -82,3 +85,7 @@ $(BUILD)/mx5dr-collector: $(BUILD)/arm/src/collector/collector.o $(BUILD)/arm/sr
 	$(ARM_PREFIX)g++ $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -static-libstdc++ -static-libgcc $^ -ldbus-1 -lpthread -lrt -o $@
 clean:
 	rm -rf $(BUILD)
+
+$(BUILD)/mx5dr-guard: src/guard/guard.cpp src/runtime/sha256.cpp | $(BUILD)
+	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo "Set ARM_PREFIX and ARM_SYSROOT"; exit 1; }
+	$(ARM_PREFIX)g++ $(ARM_CXXFLAGS) -Wl,-z,relro,-z,now,-z,noexecstack -static-libstdc++ -static-libgcc $^ -o $@
