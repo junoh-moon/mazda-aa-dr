@@ -47,7 +47,7 @@ int main() {
   require(!mx5_verify_file_sha256(
       path.c_str(),
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
-  auto c = parse("# empty config uses conservative defaults\n");
+  auto c = parse("mode=OBSERVE\n");
   require(c.valid && c.mode == 1 && c.max_log_bytes == 8388608 &&
           c.max_log_files == 3 && c.sample_ms == 1000);
   c = parse("mode = SCRUB # "
@@ -58,25 +58,38 @@ int main() {
   require(c.valid && c.mode == 4);
   c = parse("mode=OFF\n");
   require(c.valid && c.mode == 0);
+  c = parse("sample_ms=500\n # explicit mode may come last\n mode = OBSERVE");
+  require(c.valid && c.mode == 1 && c.sample_ms == 500);
+  const char *missing_mode[] = {
+      "", " \t\r\n\n", "# mode=OBSERVE\n  # comments only\n",
+      "sample_ms=1000\n",
+      "max_log_bytes=65536\nmax_log_files=1\nsample_ms=500"};
+  for (const auto *input : missing_mode) {
+    c = parse(input);
+    require(!c.valid && c.mode == 0);
+    require(!mx5::runtime::startup_enabled(
+                path.c_str(), (path + ".disabled").c_str(), &c) &&
+            !c.valid && c.mode == 0);
+  }
   const char *bad[] = {"mode=ASSIST\n",
                        "mode=OBSERVE\nmode=SCRUB\n",
-                       "sample_ms=499\n",
-                       "sample_ms=5001\n",
-                       "max_log_bytes=8388609\n",
-                       "max_log_files=0\n",
-                       "max_log_files=4\n",
-                       "max_log_bytes=-1\n",
-                       "max_log_bytes=+65536\n",
-                       "sample_ms=1000x\n",
-                       "sample_ms=\n",
-                       "future_key=1\n",
-                       "mode OBSERVE\n",
-                       "sample_ms=9999999999999999999999999999999999999999\n"};
+                       "mode=OBSERVE\nsample_ms=499\n",
+                       "mode=OBSERVE\nsample_ms=5001\n",
+                       "mode=OBSERVE\nmax_log_bytes=8388609\n",
+                       "mode=OBSERVE\nmax_log_files=0\n",
+                       "mode=OBSERVE\nmax_log_files=4\n",
+                       "mode=OBSERVE\nmax_log_bytes=-1\n",
+                       "mode=OBSERVE\nmax_log_bytes=+65536\n",
+                       "mode=OBSERVE\nsample_ms=1000x\n",
+                       "mode=OBSERVE\nsample_ms=\n",
+                       "mode=OBSERVE\nfuture_key=1\n",
+                       "mode=OBSERVE\nmode OBSERVE\n",
+                       "mode=OBSERVE\nsample_ms=9999999999999999999999999999999999999999\n"};
   for (const auto *input : bad) {
     c = parse(input);
     require(!c.valid && c.mode == 0);
   }
-  c = parse(std::string(260, 'x') + "\n");
+  c = parse("mode=OBSERVE\n" + std::string(260, 'x') + "\n");
   require(!c.valid && c.mode == 0);
   unlink(path.c_str());
   c = mx5::runtime::read_config(path.c_str());

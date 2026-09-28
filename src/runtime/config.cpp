@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
 namespace mx5 {
 namespace runtime {
 static char *trim(char *p) {
@@ -15,7 +17,7 @@ static char *trim(char *p) {
   return p;
 }
 Config read_config(const char *path) {
-  Config c = {1, 8388608, 3, 1000, true};
+  Config c = {0, 8388608, 3, 1000, true};
   FILE *f = fopen(path, "r");
   if (!f) {
     c.valid = false;
@@ -93,12 +95,20 @@ Config read_config(const char *path) {
     }
     seen |= bit;
   }
-  if (ferror(f))
+  // An existing file is not an opt-in: require one explicit, valid mode.
+  if (ferror(f) || !(seen & 1))
     c.valid = false;
   fclose(f);
   if (!c.valid)
     c.mode = 0;
   return c;
+}
+bool startup_enabled(const char *config_path, const char *disable_path, Config *out) {
+  *out = read_config(config_path);
+  if (!out->valid || out->mode == 0) return false;
+  struct stat marker;
+  if (lstat(disable_path, &marker) == 0) return false;
+  return errno == ENOENT;
 }
 } // namespace runtime
 } // namespace mx5

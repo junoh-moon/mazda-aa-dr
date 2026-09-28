@@ -16,10 +16,10 @@ ARM_SYSROOT ?=
 ARM_FLAGS = -march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=softfp -marm
 ARM_CPPFLAGS = -Isrc -I$(ARM_SYSROOT)/usr/include/dbus-1.0 -I$(ARM_SYSROOT)/usr/lib/dbus-1.0/include
 ARM_CXXFLAGS = -std=c++11 -Os -Wall -Wextra -Werror -fPIC -fvisibility=hidden -fno-exceptions -fno-rtti -fno-omit-frame-pointer -ftls-model=initial-exec $(ARM_FLAGS)
-ARM_SOURCES = $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/core_bridge.cpp
+ARM_SOURCES = src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/core_bridge.cpp
 ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o
 
-.PHONY: all test test-core test-adapter test-runtime test-packaging test-tools test-integration arm clean
+.PHONY: all test test-loader test-core test-adapter test-runtime test-packaging test-tools test-integration arm clean
 all: test
 $(BUILD):
 	mkdir -p $@
@@ -31,8 +31,8 @@ $(BUILD)/test_adapter: $(ADAPTER) src/adapter/adapter.h tests/adapter/adapter_te
 	$(CXX) $(CXX_WARN) $(ADAPTER) tests/adapter/adapter_test.cpp -ldl -pthread -o $@
 $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
-$(BUILD)/test_journal: $(RUNTIME_SUPPORT) src/runtime/runtime.cpp tests/runtime/test_journal.cpp $(ADAPTER) | $(BUILD)
-	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(RUNTIME_SUPPORT) $(ADAPTER) tests/runtime/test_journal.cpp $(HOST_DBUS_LIBS) -ldl -lpthread -lrt -lm -o $@
+$(BUILD)/test_journal: $(RUNTIME_SUPPORT) src/runtime/runtime.cpp tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(RUNTIME_SUPPORT) $(ADAPTER) src/runtime/loader.cpp tests/runtime/test_journal.cpp $(HOST_DBUS_LIBS) -ldl -lpthread -lrt -lm -o $@
 test-core: $(BUILD)/test_core $(BUILD)/replay
 	$(BUILD)/test_core
 	$(PYTHON) tests/core/test_replay.py $(BUILD)/replay
@@ -51,7 +51,10 @@ $(BUILD)/core_host.o: $(CORE) src/core/dr_core.h | $(BUILD)
 	$(CC) $(C_WARN) -c $(CORE) -o $@
 $(BUILD)/test_pipeline: $(BUILD)/core_host.o src/runtime/core_bridge.cpp tests/integration/test_pipeline.cpp $(ADAPTER)
 	$(CXX) $(CXX_WARN) src/runtime/core_bridge.cpp tests/integration/test_pipeline.cpp $(ADAPTER) $(BUILD)/core_host.o -lm -ldl -pthread -o $@
-test: test-core test-adapter test-runtime test-packaging test-tools test-integration
+test-loader:
+	$(PYTHON) tests/runtime/test_loader_interposer.py
+
+test: test-loader test-core test-adapter test-runtime test-packaging test-tools test-integration
 
 arm: $(BUILD)/libmx5dr.so
 $(BUILD)/arm/%.o: %.cpp
