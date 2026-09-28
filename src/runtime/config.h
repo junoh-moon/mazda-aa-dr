@@ -9,6 +9,8 @@ struct Config {
   unsigned max_log_files, sample_ms;
   bool valid;
 };
+// Require exactly one explicit mode. Missing/invalid configuration is invalid OFF;
+// numeric defaults apply only to otherwise valid configuration.
 Config read_config(const char *path);
 // Fail closed unless valid enabled configuration and a definitely absent marker.
 bool startup_enabled(const char *config_path, const char *disable_path, Config *out);

@@ -1,5 +1,11 @@
 # OFF/loader change — 2026-09-28
 
+Review follow-up: configuration must now contain an explicit mode. See
+[CONFIG_FAIL_CLOSED_2026-09-28.md](CONFIG_FAIL_CLOSED_2026-09-28.md) for the bug
+reproduction and new host results (38 config/SHA checks and 29 loader scenarios).
+The full-suite and ARM results below describe the earlier revision, not this
+follow-up revision.
+
 This changes issue #2; vehicle installation remains on hold. Polling isolation,
 external crash recovery and phone acceptance are separate work. Stock dependency
 name/version coverage is recorded in [BLM_DEPENDENCY_CLOSURE.md](BLM_DEPENDENCY_CLOSURE.md); it is not an OEM loader execution. Historical 0.1 validation records have not been rewritten.

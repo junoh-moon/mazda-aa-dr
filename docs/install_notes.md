@@ -47,6 +47,12 @@ max_log_files=3
 sample_ms=1000
 ```
 
+Runtime configuration requires exactly one explicit `mode` entry. An empty,
+whitespace-only, comment-only or otherwise mode-less file is invalid and keeps
+hooks disabled; it does not select OBSERVE implicitly. Valid explicit modes may
+omit numeric options to use their defaults. The installer default below is an
+explicitly written `mode=OBSERVE`, not a parser fallback.
+
 Every invocation explicitly stages the requested mode (default OBSERVE) and
 these limits; it does not silently preserve a former SCRUB choice. Runtime reads
 the configuration at cold load; scripts make no promise of immediate hot disable.

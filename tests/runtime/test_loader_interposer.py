@@ -42,11 +42,18 @@ class LoaderInterposerTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def test_real_interposer(self):
+        missing_mode = {
+            "config_empty": "",
+            "config_whitespace": " \t\r\n\n",
+            "config_comments": "# mode=OBSERVE\n  # comments only\n",
+            "config_sample_only": "sample_ms=1000\n",
+            "config_options_only": "max_log_bytes=65536\nmax_log_files=1\nsample_ms=500",
+        }
         cases = ("off", "off_global", "invalid", "disabled", "missing_config",
                  "good", "lazy", "bad", "caller_now", "existing", "noload",
                  "invalid_flags", "reentrant", "concurrent", "cross_constructor",
                  "prepare_race", "patch_race", "prepare_noload", "patch_noload",
-                 "marker_error", "marker_symlink", "lazy_log_closed", "bad_log_closed", "early_noload")
+                 "marker_error", "marker_symlink", "lazy_log_closed", "bad_log_closed", "early_noload") + tuple(missing_mode)
         for case in cases:
             with self.subTest(case=case):
                 fixture = case if case in ("lazy", "bad", "reentrant") else "good"
@@ -54,10 +61,14 @@ class LoaderInterposerTests(unittest.TestCase):
                     fixture = "lazy"
                 if case == "early_noload": fixture = "good"
                 if case.endswith("log_closed"): fixture = case.split("_")[0]
+                # NOW must fail for these fixtures: invalid config must not even
+                # probe or attempt an eager load before forwarding caller flags.
+                if case in missing_mode: fixture = "lazy"
                 shutil.copyfile(self.build / (fixture + ".so"), self.target)
                 self.config.write_text("mode=" + ("OFF" if case in ("off", "off_global") else "OBSERVE") + "\n")
                 if case == "invalid": self.config.write_text("mode=ASSIST\n")
                 if case == "missing_config": self.config.unlink()
+                if case in missing_mode: self.config.write_text(missing_mode[case])
                 if self.disable.exists() or self.disable.is_symlink(): self.disable.unlink()
                 if case == "disabled": self.disable.write_text("disabled\n")
                 if case == "marker_symlink": self.disable.symlink_to(self.build / "missing-marker-target")

@@ -97,7 +97,7 @@ int main(int argc,char** argv) {
         const bool fail=!strcmp(name,"bad") || !strcmp(name,"noload") || !strcmp(name,"invalid_flags") || !strcmp(name,"caller_now");
         if(fail) { assert(!h && result_errno==EACCES); if(strcmp(name,"noload")) assert(error && *error); }
         else { assert(h && result_errno==EBUSY && !error); }
-        if(off || !strcmp(name,"off_global")) {
+        if(off || !strcmp(name,"off_global") || !strncmp(name,"config_",7)) {
             assert(count()==1 && flag(0)==flags && policies()==1 && boots()==0);
             assert(outcome()==LoaderReport::BYPASS);
         } else if(!strcmp(name,"noload") || !strcmp(name,"invalid_flags")) {

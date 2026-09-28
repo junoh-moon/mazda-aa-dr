@@ -17,7 +17,7 @@ static char *trim(char *p) {
   return p;
 }
 Config read_config(const char *path) {
-  Config c = {1, 8388608, 3, 1000, true};
+  Config c = {0, 8388608, 3, 1000, true};
   FILE *f = fopen(path, "r");
   if (!f) {
     c.valid = false;
@@ -95,7 +95,8 @@ Config read_config(const char *path) {
     }
     seen |= bit;
   }
-  if (ferror(f))
+  // An existing file is not an opt-in: require one explicit, valid mode.
+  if (ferror(f) || !(seen & 1))
     c.valid = false;
   fclose(f);
   if (!c.valid)
