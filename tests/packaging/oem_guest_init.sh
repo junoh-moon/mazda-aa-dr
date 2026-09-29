@@ -20,8 +20,9 @@ cat /proc/version
 id
 mode=baseline
 phase=services
+retry_config=full
 for arg in $(cat /proc/cmdline); do
-    case "$arg" in mx5mode=*) mode=${arg#*=};; mx5phase=*) phase=${arg#*=};; esac
+    case "$arg" in mx5mode=*) mode=${arg#*=};; mx5phase=*) phase=${arg#*=};; mx5retry=*) retry_config=${arg#*=};; esac
 done
 echo "VM_MODE=$mode VM_PHASE=$phase"
 touch_preload=
@@ -81,7 +82,138 @@ fi
 # when the virtual board lacks the physical SPI peer; preserve that result.
 (strace -ff -tt -e trace=file,process,network,ipc,ioctl -o /tmp/oem-check/vim.syscalls /jci/vim/vim_app; rc=$?; echo "TRACE_WRAPPER_RC=$rc" > /tmp/oem-check/vim.exit) > /tmp/oem-check/vim.log 2>&1 &
 echo "VIM_TRACE_WRAPPER_PID=$!"
+# Only the retry diagnostic uses these helpers. No script below is included in
+# the USB bundle or modifies an installed CMU service configuration.
+retry_aa_pids() {
+    for retry_process in /proc/[0-9]*; do
+        [ "$(readlink "$retry_process/exe" 2>/dev/null)" = /jci/sm/sm_svclauncher ] || continue
+        retry_argv=$(tr '\000' ' ' < "$retry_process/cmdline" 2>/dev/null)
+        case "$retry_argv" in *' jciAAPA '*) echo "${retry_process#/proc/}";; esac
+    done
+}
+retry_snapshot() {
+    echo "VM_RETRY_SNAPSHOT_BEGIN=$1 UPTIME=$(cat /proc/uptime)"
+    for retry_process in /proc/[0-9]*; do
+        retry_exe=$(readlink "$retry_process/exe" 2>/dev/null)
+        case "$retry_exe" in /jci/sm/sm|/jci/sm/sm_svclauncher) ;; *) continue;; esac
+        retry_argv=$(tr '\000' ' ' < "$retry_process/cmdline" 2>/dev/null)
+        case "$retry_exe:$retry_argv" in /jci/sm/sm:*|*' jciAAPA '*|*' settings '*) ;; *) continue;; esac
+        echo "VM_RETRY_PROCESS=${retry_process#/proc/} ARGV=$retry_argv"
+        grep -E '^(Name|Pid|PPid|Uid|Gid):' "$retry_process/status"
+        tr '\000' '\n' < "$retry_process/environ" | grep '^LD_PRELOAD='
+        grep -E '/jci/aapa/|libmx5dr|libpatch-blmjciaapa' "$retry_process/maps"
+    done
+    for retry_marker in arm consumed last-boot; do
+        if [ -f "/data_persist/mx5-aa-dr/guard/$retry_marker" ]; then
+            echo "VM_RETRY_GUARD_$retry_marker=present"
+        else
+            echo "VM_RETRY_GUARD_$retry_marker=absent"
+        fi
+    done
+    for retry_trace in /data_persist/mx5-aa-dr/logs/trace.[012].jsonl; do
+        [ -f "$retry_trace" ] || continue
+        echo "VM_RETRY_RUNTIME_RECORDS=$retry_trace"
+        grep '"kind":"boot"' "$retry_trace"
+        grep '"kind":"health"' "$retry_trace" | tail -n 1
+    done
+    echo "VM_RETRY_SNAPSHOT_END=$1"
+}
+retry_ctl() {
+    retry_label=$1
+    shift
+    echo "VM_RETRY_CTL_BEGIN=$retry_label UPTIME=$(cat /proc/uptime)"
+    timeout -t 12 /jci/sm/smctl "$@" > "/tmp/oem-check/retry-$retry_label.log" 2>&1
+    retry_rc=$?
+    cat "/tmp/oem-check/retry-$retry_label.log"
+    echo "VM_RETRY_CTL_END=$retry_label RC=$retry_rc UPTIME=$(cat /proc/uptime)"
+}
+retry_probe() {
+    echo "VM_RETRY_SCOPE=config=$retry_config; exact OEM SM/launcher/AA; diagnostic operations only"
+    retry_trial=$trial
+    case "$retry_config" in
+        full) echo 'VM_RETRY_CONFIG=full original service graph plus existing touch and guarded trial tokens';;
+        reduced)
+            # Keep the original server/global settings and settings/jciAAPA
+            # attributes, including retry_count=0 and reset_board=yes. A real
+            # settings service keeps this from becoming an all-services-stop
+            # experiment when AA is restarted. Omit the other services and the
+            # eight dependency edges. This is not a full OEM boot or a proposed
+            # production configuration.
+            retry_trial=/tmp/oem-check/retry-sm.conf
+            # RETRY_CONFIG_AWK_BEGIN
+            awk '
+                !services { print; if ($0 ~ /<services /) services=1; next }
+                /<service .*name="jciAAPA"/ { active=1; aa++ }
+                /<service .*name="settings"/ { active=1; settings++ }
+                active {
+                    if ($0 ~ /<dependency /) removed++
+                    else print
+                    if ($0 ~ /<\/service>/) active=0
+                }
+                END {
+                    print "    </services>\n</sm_config>"
+                    if (aa != 1 || settings != 1 || removed != 8 || active) exit 2
+                }
+            ' "$trial" > "$retry_trial" || { echo 'VM_RETRY_CONFIG_FAILED'; return; }
+            # RETRY_CONFIG_AWK_END
+            echo 'VM_RETRY_CONFIG=reduced original settings and jciAAPA; eight dependency edges omitted; retry/reset/timeouts unchanged'
+            # The real AA backend remains fallible and is not counted as
+            # satisfying the omitted aap_service SM dependency.
+            (strace -ff -tt -e trace=file,process,network,ipc -o /tmp/oem-check/aap-service.syscalls /usr/bin/aap_service; rc=$?; echo "TRACE_WRAPPER_RC=$rc" > /tmp/oem-check/aap-service.exit) > /tmp/oem-check/aap-service.log 2>&1 &
+            sleep 2
+            ;;
+        *) echo 'VM_RETRY_UNKNOWN_CONFIG'; return;;
+    esac
+    (strace -ff -tt -e trace=file,process,network,ipc -o /tmp/oem-check/sm.syscalls taskset 0x02 /jci/sm/sm -f "$retry_trial" -e /tmp/smevents.txt; rc=$?; echo "TRACE_WRAPPER_RC=$rc" > /tmp/oem-check/sm.exit) > /tmp/oem-check/sm.log 2>&1 &
+    echo "VM_RETRY_SM_TRACE_WRAPPER_PID=$!"
+    sleep 8
+    retry_ctl help --help
+    retry_snapshot initial
+    retry_ctl launch --launch --name jciAAPA --wait
+    sleep 8
+    retry_snapshot after-launch
+    retry_ctl get-initial --get
+    if [ -z "$(retry_aa_pids)" ]; then
+        echo 'VM_RETRY_NO_AA_PROCESS=launch did not yield a live AA launcher; retry contract remains untested'
+        return
+    fi
+    retry_ctl restart --restart --name jciAAPA --wait
+    sleep 8
+    retry_snapshot after-restart
+    retry_ctl get-restarted --get
+    # An externally requested SIGKILL models unexpected delayed child death;
+    # it is not evidence that the preload itself crashed.
+    sleep 15
+    retry_victims=$(retry_aa_pids)
+    if [ -z "$retry_victims" ]; then
+        echo 'VM_RETRY_DELAYED_KILL_SKIPPED=no live AA launcher after restart; automatic crash policy not exercised'
+        return
+    fi
+    echo "VM_RETRY_DELAYED_KILL_PIDS=$retry_victims UPTIME=$(cat /proc/uptime)"
+    for retry_victim in $retry_victims; do kill -KILL "$retry_victim"; done
+    # Observe automatic SM behavior before issuing a new start request. The
+    # cumulative 65-second sleep spans the original 30-second ping timeout and
+    # sigkill_wait_before_reboot interval; snapshots record actual guest time.
+    retry_elapsed=0
+    for retry_delay in 2 8 20 35; do
+        sleep "$retry_delay"
+        retry_elapsed=$((retry_elapsed + retry_delay))
+        retry_snapshot "after-delayed-kill-$retry_elapsed"
+        retry_ctl "get-after-kill-$retry_elapsed" --get
+    done
+    retry_ctl relaunch --launch --name jciAAPA --wait
+    sleep 8
+    retry_snapshot after-client-relaunch
+    retry_ctl get-relaunched --get
+    if [ "$mode" = shadow ]; then
+        /data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf > /tmp/oem-check/retry-guard-select.log 2>&1
+        echo "VM_RETRY_GUARD_SECOND_SELECT_RC=$?"
+        cat /tmp/oem-check/retry-guard-select.log
+    fi
+    echo 'VM_RETRY_PROBE_FINISHED=observations only; inspect SM state, child identity and preload'
+}
 case "$phase" in
+    retry) retry_probe;;
     services)
         # Execute the unchanged full SM configuration. Do not fabricate the
         # external PID files or replace failed services with success stubs.
@@ -133,6 +265,16 @@ done
 timeout -t 5 /jci/sm/smctl -g 2>&1
 for file in /tmp/oem-check/* /tmp/smevents.txt /data_persist/mx5-aa-dr/logs/*.jsonl; do
     [ -f "$file" ] || continue
+    if [ "$phase" = retry ]; then
+        case "$file" in
+            *.syscalls.*)
+                # Preserve the exact SM/AA process traces needed by this probe.
+                # Printing every unrelated service thread can exhaust the
+                # bounded VM deadline before runtime journals are exported.
+                grep -qE 'execve\("/jci/sm/sm"|execve\("/jci/sm/sm_svclauncher".*"jciAAPA"' "$file" || continue
+                ;;
+        esac
+    fi
     echo "VM_LOG_BEGIN $file"
     case "$file" in
         *.syscalls.*) grep -E 'execve|exit_group|SIG[A-Z]+|mx5dr|Watchdog|cmu_io|spidev|/dev/shm' "$file"; tail -n 40 "$file";;

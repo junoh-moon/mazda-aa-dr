@@ -552,7 +552,7 @@ def main():
     run_parser.add_argument('--output', type=Path, required=True, help='New log prefix; adds .log and .json')
     run_parser.add_argument('--board', choices=('virt', 'cmu'), required=True)
     run_parser.add_argument('--mode', choices=('baseline', 'shadow'), default='baseline')
-    run_parser.add_argument('--phase', choices=('services', 'standalone', 'initprobe'), default='services')
+    run_parser.add_argument('--phase', choices=('services', 'standalone', 'initprobe', 'retry'), default='services')
     run_parser.add_argument('--seconds', type=positive_seconds, default=120)
     run_parser.add_argument('--kernel-arg', type=single_kernel_argument, action='append', default=[],
                             help='Append one explicit kernel argument after defaults; repeat as needed')
