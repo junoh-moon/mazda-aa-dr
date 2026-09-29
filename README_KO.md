@@ -21,6 +21,7 @@ OBSERVE 설치·검사·일회성 예약을 수행한다. [한 줄 설치 설명
 4. [과거 상세 설계](docs/archive/DESIGN_V1_KO.md): 설계 배경. 현재 상태 문서가 우선한다.
 5. [검증 기록](docs/VALIDATION.md), [공개 이관 검증](validation/PUBLIC_IMPORT.md), [의사결정 기록](docs/DECISIONS_KO.md).
 6. [릴리즈 생성 절차](docs/RELEASING_KO.md): 커밋 고정, 빌드·검증, 설치 ZIP·체크섬, 태그·게시·다운로드 재검증.
+7. [SHADOW 로그 형식](docs/COMPACT_SHADOW_LOGS_KO.md): 원본 필드를 보존하는 배치 기록, PC 복원, 기록량과 보존 한계.
 
 ## 구현 상태
 

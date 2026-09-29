@@ -3,6 +3,8 @@
 #include "../../src/runtime/runtime.cpp"
 #include <cassert>
 #include <string>
+#include <fstream>
+#include <iterator>
 
 static int32_t unused_next(void *, A::VehicleData *) { return 0; }
 static void arm_test_mode() {
@@ -38,6 +40,54 @@ int main() {
     assert(stat(name.c_str(), &st) == 0 && st.st_size <= 64);
     unlink(name.c_str());
   }
+  // Exercise the actual worker helpers, not a test-only batching wrapper.
+  config.max_log_bytes = 65536;
+  {
+    Journal j(tmp);
+    mx5::runtime::MotionBatch batch;
+    N::RawEvent raw = N::RawEvent();
+    raw.kind = N::YAW; raw.epoch = 1; raw.received_ns = 10;
+    for (unsigned i = 1; i <= 33; ++i) {
+      raw.receive_seq = i;
+      journal_motion(j, batch, raw);
+    }
+    raw.epoch = 2; raw.receive_seq = 1;
+    journal_motion(j, batch, raw); // Flushes the old epoch before adding new.
+    flush_motion(j, batch);
+    j.line("{\"kind\":\"shadow_input_reset\"}");
+    raw.receive_seq = 3;
+    journal_motion(j, batch, raw);
+    flush_motion(j, batch); // Empty channel/turn end before health or sleep.
+    flush_motion(j, batch); // Must not duplicate a previous batch.
+    j.flush();
+    assert(!j.failed && batch.empty());
+  }
+  {
+    std::ifstream f((logs + "/trace.0.jsonl").c_str());
+    std::string line;
+    unsigned n = 0;
+    while (std::getline(f, line)) {
+      if (n == 3) assert(line.find("shadow_input_reset") != std::string::npos);
+      else assert(line.find("motion_batch") != std::string::npos);
+      if (n < 2) assert(line.find("\"epoch\":1") != std::string::npos);
+      if (n == 2 || n == 4) assert(line.find("\"epoch\":2") != std::string::npos);
+      ++n;
+    }
+    assert(n == 5);
+  }
+  unlink((logs + "/trace.0.jsonl").c_str());
+  {
+    Journal full(tmp);
+    full.f = fopen("/dev/full", "w");
+    assert(full.f);
+    mx5::runtime::MotionBatch batch;
+    N::RawEvent raw = N::RawEvent(); raw.kind = N::REVERSE;
+    raw.epoch = raw.receive_seq = raw.received_ns = 1;
+    journal_motion(full, batch, raw); flush_motion(full, batch); full.flush();
+    assert(full.failed && batch.empty() && A::mode() == A::OBSERVE);
+  }
+  arm_test_mode();
+  config.max_log_bytes = 64;
   {
     Journal full(tmp);
     full.f = fopen("/dev/full", "w");

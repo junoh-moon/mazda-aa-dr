@@ -22,7 +22,7 @@ ARM_CXXFLAGS = -std=c++11 -Os -Wall -Wextra -Werror -fPIC -fvisibility=hidden -f
 ARM_SOURCES = src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/core_bridge.cpp $(NAVIGATION)
 ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o
 
-.PHONY: all test test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
+.PHONY: all test test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
 all: test
 $(BUILD):
 	mkdir -p $@
@@ -34,7 +34,7 @@ $(BUILD)/test_adapter: $(ADAPTER) src/adapter/adapter.h tests/adapter/adapter_te
 	$(CXX) $(CXX_WARN) $(ADAPTER) tests/adapter/adapter_test.cpp -ldl -pthread -o $@
 $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
-$(BUILD)/test_journal: $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
+$(BUILD)/test_journal: $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/motion_batch.h tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $^ $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
@@ -84,7 +84,15 @@ test-sensors: $(BUILD)/test_vim_source $(BUILD)/test_vim_tap
 $(BUILD)/test_vim_source: tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $^ -o $@
 
-test: test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
+test: test-motion-journal test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
+
+$(BUILD)/test_motion_batch: tests/runtime/test_motion_batch.cpp src/runtime/motion_batch.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $< -o $@
+test-motion-journal: $(BUILD)/test_motion_batch
+	$(BUILD)/test_motion_batch
+	MX5DR_MOTION_FIXTURE=$(abspath $(BUILD)/test_motion_batch) $(PYTHON) -m unittest discover -s tests/journal -v
+
+$(BUILD)/arm/src/runtime/runtime.o: src/runtime/motion_batch.h
 
 arm: $(BUILD)/libmx5dr-vimtap.so $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $(BUILD)/mx5dr-guard
 $(BUILD)/arm/%.o: %.cpp
