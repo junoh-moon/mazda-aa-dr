@@ -441,6 +441,8 @@ def main():
     if args.account_regressions_only:
         account_regressions(args.stock.resolve(), args.bundle.resolve())
         return
+    default_mode = (args.bundle / 'bundle-default-mode').read_text().strip()
+    require(default_mode in ('OBSERVE', 'SHADOW'), 'Unsupported bundle default mode')
     with tempfile.TemporaryDirectory(prefix='mx5dr-cmu-') as tmp:
         root = Path(tmp)
         usb = make_root(root, args.stock.resolve(), args.bundle.resolve())
@@ -477,6 +479,8 @@ def main():
         lib.write_bytes(saved)
         run('cd /tmp/mnt/sda1 && sh install.sh')
         require((base / 'guard/arm').is_file(), 'Actual ARM guard did not arm')
+        require('mode=' + default_mode in (base / 'mx5dr.conf').read_text().splitlines(),
+                'Installed config differs from the bundle default mode')
         for name in ('jci/sm/sm.conf', 'jci/sm/sm_WCP.conf'):
             require((root / name).read_bytes() == baseline[name], 'Persistent SM config changed')
         require((root / 'mount.calls').read_text().splitlines() ==
@@ -495,10 +499,22 @@ def main():
                     'Stock loader did not initialize ' + name)
         result = run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf')
         trial = root / result.stdout.strip().lstrip('/')
-        require(TOUCH in trial.read_text() and '/libmx5dr-vimtap.so' in trial.read_text(), 'Trial lost AA touch or VBS tap')
+        initial_trial = trial.read_text()
+        require(TOUCH in initial_trial, 'Initial trial lost AA touch')
+        require(('/libmx5dr-vimtap.so' in initial_trial) == (default_mode == 'SHADOW'),
+                'Initial trial VBS tap differs from the bundle default mode')
+        print('PASS: ' + default_mode + ' bundle default and initial trial preload selection', flush=True)
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
         put(root, '/proc/sys/kernel/random/boot_id', '11234567-1234-1234-1234-0123456789ab\n')
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
+        # Later status fixtures describe SHADOW. Select that mode explicitly for
+        # this simulated new boot, including a real arm/consume transition.
+        run('sh /data_persist/mx5-aa-dr/tools/arm.sh --mode=SHADOW')
+        result = run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf')
+        shadow_trial = root / result.stdout.strip().lstrip('/')
+        require('mode=SHADOW' in (base / 'mx5dr.conf').read_text().splitlines() and
+                TOUCH in shadow_trial.read_text() and '/libmx5dr-vimtap.so' in shadow_trial.read_text(),
+                'Explicit SHADOW rearm did not prepare the status fixture mode')
         # Actual collector executes with guest NSS and drops UID to service. Missing
         # vehicle DBus/SMDB is expected here; it must still start/stop its journal.
         run('/data_persist/mx5-aa-dr/mx5dr-collector --session-seconds 1')
@@ -510,7 +526,6 @@ def main():
         # No OEM sensor callback or AA process is claimed by these records.
         current_boot = (root / 'proc/sys/kernel/random/boot_id').read_text().strip()
         original_collector = journal.read_bytes()
-        put(root, '/tmp/mnt/data_persist/mx5-aa-dr/guard/last-boot', current_boot + '\n', 0o600)
         trace = [dict(kind='boot', boot_id=current_boot, mono_ns=1000000000, mode=4),
                  dict(kind='shadow_boot', active=True, capture_active=True),
                  dict(kind='health', mono_ns=99000000000, hook_installed=True,
@@ -555,7 +570,7 @@ def main():
         run('cd /tmp/mnt/sda1 && sh uninstall.sh')
         require(not (base / 'guard/arm').exists(), 'Uninstall left a trial armed')
         print('PASS: stock ARM BusyBox/libc, damaged USB rejection, install, loader, one boot, '
-              'collector UID/exit, status/finish (synthetic rows), USB export, touch update/rearm, uninstall, reinstall. Mount operations simulated; '
+              'collector UID/exit, status/finish (explicit SHADOW, synthetic rows), USB export, touch update/rearm, uninstall, reinstall. Mount operations simulated; '
               'no OEM service or vehicle execution.')
 
 

@@ -119,8 +119,10 @@ class PackagingTests(unittest.TestCase):
     def test_release_payload_with_existing_touch(self):
         release = Path(os.environ.get('MX5DR_RELEASE_BUNDLE', str(REPO / 'bundle'))) / 'libmx5dr.so'
         if not release.exists() or not (release.parent / 'libmx5dr-vimtap.so').exists():
-            self.skipTest('Current four-artifact release bundle has not been built')
-        for name in ('libmx5dr.so', 'libmx5dr-vimtap.so', 'mx5dr-collector', 'mx5dr-guard'):
+            self.skipTest('Current five-artifact release bundle has not been built')
+        artifacts = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'mx5dr-collector',
+                     'mx5dr-guard', 'mx5dr-sha256')
+        for name in artifacts:
             artifact = release.parent / name
             self.assertTrue(artifact.is_file(), str(artifact))
             shutil.copyfile(artifact, self.bundle / name)
@@ -128,8 +130,12 @@ class PackagingTests(unittest.TestCase):
             (self.bundle / (name + '.sha256')).write_text(digest + '  ' + name + '\n')
         self.add_touch(multiline=True)
         self.run_script('install.sh')
-        installed = self.root / 'data_persist/mx5-aa-dr/libmx5dr.so'
-        self.assertEqual(installed.read_bytes(), release.read_bytes())
+        installed = self.root / 'data_persist/mx5-aa-dr'
+        for name in artifacts:
+            relative = {'mx5dr-guard': 'guard/mx5dr-guard',
+                        'mx5dr-sha256': 'tools/mx5dr-sha256'}.get(name, name)
+            self.assertEqual((installed / relative).read_bytes(),
+                             (release.parent / name).read_bytes(), name)
         self.assertEqual(self.preload(), [TOUCH])
         self.assertEqual(self.preload(self.trial), [TOKEN + ':' + TOUCH])
         self.assertEqual(self.preload(self.trial, 'jciVBS'), [])
