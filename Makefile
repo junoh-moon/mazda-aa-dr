@@ -102,7 +102,7 @@ $(BUILD)/test_motion_batch: tests/runtime/test_motion_batch.cpp src/runtime/moti
 test-motion-journal: $(BUILD)/test_motion_batch $(BUILD)/test_shadow_log $(BUILD)/test_journal
 	$(BUILD)/test_motion_batch
 	$(BUILD)/test_shadow_log
-	MX5DR_MOTION_FIXTURE=$(abspath $(BUILD)/test_motion_batch) MX5DR_SHADOW_FIXTURE=$(abspath $(BUILD)/test_shadow_log) $(PYTHON) -m unittest discover -s tests/journal -v
+	MX5DR_MOTION_FIXTURE=$(abspath $(BUILD)/test_motion_batch) MX5DR_SHADOW_FIXTURE=$(abspath $(BUILD)/test_shadow_log) MX5DR_JOURNAL_FIXTURE=$(abspath $(BUILD)/test_journal) $(PYTHON) -m unittest discover -s tests/journal -v
 
 $(BUILD)/arm/src/runtime/runtime.o: src/runtime/motion_batch.h
 
