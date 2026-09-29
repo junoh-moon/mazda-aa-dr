@@ -28,6 +28,8 @@ LIMITATIONS = [
     "Lower send result is not phone receipt, app adoption, or navigation success.",
     "SMDB/owner/receiver polls do not establish source freshness or exact-request provenance.",
     "SHADOW model diagnostics do not establish DR accuracy, ground truth, or ASSIST readiness.",
+    "Stationary yaw calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
+    "Holdout journal structure cannot prove that GPS references were excluded from prediction inputs.",
     "Motion counts cover channel-accepted records; source measurement timing remains unknown.",
 ]
 
@@ -60,6 +62,22 @@ def finite_float(value):
 
 def bounded_int(value, low, high):
     return integer(value) and low <= value <= high
+
+
+def finite_number(value):
+    return type(value) in (int, float) and (type(value) is int or math.isfinite(value))
+
+
+def bounded_number(value, low, high):
+    return finite_number(value) and low <= value <= high
+
+
+def add_difference(stats, value):
+    """Bounded-memory summary; online mean avoids an overflowing error sum."""
+    stats['count'] += 1
+    stats['min'] = value if stats['min'] is None else min(stats['min'], value)
+    stats['max'] = value if stats['max'] is None else max(stats['max'], value)
+    stats['mean'] = value if stats['mean'] is None else stats['mean'] + (value - stats['mean']) / stats['count']
 
 
 def decode_motion_records(row):
@@ -137,6 +155,17 @@ class Auditor:
         self.shadow_valid = Counter()
         self.shadow_resets_max = 0
         self.shadow_rejected_max = 0
+        self.calibration_states = Counter()
+        self.calibration_enabled = Counter()
+        self.calibration_candidates = Counter()
+        self.calibration_versions = Counter()
+        self.calibration_samples_max = 0
+        self.holdout_events = Counter()
+        self.holdout_reasons = Counter()
+        self.holdout_completed = 0
+        self.holdout_aborted = 0
+        self.holdout_position = dict(count=0, min=None, max=None, mean=None)
+        self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
 
     def issue(self, code, source, detail, violation=False):
         severity = "violation" if violation else "inconclusive"
@@ -148,7 +177,8 @@ class Auditor:
         self.session = dict(boot=boot, last_send_ns=-1, health_ns=-1, sends=0,
                             dropped_max=0, health_records=0, motion_epoch=None,
                             motion_seq=0, motion_ns=0, last_diagnostic_ns=-1,
-                            shadow_resets=0, shadow_rejected=0, shadow_pipeline=None)
+                            shadow_resets=0, shadow_rejected=0, shadow_pipeline=None,
+                            holdout_window=None)
         self.sessions.append(self.session)
         self.positions = {}
 
@@ -279,6 +309,10 @@ class Auditor:
                 self.motion(event, source)
         elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled"):
             self.shadow(row, source)
+        elif kind == "shadow_calibration":
+            self.calibration(row, source)
+        elif kind == "shadow_holdout":
+            self.holdout(row, source)
         else:
             self.issue("unknown_record_kind", source, kind)
 
@@ -354,7 +388,141 @@ class Auditor:
         if (row["preview_encoded"] and (not row['model_valid'] or
                 not re.fullmatch(r"[0-9a-fA-F]{96}", preview))) or (
                 not row["preview_encoded"] and preview != ""):
-            self.issue("invalid_shadow_preview", source, "Preview must match encoded flag and 48-byte shape")
+                self.issue("invalid_shadow_preview", source, "Preview must match encoded flag and 48-byte shape")
+
+    def model_diagnostic(self, row, source):
+        """Check the shared envelope without hiding qualification violations."""
+        valid = self.validate(row, source, ints=("mono_ns",),
+                              strings=("domain",), bools=("assist_ready",))
+        if row.get("domain") != "model":
+            self.issue("unexpected_shadow_domain", source, "SHADOW must remain MODEL", True)
+            valid = False
+        if row.get("assist_ready") is True:
+            self.issue("impossible_live_capability", source, "SHADOW cannot authorize ASSIST", True)
+            valid = False
+        if not bounded_int(row.get("mono_ns"), 1, 2**64-1):
+            self.issue("partial_record", source, "SHADOW mono_ns outside uint64 range")
+            return False
+        self.session["last_diagnostic_ns"] = max(self.session["last_diagnostic_ns"], row["mono_ns"])
+        return valid
+
+    def calibration(self, row, source):
+        envelope = self.model_diagnostic(row, source)
+        if not self.validate(row, source,
+                ints=("samples", "evidence_start_ns", "evidence_end_ns", "calibration_version"),
+                strings=("state",), bools=("enabled", "candidate_ready")):
+            return
+        if (any(not bounded_int(row[key], 0, 2**64-1) for key in
+                ("samples", "evidence_start_ns", "evidence_end_ns", "calibration_version")) or
+                any(not bounded_number(row.get(key), 0, 4093) for key in ("active_zero", "candidate_zero")) or
+                not bounded_number(row.get("variance_counts2"), 0, sys.float_info.max) or
+                not row["state"]):
+            self.issue("partial_record", source, "Invalid calibration state, counter, time, or yaw zero")
+            return
+        if not envelope:
+            return
+        start, end = row["evidence_start_ns"], row["evidence_end_ns"]
+        if ((start == 0) != (end == 0) or start > end or end > row["mono_ns"] or
+                (row["candidate_ready"] and (not row["enabled"] or not row["samples"] or not start or start == end))):
+            self.issue("invalid_calibration_evidence", source, "Calibration evidence window/candidate is inconsistent")
+            return
+        self.calibration_states[row["state"]] += 1
+        self.calibration_enabled[str(row["enabled"]).lower()] += 1
+        self.calibration_candidates[str(row["candidate_ready"]).lower()] += 1
+        self.calibration_versions[str(row["calibration_version"])] += 1
+        self.calibration_samples_max = max(self.calibration_samples_max, row["samples"])
+
+    def holdout(self, row, source):
+        envelope = self.model_diagnostic(row, source)
+        if row.get("time_basis") != "receipt_model":
+            self.issue("unexpected_holdout_time_basis", source, "Holdout timestamps must remain receipt-time MODEL", True)
+            envelope = False
+        if not self.validate(row, source,
+                ints=("window_id", "anchor_ns", "reference_ns", "frontier_ns", "calibration_version"),
+                strings=("event", "reason"), bools=("model_valid",)):
+            return
+        event = row["event"]
+        if (event not in ("BEGIN", "COMPARED", "END", "ABORT") or
+                not bounded_int(row["window_id"], 0 if event == "ABORT" else 1, 2**64-1) or
+                any(not bounded_int(row[key], 0, 2**64-1) for key in
+                    ("anchor_ns", "reference_ns", "frontier_ns", "calibration_version")) or
+                not bounded_number(row.get("yaw_zero"), 0, 4093)):
+            self.issue("partial_record", source, "Invalid holdout event, counter, time, or yaw zero")
+            return
+        self.holdout_events[event] += 1
+        self.holdout_reasons[row["reason"]] += 1
+        numeric_bounds = (("lat", -90, 90), ("lon", -180, 180),
+                          ("ref_lat", -90, 90), ("ref_lon", -180, 180),
+                          ("position_error_m", 0, sys.float_info.max),
+                          ("heading_error_rad", -math.pi, math.pi))
+        if any(key not in row or (row[key] is not None and not bounded_number(row[key], low, high))
+               for key, low, high in numeric_bounds):
+            self.issue("partial_record", source, "Invalid nullable holdout coordinate or difference")
+            return
+        if not envelope:
+            return
+        anchor, reference, frontier = row["anchor_ns"], row["reference_ns"], row["frontier_ns"]
+        warmup_abort = event == "ABORT" and row["window_id"] == 0
+        if ((not anchor and not warmup_abort) or max(anchor, reference, frontier) > row["mono_ns"] or
+                (warmup_abort and (anchor or reference or frontier))):
+            self.issue("invalid_holdout_time", source, "Holdout timestamp exceeds diagnostic time or anchor is absent")
+            return
+        if event == "COMPARED":
+            if not (row["model_valid"] and anchor < reference == frontier):
+                self.issue("invalid_holdout_comparison", source, "Comparison requires MODEL output at the later GPS receipt time")
+                return
+            if any(row[key] is None for key in ("lat", "lon", "ref_lat", "ref_lon", "position_error_m")):
+                self.issue("invalid_holdout_comparison", source, "Comparison requires finite coordinates and position difference")
+                return
+        elif row["position_error_m"] is not None or row["heading_error_rad"] is not None:
+            self.issue("invalid_holdout_comparison", source, "Only COMPARED records may report differences")
+            return
+        s = self.session
+        window = s["holdout_window"]
+        if event == "BEGIN":
+            if reference != anchor or frontier != anchor:
+                self.issue("invalid_holdout_time", source, "Holdout BEGIN must align reference and frontier with its anchor")
+                return
+            if window is not None:
+                self.issue("holdout_unfinished_window", source, "New BEGIN precedes prior window END/ABORT")
+            s["holdout_window"] = dict(window_id=row["window_id"], anchor_ns=anchor,
+                                       last_reference_ns=anchor, mono_ns=row["mono_ns"],
+                                       calibration_version=row["calibration_version"], yaw_zero=row["yaw_zero"])
+            return
+        if event == "ABORT":
+            if not warmup_abort:
+                self.holdout_aborted += 1
+            self.issue("holdout_aborted", source, row["reason"])
+            if warmup_abort:
+                if window is not None:
+                    self.issue("holdout_missing_begin", source, "Warmup ABORT cannot terminate an open holdout window")
+                return
+        if window is None or window["window_id"] != row["window_id"]:
+            self.issue("holdout_missing_begin", source, "No matching holdout BEGIN in this recorded session")
+            return
+        if (anchor != window["anchor_ns"] or (event != "ABORT" and (
+                row["calibration_version"] != window["calibration_version"] or row["yaw_zero"] != window["yaw_zero"]))):
+            self.issue("holdout_window_changed", source, "Anchor/calibration changed within holdout window")
+            return
+        if row["mono_ns"] < window["mono_ns"]:
+            self.issue("invalid_holdout_time", source, "Holdout diagnostic clock regressed within window")
+            return
+        window["mono_ns"] = row["mono_ns"]
+        if event == "COMPARED":
+            if reference <= window["last_reference_ns"]:
+                self.issue("holdout_reference_replayed", source, "GPS comparison receipt time did not advance")
+                return
+            window["last_reference_ns"] = reference
+            add_difference(self.holdout_position, row["position_error_m"])
+            if row["heading_error_rad"] is not None:
+                add_difference(self.holdout_heading, row["heading_error_rad"])
+        else:
+            if event == "END":
+                if frontier <= anchor or frontier < window["last_reference_ns"]:
+                    self.issue("invalid_holdout_time", source, "Holdout END must advance beyond anchor and cover every comparison")
+                    return
+                self.holdout_completed += 1
+            s["holdout_window"] = None
 
     def send(self, row, source):
         if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "type", "length",
@@ -494,6 +662,8 @@ class Auditor:
                 self.issue("missing_health", source, "No health record")
             elif session["health_ns"] < max(session["last_send_ns"], session["last_diagnostic_ns"]):
                 self.issue("uncovered_trace_tail", source, "No health record at/after final send or diagnostic")
+            if session["holdout_window"] is not None:
+                self.issue("holdout_unfinished_window", source, "Recorded holdout window has no END/ABORT")
         if not self.checked:
             self.issue("no_location_samples", "inputs", "No complete type1 length48 payload pair checked")
         if self.collector_counts and not self.collector_boots:
@@ -520,6 +690,20 @@ class Auditor:
                                 states=dict(self.shadow_states), model_valid=dict(self.shadow_valid),
                                 resets_max=self.shadow_resets_max, rejected_max=self.shadow_rejected_max,
                                 scope="reported_model_diagnostics_not_accuracy_validation"),
+                    shadow_calibration=dict(states=dict(self.calibration_states),
+                                            enabled=dict(self.calibration_enabled),
+                                            candidate_ready=dict(self.calibration_candidates),
+                                            versions=dict(self.calibration_versions),
+                                            samples_max=self.calibration_samples_max,
+                                            scope="stationary_receipt_model_hypothesis_not_verified_calibration"),
+                    shadow_holdout=dict(events=dict(self.holdout_events), reasons=dict(self.holdout_reasons),
+                                        completed_windows=self.holdout_completed, aborted_windows=self.holdout_aborted,
+                                        position_difference_m=dict(self.holdout_position),
+                                        heading_difference_rad=dict(self.holdout_heading),
+                                        time_basis="receipt_model", gps_is_ground_truth=False,
+                                        reference_exclusion="not_provable_from_journal",
+                                        comparison_scope="recorded_compared_events_including_later_aborted_windows",
+                                        scope="model_to_gps_differences_not_physical_accuracy"),
                     position_poll_modes=dict(self.poll_modes), send_choices=dict(self.choices),
                     send_reasons=dict(self.reasons), lower_send_results=dict(self.results),
                     checked_location_payload_pairs=self.checked,
@@ -559,6 +743,13 @@ def main(argv=None):
         print("%s: %d LOCATION payload pairs checked" % (report["status"], report["checked_location_payload_pairs"]))
         print("Input modes: %s; choices: %s; max dropped: %s" %
               (report["input_modes"], report["send_choices"], report["drop_health"]["max_dropped"]))
+        if report["record_counts"].get("shadow_calibration"):
+            print("MODEL calibration states: %s; versions: %s" %
+                  (report["shadow_calibration"]["states"], report["shadow_calibration"]["versions"]))
+        if report["record_counts"].get("shadow_holdout"):
+            holdout = report["shadow_holdout"]
+            print("Receipt-time MODEL holdout events: %s; GPS position differences (m): %s" %
+                  (holdout["events"], holdout["position_difference_m"]))
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")

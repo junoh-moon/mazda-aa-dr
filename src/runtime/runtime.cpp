@@ -7,6 +7,7 @@
 #include "boot_id.h"
 #include "sha256.h"
 #include "motion_batch.h"
+#include "shadow_log.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -87,7 +88,7 @@ void hex48(const uint8_t *p, char *out) {
   out[96] = 0;
 }
 void json_number(double x, char out[48]) {
-  if (isfinite(x))
+  if (std::isfinite(x))
     snprintf(out, 48, "%.17g", x);
   else
     strcpy(out, "null");
@@ -188,6 +189,15 @@ void journal_motion(Journal &j, mx5::runtime::MotionBatch &batch,
   }
 }
 
+void journal_holdout(Journal &j,N::GpsHoldout &holdout,uint64_t now) {
+  N::HoldoutResult result;
+  char line[2200];
+  while(holdout.pop(&result)) {
+    if(mx5::runtime::format_shadow_holdout(line,sizeof line,now,result))j.line(line);
+    else j.fail();
+  }
+}
+
 void *worker(void *) {
   locale_t numeric_locale = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
   if (!numeric_locale) {
@@ -211,17 +221,20 @@ void *worker(void *) {
   j.line(line);
   j.flush();
   N::Pipeline navigation;
+  N::GpsHoldout holdout;
   N::MotionReceiver motion;
   const N::ModelProfile model=N::research_model_profile();
   mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
   bool shadow=config.mode==4 && hook_installed &&
-      navigation.init_model(model,mx5_dr_default_config(),nav_context) &&
+      navigation.init_model(model,mx5_dr_default_config(),nav_context,true) &&
+      holdout.init_model(model,mx5_dr_default_config(),nav_context) &&
       motion.open_channel();
   if(config.mode==4) {
     snprintf(line,sizeof line,
         "{\"kind\":\"shadow_boot\",\"active\":%s,\"domain\":\"model\","
         "\"source\":\"existing_vbs_vim_callback\",\"assist_ready\":false,"
         "\"motion_log_format\":\"motion_batch_v1\",\"motion_sampling\":false,"
+        "\"stationary_bias_model\":true,\"gps_holdout_model\":true,"
         "\"yaw_zero\":%.9g,\"yaw_rad_per_count\":%.9g,"
         "\"wheel_kmh_per_count\":%.9g,\"wheel_zero_kmh\":%.9g,"
         "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu}",
@@ -239,14 +252,17 @@ void *worker(void *) {
   }
   uint64_t last_flush = 0;
   uint64_t last_shadow_log=0;
+  uint64_t last_calibration_log=0;
   bool shadow_audit_reported=false;
   for (;;) {
     A::Observation o;
     unsigned drained = 0;
     while (drained++ < 256 && pop(&o)) {
       if (o.kind == A::Observation::POSITION) {
-        if(shadow && !__sync_fetch_and_add(&audit_fault,0))
+        if(shadow && !__sync_fetch_and_add(&audit_fault,0)) {
           navigation.enqueue_position(o);
+          holdout.enqueue_position(o);
+        }
         char lat[48], lon[48], h[48], v[48];
         json_number(o.position.latitude_deg, lat);
         json_number(o.position.longitude_deg, lon);
@@ -281,6 +297,8 @@ void *worker(void *) {
       if(j.failed || __sync_fetch_and_add(&audit_fault,0)) {
         if(!shadow_audit_reported) {
           navigation.reset(navigation.context());
+          holdout.reset(navigation.context(),N::HOLDOUT_AUDIT_RESET);
+          journal_holdout(j,holdout,now);
           j.line("{\"kind\":\"shadow_disabled\",\"reason\":\"audit_fault\",\"assist_ready\":false}");
           shadow_audit_reported=true;
         }
@@ -296,9 +314,11 @@ void *worker(void *) {
               disable_mutation();break;
             }
             ++c.source_epoch;++c.generation;navigation.reset(c);
+            holdout.reset(c,N::HOLDOUT_SOURCE_FAULT);
             j.line("{\"kind\":\"shadow_input_reset\",\"reason\":\"channel_discontinuity\",\"assist_ready\":false}");
           } else {
             navigation.enqueue_raw(raw);
+            holdout.enqueue_raw(raw);
             journal_motion(j,motion_batch,raw);
           }
         }
@@ -307,6 +327,14 @@ void *worker(void *) {
         flush_motion(j,motion_batch);
         now=clock_ns(0);
         if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
+        if(now>navigation.reorder_ns())holdout.drain(now-navigation.reorder_ns());
+        journal_holdout(j,holdout,now);
+        if(now>=last_calibration_log && now-last_calibration_log>=1000000000ULL) {
+          last_calibration_log=now;
+          if(mx5::runtime::format_shadow_calibration(line,sizeof line,now,navigation.calibration()))
+            j.line(line);
+          else j.fail();
+        }
         if(now>=last_shadow_log && now-last_shadow_log>=100000000ULL) {
           last_shadow_log=now;
           const N::Diagnostic d=navigation.diagnostic(now);
@@ -324,13 +352,14 @@ void *worker(void *) {
               "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
               "\"frontier_ns\":%llu,\"lat\":%s,\"lon\":%s,\"heading_rad\":%s,"
               "\"speed_mps\":%s,\"error_model_m\":%s,\"stopped\":%s,"
-              "\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
+              "\"yaw_zero\":%.17g,\"calibration_version\":%llu,\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
               (unsigned long long)now,d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),
               mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
               (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
               (unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
               (unsigned long long)d.snapshot.frontier_ns,lat,lon,heading,speed,error,
-              d.snapshot.stopped?"true":"false",encoded?"true":"false",preview);
+              d.snapshot.stopped?"true":"false",navigation.calibration().active_zero,
+              (unsigned long long)navigation.calibration().calibration_version,encoded?"true":"false",preview);
           j.line(line);
         }
       }

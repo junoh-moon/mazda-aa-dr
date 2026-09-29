@@ -23,31 +23,48 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     configured_(false), model_(false), have_fix_(false) {
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
+    for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
     profile_=research_model_profile();
 }
-bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x) {
+bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias) {
     if (!finite(p.yaw_zero)||!finite(p.yaw_rad_per_count)||p.yaw_rad_per_count==0 ||
         !finite(p.wheel_kmh_per_count)||p.wheel_kmh_per_count<=0 ||
         !finite(p.wheel_zero_kmh)||p.reorder_ns>c.sample_age_max_ns ||
         !finite(p.anchor_error_m)||p.anchor_error_m<0 ||
         !finite(p.heading_error_rad)||p.heading_error_rad<0) return false;
     model_=true; profile_=p;
+    gyro_bias_.configure(auto_bias,p.yaw_zero,c.sample_age_max_ns);
     configured_=mx5_dr_init_model(&core_,&c,x)==MX5_DR_OK;
     if (configured_) reset(x);
     return configured_;
 }
 bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
-    model_=false; configured_=mx5_dr_init(&core_,&c,x)==MX5_DR_OK;
+    model_=false; gyro_bias_.configure(false,profile_.yaw_zero,c.sample_age_max_ns);
+    configured_=mx5_dr_init(&core_,&c,x)==MX5_DR_OK;
     if (configured_) reset(x);
     return configured_;
 }
 void Pipeline::reset(mx5_dr_context x) {
     if (!configured_) return;
-    mx5_dr_reset(&core_,x); size_=0; watermark_=0; raw_epoch_=0;
+    mx5_dr_reset(&core_,x); gyro_bias_.reset(); size_=0; watermark_=0; raw_epoch_=0;
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
+    for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
     last_yaw_time_=0; interval_seq_=0; position_seq_=0; position_mode_=-1;
     have_fix_=false; status_.have_speed=status_.have_yaw=status_.have_reverse=false;
     status_.result=PIPELINE_WAITING; status_.core_result=MX5_DR_E_NO_SEED;
+}
+bool Pipeline::restart_model_prediction(mx5_dr_context x) {
+    if (!configured_ || !model_) return false;
+    GyroBias applied=gyro_bias_; applied.restart_prediction();
+    const uint64_t epoch=raw_epoch_;
+    uint64_t seq[4],time[4]; int transport[4];
+    std::memcpy(seq,raw_seq_,sizeof seq); std::memcpy(time,raw_time_,sizeof time);
+    std::memcpy(transport,raw_transport_,sizeof transport);
+    reset(x);
+    gyro_bias_=applied; raw_epoch_=epoch;
+    std::memcpy(raw_seq_,seq,sizeof seq); std::memcpy(raw_time_,time,sizeof time);
+    std::memcpy(raw_transport_,transport,sizeof transport);
+    return true;
 }
 PipelineResult Pipeline::fault(PipelineResult r) {
     mx5_dr_context x=context();
@@ -84,6 +101,11 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
         status_.uncertainties|=TRANSPORT_TIME_MODEL;
     } else status_.uncertainties|=RECEIPT_TIME_MODEL;
     if (!time||time>r.received_ns||time<raw_time_[r.kind]) return fault(PIPELINE_CLOCK_RESET);
+    // A change between receipt and transport clocks invalidates the learned
+    // zero and anchor together; never switch model units inside an outage.
+    if (gyro_bias_.status().enabled && raw_transport_[r.kind]!=-1 &&
+        raw_transport_[r.kind]!=int(r.source_mono_ms!=0)) return fault(PIPELINE_CLOCK_RESET);
+    raw_transport_[r.kind]=int(r.source_mono_ms!=0);
     raw_seq_[r.kind]=r.receive_seq; raw_time_[r.kind]=time;
     Event e=Event(); e.time=time; e.received=r.received_ns;
     e.evidence.source_id=uint64_t(r.kind); e.evidence.source_epoch=r.epoch;
@@ -93,14 +115,15 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
     e.evidence.quality=MX5_DR_MODEL; e.evidence.freshness=MX5_DR_MODEL_TIME;
     status_.uncertainties|=PHYSICAL_CALIBRATION_MODEL;
     if (r.kind==WHEELS) {
-        e.kind=SPEED_EVENT; double kmh=0;
+        e.kind=SPEED_EVENT; double kmh=0, wheels[4];
         for (unsigned i=0;i<4;++i) {
             if (r.raw[i]>40000) return fault(PIPELINE_BAD_INPUT);
             double wheel=r.raw[i]*profile_.wheel_kmh_per_count+profile_.wheel_zero_kmh;
             if (wheel<0) return fault(PIPELINE_BAD_INPUT);
-            kmh+=wheel*0.25;
+            kmh+=wheel*0.25; wheels[i]=wheel/3.6;
         }
         e.value=kmh/3.6;
+        gyro_bias_.wheels(time,r.received_ns,r.source_mono_ms!=0,wheels);
     } else if (r.kind==REVERSE) {
         e.kind=REVERSE_EVENT;
         if (profile_.reverse_forward_value<0 || profile_.reverse_reverse_value<0 ||
@@ -117,6 +140,7 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
         if (!last_yaw_time_) { last_yaw_time_=time; return PIPELINE_WAITING; }
         if (time==last_yaw_time_) return PIPELINE_WAITING;
         if (time-last_yaw_time_>core_.config.sample_age_max_ns) return fault(PIPELINE_MISSING_SENSOR);
+        gyro_bias_.yaw(last_yaw_time_,time,r.received_ns,r.source_mono_ms!=0,double(mean));
         e.kind=YAW_EVENT; e.time=last_yaw_time_; e.window_end=time;
         e.value=(double(mean)-profile_.yaw_zero)*profile_.yaw_rad_per_count;
         e.raw=uint16_t(mean); e.count=r.count; last_yaw_time_=time;
@@ -189,6 +213,15 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     position_mode_=mode;
     if (!model_) return PIPELINE_OK;
     if (!good_fix(o)) { have_fix_=false; control(MX5_DR_DISABLE); return PIPELINE_NO_ANCHOR; }
+    // GPS travel bearing can be converted to body heading only with reverse
+    // evidence already received by this fix and still within its original
+    // bounded lease. A later reverse callback cannot repair a prior anchor.
+    if (!status_.have_reverse || reverse_.time>o.mono_ns ||
+        reverse_.received>o.mono_ns ||
+        reverse_.evidence.lease_until_ns<o.mono_ns ||
+        o.mono_ns-reverse_.time>core_.config.sample_age_max_ns) {
+        have_fix_=false; control(MX5_DR_DISABLE); return PIPELINE_NO_ANCHOR;
+    }
     bool consistent=false;
     if (have_fix_ && o.mono_ns>previous_fix_.mono_ns &&
         o.mono_ns-previous_fix_.mono_ns<=2000000000ULL &&
@@ -207,13 +240,13 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     a.latitude_deg=o.position.latitude_deg; a.longitude_deg=o.position.longitude_deg;
     a.body_heading_rad=o.position.heading_deg*PI/180;
     // Travel heading becomes body heading only under this stated model. Reverse
-    // anchors require an actual observed reverse state, then rotate by pi.
-    if (!status_.have_reverse) return PIPELINE_NO_ANCHOR;
+    // evidence was checked against the anchor above; reverse rotates by pi.
     if (reverse_.value==1) a.body_heading_rad=std::fmod(a.body_heading_rad+PI,2*PI);
     a.position_error_m=profile_.anchor_error_m; a.heading_error_rad=profile_.heading_error_rad;
     a.quality=MX5_DR_MODEL;
     status_.uncertainties|=GPS_TIME_HEADING_MODEL;
     status_.core_result=mx5_dr_seed(&core_,&a);
+    if (status_.core_result==MX5_DR_OK) gyro_bias_.apply_at_anchor(o.mono_ns);
     return status_.core_result==MX5_DR_OK?PIPELINE_OK:PIPELINE_CORE_REJECTED;
 }
 PipelineResult Pipeline::advance(uint64_t end) {
@@ -230,7 +263,11 @@ PipelineResult Pipeline::advance(uint64_t end) {
         i.speed=speed_.evidence; i.yaw=yaw_.evidence; i.reverse=reverse_.evidence;
         // Reverse is held only within the original event's bounded lease.
         // Successful wheel/yaw traffic never refreshes reverse evidence.
-        i.speed_mps=speed_.value; i.yaw_rad_s=yaw_.value;
+        // Convert at consumption: a fresh anchor may switch zero while this
+        // window (or a future queued window) was received with the old zero.
+        i.speed_mps=speed_.value;
+        i.yaw_rad_s=model_?(double(yaw_.raw)-gyro_bias_.status().active_zero)*
+            profile_.yaw_rad_per_count:yaw_.value;
         i.reverse_active=int(reverse_.value); i.raw_yaw=yaw_.raw; i.yaw_count=yaw_.count;
         i.yaw_is_mean=1; i.yaw_window_start_ns=yaw_.time; i.yaw_window_end_ns=yaw_.window_end;
         status_.core_result=mx5_dr_step(&core_,&i);

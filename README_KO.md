@@ -13,6 +13,8 @@ OBSERVE 설치·검사·일회성 예약을 수행한다. [한 줄 설치 설명
 
 **master의 추가 변경(PR #12):** 실제 VIM 센서 콜백 → 시간 정렬 → DR 코어 → LOCATION 미리보기의 SHADOW 계산을 구현했다. [기능·계약·남은 조건](docs/LIVE_SHADOW_2026-09-29_KO.md). 배포된 `v0.2.0-observe.2`에는 이 기능이 없으며 live ASSIST는 계속 차단된다.
 
+**후속 SHADOW 기능:** [정차 자이로 영점 보정과 GPS 비교](docs/SHADOW_CALIBRATION_KO.md)를 추가했다. 보정값을 실제 MODEL 계산에 적용하고, 별도 10초 계산에서는 GPS를 비교 기준으로만 사용한다. 기존 설치 기본값과 ASSIST 차단은 유지한다.
+
 ## 문서 읽는 순서
 
 1. [현재 상태와 인계](docs/STATUS_KO.md): 목표, 증거 수준, 구현 범위, 남은 일.
