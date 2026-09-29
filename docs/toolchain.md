@@ -16,14 +16,25 @@ From the project directory:
 ```sh
 python3 tools/fetch_m3_toolchain.py --jobs 16
 MX5_TOOLCHAIN=$(pwd)/tools/m3-toolchain
-make arm \
-  ARM_PREFIX="$MX5_TOOLCHAIN/bin/arm-cortexa9_neon-linux-gnueabi-" \
-  ARM_SYSROOT="$MX5_TOOLCHAIN/arm-cortexa9_neon-linux-gnueabi/sysroot"
+python3 tools/build_arm.py --toolchain "$MX5_TOOLCHAIN" \
+  --build-dir build/release-arm
 ```
+
+Choose a new build directory each time. The release helper verifies the pinned
+toolchain files, compiles all five artifacts without cached objects, checks ARM
+ELF/ABI dependencies, and records source and artifact hashes in `arm-build.json`.
+`make_usb_zip.py` requires that record and rejects changed inputs or mixed
+artifacts. The record is an integrity check, not a signature or vehicle test.
+For incremental development, direct `make arm ARM_PREFIX=... ARM_SYSROOT=...`
+is still supported; compiler-generated `.d` files track transitive headers.
 
 The optional positional argument selects a different download directory. The
 script requires Python 3 and network access to GitHub; it requires no root
 privileges. It defaults to 16 parallel downloads (`--jobs 1` through `64`).
+The destination must be case-sensitive: Linux kernel headers contain distinct
+upper/lowercase names. On macOS, use storage inside the Linux container rather
+than a bind mount of a default macOS volume. The fetcher rejects that filesystem
+before downloading compiler files, instead of silently overwriting headers.
 Rerunning verifies existing files and resumes incomplete downloads. It downloads
 the compiler, C/C++ development/runtime subset and DBus; unused Boost headers and
 locales are omitted. Every file and symlink is verified against the pinned

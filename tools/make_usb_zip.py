@@ -9,12 +9,26 @@ import subprocess
 import tempfile
 import zipfile
 
+from build_arm import ARTIFACTS, verify_build
+
 REPO = Path(__file__).resolve().parents[1]
-ARTIFACTS = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'mx5dr-collector', 'mx5dr-guard', 'mx5dr-sha256')
+EXTRA_SOURCES = ('Makefile', 'tools/make_usb_zip.py', 'tools/analyze_logs.py',
+                 'tools/build_arm.py', 'tools/fetch_m3_toolchain.py')
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def source_files():
+    source = {}
+    for folder in ('src', 'packaging'):
+        for path in sorted((REPO / folder).rglob('*')):
+            if path.is_file() and '__pycache__' not in path.parts:
+                source[path.relative_to(REPO).as_posix()] = digest(path)
+    for name in EXTRA_SOURCES:
+        source[name] = digest(REPO / name)
+    return source
 
 
 def main():
@@ -27,20 +41,17 @@ def main():
     sidecar = output.with_suffix(output.suffix + '.sha256')
     if output.exists() or sidecar.exists():
         parser.error('Output already exists; choose a new name')
+    build_record = verify_build(REPO, args.build_dir.resolve())
     # This identifies uncommitted local candidates without inventing a tag or
     # pretending they are an unchanged build of the base commit.
-    source = {}
-    for folder in ('src', 'packaging'):
-        for path in sorted((REPO / folder).rglob('*')):
-            if path.is_file() and '__pycache__' not in path.parts:
-                source[path.relative_to(REPO).as_posix()] = digest(path)
-    extra_sources = ('Makefile', 'tools/make_usb_zip.py', 'tools/analyze_logs.py')
-    for name in extra_sources:
-        source[name] = digest(REPO / name)
+    source = source_files()
+    if any(source.get(name) != expected
+           for name, expected in build_record['source_files'].items()):
+        raise RuntimeError('Compiled sources changed before packaging')
     source_digest = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
     dirty = bool(subprocess.check_output(['git', 'status', '--porcelain', '--',
-                                         'src', 'packaging', *extra_sources], cwd=REPO))
+                                         'src', 'packaging', *EXTRA_SOURCES], cwd=REPO))
     with tempfile.TemporaryDirectory(prefix='mx5dr-usb-build-') as tmp:
         bundle = Path(tmp) / 'bundle'
         subprocess.run(['sh', str(REPO / 'packaging/make_bundle.sh'),
@@ -49,9 +60,15 @@ def main():
         shutil.copy2(REPO / 'tools/analyze_logs.py', bundle / 'analyze_logs.py')
         info = dict(source_commit=commit, source_modified=dirty, source_files=source,
                     source_tree_sha256=source_digest,
-                    toolchain_commit='61ec0343de84f6fc7c46840056df1d600d44be8a',
+                    toolchain_commit=build_record['toolchain']['commit'],
+                    arm_build=build_record,
                     target='NA 74.00.324A', default_mode=args.default_mode,
                     artifacts={name: digest(bundle / name) for name in ARTIFACTS})
+        if info['artifacts'] != build_record['artifacts']:
+            raise RuntimeError('Artifacts changed while packaging')
+        if source_files() != source:
+            raise RuntimeError('Sources changed while packaging')
+        verify_build(REPO, args.build_dir.resolve())
         (bundle / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
         files = sorted(p for p in bundle.rglob('*') if p.is_file())
         manifest = ''.join(digest(p) + '  ' + p.relative_to(bundle).as_posix() + '\n' for p in files)

@@ -6,6 +6,8 @@ project=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 : "${QEMU_SYSROOT:?Set its sysroot}"
 cd "$project"
 build=$project/build/arm-full-tests
+preload=${MX5DR_ARM_LIBRARY:-$project/build/libmx5dr.so}
+[ -s "$preload" ] || { echo "Missing production preload: $preload" >&2; exit 1; }
 mkdir -p "$build"
 arch='-march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=softfp -marm'
 warn='-O2 -Wall -Wextra -Werror'
@@ -24,7 +26,7 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch $dbus tests/collector/test_journal.cpp src/runtime/config.cpp -ldbus-1 -pthread -lrt -o "$build/collector-journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/collector-journal-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch tests/runtime/test_loader.cpp -ldl -pthread -o "$build/loader-test"
-qemu-arm -L "$QEMU_SYSROOT" -E "LD_PRELOAD=$project/build/libmx5dr.so" "$build/loader-test"
+qemu-arm -L "$QEMU_SYSROOT" -E "LD_PRELOAD=$preload" "$build/loader-test" "$preload"
 sh tests/adapter/run_arm.sh
 
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp tests/navigation/test_navigation.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/navigation-test"

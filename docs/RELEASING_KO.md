@@ -34,6 +34,7 @@ gh auth status
 RELEASE_WORK=$(mktemp -d /tmp/mazda-aa-dr-release.XXXXXX)
 git clone "https://github.com/$RELEASE_REPO.git" "$RELEASE_WORK/source"
 cd "$RELEASE_WORK/source"
+git remote set-url --push origin "git@github.com:$RELEASE_REPO.git"
 git fetch origin master --tags
 git cat-file -e "$RELEASE_COMMIT^{commit}"
 git merge-base --is-ancestor "$RELEASE_COMMIT" origin/master
@@ -61,12 +62,19 @@ python3 tools/fetch_m3_toolchain.py --jobs 16
 MX5_TOOLCHAIN="$PWD/tools/m3-toolchain"
 RELEASE_ARM_PREFIX="$MX5_TOOLCHAIN/bin/arm-cortexa9_neon-linux-gnueabi-"
 RELEASE_SYSROOT="$MX5_TOOLCHAIN/arm-cortexa9_neon-linux-gnueabi/sysroot"
-make arm ARM_PREFIX="$RELEASE_ARM_PREFIX" ARM_SYSROOT="$RELEASE_SYSROOT" \
+RELEASE_BUILD="$RELEASE_WORK/arm"
+python3 tools/build_arm.py --toolchain "$MX5_TOOLCHAIN" --build-dir "$RELEASE_BUILD" \
   2>&1 | tee "$RELEASE_WORK/evidence/arm-build.txt"
-sh packaging/make_bundle.sh build/libmx5dr.so "$RELEASE_BUNDLE"
+sh packaging/make_bundle.sh "$RELEASE_BUILD/libmx5dr.so" "$RELEASE_BUNDLE"
 ```
 
 묶음에는 같은 빌드의 `libmx5dr.so`, `libmx5dr-vimtap.so`, `mx5dr-collector`, `mx5dr-guard`, 정적 `mx5dr-sha256`, 각각의 `.sha256`, 설치·제거·로그 회수 helper와 기본 설정이 들어간다. `make_bundle.sh`는 ZIP, 전체 파일 manifest, 릴리즈 노트, GitHub Release를 생성하지 않는다. 출력 디렉터리가 이미 있으면 실패하므로 기존 묶음 위에 덮어쓰지 않는다.
+
+릴리즈 빌더는 새 디렉터리에서만 컴파일하고 도구체인 blob, 컴파일 전후 입력,
+실제 ARM ELF와 의존성, 다섯 결과물 해시를 `arm-build.json`에 기록한다.
+ZIP 빌더는 이 기록과 현재 소스·바이너리를 대조한다. 과거 빌드 디렉터리에
+새 소스의 정보를 덧붙여 릴리즈로 표시하지 않는다. 개발용 `make arm`은
+계속 사용할 수 있지만 릴리즈 기록을 대신하지 않는다.
 
 ## 3. 실제 배포 바이너리와 테스트 확인
 
@@ -80,11 +88,12 @@ MX5DR_RELEASE_BUNDLE="$RELEASE_BUNDLE" \
   make test 2>&1 | tee "$RELEASE_WORK/evidence/host-tests.txt"
 
 CROSS_COMPILE="$RELEASE_ARM_PREFIX" QEMU_SYSROOT="$RELEASE_SYSROOT" \
+MX5DR_ARM_LIBRARY="$RELEASE_BUILD/libmx5dr.so" \
   sh tests/run_arm_all.sh 2>&1 | tee "$RELEASE_WORK/evidence/arm-tests.txt"
 
 for artifact in libmx5dr.so libmx5dr-vimtap.so mx5dr-collector mx5dr-guard mx5dr-sha256; do
-  file "build/$artifact"
-  "${RELEASE_ARM_PREFIX}readelf" -h -A -d -V "build/$artifact"
+  file "$RELEASE_BUILD/$artifact"
+  "${RELEASE_ARM_PREFIX}readelf" -h -A -d -V "$RELEASE_BUILD/$artifact"
 done > "$RELEASE_WORK/evidence/elf.txt"
 ```
 
@@ -104,7 +113,7 @@ SHADOW 통합 시험은 아래 모드를 `SHADOW`로 명시하십시오. 기존 
 검사한 바이너리와 동일한 build 디렉터리를 사용하십시오.
 
 ```bash
-python3 tools/make_usb_zip.py --build-dir build --default-mode OBSERVE \
+python3 tools/make_usb_zip.py --build-dir "$RELEASE_BUILD" --default-mode OBSERVE \
   --output "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
 unzip -t "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
 mkdir "$RELEASE_WORK/unpacked"

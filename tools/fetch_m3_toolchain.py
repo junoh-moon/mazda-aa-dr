@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -125,6 +126,15 @@ def main():
         raise ValueError("Cached source tree is incomplete")
     selected = [entry for entry in tree["tree"]
                 if entry["type"] == "blob" and wanted(entry["path"])]
+    # Linux headers include distinct names such as xt_CONNMARK.h/xt_connmark.h.
+    # On the default macOS filesystem these overwrite one another, including
+    # through a Docker bind mount. Download into Linux storage instead.
+    with tempfile.TemporaryDirectory(prefix=".case-check-", dir=root) as probe:
+        lower = Path(probe) / "lower"
+        lower.write_bytes(b"case probe")
+        if lower.with_name("LOWER").exists():
+            raise ValueError("The pinned toolchain requires a case-sensitive filesystem; "
+                             "use Linux container storage, not a macOS bind mount")
     print("Verifying/downloading {} files from {}".format(len(selected), COMMIT), flush=True)
     errors = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:

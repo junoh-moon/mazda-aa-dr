@@ -60,7 +60,7 @@ test-runtime: $(BUILD)/test_runtime $(BUILD)/test_journal
 	$(BUILD)/test_runtime
 	$(BUILD)/test_journal
 test-packaging: $(BUILD)/test_collector
-	$(PYTHON) -m unittest discover -s tests/packaging -v
+	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/packaging -v
 test-tools:
 	$(PYTHON) -m unittest discover -s tests/tools -v
 test-build-deps:

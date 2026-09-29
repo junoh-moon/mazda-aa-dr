@@ -8,6 +8,7 @@ import time
 import unittest
 
 PACK = Path(__file__).resolve().parents[2] / 'packaging'
+COLLECTOR = Path(os.environ.get('MX5DR_TEST_BUILD', PACK.parent / 'build')) / 'test_collector'
 BOOT = '12345678-1234-1234-1234-123456789abc'
 OLD = '87654321-1234-1234-1234-123456789abc'
 
@@ -117,13 +118,13 @@ class TrialStatusTests(unittest.TestCase):
         (self.base / 'guard/arm').write_text('pending')
         self.assertNotEqual(self.run_status().returncode, 0)
 
-    @unittest.skipUnless((PACK.parent / 'build/test_collector').exists(), 'Host collector build unavailable')
+    @unittest.skipUnless(COLLECTOR.exists(), 'Host collector build unavailable')
     def test_real_collector_journal_envelope(self):
         actual_boot = Path('/proc/sys/kernel/random/boot_id').read_text()
         (self.root / 'proc/sys/kernel/random/boot_id').write_text(actual_boot)
         (self.base / 'guard/last-boot').write_text(actual_boot)
         (self.base / 'mx5dr.conf').write_text('mode=SHADOW\nsample_ms=500\n')
-        proc = subprocess.Popen([str(PACK.parent / 'build/test_collector'), '--root', str(self.base),
+        proc = subprocess.Popen([str(COLLECTOR), '--root', str(self.base),
                                  '--bus-address', 'unix:path=' + str(self.root / 'absent'),
                                  '--smdb', '/nonexistent-mx5dr-smdb'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
