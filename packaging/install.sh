@@ -75,11 +75,7 @@ for name in sm.conf sm_WCP.conf; do
     ! grep -F "$TOKEN" "$ROOT/jci/sm/$name" >/dev/null || fail 'Legacy persistent mx5dr preload found; run uninstall.sh first, then install one-boot package'
     ! grep -F "$TAP_TOKEN" "$ROOT/jci/sm/$name" >/dev/null || fail 'Persistent VBS tap preload found; run uninstall.sh first, then install one-boot package'
 done
-if [ -z "$ROOT" ]; then
-    cmu_uid=$(id -u cmu) || fail 'cmu account unavailable'
-    [ "$cmu_uid" != 0 ] || fail 'cmu must have a nonzero UID for the collector'
-fi
-prepare_storage
+prepare_collector_storage
 [ ! -e "$BASE/pending" ] || fail 'Incomplete transaction: run uninstall.sh before retrying'
 mount_rw "$ROOT/jci/sm"
 mount_rw "$ROOT/usr/bin"
@@ -112,7 +108,8 @@ hash "$TX/autostart.before" > "$TX/autostart.before.sha256"
 cp -p "$TX/autostart.before" "$file.mx5dr-new.$$"
 awk -v action=add -f "$HERE/edit_autostart.awk" "$TX/autostart.before" > "$file.mx5dr-new.$$" || fail 'Unsupported autostart anchors'
 sh -n "$file.mx5dr-new.$$" || fail 'Invalid staged autostart shell'
-# Never truncate mapped objects. Guard and config are root-owned; logs alone are cmu writable.
+# Never truncate mapped objects. Guard/config are UID 0 owned; the separate
+# collector's existing account owns logs (service when cmu itself is UID 0).
 for name in libmx5dr.so libmx5dr-vimtap.so mx5dr-guard mx5dr-collector; do
     dest=$BASE/$name
     [ "$name" != mx5dr-guard ] || dest=$BASE/guard/$name

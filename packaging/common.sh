@@ -53,6 +53,18 @@ verify_bundle_manifest() {
     [ "$entries" -gt 0 ] || fail 'Empty bundle manifest'
 }
 regular() { [ -f "$1" ] && [ ! -L "$1" ] || fail "Not a regular non-symlink file: $1"; }
+collector_user() {
+    # The shipped passwd update names UID 0 "cmu". Use its existing service
+    # account for the separate collector; do not rewrite factory accounts.
+    cmu_uid=$(id -u cmu) || fail 'cmu account unavailable'
+    if [ "$cmu_uid" != 0 ]; then
+        printf '%s\n' cmu
+    else
+        service_uid=$(id -u service) || fail 'service account unavailable'
+        [ "$service_uid" != 0 ] || fail 'service must have a nonzero UID'
+        printf '%s\n' service
+    fi
+}
 cleanup() {
     rc=$?
     trap - 0 HUP INT TERM
@@ -140,7 +152,57 @@ prepare_storage() {
     [ ! -L "$BASE/logs" ] && [ ! -L "$BASE/backups" ] || fail 'Symlink storage directory'
     chmod 0755 "$BASE" "$BASE/backups"
     chmod 0750 "$BASE/logs"
-    if [ -z "$ROOT" ]; then chown cmu "$BASE/logs" || fail 'cmu account unavailable'; fi
+}
+prepare_collector_storage() {
+    # Installation/arming need a runnable collector. Recovery must still work
+    # after accounts change or disappear, so generic storage has no NSS gate.
+    if [ -z "$ROOT" ]; then
+        log_user=$(collector_user) || fail 'Cannot select collector account'
+    fi
+    prepare_storage
+    if [ -z "$ROOT" ]; then
+        log_uid=$(id -u "$log_user") || fail 'Cannot resolve collector UID'
+        collector_lock=$BASE/logs/collector.lock
+        if [ ! -e "$collector_lock" ] && [ ! -L "$collector_lock" ]; then
+            # Another collector may create the same stable lock first.
+            (set -C; umask 077; : > "$collector_lock") 2>/dev/null || :
+        fi
+        regular "$collector_lock"
+        exec 8<> "$collector_lock" || fail 'Cannot open collector ownership lock'
+        if ! flock -n 8; then
+            # The production collector never unlinks its lock. Do not inspect
+            # its mutable PID/journals while it can remove or rotate them.
+            log_owner=$(stat -c %u "$BASE/logs") || fail 'Cannot inspect logs ownership'
+            lock_owner=$(stat -c %u "$collector_lock") || fail 'Cannot inspect collector lock ownership'
+            [ "$log_owner" = "$log_uid" ] && [ "$lock_owner" = "$log_uid" ] ||
+                fail 'Collector is active; cannot transfer log ownership'
+            exec 8>&-
+            return 0
+        fi
+        # Validate every existing entry while holding the collector's lock,
+        # before changing any owner. Never recurse into AA traces or evidence.
+        collector_files='collector.lock collector.pid collector.0.jsonl collector.1.jsonl'
+        for collector_name in $collector_files; do
+            collector_path=$BASE/logs/$collector_name
+            if [ -e "$collector_path" ] || [ -L "$collector_path" ]; then
+                regular "$collector_path"
+            fi
+        done
+        for collector_name in $collector_files; do
+            collector_path=$BASE/logs/$collector_name
+            if [ -f "$collector_path" ]; then
+                file_owner=$(stat -c %u "$collector_path") || fail "Cannot inspect ownership: $collector_name"
+                if [ "$file_owner" != "$log_uid" ]; then
+                    chown "$log_user" "$collector_path" || fail "Cannot transfer ownership: $collector_name"
+                fi
+            fi
+        done
+        log_owner=$(stat -c %u "$BASE/logs") || fail 'Cannot inspect logs ownership'
+        if [ "$log_owner" != "$log_uid" ]; then
+            chown "$log_user" "$BASE/logs" || fail 'Cannot transfer logs directory ownership'
+        fi
+        exec 8>&-
+    fi
 }
 edit_to() {
     regular "$1"

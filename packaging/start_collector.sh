@@ -12,7 +12,7 @@ regular "$BASE/mx5dr-collector"
 regular "$BASE/mx5dr.conf"
 [ -x "$BASE/mx5dr-collector" ] || fail 'Collector not executable'
 [ -d "$BASE/logs" ] && [ ! -L "$BASE/logs" ] && [ -w "$BASE/logs" ] || fail 'Writable owned logs directory required'
-# The production executable drops root to cmu before DBus/config/log access.
+# The executable drops UID 0 to service (or a non-root cmu) before DBus/config/log access.
 # No OEM preload in the collector or its SMDB children. Preserve the authorized
 # shell's other environment; the necessary DBus/library setup is site-specific.
 # A kernel flock in the executable rejects duplicate starts, without stale-PID kills.

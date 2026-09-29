@@ -8,7 +8,7 @@ MODE=OBSERVE
 for arg in "$@"; do case "$arg" in --remount) ALLOW_REMOUNT=1;; --mode=OBSERVE|--mode=SCRUB|--mode=SHADOW) MODE=${arg#--mode=};; *) fail "Unknown option $arg";; esac; done
 [ -z "$ROOT" ] || [ "$ALLOW_REMOUNT" = 0 ] || fail 'No remounts permitted for fixtures'
 verify_firmware
-prepare_storage
+prepare_collector_storage
 [ ! -e "$BASE/pending" ] || fail 'Pending installation transaction'
 [ -d "$BASE/guard" ] && [ ! -L "$BASE/guard" ] || fail 'Missing guard directory'
 regular "$BASE/guard/mx5dr-guard"

@@ -430,12 +430,15 @@ int main(int argc, char **argv) {
     else { fprintf(stderr, "Usage: mx5dr-collector [--session-seconds 1..86400]\n"); return 64; }
   }
   // A verified root-owned external startup path may launch us once. Drop to
-  // cmu before reading configuration, contacting DBus or creating log files.
+  // the existing unprivileged account before config/DBus/log access. In the
+  // shipped passwd update cmu is UID 0, and service is the bus account.
 #ifndef MX5_COLLECTOR_TESTING
   if (geteuid() == 0) {
-    struct passwd *cmu = getpwnam("cmu");
-    if (!cmu || cmu->pw_uid == 0 || setgroups(0, 0) ||
-        setgid(cmu->pw_gid) || setuid(cmu->pw_uid)) return 77;
+    struct passwd *account = getpwnam("cmu");
+    if (!account) return 77;
+    if (account->pw_uid == 0) account = getpwnam("service");
+    if (!account || account->pw_uid == 0 || setgroups(0, 0) ||
+        setgid(account->pw_gid) || setuid(account->pw_uid)) return 77;
   }
 #endif
   // Initialization is private to this process, before any DBus operation.
@@ -454,8 +457,8 @@ int main(int argc, char **argv) {
   if (config.max_log_files > 2) config.max_log_files = 2;
   // Kernel lock survives no process death: stale PID files never authorize kill.
   struct stat st;
-  // The installer owns the parent and assigns logs to cmu. Do not leave
-  // root-owned singleton/log files that prevent the next cmu invocation.
+  // The installer owns the parent and assigns logs to the selected account.
+  // Do not leave root-owned singleton/log files that block its next invocation.
   if (lstat(logs_path, &st) || !S_ISDIR(st.st_mode) || st.st_uid != geteuid()) return 73;
   int lock_fd = open(lock_path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (lock_fd < 0 || fstat(lock_fd, &st) || !S_ISREG(st.st_mode)) return 73;
