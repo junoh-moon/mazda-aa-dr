@@ -38,10 +38,24 @@ def encode(rows):
     return ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
 
 
+def collector(kind, pid=123, observed=20,
+              boot_id="12345678-1234-1234-1234-123456789abc"):
+    # Production stop/poll envelopes have PID and receipt time, but no boot ID.
+    row = dict(stream="collector", collector_pid=pid, observed_at_mono_ns=observed,
+               producer_mono_ns=None, producer_time_status="unknown", kind=kind)
+    if kind == "collector_boot":
+        row.update(schema=1, sample_ms=1000, session_seconds=28800, boot_id=boot_id)
+    elif kind == "collector_stop":
+        row.update(samples=0, reason="stop_marker")
+    elif kind == "position_poll_error":
+        row.update(reason="bus_unavailable")
+    return row
+
+
 class AnalyzeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -53,6 +67,12 @@ class AnalyzeTests(unittest.TestCase):
 
     def codes(self, report):
         return {issue["code"] for issue in report["issues"]}
+
+    def audit_collector(self, current, older=()):
+        (self.root / "trace.0.jsonl").write_bytes(encode(records()))
+        (self.root / "collector.1.jsonl").write_bytes(encode(older))
+        (self.root / "collector.0.jsonl").write_bytes(encode(current))
+        return module.analyze([self.root])
 
     def test_original_pass_scope_is_local(self):
         report = self.audit()
@@ -265,6 +285,97 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(report["status"], "violation")
         self.assertIn("unexpected_collector_record", self.codes(report))
         self.assertIn("unexpected_poll_qualification", self.codes(report))
+
+
+    def test_collector_rotated_old_stop_cannot_close_new_session(self):
+        for old_pid in (111, 222):
+            with self.subTest(pid_reused=old_pid == 222):
+                report = self.audit_collector(
+                    [collector("collector_boot", pid=222, observed=30)],
+                    older=[collector("collector_stop", pid=old_pid, observed=20)])
+                self.assertEqual(report["status"], "inconclusive")
+                self.assertIn("collector_missing_boot", self.codes(report))
+                self.assertIn("collector_open_session", self.codes(report))
+
+    def test_collector_boot_and_stop_across_rotation_are_one_session(self):
+        report = self.audit_collector(
+            [collector("position_poll_error", observed=30),
+             collector("collector_stop", observed=40)],
+            older=[collector("collector_boot", observed=20)])
+        self.assertEqual(report["status"], "local_checks_pass")
+
+    def test_collector_normal_sessions_allow_pid_reuse_and_new_boot_clock(self):
+        other_boot = "87654321-1234-1234-1234-123456789abc"
+        report = self.audit_collector([
+            collector("collector_boot", observed=20),
+            collector("collector_stop", observed=30),
+            collector("collector_boot", observed=40),
+            collector("collector_stop", observed=50),
+            collector("collector_boot", observed=10, boot_id=other_boot),
+            collector("collector_stop", observed=15),
+        ])
+        self.assertEqual(report["status"], "local_checks_pass")
+        self.assertEqual(len(report["collector"]["boots"]), 3)
+        self.assertEqual(len(report["collector"]["stops"]), 3)
+
+    def test_collector_duplicate_old_stop_cannot_close_reused_pid_new_boot(self):
+        report = self.audit_collector(
+            [collector("collector_boot", observed=10,
+                       boot_id="87654321-1234-1234-1234-123456789abc")],
+            older=[collector("collector_boot", observed=20),
+                   collector("collector_stop", observed=30),
+                   collector("collector_stop", observed=30)])
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertIn("collector_record_after_stop", self.codes(report))
+        self.assertIn("collector_open_session", self.codes(report))
+
+    def test_collector_stop_requires_the_current_pid(self):
+        report = self.audit_collector([
+            collector("collector_boot", pid=123, observed=20),
+            collector("collector_stop", pid=456, observed=30),
+        ])
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertIn("collector_session_mismatch", self.codes(report))
+        self.assertIn("collector_open_session", self.codes(report))
+
+    def test_collector_orphan_rows_are_not_healed_by_later_complete_session(self):
+        report = self.audit_collector(
+            [collector("collector_boot", pid=222, observed=20),
+             collector("collector_stop", pid=222, observed=30)],
+            older=[collector("position_poll_error", pid=111, observed=10)])
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertIn("collector_missing_boot", self.codes(report))
+
+    def test_collector_regressed_or_malformed_stop_cannot_close_session(self):
+        for change in ({"observed_at_mono_ns": 19}, {"observed_at_mono_ns": -1},
+                       {"samples": "missing"}):
+            with self.subTest(change=change):
+                stop = collector("collector_stop", observed=30)
+                stop.update(change)
+                report = self.audit_collector([collector("collector_boot", observed=20), stop])
+                self.assertEqual(report["status"], "inconclusive")
+                self.assertIn("collector_open_session", self.codes(report))
+
+    def test_collector_records_after_stop_are_incomplete(self):
+        report = self.audit_collector([
+            collector("collector_boot", observed=20),
+            collector("collector_stop", observed=30),
+            collector("position_poll_error", observed=40),
+        ])
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertIn("collector_record_after_stop", self.codes(report))
+
+    def test_collector_open_session_has_no_terminal_evidence(self):
+        report = self.audit_collector([collector("collector_boot")])
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertIn("collector_open_session", self.codes(report))
+
+    def test_collector_unknown_boot_identity_is_inconclusive(self):
+        report = self.audit_collector([
+            collector("collector_boot", boot_id="unknown"),
+            collector("collector_stop", observed=30),
+        ])
+        self.assertEqual(report["status"], "inconclusive")
 
 
 if __name__ == "__main__":

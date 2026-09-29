@@ -31,6 +31,7 @@ LIMITATIONS = [
     "Yaw/wheel calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
     "Holdout journal structure cannot prove that GPS references were excluded from prediction inputs.",
     "Motion counts cover channel-accepted records; source measurement timing remains unknown.",
+    "Collector stops carry no boot ID; matching uses ordered boot boundaries, PID, and monotonic receipt time.",
 ]
 
 
@@ -146,6 +147,9 @@ class Auditor:
         self.collector_boots = []
         self.collector_stops = []
         self.collector_pids = set()
+        self.collector_session = None
+        self.collector_sessions = []
+        self.collector_orphan_pid = None
         self.motion_samples = 0
         self.motion_sensors = Counter()
         self.motion_batches = 0
@@ -202,6 +206,87 @@ class Auditor:
         if any(k not in row or (row[k] is not None and type(row[k]) not in (int, float)) for k in fields):
             self.issue("partial_record", source, "Position numeric fields absent or invalid")
 
+    def collector_continuation(self, row, source):
+        """Only the current explicit boot boundary can own a subsequent row."""
+        s = self.collector_session
+        pid, observed = row["collector_pid"], row["observed_at_mono_ns"]
+        if s is None:
+            if self.collector_orphan_pid != pid:
+                self.issue("collector_missing_boot", source,
+                           "Collector rotation/start boundary is missing for PID %d" % pid)
+                self.collector_orphan_pid = pid
+            return False
+        if pid != s["pid"]:
+            self.issue("collector_session_mismatch", source,
+                       "Record PID does not match the current collector boot")
+            return False
+        if s["stop_ns"] is not None:
+            self.issue("collector_record_after_stop", source,
+                       "Collector record follows this session's terminal record")
+            return False
+        if observed < s["last_ns"]:
+            self.issue("collector_clock_regressed", source,
+                       "Collector receipt time regressed within a session")
+            return False
+        s["last_ns"] = observed
+        return True
+
+    def collector_record(self, row, source):
+        """Return whether a polling row still needs its ordinary field checks."""
+        kind = row["kind"]
+        self.collector_counts[kind] += 1
+        if not self.validate(row, source, ("collector_pid", "observed_at_mono_ns"),
+                             ("producer_time_status",)):
+            return False
+        if (not bounded_int(row["collector_pid"], 1, 2**31 - 1) or
+                not bounded_int(row["observed_at_mono_ns"], 1, 2**64 - 1)):
+            self.issue("partial_record", source, "Invalid collector PID or receipt time")
+            return False
+        self.collector_pids.add(row["collector_pid"])
+        if ("producer_mono_ns" not in row or row["producer_mono_ns"] is not None or
+                row["producer_time_status"] != "unknown"):
+            self.issue("unexpected_poll_qualification", source,
+                       "Collector cannot establish producer measurement time", True)
+        if kind == "collector_boot":
+            previous = self.collector_session
+            self.collector_session = None
+            self.collector_orphan_pid = None
+            self.collector_boots.append(row)
+            if not self.validate(row, source, ("schema", "sample_ms", "session_seconds"), ("boot_id",)):
+                return False
+            if (not bounded_int(row["schema"], 1, 1) or
+                    not bounded_int(row["sample_ms"], 1, 2**32 - 1) or
+                    not bounded_int(row["session_seconds"], 1, 86400)):
+                self.issue("partial_record", source, "Invalid collector boot schema or timing")
+                return False
+            if not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", row["boot_id"]):
+                self.issue("collector_boot_identity_unavailable", source, "Collector boot ID is not available")
+                return False
+            observed = row["observed_at_mono_ns"]
+            if previous and previous["boot_id"] == row["boot_id"] and observed < previous["last_ns"]:
+                self.issue("collector_clock_regressed", source,
+                           "Collector receipt time regressed within the same kernel boot")
+            self.collector_session = dict(boot_id=row["boot_id"], pid=row["collector_pid"],
+                                          start_ns=observed, last_ns=observed, stop_ns=None,
+                                          source=source)
+            self.collector_sessions.append(self.collector_session)
+            return False
+        if kind == "collector_stop":
+            self.collector_stops.append(row)
+            if not self.validate(row, source, ("samples",), ("reason",)):
+                return False
+            if not bounded_int(row["samples"], 0, 2**64 - 1) or not row["reason"]:
+                self.issue("partial_record", source, "Invalid collector stop counter or reason")
+                return False
+            if self.collector_continuation(row, source):
+                self.collector_session["stop_ns"] = row["observed_at_mono_ns"]
+            return False
+        if kind not in ("poll", "position_poll", "position_poll_error", "owner_poll", "receiver_poll"):
+            self.issue("unexpected_collector_record", source, "Collector cannot emit AA hook/health records", True)
+            return False
+        self.collector_continuation(row, source)
+        return True
+
     def consume(self, row, source):
         if not isinstance(row, dict) or not isinstance(row.get("kind"), str):
             self.issue("partial_record", source, "Expected object with kind")
@@ -209,25 +294,8 @@ class Auditor:
         kind = row["kind"]
         self.counts[kind] += 1
         collector = row.get("stream") == "collector"
-        if collector:
-            self.collector_counts[kind] += 1
-            if not self.validate(row, source, ("collector_pid", "observed_at_mono_ns"),
-                                 ("producer_time_status",)):
-                return
-            self.collector_pids.add(row["collector_pid"])
-            if "producer_mono_ns" not in row or row["producer_mono_ns"] is not None or row["producer_time_status"] != "unknown":
-                self.issue("unexpected_poll_qualification", source, "Collector cannot establish producer measurement time", True)
-            if kind == "collector_boot":
-                self.validate(row, source, ("schema", "sample_ms", "session_seconds"), ("boot_id",))
-                self.collector_boots.append(row)
-                return
-            if kind == "collector_stop":
-                self.validate(row, source, ("samples",), ("reason",))
-                self.collector_stops.append(row)
-                return
-            if kind not in ("poll", "position_poll", "position_poll_error", "owner_poll", "receiver_poll"):
-                self.issue("unexpected_collector_record", source, "Collector cannot emit AA hook/health records", True)
-                return
+        if collector and not self.collector_record(row, source):
+            return
         if kind == "boot":
             self.new_session(row)
             self.boots.append(row)
@@ -783,10 +851,10 @@ class Auditor:
                 self.issue("holdout_unfinished_window", source, "Recorded holdout window has no END/ABORT")
         if not self.checked:
             self.issue("no_location_samples", "inputs", "No complete type1 length48 payload pair checked")
-        if self.collector_counts and not self.collector_boots:
-            self.issue("collector_missing_boot", "collector", "Collector rotation/start boundary is missing")
-        if len(self.collector_stops) < len(self.collector_boots):
-            self.issue("collector_open_session", "collector", "Collector shutdown is not recorded; observation coverage is incomplete")
+        for session in self.collector_sessions:
+            if session["stop_ns"] is None:
+                self.issue("collector_open_session", session["source"],
+                           "No matching shutdown after this collector boot; observation coverage is incomplete")
         status = ("violation" if self.issue_counts["violation"] else
                   "inconclusive" if self.issue_counts["inconclusive"] else "local_checks_pass")
         def boot_ids(rows):
@@ -842,6 +910,9 @@ class Auditor:
                     collector=dict(record_counts=dict(self.collector_counts),
                                    pids=sorted(self.collector_pids), boots=self.collector_boots,
                                    stops=self.collector_stops, producer_time="unknown",
+                                   sessions=[dict(boot_id=s["boot_id"], pid=s["pid"],
+                                                  start_ns=s["start_ns"], stop_ns=s["stop_ns"])
+                                             for s in self.collector_sessions],
                                    request_provenance="not_established"),
                     owner_pid_comm=[dict(owner=k[0], pid=k[1], comm=k[2], count=v) for k, v in sorted(self.owners.items())],
                     receiver_counts=dict(self.receivers), install_counts=dict(self.installs), boots=self.boots,
