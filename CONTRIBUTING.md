@@ -22,6 +22,8 @@ Pinned ARM compiler and QEMU instructions are in [toolchain notes](docs/toolchai
 
 ## Changes and evidence
 
+For installation ZIPs and GitHub Releases, follow [the release procedure](docs/RELEASING_KO.md): pin the source commit, build and validate the actual artifacts, package checksums, publish a tagged pre-release, and verify the downloaded assets. Merging source does not update an existing release.
+
 PRs should state the observed problem, behavior before/after, checks actually run, skipped checks, and what remains uncertain. Source, design and current status must agree. Keep review discussion attached to a commit when it depends on exact source. Use issue acceptance criteria rather than treating a general test PASS as resolution.
 
 Do not attach location traces without removing personal routes/identifiers. Prefer synthetic reproduction inputs. Do not upload stock firmware or extracted OEM components. No project license is selected yet; preserve external attribution and do not apply a blanket license to third-party materials.
