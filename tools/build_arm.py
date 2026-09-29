@@ -105,6 +105,8 @@ def check_attributes(path, readelf):
     if ('Tag_CPU_arch: v7\n' not in report or
             'Tag_ABI_VFP_args: VFP registers' in report or 'TEXTREL' in report):
         raise ValueError('Unexpected ARM attributes or TEXTREL: ' + path.name)
+    if re.search(r'\((?:RPATH|RUNPATH)\)', report):
+        raise ValueError('Unexpected RPATH/RUNPATH: ' + path.name)
     if set(re.findall(r'\bGLIBC_[0-9.]+', report)) - {'GLIBC_2.4'}:
         raise ValueError('Unexpected GLIBC version: ' + path.name)
     needed = re.findall(r'\(NEEDED\).*?\[(.*?)\]', report)
@@ -122,7 +124,7 @@ def build_environment():
     for name in ('MAKEFLAGS', 'GNUMAKEFLAGS', 'MFLAGS', 'MAKEOVERRIDES', 'MAKEFILES',
                  'MAKELEVEL', 'GCC_EXEC_PREFIX', 'COMPILER_PATH', 'LIBRARY_PATH',
                  'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'DEPENDENCIES_OUTPUT',
-                 'SUNPRO_DEPENDENCIES'):
+                 'SUNPRO_DEPENDENCIES', 'LD_RUN_PATH'):
         environment.pop(name, None)
     environment['LC_ALL'] = 'C'
     return environment

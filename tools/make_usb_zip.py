@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -31,15 +32,76 @@ def source_files():
     return source
 
 
+def source_modified(source, commit):
+    # Compare captured input bytes with the pinned commit, independently of
+    # index flags, ignore rules and status.showUntrackedFiles configuration.
+    tree = subprocess.check_output(['git', '--no-replace-objects', 'ls-tree', '-r', '-z', '--full-tree',
+                                    commit, '--', 'src', 'packaging', *EXTRA_SOURCES], cwd=REPO)
+    tracked = {}
+    for entry in tree.split(b'\0'):
+        if entry:
+            metadata, raw_name = entry.split(b'\t', 1)
+            _, kind, object_id = metadata.split()
+            name = os.fsdecode(raw_name)
+            if kind == b'blob' and '__pycache__' not in Path(name).parts:
+                tracked[name] = object_id.decode('ascii')
+    if set(tracked) != set(source):
+        return True
+    for name, object_id in tracked.items():
+        blob = subprocess.check_output(['git', '--no-replace-objects', 'cat-file', 'blob', object_id], cwd=REPO)
+        if hashlib.sha256(blob).hexdigest() != source[name]:
+            return True
+    return False
+
+
+def write_verified_zip(bundle, output, sidecar):
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # The temporary files share the destination filesystem. Hard links publish
+    # complete files without replacing any concurrently created destination.
+    with tempfile.NamedTemporaryFile(dir=output.parent, prefix='.' + output.name + '.',
+                                     suffix='.partial') as partial, \
+            tempfile.NamedTemporaryFile(dir=output.parent, prefix='.' + sidecar.name + '.',
+                                         suffix='.partial') as checksum:
+        with zipfile.ZipFile(partial.name, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(p for p in bundle.rglob('*') if p.is_file()):
+                archive.write(path, path.relative_to(bundle).as_posix())
+        # Verify the bytes actually written, including trigger subdirectories.
+        with zipfile.ZipFile(partial.name) as archive:
+            if archive.testzip() is not None:
+                raise RuntimeError('ZIP integrity failure')
+            for line in archive.read('SHA256SUMS').decode().splitlines():
+                expected, name = line.split('  ', 1)
+                if hashlib.sha256(archive.read(name)).hexdigest() != expected:
+                    raise RuntimeError('ZIP checksum mismatch: ' + name)
+            if not {'install.sh', 'js/run.js', 'mp3/a.mp3', 'mx5dr-sha256'} <= set(archive.namelist()):
+                raise RuntimeError('Missing USB root entry')
+        checksum_line = digest(Path(partial.name)) + '  ' + output.name + '\n'
+        checksum.write(checksum_line.encode())
+        checksum.flush()
+        try:
+            # Publish the ZIP last so a failed sidecar cannot leave a final ZIP.
+            os.link(checksum.name, sidecar)
+            os.link(partial.name, output)
+        except BaseException:
+            for path, temporary in ((output, partial), (sidecar, checksum)):
+                try:
+                    if os.path.samestat(path.lstat(), os.fstat(temporary.fileno())):
+                        path.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
+    return checksum_line
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, default=REPO / 'build')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--default-mode', choices=('OBSERVE', 'SHADOW'), default='OBSERVE')
     args = parser.parse_args()
-    output = args.output.resolve()
+    output = args.output.absolute()
     sidecar = output.with_suffix(output.suffix + '.sha256')
-    if output.exists() or sidecar.exists():
+    if any(path.exists() or path.is_symlink() for path in (output, sidecar)):
         parser.error('Output already exists; choose a new name')
     build_record = verify_build(REPO, args.build_dir.resolve())
     # This identifies uncommitted local candidates without inventing a tag or
@@ -50,8 +112,7 @@ def main():
         raise RuntimeError('Compiled sources changed before packaging')
     source_digest = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
-    dirty = bool(subprocess.check_output(['git', 'status', '--porcelain', '--',
-                                         'src', 'packaging', *EXTRA_SOURCES], cwd=REPO))
+    dirty = source_modified(source, commit)
     with tempfile.TemporaryDirectory(prefix='mx5dr-usb-build-') as tmp:
         bundle = Path(tmp) / 'bundle'
         subprocess.run(['sh', str(REPO / 'packaging/make_bundle.sh'),
@@ -73,23 +134,9 @@ def main():
         files = sorted(p for p in bundle.rglob('*') if p.is_file())
         manifest = ''.join(digest(p) + '  ' + p.relative_to(bundle).as_posix() + '\n' for p in files)
         (bundle / 'SHA256SUMS').write_text(manifest)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(p for p in bundle.rglob('*') if p.is_file()):
-                archive.write(path, path.relative_to(bundle).as_posix())
-        # Verify the bytes actually written, including trigger subdirectories.
-        with zipfile.ZipFile(output) as archive:
-            if archive.testzip() is not None:
-                raise RuntimeError('ZIP integrity failure')
-            for line in archive.read('SHA256SUMS').decode().splitlines():
-                expected, name = line.split('  ', 1)
-                if hashlib.sha256(archive.read(name)).hexdigest() != expected:
-                    raise RuntimeError('ZIP checksum mismatch: ' + name)
-            if not {'install.sh', 'js/run.js', 'mp3/a.mp3', 'mx5dr-sha256'} <= set(archive.namelist()):
-                raise RuntimeError('Missing USB root entry')
-        sidecar.write_text(digest(output) + '  ' + output.name + '\n')
+        checksum_line = write_verified_zip(bundle, output, sidecar)
         print(output)
-        print(sidecar.read_text(), end='')
+        print(checksum_line, end='')
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 """Release input checks; synthetic ELF headers here are never executed."""
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -9,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'tools'))
@@ -63,12 +65,30 @@ class ArmReleaseTests(unittest.TestCase):
             return ' M src/example.h\n'
         with mock.patch.object(make_usb_zip, 'REPO', self.repo), \
                 mock.patch.object(make_usb_zip.subprocess, 'check_output', metadata), \
+                mock.patch.object(make_usb_zip, 'source_modified', return_value=True, create=True), \
                 mock.patch.object(sys, 'argv', ['make_usb_zip.py', '--build-dir', str(self.build),
                                                '--output', str(output)]):
             make_usb_zip.main()
 
     def test_matching_record_and_bytes(self):
         self.assertEqual(build_arm.verify_build(self.repo, self.build), self.record)
+
+    def test_build_environment_removes_ld_run_path(self):
+        with mock.patch.dict(os.environ, {'LD_RUN_PATH': '/unexpected/library/path'}, clear=True):
+            self.assertFalse('LD_RUN_PATH' in build_arm.build_environment())
+
+    def test_attributes_reject_rpath_and_runpath(self):
+        report = ('  Tag_CPU_arch: v7\n'
+                  ' 0x00000001 (NEEDED) Shared library: [libc.so.6]\n')
+        path = self.build / 'libmx5dr.so'
+        with mock.patch.object(build_arm.subprocess, 'check_output', return_value=report):
+            self.assertEqual(build_arm.check_attributes(path, 'readelf')['needed'], ['libc.so.6'])
+        for tag in ('RPATH', 'RUNPATH'):
+            with self.subTest(tag=tag), \
+                    mock.patch.object(build_arm.subprocess, 'check_output',
+                                      return_value=report + ' 0x0000000f (' + tag + ') [/unexpected]\n'):
+                with self.assertRaisesRegex(ValueError, 'RPATH|RUNPATH'):
+                    build_arm.check_attributes(path, 'readelf')
 
     def test_missing_build_record_rejected(self):
         (self.build / build_arm.RECORD).unlink()
@@ -153,10 +173,62 @@ class ArmReleaseTests(unittest.TestCase):
 
     def test_zip_matching_validation_fixture_succeeds(self):
         self.prepare_packaging()
-        output = self.root / 'matched-fixture.zip'
+        output = self.root / 'published' / 'matched-fixture.zip'
         self.package(output)
         self.assertTrue(output.is_file())
-        self.assertTrue(output.with_suffix('.zip.sha256').is_file())
+        sidecar = output.with_suffix('.zip.sha256')
+        self.assertEqual(sidecar.read_text(), build_arm.digest(output) + '  ' + output.name + '\n')
+        with zipfile.ZipFile(output) as archive:
+            self.assertIsNone(archive.testzip())
+            self.assertIn('build-info.json', archive.namelist())
+        self.assertEqual(set(output.parent.iterdir()), {output, sidecar})
+
+    def test_zip_late_integrity_failure_leaves_no_outputs_or_temporary_files(self):
+        self.prepare_packaging()
+        output = self.root / 'published' / 'failed.zip'
+        with mock.patch.object(zipfile.ZipFile, 'testzip', return_value='install.sh'):
+            with self.assertRaisesRegex(RuntimeError, 'ZIP integrity failure'):
+                self.package(output)
+        self.assertEqual(list(output.parent.iterdir()), [])
+
+    def test_zip_interruption_leaves_no_outputs_or_temporary_files(self):
+        self.prepare_packaging()
+        output = self.root / 'published' / 'interrupted.zip'
+        with mock.patch.object(zipfile.ZipFile, 'testzip', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.package(output)
+        self.assertEqual(list(output.parent.iterdir()), [])
+
+    def test_zip_concurrent_output_is_never_overwritten(self):
+        self.prepare_packaging()
+        output = self.root / 'published' / 'competing.zip'
+        run = subprocess.run
+        def create_competing_output(*args, **kwargs):
+            result = run(*args, **kwargs)
+            output.parent.mkdir()
+            output.write_bytes(b'other publisher output')
+            return result
+        with mock.patch.object(make_usb_zip.subprocess, 'run', create_competing_output):
+            with self.assertRaises(FileExistsError):
+                self.package(output)
+        self.assertEqual(output.read_bytes(), b'other publisher output')
+        self.assertEqual(set(output.parent.iterdir()), {output})
+
+    def test_zip_concurrent_sidecar_is_never_overwritten(self):
+        self.prepare_packaging()
+        output = self.root / 'published' / 'competing.zip'
+        sidecar = output.with_suffix('.zip.sha256')
+        run = subprocess.run
+        def create_competing_sidecar(*args, **kwargs):
+            result = run(*args, **kwargs)
+            output.parent.mkdir()
+            sidecar.write_bytes(b'other publisher checksum')
+            return result
+        with mock.patch.object(make_usb_zip.subprocess, 'run', create_competing_sidecar):
+            with self.assertRaises(FileExistsError):
+                self.package(output)
+        self.assertEqual(sidecar.read_bytes(), b'other publisher checksum')
+        self.assertEqual(set(output.parent.iterdir()), {sidecar})
 
     def test_zip_header_edit_after_initial_verification_is_rejected(self):
         self.prepare_packaging()
@@ -184,6 +256,97 @@ class ArmReleaseTests(unittest.TestCase):
                 self.package(output)
         self.assertFalse(output.exists())
         self.assertFalse(output.with_suffix('.zip.sha256').exists())
+
+
+class SourceModifiedTests(unittest.TestCase):
+    """Use a real isolated Git index, including flags that hide changes."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='mx5dr-source-check-')
+        self.addCleanup(temporary.cleanup)
+        self.repo = Path(temporary.name) / 'repo'
+        subprocess.run(['git', 'clone', '--quiet', '--shared', '--no-checkout',
+                        str(REPO), str(self.repo)], check=True)
+        self.paths = ['src', 'packaging', *make_usb_zip.EXTRA_SOURCES]
+        self.git('checkout', 'HEAD', '--', *self.paths)
+        self.commit = self.git('rev-parse', 'HEAD').strip()
+
+    def git(self, *args):
+        return subprocess.check_output(['git', *args], cwd=self.repo, text=True)
+
+    def modified(self):
+        with mock.patch.object(make_usb_zip, 'REPO', self.repo):
+            return make_usb_zip.source_modified(make_usb_zip.source_files(), self.commit)
+
+    def assert_status_clean(self):
+        self.assertEqual(self.git('status', '--porcelain', '--', *self.paths), '')
+
+    def test_unchanged_sources_are_not_modified(self):
+        self.assert_status_clean()
+        self.assertFalse(self.modified())
+
+    def hidden_tracked_change(self, flag):
+        name = 'src/core/dr_core.c'
+        self.git('update-index', flag, name)
+        with (self.repo / name).open('a') as stream:
+            stream.write('\n/* changed but hidden from git status */\n')
+        self.assert_status_clean()
+        self.assertTrue(self.modified())
+
+    def test_assume_unchanged_does_not_hide_source_modification(self):
+        self.hidden_tracked_change('--assume-unchanged')
+
+    def test_skip_worktree_does_not_hide_source_modification(self):
+        self.hidden_tracked_change('--skip-worktree')
+
+    def test_untracked_configuration_does_not_hide_new_input(self):
+        self.git('config', 'status.showUntrackedFiles', 'no')
+        (self.repo / 'src/new-input.c').write_text('/* new compilation input */\n')
+        self.assert_status_clean()
+        self.assertTrue(self.modified())
+
+    def test_ignored_source_is_still_modified(self):
+        (self.repo / '.git/info/exclude').write_text('src/ignored-input.c\n')
+        (self.repo / 'src/ignored-input.c').write_text('/* ignored compilation input */\n')
+        self.assert_status_clean()
+        self.assertTrue(self.modified())
+
+    def test_missing_tracked_source_is_modified(self):
+        (self.repo / 'src/core/dr_core.c').unlink()
+        self.assertTrue(self.modified())
+
+    def test_git_replace_cannot_hide_changed_commit_input(self):
+        name = 'src/core/dr_core.c'
+        original = self.git('rev-parse', self.commit + ':' + name).strip()
+        with (self.repo / name).open('a') as stream:
+            stream.write('\n/* different from the original commit */\n')
+        replacement = self.git('hash-object', '-w', name).strip()
+        self.assertTrue(self.modified())
+        self.git('replace', original, replacement)
+        self.assertEqual(self.git('rev-parse', 'HEAD').strip(), self.commit)
+        self.assertTrue(self.modified())
+
+    def test_zip_metadata_uses_blob_comparison_for_hidden_modification(self):
+        self.hidden_tracked_change('--assume-unchanged')
+        build = self.repo.parent / 'arm'
+        build.mkdir()
+        for name in build_arm.ARTIFACTS:
+            (build / name).write_bytes(elf_header(name))
+        record = dict(schema=1, source_files=build_arm.source_inputs(self.repo),
+                      toolchain=dict(commit=build_arm.COMMIT),
+                      artifacts={name: build_arm.digest(build / name)
+                                 for name in build_arm.ARTIFACTS})
+        (build / build_arm.RECORD).write_text(json.dumps(record))
+        output = self.repo.parent / 'hidden-change.zip'
+        # Only the ELF bytes are fixtures: Git, the bundle script, metadata
+        # selection and final ZIP verification execute their production paths.
+        with mock.patch.object(make_usb_zip, 'REPO', self.repo), \
+                mock.patch.object(sys, 'argv', ['make_usb_zip.py', '--build-dir', str(build),
+                                               '--output', str(output)]):
+            make_usb_zip.main()
+        with zipfile.ZipFile(output) as archive:
+            info = json.loads(archive.read('build-info.json'))
+        self.assertEqual(info['source_commit'], self.commit)
+        self.assertIs(info['source_modified'], True)
 
 
 if __name__ == '__main__':
