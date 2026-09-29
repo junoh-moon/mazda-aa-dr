@@ -54,7 +54,7 @@ test-adapter: $(BUILD)/test_adapter
 test-runtime: $(BUILD)/test_runtime $(BUILD)/test_journal
 	$(BUILD)/test_runtime
 	$(BUILD)/test_journal
-test-packaging:
+test-packaging: $(BUILD)/test_collector
 	$(PYTHON) -m unittest discover -s tests/packaging -v
 test-tools:
 	$(PYTHON) -m unittest discover -s tests/tools -v
@@ -92,7 +92,7 @@ test: test-motion-journal test-sensors test-navigation test-recovery test-loader
 
 $(BUILD)/test_motion_batch: tests/runtime/test_motion_batch.cpp src/runtime/motion_batch.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
-test-motion-journal: $(BUILD)/test_motion_batch $(BUILD)/test_shadow_log
+test-motion-journal: $(BUILD)/test_motion_batch $(BUILD)/test_shadow_log $(BUILD)/test_journal
 	$(BUILD)/test_motion_batch
 	$(BUILD)/test_shadow_log
 	MX5DR_MOTION_FIXTURE=$(abspath $(BUILD)/test_motion_batch) MX5DR_SHADOW_FIXTURE=$(abspath $(BUILD)/test_shadow_log) $(PYTHON) -m unittest discover -s tests/journal -v

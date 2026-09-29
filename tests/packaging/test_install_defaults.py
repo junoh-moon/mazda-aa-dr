@@ -15,15 +15,24 @@ class InstallDefaultsTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
-    def parse_options(self, *options, fixture=False):
+    def parse_options(self, *options, fixture=False, marker=None):
         # Execute the real install entrypoint and stop at its first firmware
         # check. This tests CLI defaults without touching a host target path.
         bundle = self.root / 'bundle'
         bundle.mkdir(exist_ok=True)
         shutil.copyfile(PACK / 'install.sh', bundle / 'install.sh')
+        marker_path = bundle / 'bundle-default-mode'
+        if marker_path.exists() or marker_path.is_symlink():
+            marker_path.unlink()
+        if marker is not None:
+            if isinstance(marker, Path):
+                marker_path.symlink_to(marker)
+            else:
+                marker_path.write_text(marker)
         (bundle / 'common.sh').write_text('''set -eu
 ROOT=${MX5DR_FIXTURE_ROOT:-}
 fail() { echo "$*" >&2; exit 1; }
+regular() { [ -f "$1" ] && [ ! -L "$1" ] || fail "nonregular"; }
 verify_firmware() { echo "mode=$MODE remount=$ALLOW_REMOUNT"; exit 0; }
 ''')
         env = dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root) if fixture else '')
@@ -51,6 +60,26 @@ verify_firmware() { echo "mode=$MODE remount=$ALLOW_REMOUNT"; exit 0; }
     def test_unknown_and_assist_options_rejected(self):
         for arg in ('--mode=ASSIST', '--typo'):
             self.assertNotEqual(self.parse_options(arg).returncode, 0)
+
+    def test_bundle_default_and_explicit_mode_override(self):
+        for args, expected in (((), 'SHADOW'), (('--mode=OBSERVE',), 'OBSERVE'),
+                               (('--mode=OFF',), 'OFF'), (('--mode=SCRUB',), 'SCRUB')):
+            result = self.parse_options(*args, marker='SHADOW\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('mode=' + expected, result.stdout)
+
+    def test_invalid_default_rejected_even_with_override(self):
+        for marker in ('ASSIST\n', '', 'SHADOW\nOFF', 'SHADOW\n\n', 'SHADOW\n\n\n', '$(touch bad)'):
+            result = self.parse_options('--mode=OBSERVE', marker=marker)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('remount=', result.stdout)
+
+    def test_symlink_default_rejected(self):
+        source = self.root / 'mode'
+        source.write_text('SHADOW\n')
+        result = self.parse_options(marker=source)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('remount=', result.stdout)
 
     def mounts(self, initial='ro', fail_stage='', policy=1, body='mount_rw /jci/sm'):
         fixture = self.root / 'fixture'

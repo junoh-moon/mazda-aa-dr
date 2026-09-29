@@ -94,3 +94,27 @@ set_config() {
     if [ -z "$ROOT" ]; then chown root "$tmp"; fi
     mv -f "$tmp" "$BASE/mx5dr.conf"
 }
+
+# Only explicit installation/rearm may prepare another capture session.
+# Never discard journal files or recursively remove an unexpected marker.
+clear_capture_markers() {
+    if [ -e "$BASE/logs/capture.stop" ] || [ -L "$BASE/logs/capture.stop" ]; then
+        [ -d "$BASE/logs/capture.stop" ] && [ ! -L "$BASE/logs/capture.stop" ] || fail 'Invalid capture stop marker'
+        rmdir "$BASE/logs/capture.stop" || fail 'Capture stop marker is not empty'
+    fi
+    if [ -e "$BASE/logs/capture.done" ] || [ -L "$BASE/logs/capture.done" ]; then
+        regular "$BASE/logs/capture.done"
+        rm "$BASE/logs/capture.done" || fail 'Cannot clear capture acknowledgement'
+    fi
+}
+
+valid_boot_id() {
+    printf '%s\n' "$1" | awk '
+        length($0)==36 {
+            s=$0
+            if (substr(s,9,1)!="-" || substr(s,14,1)!="-" || substr(s,19,1)!="-" || substr(s,24,1)!="-") exit 1
+            gsub(/-/,"",s)
+            if (length(s)==32 && s ~ /^[0-9a-f]+$/) ok=1
+        }
+        END {exit !ok}'
+}

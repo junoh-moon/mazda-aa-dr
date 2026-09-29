@@ -167,6 +167,9 @@ class Auditor:
         self.holdout_reasons = Counter()
         self.holdout_completed = 0
         self.holdout_aborted = 0
+        self.motion_rejected_reasons = Counter()
+        self.motion_rejected_sensors = Counter()
+        self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
 
@@ -181,7 +184,7 @@ class Auditor:
                             dropped_max=0, health_records=0, motion_epoch=None,
                             motion_seq=0, motion_ns=0, last_diagnostic_ns=-1,
                             shadow_resets=0, shadow_rejected=0, shadow_pipeline=None,
-                            holdout_window=None)
+                            holdout_window=None, capture_end_ns=None)
         self.sessions.append(self.session)
         self.positions = {}
 
@@ -243,6 +246,9 @@ class Auditor:
             return
         if self.session is None and not collector:
             self.new_session()
+        if (not collector and self.session.get("capture_end_ns") is not None and
+                kind not in ("health", "capture_end")):
+            self.issue("record_after_capture_end", source, kind)
         if kind == "position":
             if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "utc_s")):
                 return
@@ -300,6 +306,10 @@ class Auditor:
                                "Polling cannot establish ASSIST readiness, freshness, or quality", True)
         elif kind == "position_poll_error":
             self.validate(row, source, strings=("reason",))
+        elif kind == "capture_end":
+            self.capture_end(row, source)
+        elif kind == "motion_rejected":
+            self.rejected_motion(row, source)
         elif kind in ("motion", "motion_batch"):
             try:
                 events = decode_motion_records(row)
@@ -318,6 +328,60 @@ class Auditor:
             self.holdout(row, source)
         else:
             self.issue("unknown_record_kind", source, kind)
+
+    def capture_end(self, row, source):
+        if row.get("domain") != "model" or row.get("assist_ready") is not False:
+            self.issue("unexpected_capture_qualification", source,
+                       "Capture completion is not navigation qualification", True)
+            return
+        boot = self.session.get("boot") or {}
+        if (not bounded_int(row.get("schema"), 1, 1) or
+                not bounded_int(row.get("mono_ns"), 1, 2**64-1) or
+                not bounded_int(row.get("cutoff_ns"), 1, row["mono_ns"]) or
+                row.get("bounded_final_drain") is not True or
+                row.get("reason") != "requested" or
+                not isinstance(row.get("boot_id"), str) or
+                not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", row["boot_id"]) or
+                row["boot_id"] != boot.get("boot_id")):
+            self.issue("malformed_capture_end", source, "Missing/current-boot completion metadata")
+            return
+        s = self.session
+        if s["capture_end_ns"] is not None or row["mono_ns"] < s["last_diagnostic_ns"]:
+            self.issue("invalid_capture_end_order", source, "Duplicate or regressed completion")
+            return
+        s["capture_end_ns"] = row["mono_ns"]
+        s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["mono_ns"])
+        self.capture_ends += 1
+
+    def rejected_motion(self, row, source):
+        # Preserve diagnostics without healing accepted sequence gaps or feeding
+        # the replay engine. A decoded payload is not an accepted sensor sample.
+        if (row.get("domain") != "model" or row.get("assist_ready") is not False or
+                row.get("producer_time_status") != "unknown" or
+                row.get("authenticated_decoded") is not True):
+            self.issue("unexpected_rejected_motion_qualification", source,
+                       "Rejected input cannot authorize navigation", True)
+            return
+        if (not bounded_int(row.get("schema"), 1, 1) or
+                row.get("reason") not in ("clock_unavailable", "future", "stale",
+                                          "source_changed", "sequence_discontinuity") or
+                not bounded_int(row.get("checked_ns"), 0, 2**64-1) or
+                not bounded_int(row.get("sender_pid"), 1, 2**31-1) or
+                not bounded_int(row.get("sender_uid"), 0, 2**32-1)):
+            self.issue("malformed_rejected_motion", source, "Invalid rejection metadata")
+            return
+        try:
+            accepted_shape = dict(row, kind="motion")
+            event = decode_motion_records(accepted_shape)[0]
+        except ValueError as exc:
+            self.issue("malformed_rejected_motion", source, str(exc))
+            return
+        self.motion_rejected_reasons[row["reason"]] += 1
+        self.motion_rejected_sensors[str(event["sensor"])] += 1
+        # A future raw timestamp must not become the journal's time frontier.
+        s = self.session
+        s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["checked_ns"])
+        self.issue("motion_channel_rejected", source, row["reason"])
 
     def motion(self, row, source):
         self.motion_samples += 1
@@ -357,6 +421,11 @@ class Auditor:
                 self.issue("shadow_inactive", source, "Sensor SHADOW did not start")
             if "motion_sampling" in row and row["motion_sampling"] is not False:
                 self.issue("motion_sampling", source, "Lossless motion logging not established")
+            if "capture_active" in row:
+                if type(row["capture_active"]) is not bool:
+                    self.issue("partial_record", source, "capture_active must be boolean")
+                elif not row["capture_active"]:
+                    self.issue("motion_capture_inactive", source, "Raw receiver did not start")
             return
         if not self.validate(row, source,
                 ints=("mono_ns", "state", "uncertainties", "events", "intervals", "resets", "rejected", "frontier_ns"),
@@ -734,6 +803,11 @@ class Auditor:
                     motion=dict(samples=self.motion_samples, batches=self.motion_batches,
                                 sensors=dict(self.motion_sensors), producer_time="unknown",
                                 scope="channel_accepted_records_only"),
+                    motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
+                                         sensors=dict(self.motion_rejected_sensors),
+                                         scope="diagnostic_only_excluded_from_accepted_motion"),
+                    capture=dict(completion_records=self.capture_ends,
+                                 scope="recorded_cutoff_not_proof_of_storage_or_vehicle_safety"),
                     shadow=dict(pipelines=dict(self.shadow_pipelines), results=dict(self.shadow_results),
                                 states=dict(self.shadow_states), model_valid=dict(self.shadow_valid),
                                 resets_max=self.shadow_resets_max, rejected_max=self.shadow_rejected_max,
@@ -801,6 +875,9 @@ def main(argv=None):
             holdout = report["shadow_holdout"]
             print("Receipt-time MODEL holdout events: %s; GPS position differences (m): %s" %
                   (holdout["events"], holdout["position_difference_m"]))
+        if report['motion_rejected']['reasons']:
+            print("Rejected sensor diagnostics (not accepted input): %s" %
+                  report['motion_rejected']['reasons'])
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")

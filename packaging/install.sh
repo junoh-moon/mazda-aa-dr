@@ -2,6 +2,15 @@
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
 MODE=OBSERVE
+# Maintainer-selected trial default, never shell-sourced and never ASSIST.
+# Validate even when an explicit CLI mode overrides it; reject before writes.
+if [ -e "$HERE/bundle-default-mode" ] || [ -L "$HERE/bundle-default-mode" ]; then
+    regular "$HERE/bundle-default-mode"
+    [ "$(wc -c < "$HERE/bundle-default-mode")" -le 8 ] || fail 'Invalid bundle default mode'
+    MODE=$(awk 'NR==1 && ($0=="OBSERVE" || $0=="SHADOW") {mode=$0}
+        END {if(NR!=1 || mode=="") exit 1; print mode}' "$HERE/bundle-default-mode") || fail 'Invalid bundle default mode'
+    case "$MODE" in OBSERVE|SHADOW) ;; *) fail 'Invalid bundle default mode';; esac
+fi
 WITH_WCP=0
 # Running the installer authorizes the temporary writes it needs. Restore every
 # mount we changed in common.sh's exit trap, including on installation failure.
@@ -74,6 +83,7 @@ chmod 0700 "$BASE/guard"
 if [ -z "$ROOT" ]; then chown root "$BASE" "$BASE/guard"; fi
 # No old arm may survive a partial replacement.
 rm -f "$BASE/guard/arm"
+clear_capture_markers
 sync
 TX=$BASE/backups/$(date +%Y%m%dT%H%M%S)-$$
 mkdir "$TX"
@@ -109,7 +119,7 @@ set_config
 mkdir -p "$BASE/tools"
 chmod 0755 "$BASE/tools"
 if [ -z "$ROOT" ]; then chown root "$BASE/tools"; fi
-for name in common.sh edit_service.awk edit_autostart.awk arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh firmware.sha256; do
+for name in common.sh edit_service.awk edit_autostart.awk arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk firmware.sha256; do
     cp "$HERE/$name" "$BASE/tools/$name.new.$$"
     chmod 0644 "$BASE/tools/$name.new.$$"
     if [ -z "$ROOT" ]; then chown root "$BASE/tools/$name.new.$$"; fi
@@ -138,7 +148,7 @@ else
     echo 'Fixture staged only; target guard not executed.'
 fi
 echo "Staged $MODE for one guarded boot. Persistent service configs retain existing touch only. No processes restarted."
-if [ -z "$ROOT" ] && [ "$MODE" = OBSERVE ]; then
+if [ -z "$ROOT" ] && [ "$MODE" != OFF ]; then
     echo 'Install steps finished. After successful command exit, power off normally and start again.'
-    echo 'The next guarded boot collects OBSERVE logs automatically; no driving-time commands are needed.'
+    echo "The next guarded boot collects $MODE logs automatically; no driving-time commands are needed."
 fi

@@ -1,7 +1,12 @@
 #!/bin/sh
 # Host-side bundle preparation. Does not execute the ARM payload.
 set -eu
-[ "$#" = 2 ] || { echo 'Usage: sh make_bundle.sh built/libmx5dr.so new-output-directory' >&2; exit 2; }
+DEFAULT_MODE=OBSERVE
+case "${1:-}" in
+  --default-mode=OBSERVE|--default-mode=SHADOW) DEFAULT_MODE=${1#--default-mode=}; shift;;
+  --*) echo 'Bundle default must be OBSERVE or SHADOW' >&2; exit 2;;
+esac
+[ "$#" = 2 ] || { echo 'Usage: sh make_bundle.sh [--default-mode=OBSERVE|SHADOW] built/libmx5dr.so new-output-directory' >&2; exit 2; }
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 lib=$1; dest=$2
 build_dir=$(dirname -- "$lib")
@@ -10,7 +15,8 @@ build_dir=$(dirname -- "$lib")
 [ -f "$build_dir/libmx5dr-vimtap.so" ] || { echo "Missing sibling libmx5dr-vimtap.so build" >&2; exit 1; }
 [ -f "$lib" ] && [ ! -e "$dest" ] || { echo 'Input missing or output already exists' >&2; exit 1; }
 mkdir -p "$dest"
-for file in install.sh uninstall.sh export_logs.sh common.sh edit_service.awk edit_autostart.awk arm.sh start_collector.sh stop_collector.sh firmware.sha256 mx5dr.conf; do cp "$HERE/$file" "$dest/$file"; done
+printf '%s\n' "$DEFAULT_MODE" > "$dest/bundle-default-mode"
+for file in install.sh uninstall.sh export_logs.sh common.sh edit_service.awk edit_autostart.awk arm.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk firmware.sha256 mx5dr.conf; do cp "$HERE/$file" "$dest/$file"; done
 cp "$lib" "$dest/libmx5dr.so"
 cp "$build_dir/libmx5dr-vimtap.so" "$dest/libmx5dr-vimtap.so"
 cp "$build_dir/mx5dr-guard" "$dest/mx5dr-guard"
@@ -19,4 +25,4 @@ cp "$build_dir/mx5dr-collector" "$dest/mx5dr-collector"
 (cd "$dest" && sha256sum mx5dr-guard > mx5dr-guard.sha256)
 (cd "$dest" && sha256sum libmx5dr.so > libmx5dr.so.sha256)
 (cd "$dest" && sha256sum libmx5dr-vimtap.so > libmx5dr-vimtap.so.sha256)
-echo "Bundle prepared: $dest (not vehicle-tested)"
+echo "Bundle prepared: $dest (default=$DEFAULT_MODE; one guarded boot; not vehicle-tested)"

@@ -32,6 +32,7 @@ unsigned qhead = 0, qtail = 0, qsize = 0;
 pthread_mutex_t queue_mu = PTHREAD_MUTEX_INITIALIZER;
 volatile uint32_t dropped = 0;
 volatile uint32_t audit_fault = 0;
+volatile uint32_t capture_stopped = 0;
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
@@ -46,9 +47,15 @@ uint64_t clock_ns(void *) {
   return uint64_t(t.tv_sec) * 1000000000ULL + t.tv_nsec;
 }
 void sink(const A::Observation *o, void *) {
+  if (__sync_fetch_and_add(&capture_stopped, 0)) return;
   if (pthread_mutex_trylock(&queue_mu)) {
+    if (__sync_fetch_and_add(&capture_stopped, 0)) return;
     __sync_fetch_and_add(&dropped, 1);
     disable_mutation();
+    return;
+  }
+  if (__sync_fetch_and_add(&capture_stopped, 0)) {
+    pthread_mutex_unlock(&queue_mu);
     return;
   }
   if (qsize == 256) {
@@ -60,6 +67,12 @@ void sink(const A::Observation *o, void *) {
     ++qsize;
   }
   pthread_mutex_unlock(&queue_mu);
+}
+void freeze_capture() {
+  pthread_mutex_lock(&queue_mu);
+  __sync_lock_test_and_set(&capture_stopped, 1);
+  pthread_mutex_unlock(&queue_mu);
+  A::set_mode(A::OBSERVE);
 }
 bool pop(A::Observation *out) {
   pthread_mutex_lock(&queue_mu);
@@ -198,14 +211,129 @@ void journal_holdout(Journal &j,N::GpsHoldout &holdout,uint64_t now) {
   }
 }
 
-void *worker(void *) {
+bool format_motion_rejected(char* line,size_t capacity,const N::ReceiveDiagnostic& d) {
+  const N::RawEvent& r=d.rejected;
+  const int n=snprintf(line,capacity,
+      "{\"kind\":\"motion_rejected\",\"schema\":1,\"domain\":\"model\","
+      "\"assist_ready\":false,\"producer_time_status\":\"unknown\","
+      "\"authenticated_decoded\":true,\"reason\":\"%s\",\"checked_ns\":%llu,"
+      "\"sender_pid\":%ld,\"sender_uid\":%lu,\"sensor\":%u,\"epoch\":%llu,"
+      "\"receive_seq\":%llu,\"received_ns\":%llu,\"source_mono_ms\":%lld,"
+      "\"raw\":[%u,%u,%u,%u],\"count\":%u,\"reverse\":%d}",
+      N::receive_fault_name(d.reason),(unsigned long long)d.checked_ns,
+      (long)d.sender_pid,(unsigned long)d.sender_uid,unsigned(r.kind),
+      (unsigned long long)r.epoch,(unsigned long long)r.receive_seq,
+      (unsigned long long)r.received_ns,(long long)r.source_mono_ms,
+      unsigned(r.raw[0]),unsigned(r.raw[1]),unsigned(r.raw[2]),unsigned(r.raw[3]),
+      unsigned(r.count),r.reverse);
+  return d.authenticated_decoded && n>0 && size_t(n)<capacity;
+}
+
+// One bounded worker receive turn. Capture survives model/AA audit failure;
+// rejected input is separate evidence and can never enter either estimator.
+template<class Receiver>
+void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
+                  N::Pipeline& navigation,N::GpsHoldout& holdout,bool compute) {
+  for(unsigned i=0;i<256 && !j.failed;++i) {
+    N::RawEvent raw=N::RawEvent();
+    N::ReceiveDiagnostic d=N::ReceiveDiagnostic();
+    const N::ReceiveResult received=motion.receive(clock_ns(0),&raw,&d);
+    if(received==N::CHANNEL_EMPTY)break;
+    const bool enabled=compute && !__sync_fetch_and_add(&audit_fault,0);
+    if(received==N::CHANNEL_FAULT) {
+      flush_motion(j,batch);
+      char line[1200];
+      if(d.authenticated_decoded) {
+        if(format_motion_rejected(line,sizeof line,d))j.line(line);
+        else j.fail();
+      }
+      if(enabled) {
+        mx5_dr_context c=navigation.context();
+        if(c.source_epoch==UINT64_MAX || c.generation==UINT64_MAX) {
+          disable_mutation();break;
+        }
+        ++c.source_epoch;++c.generation;navigation.reset(c);
+        holdout.reset(c,N::HOLDOUT_SOURCE_FAULT);
+      }
+      snprintf(line,sizeof line,
+          "{\"kind\":\"shadow_input_reset\",\"mono_ns\":%llu,\"reason\":\"%s\","
+          "\"credentials_present\":%s,\"sender_pid\":%ld,\"sender_uid\":%lu,"
+          "\"syscall_errno\":%d,\"computation_active\":%s,\"assist_ready\":false}",
+          (unsigned long long)d.checked_ns,N::receive_fault_name(d.reason),
+          d.credentials_present?"true":"false",(long)d.sender_pid,(unsigned long)d.sender_uid,
+          d.syscall_errno,enabled?"true":"false");
+      j.line(line);
+    } else {
+      if(enabled) { navigation.enqueue_raw(raw);holdout.enqueue_raw(raw); }
+      journal_motion(j,batch,raw);
+    }
+  }
+  // No batch crosses the worker sleep, including a capped or failed turn.
+  flush_motion(j,batch);
+}
+
+void journal_health(Journal& j,uint64_t now,bool capture,bool computation) {
+  char line[400];
+  snprintf(line,sizeof line,
+      "{\"kind\":\"health\",\"mono_ns\":%llu,\"dropped\":%u,\"hook_installed\":%s,"
+      "\"runtime_mode\":%u,\"audit_fault\":%u,\"capture_active\":%s,"
+      "\"computation_active\":%s,\"assist_ready\":false}",
+      (unsigned long long)now,__sync_fetch_and_add(&dropped,0),hook_installed?"true":"false",
+      unsigned(A::mode()),__sync_fetch_and_add(&audit_fault,0),capture?"true":"false",
+      computation?"true":"false");
+  j.line(line);
+}
+bool stop_requested(const char* root) {
+  char path[256];snprintf(path,sizeof path,"%s/logs/capture.stop",root);
+  struct stat st;
+  return lstat(path,&st)==0 && S_ISDIR(st.st_mode);
+}
+// Only after input is frozen and the bounded final drain has completed.
+// No acknowledgement can precede durable terminal records.
+bool finish_capture(Journal& j,const char* boot_id,uint64_t cutoff,uint64_t now) {
+  if(!cutoff || now<cutoff) { j.fail();return false; }
+  char line[400];
+  snprintf(line,sizeof line,
+      "{\"kind\":\"capture_end\",\"schema\":1,\"mono_ns\":%llu,\"boot_id\":\"%s\","
+      "\"domain\":\"model\",\"assist_ready\":false,\"reason\":\"requested\","
+      "\"cutoff_ns\":%llu,\"bounded_final_drain\":true}",
+      (unsigned long long)now,boot_id,(unsigned long long)cutoff);
+  j.line(line);
+  journal_health(j,now,false,false);
+  j.flush();
+  if(j.failed || !j.f || fsync(fileno(j.f))) { j.fail();return false; }
+  const bool close_failed=fclose(j.f)!=0;j.f=0;
+  if(close_failed) { j.fail();return false; }
+  if(!strcmp(boot_id,"unknown"))return false;
+  char temporary[256],done[256],directory[256];
+  snprintf(directory,sizeof directory,"%s/logs",j.root);
+  snprintf(temporary,sizeof temporary,"%s/logs/capture.done.%ld.tmp",j.root,(long)getpid());
+  snprintf(done,sizeof done,"%s/logs/capture.done",j.root);
+  int dirfd=open(directory,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+  if(dirfd<0)return false;
+  int fd=open(temporary,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+  if(fd<0) { close(dirfd);return false; }
+  const int n=snprintf(line,sizeof line,"%s\n",boot_id);
+  bool ok=write(fd,line,size_t(n))==n && fsync(fd)==0;
+  if(close(fd))ok=false;
+  if(ok)ok=rename(temporary,done)==0;
+  if(ok)ok=fsync(dirfd)==0;
+  if(!ok) { unlink(temporary);unlink(done);fsync(dirfd); }
+  close(dirfd);
+  return ok;
+}
+
+void *worker_at(const char* root) {
+  // An explicit stop survives same-boot service restarts. Do not rotate or
+  // append even a boot record after an acknowledged capture was closed.
+  if(stop_requested(root)) { freeze_capture();return 0; }
   locale_t numeric_locale = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
   if (!numeric_locale) {
     disable_mutation();
     return 0;
   }
   uselocale(numeric_locale);
-  Journal j;
+  Journal j(root);
   mx5::runtime::MotionBatch motion_batch;
   char line[2200];
   char boot_id[37];
@@ -225,13 +353,13 @@ void *worker(void *) {
   N::MotionReceiver motion;
   const N::ModelProfile model=N::research_model_profile();
   mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
-  bool shadow=config.mode==4 && hook_installed &&
+  const bool capture=config.mode==4 && motion.open_channel();
+  bool shadow=capture && hook_installed &&
       navigation.init_model(model,mx5_dr_default_config(),nav_context,true,true) &&
-      holdout.init_model(model,mx5_dr_default_config(),nav_context) &&
-      motion.open_channel();
+      holdout.init_model(model,mx5_dr_default_config(),nav_context);
   if(config.mode==4) {
     snprintf(line,sizeof line,
-        "{\"kind\":\"shadow_boot\",\"active\":%s,\"domain\":\"model\","
+        "{\"kind\":\"shadow_boot\",\"active\":%s,\"capture_active\":%s,\"domain\":\"model\","
         "\"source\":\"existing_vbs_vim_callback\",\"assist_ready\":false,"
         "\"motion_log_format\":\"motion_batch_v1\",\"motion_sampling\":false,"
         "\"stationary_bias_model\":true,\"gps_holdout_model\":true,"
@@ -239,7 +367,7 @@ void *worker(void *) {
         "\"yaw_zero\":%.9g,\"yaw_rad_per_count\":%.9g,"
         "\"wheel_kmh_per_count\":%.9g,\"wheel_zero_kmh\":%.9g,"
         "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu}",
-        shadow?"true":"false",model.yaw_zero,model.yaw_rad_per_count,
+        shadow?"true":"false",capture?"true":"false",model.yaw_zero,model.yaw_rad_per_count,
         model.wheel_kmh_per_count,model.wheel_zero_kmh,
         model.reverse_forward_value,model.reverse_reverse_value,
         (unsigned long long)model.reorder_ns);
@@ -254,8 +382,23 @@ void *worker(void *) {
   uint64_t last_flush = 0;
   uint64_t last_shadow_log=0;
   uint64_t last_calibration_log=0;
-  bool shadow_audit_reported=false;
+  uint64_t last_stop_check=0;
   for (;;) {
+    const uint64_t cutoff=clock_ns(0);
+    bool stopping=false;
+    if(cutoff>=last_stop_check && cutoff-last_stop_check>=1000000000ULL) {
+      last_stop_check=cutoff;
+      stopping=stop_requested(root);
+      if(stopping) {
+        freeze_capture();
+        if(shadow) {
+          navigation.reset(navigation.context());
+          holdout.reset(navigation.context(),N::HOLDOUT_CAPTURE_STOP);
+          journal_holdout(j,holdout,cutoff);
+        }
+        shadow=false;
+      }
+    }
     A::Observation o;
     unsigned drained = 0;
     while (drained++ < 256 && pop(&o)) {
@@ -294,38 +437,19 @@ void *worker(void *) {
       j.line(line);
     }
     uint64_t now = clock_ns(0);
-    if(shadow) {
-      if(j.failed || __sync_fetch_and_add(&audit_fault,0)) {
-        if(!shadow_audit_reported) {
+    if(shadow && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
           navigation.reset(navigation.context());
           holdout.reset(navigation.context(),N::HOLDOUT_AUDIT_RESET);
           journal_holdout(j,holdout,now);
           j.line("{\"kind\":\"shadow_disabled\",\"reason\":\"audit_fault\",\"assist_ready\":false}");
-          shadow_audit_reported=true;
-        }
-      } else {
-        for(unsigned i=0;i<256;++i) {
-          N::RawEvent raw=N::RawEvent();
-          const N::ReceiveResult received=motion.receive(clock_ns(0),&raw);
-          if(received==N::CHANNEL_EMPTY)break;
-          if(received==N::CHANNEL_FAULT) {
-            flush_motion(j,motion_batch);
-            mx5_dr_context c=navigation.context();
-            if(c.source_epoch==UINT64_MAX || c.generation==UINT64_MAX) {
-              disable_mutation();break;
-            }
-            ++c.source_epoch;++c.generation;navigation.reset(c);
-            holdout.reset(c,N::HOLDOUT_SOURCE_FAULT);
-            j.line("{\"kind\":\"shadow_input_reset\",\"reason\":\"channel_discontinuity\",\"assist_ready\":false}");
-          } else {
-            navigation.enqueue_raw(raw);
-            holdout.enqueue_raw(raw);
-            journal_motion(j,motion_batch,raw);
-          }
-        }
-        // Empty socket, 256-event turn limit and faults all leave no batch
-        // pending across the worker's sleep or the next POSITION observation.
-        flush_motion(j,motion_batch);
+          shadow=false; // Permanent for this worker, even if a fault flag changes.
+    }
+    if(capture && !j.failed)drain_motion(j,motion_batch,motion,navigation,holdout,shadow);
+    if(stopping) {
+      finish_capture(j,boot_id,cutoff,clock_ns(0));
+      return 0; // Even failed finalization cannot reopen this capture.
+    }
+    if(shadow && !j.failed && !__sync_fetch_and_add(&audit_fault,0)) {
         now=clock_ns(0);
         if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
         if(now>navigation.reorder_ns())holdout.drain(now-navigation.reorder_ns());
@@ -367,18 +491,10 @@ void *worker(void *) {
               (unsigned long long)navigation.wheel_calibration().calibration_version,encoded?"true":"false",preview);
           j.line(line);
         }
-      }
     }
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;
-      snprintf(line, sizeof line,
-               "{\"kind\":\"health\",\"mono_ns\":%llu,\"dropped\":%u,\"hook_"
-               "installed\":%s,\"runtime_mode\":%u,\"audit_fault\":%u,\"assist_"
-               "ready\":false}",
-               (unsigned long long)now, __sync_fetch_and_add(&dropped, 0),
-               hook_installed ? "true" : "false", unsigned(A::mode()),
-               __sync_fetch_and_add(&audit_fault, 0));
-      j.line(line);
+      journal_health(j,now,capture&&!j.failed,shadow);
       j.flush();
     }
     struct timespec pause = {0, 50000000};
@@ -386,6 +502,7 @@ void *worker(void *) {
   }
   return 0;
 }
+void* worker(void*) { return worker_at(ROOT); }
 
 void bootstrap(void *h) {
   void *entry = dlsym(h, "GetServiceInterfaces");

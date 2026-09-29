@@ -13,6 +13,7 @@ regular "$BASE/guard/mx5dr-guard"
 regular "$BASE/libmx5dr-vimtap.so"
 # Disarm first: interrupted template refresh must not retain a previous authorization.
 rm -f "$BASE/guard/arm"
+clear_capture_markers
 sync
 set_config
 for pair in 'sm.conf normal.trial' 'sm_WCP.conf wcp.trial'; do
