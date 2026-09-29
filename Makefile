@@ -1,5 +1,6 @@
 # Host checks are independent of the CMU. ARM_PREFIX must select a compatible
 # ARMv7 softfp toolchain and sysroot, not the host compiler.
+.DEFAULT_GOAL := all
 CC ?= cc
 CXX ?= c++
 PYTHON ?= python3
@@ -24,6 +25,12 @@ ARM_SOURCES = src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/r
 ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o
 
 .PHONY: all test test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
+.PHONY: replay-navigation test-replay-navigation
+replay-navigation: $(BUILD)/replay_navigation
+$(BUILD)/replay_navigation: tools/replay_navigation.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o $(NAV_HEADERS) src/runtime/shadow_log.h
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
+test-replay-navigation: $(BUILD)/replay_navigation
+	$(PYTHON) tests/replay_cpp/test_replay_cpp.py $(BUILD)/replay_navigation
 all: test
 $(BUILD):
 	mkdir -p $@
@@ -56,7 +63,7 @@ test-runtime: $(BUILD)/test_runtime $(BUILD)/test_journal
 	$(BUILD)/test_journal
 test-packaging:
 	$(PYTHON) -m unittest discover -s tests/packaging -v
-test-tools:
+test-tools: $(BUILD)/replay_navigation
 	$(PYTHON) -m unittest discover -s tests/tools -v
 test-integration: $(BUILD)/test_pipeline
 	$(BUILD)/test_pipeline
@@ -88,7 +95,7 @@ test-sensors: $(BUILD)/test_vim_source $(BUILD)/test_vim_tap
 $(BUILD)/test_vim_source: tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $^ -o $@
 
-test: test-motion-journal test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
+test: test-motion-journal test-sensors test-navigation test-replay-navigation test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
 
 $(BUILD)/test_motion_batch: tests/runtime/test_motion_batch.cpp src/runtime/motion_batch.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@

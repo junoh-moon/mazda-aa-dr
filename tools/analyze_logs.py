@@ -18,6 +18,8 @@ MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_LINE_BYTES = 8192
 MAX_MEMBERS = 4096
+MOTION_SENSORS = {1: "wheel", 2: "yaw", 3: "reverse"}
+RECEIPT_GAP_DIAGNOSTIC_NS = 250000000
 CLEAR_BYTES = (32, 36, 37, 38, 39, 40, 44, 45, 46, 47)
 CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT"}
 REASONS = ("PASS", "NO_CONTEXT", "NESTED_CALL", "EXTRA_LOCATION", "BAD_LENGTH",
@@ -31,6 +33,7 @@ LIMITATIONS = [
     "Yaw/wheel calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
     "Holdout journal structure cannot prove that GPS references were excluded from prediction inputs.",
     "Motion counts cover channel-accepted records; source measurement timing remains unknown.",
+    "Per-sensor intervals measure receipt timing, not producer cadence or latency; 250 ms is a MODEL diagnostic, not a physical sensor requirement.",
 ]
 
 
@@ -149,6 +152,13 @@ class Auditor:
         self.motion_samples = 0
         self.motion_sensors = Counter()
         self.motion_batches = 0
+        self.motion_sensor_health = {
+            str(sensor): dict(name=name, samples=0, session_epoch_segments=0,
+                              first_received_ns=None, last_received_ns=None, coverage_ns=0,
+                              receipt_intervals_ns=dict(count=0, min=None, max=None, mean=None),
+                              gaps_over_250ms=0, duplicate_receipts=0, regressed_receipts=0)
+            for sensor, name in MOTION_SENSORS.items()}
+        self._motion_sensor_last = {}
         self.shadow_pipelines = Counter()
         self.shadow_results = Counter()
         self.shadow_states = Counter()
@@ -184,6 +194,7 @@ class Auditor:
                             holdout_window=None)
         self.sessions.append(self.session)
         self.positions = {}
+        self._motion_sensor_last = {}
 
     def validate(self, row, source, ints=(), strings=(), bools=()):
         bad = [k for k in ints if not integer(row.get(k))]
@@ -330,7 +341,10 @@ class Auditor:
             s["motion_epoch"] = row["epoch"]
             s["motion_seq"] = row["receive_seq"]
             s["motion_ns"] = row["received_ns"]
+            self._motion_sensor_last = {}
+            self.motion_receipt(row)
             return  # First sequence need not be 1: the receiver can start late.
+        self.motion_receipt(row)
         if row["receive_seq"] <= s["motion_seq"]:
             self.issue("motion_sequence_replayed", source, "Duplicate/backward observer sequence")
         elif row["receive_seq"] != s["motion_seq"] + 1:
@@ -339,6 +353,34 @@ class Auditor:
             self.issue("motion_clock_regressed", source, "Receipt clock regressed within source epoch")
         s["motion_seq"] = max(s["motion_seq"], row["receive_seq"])
         s["motion_ns"] = max(s["motion_ns"], row["received_ns"])
+
+    def motion_receipt(self, row):
+        """Three streaming summaries; no subtraction across epoch/boot boundaries.
+
+        Receipt high-watermarks prevent duplicate/backward records from creating
+        negative intervals or counting the same elapsed time twice. Coverage is
+        the sum of these intervals; first/last are timestamps in input order,
+        not a wall-clock session range or proof of uninterrupted observation.
+        """
+        sensor, now = str(row["sensor"]), row["received_ns"]
+        stats = self.motion_sensor_health[sensor]
+        stats["samples"] += 1
+        if stats["first_received_ns"] is None:
+            stats["first_received_ns"] = now
+        stats["last_received_ns"] = now
+        previous = self._motion_sensor_last.get(sensor)
+        if previous is None:
+            stats["session_epoch_segments"] += 1
+        elif now <= previous:
+            stats["duplicate_receipts" if now == previous else "regressed_receipts"] += 1
+            return
+        else:
+            interval = now - previous  # Subtract exact integers before computing mean.
+            add_difference(stats["receipt_intervals_ns"], interval)
+            stats["coverage_ns"] += interval
+            if interval > RECEIPT_GAP_DIAGNOSTIC_NS:
+                stats["gaps_over_250ms"] += 1
+        self._motion_sensor_last[sensor] = now
 
     def shadow(self, row, source):
         if not self.validate(row, source, bools=("assist_ready",)):
@@ -733,6 +775,12 @@ class Auditor:
                     record_counts=dict(self.counts), input_modes=dict(self.modes),
                     motion=dict(samples=self.motion_samples, batches=self.motion_batches,
                                 sensors=dict(self.motion_sensors), producer_time="unknown",
+                                sensor_health={key: dict(value, availability=("observed" if value["samples"] else "absent"),
+                                                         receipt_intervals_ns=dict(value["receipt_intervals_ns"]))
+                                               for key, value in self.motion_sensor_health.items()},
+                                receipt_interval_basis="positive_per_sensor_high_watermark_within_session_and_epoch",
+                                coverage_basis="sum_of_within_segment_receipt_spans_not_continuous_coverage",
+                                receipt_gap_diagnostic_ns=RECEIPT_GAP_DIAGNOSTIC_NS,
                                 scope="channel_accepted_records_only"),
                     shadow=dict(pipelines=dict(self.shadow_pipelines), results=dict(self.shadow_results),
                                 states=dict(self.shadow_states), model_valid=dict(self.shadow_valid),
@@ -794,9 +842,19 @@ def main(argv=None):
         print("%s: %d LOCATION payload pairs checked" % (report["status"], report["checked_location_payload_pairs"]))
         print("Input modes: %s; choices: %s; max dropped: %s" %
               (report["input_modes"], report["send_choices"], report["drop_health"]["max_dropped"]))
+        for sensor in report["motion"]["sensor_health"].values():
+            maximum = sensor["receipt_intervals_ns"]["max"]
+            print("%s receipt observations: %d samples (%s); max gap %s ms; gaps >250 ms: %d; duplicate/backward receipts: %d/%d" %
+                  (sensor["name"], sensor["samples"], sensor["availability"],
+                   "n/a" if maximum is None else "%.3f" % (maximum / 1000000),
+                   sensor["gaps_over_250ms"], sensor["duplicate_receipts"], sensor["regressed_receipts"]))
+        print("Receipt gaps are diagnostics only; producer cadence, latency and ASSIST readiness remain unverified.")
         if report["record_counts"].get("shadow_calibration"):
             print("MODEL calibration states: %s; versions: %s" %
                   (report["shadow_calibration"]["states"], report["shadow_calibration"]["versions"]))
+            if report["shadow_calibration"]["wheel_scale"]["count"]:
+                print("MODEL wheel scale: %s; GPS anchor gates: %s" %
+                      (report["shadow_calibration"]["wheel_scale"], report["shadow_calibration"]["gps_anchor_gates"]))
         if report["record_counts"].get("shadow_holdout"):
             holdout = report["shadow_holdout"]
             print("Receipt-time MODEL holdout events: %s; GPS position differences (m): %s" %

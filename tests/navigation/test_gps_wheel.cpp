@@ -78,8 +78,9 @@ static void drain(Pipeline& p,unsigned ms) {
     CHECK(p.drain(T(ms)-p.reorder_ns())==PIPELINE_OK);
 }
 static void gates() {
-    for(unsigned bad=0;bad<7;++bad) {
-        Pipeline p; init(p);
+    for(unsigned learn=0;learn<2;++learn) for(unsigned bad=0;bad<7;++bad) {
+        Pipeline p; mx5_dr_context x={1,1,1};
+        CHECK(p.init_model(research_model_profile(),mx5_dr_default_config(),x,learn!=0,true,learn!=0));
         for(unsigned ms=0;ms<=1100;ms+=100) {
             feed(p,ms,bad==6?1:0);
             if(ms==0||ms==1000) {
@@ -113,6 +114,24 @@ static void gates() {
             CHECK(g.fix(o)==(ms==1000));
         }
     }
+}
+static void fixed_learning_retains_gates() {
+    GpsWheel fixed,adaptive;
+    fixed.configure(true,250000000ULL,false);adaptive.configure(true,250000000ULL);
+    for(unsigned ms=0;ms<=13000;ms+=100) {
+        helper_feed(fixed,ms);helper_feed(adaptive,ms);
+        if(ms%1000==0) {
+            CHECK(fixed.fix(fix(ms,1.03))==adaptive.fix(fix(ms,1.03)));
+            CHECK(fixed.gate()==adaptive.gate());
+        }
+    }
+    CHECK(fixed.status().enabled);CHECK(!fixed.status().candidate_ready);
+    CHECK(!fixed.status().segments);CHECK(adaptive.status().candidate_ready);
+    fixed.apply_at_anchor(T(14000));adaptive.apply_at_anchor(T(14000));
+    CHECK(fixed.status().active_scale==1);CHECK(!fixed.status().calibration_version);
+    CHECK(std::fabs(adaptive.status().active_scale-1.03)<1e-9);
+    // Reverse, wheel disagreement and GPS course gates remain active when the
+    // wheel learner is disabled; pipeline gates() above runs both variants.
 }
 static void evidence_resets() {
     // No fresh four-wheel support, frozen UTC, or discontinuity may train or
@@ -248,7 +267,7 @@ static void asynchronous_windows() {
     g.apply_at_anchor(T(12200)); CHECK(std::fabs(g.status().active_scale-1.03)<1e-9);
 }
 int main() {
-    learning(); gates(); evidence_resets(); pipeline_learning_and_reacquisition(); rejected_anchor_revokes();
+    learning(); gates(); fixed_learning_retains_gates(); evidence_resets(); pipeline_learning_and_reacquisition(); rejected_anchor_revokes();
     fast_outlier_revokes(); asynchronous_windows();
     std::printf("MODEL GPS/wheel consistency and scale: %u checks (synthetic)\n",checks);
 }

@@ -24,10 +24,10 @@ GpsHoldout::GpsHoldout() : phase_(HOLDOUT_WARMUP), reference_count_(0),
     cooldown_until_(0), last_gps_ns_(0), latest_received_ns_(0), watermark_(0), utc_progress_ns_(0), sample_age_ns_(0),
     configured_(false), have_previous_(false) { config_=default_holdout_config(); }
 bool GpsHoldout::init_model(const ModelProfile& p,const mx5_dr_config& c,
-                            mx5_dr_context x,const HoldoutConfig& h) {
+                            mx5_dr_context x,const HoldoutConfig& h,bool learn_calibration) {
     if(!h.duration_ns||h.duration_ns>60000000000ULL||!h.cooldown_ns||
        !h.gps_timeout_ns||h.gps_timeout_ns>2000000000ULL)return false;
-    configured_=pipeline_.init_model(p,c,x,true,true);
+    configured_=pipeline_.init_model(p,c,x,learn_calibration,true,learn_calibration);
     if(!configured_)return false;
     config_=h;sample_age_ns_=c.sample_age_max_ns;phase_=HOLDOUT_WARMUP;reference_count_=result_head_=result_count_=0;
     window_id_=anchor_ns_=end_ns_=cooldown_until_=last_gps_ns_=0;

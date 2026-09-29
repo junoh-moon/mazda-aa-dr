@@ -26,7 +26,7 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
     profile_=research_model_profile();
 }
-bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias,bool gps_wheel) {
+bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias,bool gps_wheel,bool learn_wheels) {
     if (!finite(p.yaw_zero)||!finite(p.yaw_rad_per_count)||p.yaw_rad_per_count==0 ||
         !finite(p.wheel_kmh_per_count)||p.wheel_kmh_per_count<=0 ||
         !finite(p.wheel_zero_kmh)||p.reorder_ns>c.sample_age_max_ns ||
@@ -34,7 +34,7 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
         !finite(p.heading_error_rad)||p.heading_error_rad<0) return false;
     model_=true; profile_=p;
     gyro_bias_.configure(auto_bias,p.yaw_zero,c.sample_age_max_ns);
-    gps_wheel_.configure(gps_wheel,c.sample_age_max_ns);
+    gps_wheel_.configure(gps_wheel,c.sample_age_max_ns,learn_wheels);
     configured_=mx5_dr_init_model(&core_,&c,x)==MX5_DR_OK;
     if (configured_) reset(x);
     return configured_;

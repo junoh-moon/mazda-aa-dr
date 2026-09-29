@@ -60,8 +60,10 @@ public:
     Pipeline();
     // Opt-in MODEL bias/scale learning changes math only at a new GPS seed.
     // gps_wheel also enables fresh-wheel and GPS travel-course anchor gates.
+    // learn_wheels=false retains those gates for a fixed-calibration baseline.
     bool init_model(const ModelProfile&, const mx5_dr_config&, mx5_dr_context,
-                    bool auto_bias=false, bool gps_wheel=false);
+                    bool auto_bias=false, bool gps_wheel=false,
+                    bool learn_wheels=true);
     bool init_qualified(const mx5_dr_config&, mx5_dr_context);
     PipelineResult enqueue_raw(const RawEvent&);
     PipelineResult enqueue_position(const adapter::Observation&);

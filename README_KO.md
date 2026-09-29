@@ -42,6 +42,8 @@ OBSERVE 설치·검사·일회성 예약을 수행한다. [한 줄 설치 설명
 
 ## 개발과 공개 범위
 
+[원본 로그 항법 재생과 보정 비교](docs/NAVIGATION_REPLAY_KO.md)는 PC에서 실제 항법 코드로 같은 입력을 다시 계산한다. `make replay-navigation` 후 `python3 tools/replay_navigation.py 로그.tar.gz --json`을 사용한다. 원본 센서가 포함된 SHADOW 로그가 필요하다.
+
 Linux 호스트에 C/C++ 컴파일러, make, Python 3, pkg-config, D-Bus 개발 파일을 준비한 뒤 `make test`를 실행한다. 원본 펌웨어가 필요한 설치 fixture는 공개하지 않으며, 없으면 해당 시험은 skip으로 표시된다. 상세 방법은 [CONTRIBUTING.md](CONTRIBUTING.md)와 [ARM 도구체인](docs/toolchain.md)에 있다.
 
 소스·설계·검증 기록을 공개한다. 원본 펌웨어·라이브러리·지도·디스어셈블 덤프·개인 공유 링크·실차 이동 로그·빌드된 설치 묶음은 포함하지 않는다. 과거 설치 문서는 검토용 기록이며 현재 설치 안내가 아니다. 프로젝트 라이선스는 아직 선택하지 않았다.

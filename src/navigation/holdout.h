@@ -36,8 +36,10 @@ class GpsHoldout {
 public:
     static const size_t REFERENCE_CAPACITY=32, RESULT_CAPACITY=64;
     GpsHoldout();
+    // Disabling learning retains the same GPS gates and holdout policy.
     bool init_model(const ModelProfile&, const mx5_dr_config&, mx5_dr_context,
-                    const HoldoutConfig& = default_holdout_config());
+                    const HoldoutConfig& = default_holdout_config(),
+                    bool learn_calibration=true);
     PipelineResult enqueue_raw(const RawEvent&);
     PipelineResult enqueue_position(const adapter::Observation&);
     void drain(uint64_t watermark_ns);

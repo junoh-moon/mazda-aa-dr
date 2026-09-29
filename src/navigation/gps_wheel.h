@@ -28,8 +28,10 @@ struct WheelScaleStatus {
 class GpsWheel {
 public:
     GpsWheel() { configure(false,250000000ULL); }
-    void configure(bool enabled,uint64_t age) {
-        enabled_=enabled; gap_=age<250000000ULL?age:250000000ULL; reset();
+    // A fixed-calibration comparison must retain the identical GPS gates.
+    void configure(bool enabled,uint64_t age,bool learn=true) {
+        enabled_=enabled; learning_=enabled&&learn;
+        gap_=age<250000000ULL?age:250000000ULL; reset();
     }
     void reset() {
         status_=WheelScaleStatus(); status_.enabled=enabled_;
@@ -53,7 +55,7 @@ public:
         have_base_=false; last_fix_time_=0; clear_training(); gate_=reason;
     }
     void advance(uint64_t end) {
-        if (!enabled_ || end<=time_) return;
+        if (!learning_ || end<=time_) return;
         if (time_) {
             bool clean=wheels_good_ && speed_>=2 && reverse_==0 &&
                 fresh(wheel_time_,wheel_received_,end) &&
@@ -140,7 +142,7 @@ public:
         const bool straight=angle(o.position.heading_deg,base_.position.heading_deg)<=5;
         if (reverse_!=0 || base_broken_!=broken_ || !straight || gps_speed<2)
             clear_training();
-        else if (have_training_ && !status_.candidate_ready) {
+        else if (learning_ && have_training_ && !status_.candidate_ready) {
             // Longer independent endpoint segments avoid judging a 5% scale
             // from only 10m of GPS displacement at each anchor pair.
             const double raw_distance=distance_-training_distance_;
@@ -171,7 +173,7 @@ public:
         base(o); gate_=GPS_GATE_ACCEPTED; return true;
     }
     void apply_at_anchor(uint64_t time) {
-        if (!enabled_ || !status_.candidate_ready || time<=status_.evidence_end_ns ||
+        if (!learning_ || !status_.candidate_ready || time<=status_.evidence_end_ns ||
             time<candidate_received_) return;
         if (time-status_.evidence_end_ns>30000000000ULL ||
             status_.calibration_version==UINT64_MAX) { clear_training(); return; }
@@ -179,7 +181,7 @@ public:
         clear_training();
     }
 private:
-    bool enabled_,wheels_good_,have_base_,have_training_;
+    bool enabled_,learning_,wheels_good_,have_base_,have_training_;
     uint64_t gap_,time_,wheel_time_,wheel_received_,reverse_time_,reverse_received_;
     uint64_t yaw_begin_,yaw_end_,yaw_received_,last_fix_time_,last_utc_,utc_changed_,broken_,base_broken_;
     uint64_t distance_received_,candidate_received_;
@@ -207,7 +209,7 @@ private:
     void base(const adapter::Observation& o) {
         base_=o; have_base_=true;
         base_broken_=broken_; base_reverse_=reverse_;
-        if (!have_training_) {
+        if (learning_ && !have_training_) {
             training_=o; training_distance_=distance_; have_training_=true;
         }
     }
