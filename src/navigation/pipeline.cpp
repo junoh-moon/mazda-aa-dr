@@ -336,7 +336,11 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
             return PIPELINE_NO_ANCHOR;
         }
     } else {
-        if (have_fix_ && o.mono_ns>previous_fix_.mono_ns &&
+        if (!have_fix_) {
+            previous_fix_=o; have_fix_=true;
+            return PIPELINE_NO_ANCHOR;
+        }
+        if (o.mono_ns>previous_fix_.mono_ns &&
             o.mono_ns-previous_fix_.mono_ns<=2000000000ULL &&
             o.position.utc_seconds>=previous_fix_.position.utc_seconds) {
             const double dt=double(o.mono_ns-previous_fix_.mono_ns)/1e9;
@@ -345,8 +349,13 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
                            111320*std::cos(o.position.latitude_deg*PI/180);
             consistent=std::sqrt(n*n+e*e)<=100*dt+20;
         }
-        previous_fix_=o; have_fix_=true;
-        if (!consistent) return PIPELINE_NO_ANCHOR;
+        previous_fix_=o;
+        if (!consistent) {
+            // A rejected pair must not leave an older READY seed available
+            // for the next gap, or reuse this rejected endpoint as a baseline.
+            have_fix_=false; control(MX5_DR_DISABLE);
+            return PIPELINE_NO_ANCHOR;
+        }
     }
     mx5_dr_anchor a=mx5_dr_anchor(); a.context=context(); a.anchor_id=++position_seq_;
     a.position_seq=position_seq_; a.measured_ns=o.mono_ns;

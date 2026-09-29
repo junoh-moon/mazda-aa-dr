@@ -169,6 +169,40 @@ static void receipt_worker_and_reacquisition() {
     }
     CHECK(!silent.diagnostic(T(700)).snapshot.model_valid);
 }
+static void rejected_gps_requires_new_pair() {
+    // A rejected GPS pair cannot leave an older READY anchor available for
+    // the next gap. Recovery needs two new fixes, not the rejected endpoint.
+    for (int mode=1;mode<=2;++mode) {
+        Pipeline p; init(p);
+        for (unsigned ms=0;ms<=1200;ms+=100) {
+            CHECK(p.enqueue_raw(raw(REVERSE,ms,ms/100+1))==PIPELINE_OK);
+            feed(p,ms,ms/100+1);
+            if (ms==0||ms==100||ms==200||ms==900||ms==1000) {
+                adapter::Observation o=pos(ms,mode,ms/100+1);
+                if (ms==200) o.position.latitude_deg=36;
+                if (ms>=900) o.position.latitude_deg+=double(ms)*0.01/111320;
+                CHECK(p.enqueue_position(o)==PIPELINE_OK);
+            }
+            if (ms==300||ms==1100)
+                CHECK(p.enqueue_position(pos(ms-90,0,ms/100+20))==PIPELINE_OK);
+            if (ms>=100) CHECK(p.drain(T(ms-100))==PIPELINE_OK);
+            if (ms==400) {
+                Diagnostic d=p.diagnostic(T(ms));
+                CHECK(!d.snapshot.model_valid&&!d.snapshot.valid);
+                CHECK(d.snapshot.state!=MX5_DR_READY&&d.snapshot.state!=MX5_DR_ACTIVE);
+            }
+            if (ms==1000) {
+                // The first clean return cannot revive either old endpoint.
+                CHECK(p.diagnostic(T(ms)).snapshot.state!=MX5_DR_READY);
+                CHECK(!p.diagnostic(T(ms)).snapshot.model_valid);
+            }
+        }
+        Diagnostic d=p.diagnostic(T(1200));
+        CHECK(d.result==MX5_DR_OK&&d.snapshot.model_valid&&!d.snapshot.valid);
+        CHECK(d.snapshot.state==MX5_DR_ACTIVE);
+        CHECK(d.snapshot.latitude_deg>35&&d.snapshot.latitude_deg<35.001);
+    }
+}
 static void single_stopped_wheel_consistency() {
     // A persistent stopped wheel among three agreeing moving wheels is not a
     // plausible straight-motion input. Do not average it into a slower car.
@@ -273,5 +307,5 @@ static void qualified() {
     CHECK(!overlap.diagnostic(T(150)).snapshot.valid);
 }
 int main() { model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
-    single_stopped_wheel_consistency();qualified();
+    rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();
     std::printf("navigation: %u checks passed\n",checks); return 0; }

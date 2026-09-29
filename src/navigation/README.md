@@ -50,6 +50,10 @@ sequence. Native mode 3 also revokes it. Pending GPS/native observations suppres
 snapshot validity before their ordering watermark; missing earlier sensor data
 cannot prevent that revocation. A missing source, queue overflow, source change,
 clock rollback or late record resets history and requires a new anchor.
+The default MODEL path with GPS/wheel learning disabled also revokes an older
+READY anchor when a GPS pair fails its time/displacement checks. The rejected
+endpoint cannot be the next pair's baseline; two new plausible fixes are needed
+before another GPS gap can activate a prediction.
 
 ## Qualified external adapter path
 
