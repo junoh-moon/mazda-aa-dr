@@ -28,7 +28,7 @@ LIMITATIONS = [
     "Lower send result is not phone receipt, app adoption, or navigation success.",
     "SMDB/owner/receiver polls do not establish source freshness or exact-request provenance.",
     "SHADOW model diagnostics do not establish DR accuracy, ground truth, or ASSIST readiness.",
-    "Stationary yaw calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
+    "Yaw/wheel calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
     "Holdout journal structure cannot prove that GPS references were excluded from prediction inputs.",
     "Motion counts cover channel-accepted records; source measurement timing remains unknown.",
 ]
@@ -160,6 +160,9 @@ class Auditor:
         self.calibration_candidates = Counter()
         self.calibration_versions = Counter()
         self.calibration_samples_max = 0
+        self.wheel_scales = dict(count=0, min=None, max=None, mean=None)
+        self.wheel_versions = Counter()
+        self.gps_anchor_gates = Counter()
         self.holdout_events = Counter()
         self.holdout_reasons = Counter()
         self.holdout_completed = 0
@@ -367,6 +370,8 @@ class Auditor:
             self.issue('partial_record', source, 'SHADOW state/counter/time outside integer range')
             return
         self.session["last_diagnostic_ns"] = max(self.session["last_diagnostic_ns"], row["mono_ns"])
+        if not self.wheel_scale_pair(row, source):
+            return
         self.shadow_pipelines[row['pipeline']] += 1
         self.shadow_results[row['result']] += 1
         self.shadow_states[str(row['state'])] += 1
@@ -406,6 +411,16 @@ class Auditor:
         self.session["last_diagnostic_ns"] = max(self.session["last_diagnostic_ns"], row["mono_ns"])
         return valid
 
+    def wheel_scale_pair(self, row, source):
+        # Both fields are absent in older journals; partial additions are invalid.
+        if "wheel_scale" not in row and "wheel_scale_version" not in row:
+            return True
+        if (not bounded_number(row.get("wheel_scale"), 0.95, 1.05) or
+                not bounded_int(row.get("wheel_scale_version"), 0, 2**64-1)):
+            self.issue("partial_record", source, "Invalid or incomplete wheel scale/version pair")
+            return False
+        return True
+
     def calibration(self, row, source):
         envelope = self.model_diagnostic(row, source)
         if not self.validate(row, source,
@@ -426,6 +441,33 @@ class Auditor:
                 (row["candidate_ready"] and (not row["enabled"] or not row["samples"] or not start or start == end))):
             self.issue("invalid_calibration_evidence", source, "Calibration evidence window/candidate is inconsistent")
             return
+        wheel_fields = ("wheel_enabled", "wheel_candidate_ready", "wheel_scale", "wheel_candidate_scale",
+                        "wheel_scale_version", "wheel_segments", "wheel_gps_distance_m", "wheel_distance_m",
+                        "wheel_evidence_end_ns", "gps_anchor_gate")
+        if any(key in row for key in wheel_fields):
+            if not self.validate(row, source,
+                    ints=("wheel_scale_version", "wheel_segments", "wheel_evidence_end_ns"),
+                    strings=("gps_anchor_gate",), bools=("wheel_enabled", "wheel_candidate_ready")):
+                return
+            if not self.wheel_scale_pair(row, source):
+                return
+            if (not bounded_number(row.get("wheel_candidate_scale"), 0.95, 1.05) or
+                    any(not bounded_int(row[key], 0, 2**64-1)
+                        for key in ("wheel_segments", "wheel_evidence_end_ns")) or
+                    any(not bounded_number(row.get(key), 0, sys.float_info.max)
+                        for key in ("wheel_gps_distance_m", "wheel_distance_m")) or
+                    not row["gps_anchor_gate"]):
+                self.issue("partial_record", source, "Invalid wheel calibration evidence or GPS anchor gate")
+                return
+            if (row["wheel_evidence_end_ns"] > row["mono_ns"] or
+                    (row["wheel_candidate_ready"] and (not row["wheel_enabled"] or
+                        row["wheel_segments"] < 3 or row["wheel_gps_distance_m"] < 100 or
+                        row["wheel_distance_m"] <= 0 or row["wheel_evidence_end_ns"] == 0))):
+                self.issue("invalid_calibration_evidence", source, "Wheel calibration evidence/candidate is inconsistent")
+                return
+            add_difference(self.wheel_scales, row["wheel_scale"])
+            self.wheel_versions[str(row["wheel_scale_version"])] += 1
+            self.gps_anchor_gates[row["gps_anchor_gate"]] += 1
         self.calibration_states[row["state"]] += 1
         self.calibration_enabled[str(row["enabled"]).lower()] += 1
         self.calibration_candidates[str(row["candidate_ready"]).lower()] += 1
@@ -448,6 +490,8 @@ class Auditor:
                     ("anchor_ns", "reference_ns", "frontier_ns", "calibration_version")) or
                 not bounded_number(row.get("yaw_zero"), 0, 4093)):
             self.issue("partial_record", source, "Invalid holdout event, counter, time, or yaw zero")
+            return
+        if not self.wheel_scale_pair(row, source):
             return
         self.holdout_events[event] += 1
         self.holdout_reasons[row["reason"]] += 1
@@ -487,7 +531,9 @@ class Auditor:
                 self.issue("holdout_unfinished_window", source, "New BEGIN precedes prior window END/ABORT")
             s["holdout_window"] = dict(window_id=row["window_id"], anchor_ns=anchor,
                                        last_reference_ns=anchor, mono_ns=row["mono_ns"],
-                                       calibration_version=row["calibration_version"], yaw_zero=row["yaw_zero"])
+                                       calibration_version=row["calibration_version"], yaw_zero=row["yaw_zero"],
+                                       wheel_scale=row.get("wheel_scale"),
+                                       wheel_scale_version=row.get("wheel_scale_version"))
             return
         if event == "ABORT":
             if not warmup_abort:
@@ -501,7 +547,9 @@ class Auditor:
             self.issue("holdout_missing_begin", source, "No matching holdout BEGIN in this recorded session")
             return
         if (anchor != window["anchor_ns"] or (event != "ABORT" and (
-                row["calibration_version"] != window["calibration_version"] or row["yaw_zero"] != window["yaw_zero"]))):
+                row["calibration_version"] != window["calibration_version"] or row["yaw_zero"] != window["yaw_zero"] or
+                row.get("wheel_scale") != window["wheel_scale"] or
+                row.get("wheel_scale_version") != window["wheel_scale_version"]))):
             self.issue("holdout_window_changed", source, "Anchor/calibration changed within holdout window")
             return
         if row["mono_ns"] < window["mono_ns"]:
@@ -695,6 +743,9 @@ class Auditor:
                                             candidate_ready=dict(self.calibration_candidates),
                                             versions=dict(self.calibration_versions),
                                             samples_max=self.calibration_samples_max,
+                                            wheel_scale=dict(self.wheel_scales),
+                                            wheel_versions=dict(self.wheel_versions),
+                                            gps_anchor_gates=dict(self.gps_anchor_gates),
                                             scope="stationary_receipt_model_hypothesis_not_verified_calibration"),
                     shadow_holdout=dict(events=dict(self.holdout_events), reasons=dict(self.holdout_reasons),
                                         completed_windows=self.holdout_completed, aborted_windows=self.holdout_aborted,

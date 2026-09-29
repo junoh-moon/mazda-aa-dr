@@ -42,7 +42,7 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/motion-channel-test" || result=$?
 qemu-arm -L "$QEMU_SYSROOT" "$build/live-pipeline-test"
 
 # The same worker algorithms and test fixtures on the release ARM32 ABI.
-for fixture in gyro_bias holdout; do
+for fixture in gyro_bias gps_wheel holdout; do
   "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc "tests/navigation/test_${fixture}.cpp" src/navigation/pipeline.cpp src/navigation/holdout.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/${fixture}-test"
   qemu-arm -L "$QEMU_SYSROOT" "$build/${fixture}-test"
 done

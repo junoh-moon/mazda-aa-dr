@@ -52,6 +52,25 @@ def holdout(event_name='BEGIN', **changes):
     return row
 
 
+def wheel_calibration(**changes):
+    row = calibration(wheel_enabled=True, wheel_candidate_ready=True, wheel_scale=1,
+                      wheel_candidate_scale=1.02, wheel_scale_version=0, wheel_segments=3,
+                      wheel_gps_distance_m=100, wheel_distance_m=98, wheel_evidence_end_ns=90,
+                      gps_anchor_gate='ACCEPTED')
+    row.update(changes)
+    return row
+
+
+def shadow(**changes):
+    row = dict(kind='shadow', mono_ns=100, domain='model', model_valid=False,
+               assist_ready=False, state=0, result='E_NO_SEED', pipeline='WAITING',
+               uncertainties=127, events=0, intervals=0, resets=0, rejected=0,
+               frontier_ns=0, lat=None, lon=None, heading_rad=None, speed_mps=None,
+               error_model_m=None, stopped=False, preview_encoded=False, location_preview_hex='')
+    row.update(changes)
+    return row
+
+
 def consume(rows, health_ns=1000):
     a = audit.Auditor()
     a.consume(boot(), 'boot')
@@ -86,7 +105,89 @@ class CalibrationLogs(unittest.TestCase):
         self.assertEqual(report['status'], 'local_checks_pass')
         self.assertEqual(report['shadow_holdout']['position_difference_m'],
                          dict(count=1, min=3.0, max=3.0, mean=3.0))
+        self.assertEqual(report['shadow_calibration']['wheel_scale'],
+                         dict(count=1, min=1.02, max=1.02, mean=1.02))
+        self.assertEqual(report['shadow_calibration']['wheel_versions'], {'1': 1})
+        self.assertEqual(report['shadow_calibration']['gps_anchor_gates'], {'ACCEPTED': 1})
+        self.assertTrue(all(row['wheel_scale'] == 1.02 and row['wheel_scale_version'] == 1
+                            for row in rows if row['kind'] == 'shadow_holdout'))
         self.assertLess(max(map(len, emitted.splitlines())), audit.MAX_LINE_BYTES)
+
+    def test_optional_wheel_pair_legacy_bounds_and_invalid_fields(self):
+        for factory in (shadow, holdout):
+            for fields in ({}, dict(wheel_scale=0.95, wheel_scale_version=0),
+                           dict(wheel_scale=1.05, wheel_scale_version=2**64-1)):
+                with self.subTest(factory=factory.__name__, fields=fields):
+                    self.assertEqual(codes(consume([factory(**fields)])), [])
+            invalid = [dict(wheel_scale=1), dict(wheel_scale_version=0)]
+            invalid += [dict(wheel_scale=value, wheel_scale_version=0)
+                        for value in (True, None, '1', 0.949, 1.051, float('inf'), float('nan'))]
+            invalid += [dict(wheel_scale=1, wheel_scale_version=value)
+                        for value in (True, -1, 2**64, 1.0)]
+            for fields in invalid:
+                with self.subTest(factory=factory.__name__, fields=fields):
+                    self.assertIn('partial_record', codes(consume([factory(**fields)])))
+
+    def test_wheel_calibration_group_is_optional_but_complete(self):
+        self.assertEqual(codes(consume([calibration()])), [])
+        row = wheel_calibration()
+        for key in set(row) - set(calibration()):
+            bad = dict(row); del bad[key]
+            with self.subTest(missing=key):
+                a = consume([bad])
+                self.assertIn('partial_record', codes(a))
+                self.assertEqual(a.calibration_states, {})
+                self.assertEqual(a.wheel_scales['count'], 0)
+        summary = consume([row, wheel_calibration(wheel_scale=1.02, wheel_scale_version=1,
+            wheel_candidate_ready=False, wheel_segments=0, wheel_gps_distance_m=0,
+            wheel_distance_m=0, wheel_evidence_end_ns=0, gps_anchor_gate='JUMP')]).report()['shadow_calibration']
+        self.assertEqual(summary['wheel_scale'], dict(count=2, min=1, max=1.02, mean=1.01))
+        self.assertEqual(summary['wheel_versions'], {'0': 1, '1': 1})
+        self.assertEqual(summary['gps_anchor_gates'], {'ACCEPTED': 1, 'JUMP': 1})
+
+    def test_wheel_calibration_invalid_evidence(self):
+        malformed = [('wheel_enabled', 1), ('wheel_candidate_ready', 'true'),
+                     ('wheel_candidate_scale', 0.949), ('wheel_candidate_scale', 1.051),
+                     ('wheel_scale', float('nan')), ('wheel_segments', True),
+                     ('wheel_segments', -1), ('wheel_segments', 2**64),
+                     ('wheel_scale_version', 2**64), ('wheel_evidence_end_ns', -1),
+                     ('wheel_evidence_end_ns', 2**64), ('wheel_gps_distance_m', -1),
+                     ('wheel_distance_m', float('inf')), ('wheel_distance_m', True),
+                     ('gps_anchor_gate', ''), ('gps_anchor_gate', None)]
+        inconsistent = [('wheel_enabled', False), ('wheel_segments', 2),
+                        ('wheel_gps_distance_m', 99), ('wheel_distance_m', 0),
+                        ('wheel_evidence_end_ns', 0), ('wheel_evidence_end_ns', 101)]
+        for changes, expected in ((malformed, 'partial_record'),
+                                  (inconsistent, 'invalid_calibration_evidence')):
+            for key, value in changes:
+                with self.subTest(key=key, value=value):
+                    a = consume([wheel_calibration(**{key: value})])
+                    self.assertIn(expected, codes(a))
+                    self.assertEqual(a.calibration_states, {})
+        # A consumed candidate may retain evidence or reset it on apply.
+        self.assertEqual(codes(consume([wheel_calibration(wheel_candidate_ready=False)])), [])
+        self.assertIn('invalid_calibration_evidence', codes(consume([
+            wheel_calibration(wheel_candidate_ready=False, wheel_evidence_end_ns=101)])))
+
+    def test_wheel_pair_cannot_change_appear_or_disappear_within_window(self):
+        pair = dict(wheel_scale=1.02, wheel_scale_version=1)
+        for event in ('COMPARED', 'END'):
+            for fields in ({}, dict(wheel_scale=1, wheel_scale_version=1),
+                           dict(wheel_scale=1.02, wheel_scale_version=2)):
+                with self.subTest(event=event, fields=fields):
+                    a = consume([holdout(**pair), holdout(event, **fields)])
+                    self.assertIn('holdout_window_changed', codes(a))
+                    self.assertEqual(a.holdout_position['count'], 0)
+                    self.assertEqual(a.holdout_completed, 0)
+            a = consume([holdout(), holdout(event, **pair)])
+            self.assertIn('holdout_window_changed', codes(a))
+        a = consume([holdout(**pair), holdout('COMPARED', **pair), holdout('END', **pair)])
+        self.assertEqual(codes(a), [])
+        self.assertEqual(a.holdout_position['count'], 1)
+        for fields in ({}, dict(wheel_scale=1, wheel_scale_version=0)):
+            a = consume([holdout(**pair), holdout('ABORT', **fields)])
+            self.assertEqual(codes(a), ['holdout_aborted'])
+            self.assertIsNone(a.session['holdout_window'])
 
     def test_calibration_counts_do_not_qualify_model(self):
         rows = [calibration(), calibration(state='APPLIED', candidate_ready=False,

@@ -4,6 +4,8 @@
 
 ## 실행 구성
 
+후속 [GPS 기준점·휠 거리 보정](GPS_WHEEL_MODEL_KO.md)은 두 MODEL 파이프라인의 기준점 검사를 보강하고, GPS-visible cooldown에서 휠 보정을 학습한다. RUNNING 중 GPS 제외 계약은 같다. 정상 비교 종료에는 적용 자이로 영점과 휠 scale을 함께 유지하며, 이후의 세부 조건은 해당 문서를 따른다.
+
 기존 AA worker가 같은 원본 센서 복사본을 두 MODEL 파이프라인에 전달한다.
 
 - **주 SHADOW:** 정차 중 영점 후보를 계산한다. 정상 GPS 기준점을 잡을 때 적용하고 실제 mode=0 구간을 계산한다.

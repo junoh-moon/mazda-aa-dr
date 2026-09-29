@@ -2,6 +2,7 @@
 #define MX5_NAVIGATION_PIPELINE_H
 #include "adapter/adapter.h"
 #include "navigation/gyro_bias.h"
+#include "navigation/gps_wheel.h"
 #include "core/dr_core.h"
 #include "runtime/core_bridge.h"
 #include <stddef.h>
@@ -57,9 +58,10 @@ class Pipeline {
 public:
     static const size_t CAPACITY=128;
     Pipeline();
-    // Opt-in stationary bias learning changes MODEL math only at a new GPS seed.
+    // Opt-in MODEL bias/scale learning changes math only at a new GPS seed.
+    // gps_wheel also enables fresh-wheel and GPS travel-course anchor gates.
     bool init_model(const ModelProfile&, const mx5_dr_config&, mx5_dr_context,
-                    bool auto_bias=false);
+                    bool auto_bias=false, bool gps_wheel=false);
     bool init_qualified(const mx5_dr_config&, mx5_dr_context);
     PipelineResult enqueue_raw(const RawEvent&);
     PipelineResult enqueue_position(const adapter::Observation&);
@@ -79,13 +81,15 @@ public:
     PipelineResult drain(uint64_t watermark_ns);
     void reset(mx5_dr_context);
     // Normal MODEL holdout completion only: clear prediction and candidates,
-    // retain applied zero and raw source/time guards. Faults must use reset().
+    // retain applied zero/scale and raw source/time guards. Faults must use reset().
     bool restart_model_prediction(mx5_dr_context);
     Diagnostic diagnostic(uint64_t now_ns) const;
     runtime::CoreBridgeResult qualified_snapshot(uint64_t now_ns,
         const runtime::CoreBridgeQualification&, adapter::DrSnapshot*) const;
     const Status& status() const { return status_; }
     const GyroBiasStatus& calibration() const { return gyro_bias_.status(); }
+    const WheelScaleStatus& wheel_calibration() const { return gps_wheel_.status(); }
+    GpsAnchorGate anchor_gate() const { return gps_wheel_.gate(); }
     mx5_dr_context context() const { return core_.estimate.context; }
     uint64_t reorder_ns() const { return profile_.reorder_ns; }
 private:
@@ -94,7 +98,7 @@ private:
         Kind kind;
         uint64_t time, received, window_end;
         mx5_dr_evidence evidence;
-        double value;
+        double value, wheel_spread;
         uint16_t raw, count;
         mx5_dr_anchor anchor;
         adapter::Observation observation;
@@ -102,6 +106,7 @@ private:
     mx5_dr_core core_;
     ModelProfile profile_;
     GyroBias gyro_bias_;
+    GpsWheel gps_wheel_;
     Status status_;
     Event queue_[CAPACITY], speed_, yaw_, reverse_;
     size_t size_;
