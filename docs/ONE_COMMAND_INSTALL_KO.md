@@ -18,5 +18,8 @@ sh install.sh
 만듭니다. SHADOW는 계산 결과를 기록하고 순정 송신을 유지합니다.
 ASSIST는 비활성 상태입니다. 설치 성공 후 정상적인 전원 종료·기동이 필요합니다.
 
-이미 발행된 v0.3.0-shadow.1 ZIP에는 이 수정이 없습니다.
-[수정과 실제 검증 범위](../validation/USB_INSTALL_2026-09-29.md)를 확인하십시오.
+[v0.3.1-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.1-shadow.1)의
+`mazda-aa-dr-v0.3.1-shadow.1.zip`을 사용하십시오. 이 ZIP의 기본 모드는 SHADOW입니다.
+공개 파일 재다운로드까지 확인한 [최종 검증 결과](../validation/RELEASE_2026-09-30.md)와
+[설치 수정 범위](../validation/USB_INSTALL_2026-09-29.md)를 확인하십시오.
+기존 v0.3.0-shadow.1 ZIP에는 이 수정이 없습니다.
