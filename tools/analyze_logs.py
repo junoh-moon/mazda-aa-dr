@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline r0.1 trace auditor (Python 3, PC only; never extracts tar members).
+"""Offline trace auditor (Python 3, PC only; never extracts tar members).
 
 Exit 0: local checks passed for the recorded window; 1: invariant violation;
 2: insufficient/malformed evidence. No exit status establishes phone acceptance,
@@ -27,7 +27,8 @@ LIMITATIONS = [
     "Only recorded local byte invariants are checked; no complete vehicle-session proof.",
     "Lower send result is not phone receipt, app adoption, or navigation success.",
     "SMDB/owner/receiver polls do not establish source freshness or exact-request provenance.",
-    "No live DR accuracy or ground truth is established; r0.1 cannot send DR_REPLACEMENT.",
+    "SHADOW model diagnostics do not establish DR accuracy, ground truth, or ASSIST readiness.",
+    "Motion counts cover channel-accepted records; source measurement timing remains unknown.",
 ]
 
 
@@ -54,6 +55,48 @@ def finite_float(value):
     result = float(value)
     if not math.isfinite(result):
         raise ValueError("Nonfinite JSON number")
+    return result
+
+
+def bounded_int(value, low, high):
+    return integer(value) and low <= value <= high
+
+
+def decode_motion_records(row):
+    """Expand journal v1 without promoting receipt timestamps to producer time.
+
+    Validate the entire batch before returning any records. Integers stay Python
+    integers, including uint64 values larger than a JSON/JavaScript double.
+    """
+    if row.get("producer_time_status") != "unknown":
+        raise ValueError("motion producer_time_status must remain unknown")
+    if not bounded_int(row.get("epoch"), 1, 2**64 - 1):
+        raise ValueError("invalid motion epoch")
+    if row.get("kind") == "motion_batch":
+        if not integer(row.get("schema")) or row["schema"] != 1:
+            raise ValueError("unsupported motion_batch schema")
+        events = row.get("events")
+        if not isinstance(events, list) or not 1 <= len(events) <= 32:
+            raise ValueError("motion_batch must contain 1..32 events")
+    elif row.get("kind") == "motion":
+        raw = row.get("raw")
+        if not isinstance(raw, list) or len(raw) != 4:
+            raise ValueError("motion raw must contain four integers")
+        events = [[row.get("sensor"), row.get("receive_seq"), row.get("received_ns"),
+                   row.get("source_mono_ms"), *raw, row.get("count"), row.get("reverse")]]
+    else:
+        raise ValueError("expected motion or motion_batch")
+    bounds = [(1, 3), (1, 2**64 - 1), (1, 2**64 - 1), (-2**63, 2**63 - 1)]
+    bounds += [(0, 65535)] * 6
+    result = []
+    for event in events:
+        if not isinstance(event, list) or len(event) != 10 or any(
+                not bounded_int(v, lo, hi) for v, (lo, hi) in zip(event, bounds)):
+            raise ValueError("invalid motion row shape, integer type, or range")
+        result.append(dict(kind="motion", sensor=event[0], epoch=row["epoch"],
+                           receive_seq=event[1], received_ns=event[2], source_mono_ms=event[3],
+                           producer_time_status="unknown", raw=event[4:8],
+                           count=event[8], reverse=event[9]))
     return result
 
 
@@ -85,6 +128,15 @@ class Auditor:
         self.collector_boots = []
         self.collector_stops = []
         self.collector_pids = set()
+        self.motion_samples = 0
+        self.motion_sensors = Counter()
+        self.motion_batches = 0
+        self.shadow_pipelines = Counter()
+        self.shadow_results = Counter()
+        self.shadow_states = Counter()
+        self.shadow_valid = Counter()
+        self.shadow_resets_max = 0
+        self.shadow_rejected_max = 0
 
     def issue(self, code, source, detail, violation=False):
         severity = "violation" if violation else "inconclusive"
@@ -94,7 +146,9 @@ class Auditor:
 
     def new_session(self, boot=None):
         self.session = dict(boot=boot, last_send_ns=-1, health_ns=-1, sends=0,
-                            dropped_max=0, health_records=0)
+                            dropped_max=0, health_records=0, motion_epoch=None,
+                            motion_seq=0, motion_ns=0, last_diagnostic_ns=-1,
+                            shadow_resets=0, shadow_rejected=0, shadow_pipeline=None)
         self.sessions.append(self.session)
         self.positions = {}
 
@@ -152,7 +206,7 @@ class Auditor:
             if row["install"] != "ok":
                 self.issue("install_not_ok", source, row["install"])
             if row["assist_ready"] or row["wire_timestamp_modified"]:
-                self.issue("impossible_live_capability", source, "r0.1 boot claims unsupported capability", True)
+                self.issue("impossible_live_capability", source, "Boot claims unsupported live capability", True)
             return
         if self.session is None and not collector:
             self.new_session()
@@ -182,7 +236,7 @@ class Auditor:
             if not row["hook_installed"]:
                 self.issue("hook_not_installed", source, "Health reports no installed hook")
             if row["assist_ready"]:
-                self.issue("impossible_live_capability", source, "r0.1 health claims ASSIST ready", True)
+                self.issue("impossible_live_capability", source, "Health claims unsupported ASSIST readiness", True)
             for key, counter in (("runtime_mode", self.runtime_modes), ("audit_fault", self.audit_faults)):
                 if key in row:
                     if not integer(row[key]):
@@ -210,11 +264,97 @@ class Auditor:
                              ("speed_raw", "yaw_raw", "gear_raw", "freshness", "quality"), ("assist_ready",)):
                 if row["assist_ready"] or row["freshness"] != "unproven_poll" or row["quality"] != "unknown":
                     self.issue("unexpected_poll_qualification", source,
-                               "r0.1 polling cannot establish ASSIST readiness, freshness, or quality", True)
+                               "Polling cannot establish ASSIST readiness, freshness, or quality", True)
         elif kind == "position_poll_error":
             self.validate(row, source, strings=("reason",))
+        elif kind in ("motion", "motion_batch"):
+            try:
+                events = decode_motion_records(row)
+            except ValueError as exc:
+                self.issue("malformed_motion", source, str(exc))
+                return
+            if kind == "motion_batch":
+                self.motion_batches += 1
+            for event in events:
+                self.motion(event, source)
+        elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled"):
+            self.shadow(row, source)
         else:
             self.issue("unknown_record_kind", source, kind)
+
+    def motion(self, row, source):
+        self.motion_samples += 1
+        self.motion_sensors[str(row["sensor"])] += 1
+        s = self.session
+        s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["received_ns"])
+        if s["motion_epoch"] != row["epoch"]:
+            if s["motion_epoch"] is not None:
+                self.issue("motion_source_restart", source, "Observed source epoch changed")
+            s["motion_epoch"] = row["epoch"]
+            s["motion_seq"] = row["receive_seq"]
+            s["motion_ns"] = row["received_ns"]
+            return  # First sequence need not be 1: the receiver can start late.
+        if row["receive_seq"] <= s["motion_seq"]:
+            self.issue("motion_sequence_replayed", source, "Duplicate/backward observer sequence")
+        elif row["receive_seq"] != s["motion_seq"] + 1:
+            self.issue("motion_sequence_gap", source, "Gap in channel-accepted observer records")
+        if row["received_ns"] < s["motion_ns"]:
+            self.issue("motion_clock_regressed", source, "Receipt clock regressed within source epoch")
+        s["motion_seq"] = max(s["motion_seq"], row["receive_seq"])
+        s["motion_ns"] = max(s["motion_ns"], row["received_ns"])
+
+    def shadow(self, row, source):
+        if not self.validate(row, source, bools=("assist_ready",)):
+            return
+        if row["assist_ready"]:
+            self.issue("impossible_live_capability", source, "SHADOW cannot authorize ASSIST", True)
+        kind = row["kind"]
+        if kind in ("shadow_input_reset", "shadow_disabled"):
+            self.validate(row, source, strings=("reason",))
+            self.issue(kind, source, str(row.get("reason")))
+            return  # A reset marker does not heal a missing observer sequence.
+        if row.get("domain") != "model":
+            self.issue("unexpected_shadow_domain", source, "SHADOW must remain MODEL", True)
+        if kind == "shadow_boot":
+            if self.validate(row, source, strings=("source",), bools=("active",)) and not row["active"]:
+                self.issue("shadow_inactive", source, "Sensor SHADOW did not start")
+            if "motion_sampling" in row and row["motion_sampling"] is not False:
+                self.issue("motion_sampling", source, "Lossless motion logging not established")
+            return
+        if not self.validate(row, source,
+                ints=("mono_ns", "state", "uncertainties", "events", "intervals", "resets", "rejected", "frontier_ns"),
+                strings=("result", "pipeline", "location_preview_hex"),
+                bools=("model_valid", "stopped", "preview_encoded")):
+            return
+        if (not bounded_int(row['state'], 0, 6) or not bounded_int(row['uncertainties'], 0, 2**32-1) or
+                not bounded_int(row['mono_ns'], 1, 2**64-1) or any(
+                    not bounded_int(row[key], 0, 2**64-1)
+                    for key in ('events', 'intervals', 'resets', 'rejected', 'frontier_ns'))):
+            self.issue('partial_record', source, 'SHADOW state/counter/time outside integer range')
+            return
+        self.session["last_diagnostic_ns"] = max(self.session["last_diagnostic_ns"], row["mono_ns"])
+        self.shadow_pipelines[row['pipeline']] += 1
+        self.shadow_results[row['result']] += 1
+        self.shadow_states[str(row['state'])] += 1
+        self.shadow_valid[str(row['model_valid']).lower()] += 1
+        self.shadow_resets_max = max(self.shadow_resets_max, row['resets'])
+        self.shadow_rejected_max = max(self.shadow_rejected_max, row['rejected'])
+        normal = ('OK', 'WAITING', 'MISSING_SENSOR', 'NO_ANCHOR')
+        if row['pipeline'] not in normal and self.session['shadow_pipeline'] != row['pipeline']:
+            self.issue('shadow_pipeline_fault', source, row['pipeline'])
+        self.session['shadow_pipeline'] = row['pipeline']
+        for counter in ('resets', 'rejected'):
+            if row[counter] > self.session['shadow_' + counter]:
+                self.issue('shadow_' + counter, source, 'Observed model input fault counter increased')
+            self.session['shadow_' + counter] = row[counter]
+        for key in ("lat", "lon", "heading_rad", "speed_mps", "error_model_m"):
+            if key not in row or (row[key] is not None and type(row[key]) not in (int, float)):
+                self.issue("partial_record", source, "Invalid SHADOW numeric field: " + key)
+        preview = row["location_preview_hex"]
+        if (row["preview_encoded"] and (not row['model_valid'] or
+                not re.fullmatch(r"[0-9a-fA-F]{96}", preview))) or (
+                not row["preview_encoded"] and preview != ""):
+            self.issue("invalid_shadow_preview", source, "Preview must match encoded flag and 48-byte shape")
 
     def send(self, row, source):
         if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "type", "length",
@@ -229,7 +369,7 @@ class Auditor:
         self.reasons[REASONS[reason] if 0 <= reason < len(REASONS) else "UNKNOWN:" + str(reason)] += 1
         self.results[str(row["result"])] += 1
         if choice == 2:
-            self.issue("dr_replacement_impossible", source, "DR_REPLACEMENT is impossible for live r0.1", True)
+            self.issue("dr_replacement_impossible", source, "DR_REPLACEMENT is disabled in the live runtime", True)
         elif choice not in CHOICES:
             self.issue("unknown_send_choice", source, str(choice), True)
         if row["type"] != 1 or row["length"] != 48:
@@ -352,8 +492,8 @@ class Auditor:
                 self.issue("missing_boot", source, "Rotated/partial trace has no boot record")
             if not session["health_records"]:
                 self.issue("missing_health", source, "No health record")
-            elif session["sends"] and session["health_ns"] < session["last_send_ns"]:
-                self.issue("uncovered_trace_tail", source, "No health record at/after final send")
+            elif session["health_ns"] < max(session["last_send_ns"], session["last_diagnostic_ns"]):
+                self.issue("uncovered_trace_tail", source, "No health record at/after final send or diagnostic")
         if not self.checked:
             self.issue("no_location_samples", "inputs", "No complete type1 length48 payload pair checked")
         if self.collector_counts and not self.collector_boots:
@@ -368,11 +508,18 @@ class Auditor:
                            re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", row["boot_id"])})
         aa_boot_ids = boot_ids(self.boots)
         collector_boot_ids = boot_ids(self.collector_boots)
-        return dict(report_schema=1, runtime_release="r0.1", status=status,
+        return dict(report_schema=1, runtime_release="not_inferred_from_log_schema", status=status,
                     scope="recorded_window_local_invariants_only", phone_acceptance="not_established",
                     dr_accuracy="not_established", limitations=LIMITATIONS,
                     files=self.files, ignored_archive_members=self.ignored,
                     record_counts=dict(self.counts), input_modes=dict(self.modes),
+                    motion=dict(samples=self.motion_samples, batches=self.motion_batches,
+                                sensors=dict(self.motion_sensors), producer_time="unknown",
+                                scope="channel_accepted_records_only"),
+                    shadow=dict(pipelines=dict(self.shadow_pipelines), results=dict(self.shadow_results),
+                                states=dict(self.shadow_states), model_valid=dict(self.shadow_valid),
+                                resets_max=self.shadow_resets_max, rejected_max=self.shadow_rejected_max,
+                                scope="reported_model_diagnostics_not_accuracy_validation"),
                     position_poll_modes=dict(self.poll_modes), send_choices=dict(self.choices),
                     send_reasons=dict(self.reasons), lower_send_results=dict(self.results),
                     checked_location_payload_pairs=self.checked,

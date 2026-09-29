@@ -6,6 +6,7 @@
 #include "loader.h"
 #include "boot_id.h"
 #include "sha256.h"
+#include "motion_batch.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -172,6 +173,21 @@ struct Journal {
   }
 };
 
+void flush_motion(Journal &j, mx5::runtime::MotionBatch &batch) {
+  if (!batch.empty()) {
+    j.line(batch.line());
+    batch.clear();
+  }
+}
+void journal_motion(Journal &j, mx5::runtime::MotionBatch &batch,
+                    const N::RawEvent &raw) {
+  if (!batch.append(raw)) {
+    flush_motion(j, batch);
+    if (!batch.append(raw))
+      j.fail(); // An unrepresentable record is an audit fault, not sampling.
+  }
+}
+
 void *worker(void *) {
   locale_t numeric_locale = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
   if (!numeric_locale) {
@@ -180,6 +196,7 @@ void *worker(void *) {
   }
   uselocale(numeric_locale);
   Journal j;
+  mx5::runtime::MotionBatch motion_batch;
   char line[2200];
   char boot_id[37];
   mx5::runtime::read_boot_id(boot_id);
@@ -204,6 +221,7 @@ void *worker(void *) {
     snprintf(line,sizeof line,
         "{\"kind\":\"shadow_boot\",\"active\":%s,\"domain\":\"model\","
         "\"source\":\"existing_vbs_vim_callback\",\"assist_ready\":false,"
+        "\"motion_log_format\":\"motion_batch_v1\",\"motion_sampling\":false,"
         "\"yaw_zero\":%.9g,\"yaw_rad_per_count\":%.9g,"
         "\"wheel_kmh_per_count\":%.9g,\"wheel_zero_kmh\":%.9g,"
         "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu}",
@@ -272,6 +290,7 @@ void *worker(void *) {
           const N::ReceiveResult received=motion.receive(clock_ns(0),&raw);
           if(received==N::CHANNEL_EMPTY)break;
           if(received==N::CHANNEL_FAULT) {
+            flush_motion(j,motion_batch);
             mx5_dr_context c=navigation.context();
             if(c.source_epoch==UINT64_MAX || c.generation==UINT64_MAX) {
               disable_mutation();break;
@@ -280,17 +299,12 @@ void *worker(void *) {
             j.line("{\"kind\":\"shadow_input_reset\",\"reason\":\"channel_discontinuity\",\"assist_ready\":false}");
           } else {
             navigation.enqueue_raw(raw);
-            snprintf(line,sizeof line,
-                "{\"kind\":\"motion\",\"sensor\":%u,\"epoch\":%llu,\"receive_seq\":%llu,"
-                "\"received_ns\":%llu,\"source_mono_ms\":%lld,\"producer_time_status\":\"unknown\","
-                "\"raw\":[%u,%u,%u,%u],\"count\":%u,\"reverse\":%d}",
-                unsigned(raw.kind),(unsigned long long)raw.epoch,
-                (unsigned long long)raw.receive_seq,(unsigned long long)raw.received_ns,
-                (long long)raw.source_mono_ms,unsigned(raw.raw[0]),unsigned(raw.raw[1]),
-                unsigned(raw.raw[2]),unsigned(raw.raw[3]),unsigned(raw.count),raw.reverse);
-            j.line(line);
+            journal_motion(j,motion_batch,raw);
           }
         }
+        // Empty socket, 256-event turn limit and faults all leave no batch
+        // pending across the worker's sleep or the next POSITION observation.
+        flush_motion(j,motion_batch);
         now=clock_ns(0);
         if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
         if(now>=last_shadow_log && now-last_shadow_log>=100000000ULL) {

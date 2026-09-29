@@ -5,6 +5,18 @@ This record applies to the live-shadow-navigation feature diff, not to the
 published `v0.2.0-observe.2` release. No proprietary binary was executed and no
 physical CMU, vehicle, phone, Naver Map, or Claude session was tested.
 
+## Subsequent independent review (2026-09-29)
+
+After the implementation above, [Claude Code reported an independent review and
+host run at c0bf390a](https://github.com/junoh-moon/mazda-aa-dr/pull/12#issuecomment-5884112251).
+On Debian 12/aarch64, the real kernel Unix datagram integration test ran and
+passed; `make test` returned 0, with 20 private stock-fixture packaging skips.
+Claude did not run the pinned ARM32 compiler or QEMU. This is reviewer-reported
+evidence for that commit, not a rerun by the author or target-vehicle validation.
+The original sandbox socket EPERM results below remain accurate for that host.
+The same review's journal-volume concern is addressed by the separate
+[compact-journal follow-up](COMPACT_SHADOW_LOGS_2026-09-29.md).
+
 ## Implemented path
 
 Existing VBS VIMC callback registration -> bounded pre-mutation sensor copy ->
