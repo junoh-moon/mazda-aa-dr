@@ -9,6 +9,11 @@
 고정했습니다. 기본 모드는 SHADOW이며 ASSIST는 비활성입니다. 실제 센서 callback,
 위치 정확도, 정상 전체 차량 기동·복구와 폰 수용은 미검증입니다.
 
+[후속 OEM 위치 서비스 실행](../validation/OEM_LOCATION_2026-09-30.md)에서는
+원본 LDS 제공자와 실제 위치 API 응답을 확인했습니다. mode·UTC·좌표는 모두
+0이며 READ_NOT_READY 상태입니다. 내비의 SM 의존성 실패도 남아 있어 유효한
+GPS 또는 정상 전체 기동으로 판정하지 않습니다.
+
 ## SHADOW 기능 변경
 
 추가 독립 감사에서 헤더 변경 누락, ZIP 빌드 출처 혼합, collector 종료 오판,

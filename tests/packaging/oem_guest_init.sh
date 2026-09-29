@@ -65,7 +65,9 @@ if [ "$mode" = shadow ]; then
     rc=$?
     echo "GUARD_SELECT_RC=$rc TRIAL=$trial"
     [ "$rc" = 0 ] || exec /bin/sh
-    sh /data_persist/mx5-aa-dr/tools/start_collector.sh 20
+    collector_seconds=20
+    [ "$phase" != location ] || collector_seconds=60
+    sh /data_persist/mx5-aa-dr/tools/start_collector.sh "$collector_seconds"
     sleep 1
     for process in /proc/[0-9]*; do
         case "$(readlink "$process/exe" 2>/dev/null)" in
@@ -212,6 +214,26 @@ retry_probe() {
     fi
     echo 'VM_RETRY_PROBE_FINISHED=observations only; inspect SM state, child identity and preload'
 }
+location_query() {
+    location_label=$1
+    shift
+    echo "VM_LOCATION_QUERY_BEGIN=$location_label UID=$(id -u) UPTIME=$(cat /proc/uptime)"
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus_service_socket \
+        timeout -t 3 /usr/bin/dbus-send --session --print-reply --reply-timeout=1500 "$@"
+    location_rc=$?
+    echo "VM_LOCATION_QUERY_END=$location_label RC=$location_rc UPTIME=$(cat /proc/uptime)"
+}
+location_snapshot() {
+    location_stage=$1
+    location_query "$location_stage.owner" --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus org.freedesktop.DBus.GetNameOwner string:com.jci.lds.data
+    location_query "$location_stage.position" --dest=com.jci.lds.data \
+        /com/jci/lds/data com.jci.lds.data.GetPosition
+    location_query "$location_stage.selected-gps" --dest=com.jci.lds.control \
+        /com/jci/lds/control com.jci.lds.control.GetSelectedGPS_sync
+    location_query "$location_stage.read-status" --dest=com.jci.lds.control \
+        /com/jci/lds/control com.jci.lds.control.GetReadStatus_sync
+}
 case "$phase" in
     retry) retry_probe;;
     services)
@@ -221,7 +243,7 @@ case "$phase" in
         sm_pid=$!
         echo "SM_PID=$sm_pid"
         ;;
-    standalone)
+    standalone|location)
         # The OEM launcher documents this mode; original dependencies can fail.
         (strace -ff -tt -e trace=file,process,network,ipc -o /tmp/oem-check/aap-service.syscalls /usr/bin/aap_service; rc=$?; echo "TRACE_WRAPPER_RC=$rc" > /tmp/oem-check/aap-service.exit) > /tmp/oem-check/aap-service.log 2>&1 &
         echo "AAP_SERVICE_TRACE_WRAPPER_PID=$!"
@@ -240,6 +262,17 @@ case "$phase" in
         (strace -ff -tt -e trace=file,process,network,ipc -o /tmp/oem-check/aa.syscalls /bin/sh -c 'export LD_PRELOAD="$1" LD_DEBUG=libs; exec /jci/sm/sm_svclauncher -s jciAAPA /jci/aapa/blmjciaapa.so 0 -a' vm "$aa_preload"; rc=$?; echo "TRACE_WRAPPER_RC=$rc" > /tmp/oem-check/aa.exit) > /tmp/oem-check/aa.log 2>&1 &
         aa_pid=$!
         echo "AA_LAUNCHER_PID=$aa_pid"
+        if [ "$phase" = location ]; then
+            echo 'VM_LOCATION_SCOPE=standalone OEM LDS/navi; unchanged args and XML; no GPS or CAN input supplied'
+            location_snapshot before-providers > /tmp/oem-check/location-dbus.log 2>&1
+            (strace -ff -tt -e trace=file,process,network,ipc,ioctl -o /tmp/oem-check/lds.syscalls /jci/sm/sm_svclauncher -s jciLDS /jci/lds/svcjcilds.so 0 -a /jci/lds/lds ConfigFile=/jci/lds/lds.xml; rc=$?; echo "TRACE_WRAPPER_RC=$rc" > /tmp/oem-check/lds.exit) > /tmp/oem-check/lds.log 2>&1 &
+            echo "VM_LOCATION_LDS_TRACE_WRAPPER_PID=$!"
+            sleep 3
+            (strace -ff -tt -e trace=file,process,network,ipc,ioctl -o /tmp/oem-check/navi.syscalls /jci/sm/sm_svclauncher -s jcinavi /jci/navi/svcjcinavi.so 0 -a; rc=$?; echo "TRACE_WRAPPER_RC=$rc" > /tmp/oem-check/navi.exit) > /tmp/oem-check/navi.log 2>&1 &
+            echo "VM_LOCATION_NAVI_TRACE_WRAPPER_PID=$!"
+            sleep 3
+            location_snapshot after-providers >> /tmp/oem-check/location-dbus.log 2>&1
+        fi
         ;;
     initprobe)
         strace -ff -tt -o /tmp/oem-check/init.syscalls /sbin/init_target > /tmp/oem-check/init.log 2>&1 &
@@ -249,6 +282,13 @@ case "$phase" in
     *) echo 'UNKNOWN_VM_PHASE';;
 esac
 sleep 25
+if [ "$phase" = location ]; then
+    location_snapshot late >> /tmp/oem-check/location-dbus.log 2>&1
+    if [ "$mode" = shadow ]; then
+        sh /data_persist/mx5-aa-dr/tools/stop_collector.sh
+        echo "VM_LOCATION_COLLECTOR_STOP_RC=$?"
+    fi
+fi
 echo 'VM_PROCESS_SNAPSHOT_BEGIN'
 ps -ef
 echo 'VM_PROCESS_SNAPSHOT_END'
@@ -279,7 +319,7 @@ for file in /tmp/oem-check/* /tmp/smevents.txt /data_persist/mx5-aa-dr/logs/*.js
     case "$file" in
         # Keep tap initialization evidence even when it is outside the final
         # thread tail. These are file/socket calls, not OEM read-buffer dumps.
-        *.syscalls.*) grep -E 'execve|exit_group|SIG[A-Z]+|mx5dr|/data_persist/mx5-aa-dr/|libjcivim_api|svcjcivbs|libjcimod_can|/jci/vim/vim_app|socket\((AF_UNIX|AF_LOCAL|PF_FILE|PF_LOCAL)|Watchdog|cmu_io|spidev|/dev/shm' "$file"; tail -n 40 "$file";;
+        *.syscalls.*) grep -E 'execve|exit_group|SIG[A-Z]+|mx5dr|/data_persist/mx5-aa-dr/|libjcivim_api|svcjcivbs|libjcimod_can|/jci/vim/vim_app|/jci/lds/|/jci/navi/|/dev/ttymxc2|socket\((AF_UNIX|AF_LOCAL|PF_FILE|PF_LOCAL)|Watchdog|cmu_io|spidev|/dev/shm' "$file"; tail -n 40 "$file";;
         *) cat "$file";;
     esac
     echo "VM_LOG_END $file"
