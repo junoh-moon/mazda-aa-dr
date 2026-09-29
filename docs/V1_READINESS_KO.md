@@ -28,6 +28,9 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   큐 lifetime·실제 요청 연결·qualified runtime 구현의 완료로 세지 않습니다.
   [별도 요청 관측 자료구조](../validation/REQUEST_TRACE_2026-09-30.md)와 합성 회귀를
   추가했습니다. 제품 연결과 실제 수신기·세션 자격은 여전히 미구현입니다.
+  [원본 LDS 비동기 요청 실행](../validation/LDS_ASYNC_2026-09-30.md)으로 요청→reply
+  sender→callback→정상 정리의 실제 identity 경계는 확인했지만, BLM 이후 큐와
+  취소·timeout 정리, 제품 hook은 남아 있습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.

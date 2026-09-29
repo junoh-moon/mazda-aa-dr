@@ -30,6 +30,12 @@ VBS를 종료했고, 의존성을 유지한 jcinavi·jciAAPA는 시작되지 않
 별도 구현하고 합성 회귀를 추가했습니다. 생산 바이너리에는 연결하지 않았으며
 실제 요청·응답·작업의 OEM 생존 경계 연결은 명시적인 TODO입니다.
 
+[원본 LDS 비동기 요청 실행](../validation/LDS_ASYNC_2026-09-30.md)에서는 격리 VM의
+원본 LDS에 두 GetPosition을 동시에 대기시키고, 요청별 method·context·reply
+sender·userdata callback·정상 정리를 hardware breakpoint만으로 관찰했습니다.
+JCIDBUS connect는 0이 아닌 값이 성공이라는 계약 정정도 기록했습니다. 값은 모두
+mode 0이며 BLM worker 큐·AA 세션·수신기 자격·취소 경로는 여전히 미검증입니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
