@@ -1,13 +1,37 @@
 #!/bin/sh
 # Developer PC only. Runs generated synthetic programs in qemu, no OEM binary.
 set -eu
+# Match build_arm.build_environment for every compiler and QEMU child, not
+# only the identity probe. Preserve explicit CROSS_COMPILE/QEMU_SYSROOT.
+unset MAKEFLAGS GNUMAKEFLAGS MFLAGS MAKEOVERRIDES MAKEFILES MAKELEVEL \
+    GCC_EXEC_PREFIX COMPILER_PATH LIBRARY_PATH CPATH C_INCLUDE_PATH \
+    CPLUS_INCLUDE_PATH DEPENDENCIES_OUTPUT SUNPRO_DEPENDENCIES LD_RUN_PATH
+# QEMU also inherits guest loader settings. The loader test adds only its
+# selected production preload explicitly with qemu-arm -E below.
+unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT QEMU_SET_ENV QEMU_UNSET_ENV QEMU_LD_PREFIX
+LC_ALL=C
+export LC_ALL
 project=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 : "${CROSS_COMPILE:?Set the CMU-compatible compiler prefix}"
 : "${QEMU_SYSROOT:?Set its sysroot}"
 cd "$project"
 build=$project/build/arm-full-tests
 preload=${MX5DR_ARM_LIBRARY:-$project/build/libmx5dr.so}
+if [ -n "${MX5DR_ARM_BUILD:-}" ]; then
+    preload=$MX5DR_ARM_BUILD/libmx5dr.so
+fi
 [ -s "$preload" ] || { echo "Missing production preload: $preload" >&2; exit 1; }
+verify_inputs() {
+    if [ -n "${MX5DR_ARM_BUILD:-}" ]; then
+        python3 tools/check_arm_test_inputs.py --library "$preload" \
+            --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
+            --release-build "$MX5DR_ARM_BUILD"
+    else
+        python3 tools/check_arm_test_inputs.py --library "$preload" \
+            --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT"
+    fi
+}
+verify_inputs
 mkdir -p "$build"
 arch='-march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=softfp -marm'
 warn='-O2 -Wall -Wextra -Werror'
@@ -51,3 +75,4 @@ done
 
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_shadow_log.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/shadow-log-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/shadow-log-test"
+verify_inputs

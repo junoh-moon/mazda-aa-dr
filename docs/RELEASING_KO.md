@@ -88,7 +88,7 @@ MX5DR_RELEASE_BUNDLE="$RELEASE_BUNDLE" \
   make test 2>&1 | tee "$RELEASE_WORK/evidence/host-tests.txt"
 
 CROSS_COMPILE="$RELEASE_ARM_PREFIX" QEMU_SYSROOT="$RELEASE_SYSROOT" \
-MX5DR_ARM_LIBRARY="$RELEASE_BUILD/libmx5dr.so" \
+MX5DR_ARM_BUILD="$RELEASE_BUILD" \
   sh tests/run_arm_all.sh 2>&1 | tee "$RELEASE_WORK/evidence/arm-tests.txt"
 
 for artifact in libmx5dr.so libmx5dr-vimtap.so mx5dr-collector mx5dr-guard mx5dr-sha256; do
@@ -102,6 +102,8 @@ done > "$RELEASE_WORK/evidence/elf.txt"
 - `set -o pipefail`로 `tee` 성공이 빌드/테스트 실패를 가리지 않게 한다.
 - `make test` 종료 코드만으로 판정하지 않는다. fixture 누락에 따른 packaging skip과 소켓 금지 환경의 exit 77은 전체 명령에서 성공처럼 보일 수 있다. 실제 PASS/FAIL/SKIP과 이유를 기록한다. 이번 다섯 바이너리를 사용하는 packaging 시험이 생략된 채 차량용 설치 ZIP의 검증이 끝났다고 하지 않는다.
 - ELF32 little-endian ARM, softfp 호출 규약, TEXTREL 부재, GLIBC 버전/의존성을 확인한다. 현재 기대값은 GLIBC_2.4만 필요하고 동적 libstdc++ 의존성이 없는 것이다. D-Bus는 collector에 필요하며 AA preload로 돌아가면 안 된다. 과거 elf.txt를 새 바이너리의 결과로 재사용하지 않는다.
+- ARM 로그 처음과 끝의 `ARM_TEST_INPUTS`에서 `release_verified=true`, 다섯 artifact 해시, 도구체인과 sysroot를 확인한다. 릴리즈 검사는 `MX5DR_ARM_BUILD`가 필수다. 개발용 `MX5DR_ARM_LIBRARY` 검사에는 입력 해시만 기록하며 릴리즈 검증으로 표시하지 않는다.
+- ARM runner는 명시한 compiler/sysroot/preload를 사용한다. 상속된 GCC 검색 경로와 `LD_LIBRARY_PATH`, `LD_PRELOAD`, QEMU guest 환경 덮어쓰기는 제거하고 실제 loader 시험에서 지정한 preload만 적용한다.
 - 변경 부분에 따른 추가 ARM 로더/guard 시험은 [통합 검증](../validation/INTEGRATION_2026-09-28.md), SHADOW 범위는 [기능 검증](../validation/LIVE_SHADOW_2026-09-29.md)을 참고한다.
 - 원본 펌웨어, 개인 경로, 실차 위치 로그를 공개하지 않는다. 실행 로그는 먼저 비공개 evidence에 보관하고, 공개 검증 요약에 실행 환경·커밋·생략·미검증을 적는다.
 
