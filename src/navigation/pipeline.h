@@ -105,7 +105,7 @@ private:
         adapter::Observation observation;
     };
     static const size_t HISTORY_CAPACITY=64;
-    struct SensorRecord { uint64_t time,received,lease; double value; };
+    struct SensorRecord { uint64_t time,received,lease; double value,spread,wheel_max; };
     struct SensorHistory { SensorRecord records[HISTORY_CAPACITY]; size_t size,next; };
     mx5_dr_core core_;
     ModelProfile profile_;
@@ -130,7 +130,7 @@ private:
     bool good_fix(const adapter::Observation&) const;
     bool can_keep_stationary_heading(const adapter::Observation&) const;
     void clear_history();
-    void remember(SensorHistory&,const Event&,double);
+    void remember(SensorHistory&,const Event&);
     const SensorRecord* causal(const SensorHistory&,uint64_t) const;
 };
 const char* pipeline_result_name(PipelineResult);

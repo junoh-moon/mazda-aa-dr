@@ -18,6 +18,14 @@ struct WheelScaleStatus {
     double active_scale, candidate_scale, gps_distance_m, wheel_distance_m;
     uint64_t calibration_version, segments, evidence_end_ns;
 };
+// Original MODEL samples selected for one GPS anchor. This does not replace
+// the chronological wheel/reverse inputs used by distance learning.
+struct GpsAnchorSupport {
+    uint64_t wheel_time_ns,wheel_received_ns,wheel_lease_ns;
+    double wheel_speed_mps,wheel_spread_mps;
+    uint64_t reverse_time_ns,reverse_received_ns,reverse_lease_ns;
+    int reverse;
+};
 // A bounded MODEL experiment. GPS gates use travel bearing, never old DR
 // geometry. Learning integrates raw wheel speed on the ordered source timeline.
 // Defaults are hypotheses for synthetic/vehicle observation, not qualification:
@@ -37,7 +45,7 @@ public:
         gate_=enabled_?GPS_GATE_WAITING:GPS_GATE_DISABLED;
         time_=wheel_time_=wheel_received_=reverse_time_=reverse_received_=0;
         yaw_begin_=yaw_end_=yaw_received_=last_fix_time_=last_utc_=utc_changed_=0;
-        speed_=yaw_=distance_=0; reverse_=base_reverse_=0;
+        speed_=spread_=yaw_=distance_=0; reverse_=base_reverse_=0;
         wheels_good_=false; have_base_=have_training_=false; broken_=base_broken_=0;
         training_distance_=0; distance_received_=candidate_received_=0;
     }
@@ -81,7 +89,7 @@ public:
             (wheel_time_ && (time<=wheel_time_ || time-wheel_time_>gap_ ||
             std::fabs(speed-speed_)/(double(time-wheel_time_)/1e9)>1.0)))
             break_training();
-        speed_=speed; wheel_time_=time; wheel_received_=received;
+        speed_=speed; spread_=spread; wheel_time_=time; wheel_received_=received;
         wheels_good_=agreement;
     }
     void reverse(uint64_t time,uint64_t received,int value) {
@@ -95,13 +103,26 @@ public:
         if (std::fabs(value)>0.03) break_training();
     }
     bool fix(const adapter::Observation& o) {
+        GpsAnchorSupport support=GpsAnchorSupport();
+        support.wheel_time_ns=wheel_time_;support.wheel_received_ns=wheel_received_;
+        support.wheel_lease_ns=lease(wheel_time_);
+        support.wheel_speed_mps=speed_;support.wheel_spread_mps=spread_;
+        support.reverse_time_ns=reverse_time_;support.reverse_received_ns=reverse_received_;
+        support.reverse_lease_ns=lease(reverse_time_);support.reverse=reverse_;
+        return fix(o,support);
+    }
+    bool fix(const adapter::Observation& o,const GpsAnchorSupport& support) {
         if (!enabled_) return false;
-        if (!wheels_good_ || !fresh(wheel_time_,wheel_received_,o.mono_ns))
+        if (support.wheel_spread_mps>maximum(0.3,support.wheel_speed_mps*0.05) ||
+            !std::isfinite(support.wheel_speed_mps)||!std::isfinite(support.wheel_spread_mps)||
+            support.wheel_lease_ns<o.mono_ns ||
+            !fresh(support.wheel_time_ns,support.wheel_received_ns,o.mono_ns))
             return reject(GPS_GATE_WHEELS);
-        if (!fresh(reverse_time_,reverse_received_,o.mono_ns))
+        if ((support.reverse!=0&&support.reverse!=1)||support.reverse_lease_ns<o.mono_ns ||
+            !fresh(support.reverse_time_ns,support.reverse_received_ns,o.mono_ns))
             return reject(GPS_GATE_REVERSE);
         const double gps_speed=o.position.velocity_kmh/3.6;
-        if (speed_<0.5 || std::fabs(gps_speed-speed_*status_.active_scale)>
+        if (support.wheel_speed_mps<0.5 || std::fabs(gps_speed-support.wheel_speed_mps*status_.active_scale)>
             maximum(3.0,gps_speed*0.30)) return reject(GPS_GATE_SPEED);
         if (last_fix_time_ && (o.mono_ns<=last_fix_time_ ||
             o.mono_ns-last_fix_time_>2000000000ULL ||
@@ -114,8 +135,8 @@ public:
         if (!utc_changed_ || o.position.utc_seconds!=last_utc_) utc_changed_=o.mono_ns;
         else if (o.mono_ns-utc_changed_>2000000000ULL) return reject(GPS_GATE_BAD_FIX);
         last_fix_time_=o.mono_ns; last_utc_=o.position.utc_seconds;
-        if (!have_base_) { base(o); gate_=GPS_GATE_WAITING; return false; }
-        if (reverse_!=base_reverse_) return reject(GPS_GATE_REVERSE);
+        if (!have_base_) { base(o,support.reverse); gate_=GPS_GATE_WAITING; return false; }
+        if (support.reverse!=base_reverse_) return reject(GPS_GATE_REVERSE);
         const uint64_t elapsed=o.mono_ns-base_.mono_ns;
         const double dt=double(elapsed)/1e9;
         double lon=o.position.longitude_deg-base_.position.longitude_deg;
@@ -138,7 +159,7 @@ public:
         if (elapsed<1000000000ULL) { gate_=GPS_GATE_WAITING; return false; }
         if (gps_distance<5) return reject(GPS_GATE_DISPLACEMENT);
         const bool straight=angle(o.position.heading_deg,base_.position.heading_deg)<=5;
-        if (reverse_!=0 || base_broken_!=broken_ || !straight || gps_speed<2)
+        if (support.reverse!=0 || base_broken_!=broken_ || !straight || gps_speed<2)
             clear_training();
         else if (have_training_ && !status_.candidate_ready) {
             // Longer independent endpoint segments avoid judging a 5% scale
@@ -168,7 +189,7 @@ public:
                 }
             }
         }
-        base(o); gate_=GPS_GATE_ACCEPTED; return true;
+        base(o,support.reverse); gate_=GPS_GATE_ACCEPTED; return true;
     }
     void apply_at_anchor(uint64_t time) {
         if (!enabled_ || !status_.candidate_ready || time<=status_.evidence_end_ns ||
@@ -183,7 +204,7 @@ private:
     uint64_t gap_,time_,wheel_time_,wheel_received_,reverse_time_,reverse_received_;
     uint64_t yaw_begin_,yaw_end_,yaw_received_,last_fix_time_,last_utc_,utc_changed_,broken_,base_broken_;
     uint64_t distance_received_,candidate_received_;
-    double speed_,yaw_,distance_,training_distance_;
+    double speed_,spread_,yaw_,distance_,training_distance_;
     int reverse_,base_reverse_;
     adapter::Observation base_,training_;
     WheelScaleStatus status_;
@@ -196,6 +217,7 @@ private:
     bool fresh(uint64_t time,uint64_t received,uint64_t now) const {
         return time && time<=now && received<=now && received>=time && now-time<=gap_;
     }
+    uint64_t lease(uint64_t time) const { return UINT64_MAX-time<gap_?UINT64_MAX:time+gap_; }
     void clear_training() {
         have_training_=false; candidate_received_=0;
         status_.candidate_ready=false; status_.candidate_scale=1;
@@ -204,9 +226,9 @@ private:
     }
     void break_training() { ++broken_; clear_training(); }
     bool reject(GpsAnchorGate reason) { unavailable(reason); return false; }
-    void base(const adapter::Observation& o) {
+    void base(const adapter::Observation& o,int reverse) {
         base_=o; have_base_=true;
-        base_broken_=broken_; base_reverse_=reverse_;
+        base_broken_=broken_; base_reverse_=reverse;
         if (!have_training_) {
             training_=o; training_distance_=distance_; have_training_=true;
         }

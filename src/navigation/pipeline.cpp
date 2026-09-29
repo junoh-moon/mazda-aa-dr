@@ -216,10 +216,11 @@ PipelineResult Pipeline::control(mx5_dr_control_kind kind) {
 void Pipeline::clear_history() {
     wheel_history_.size=wheel_history_.next=reverse_history_.size=reverse_history_.next=0;
 }
-void Pipeline::remember(SensorHistory& history,const Event& e,double value) {
+void Pipeline::remember(SensorHistory& history,const Event& e) {
     SensorRecord& record=history.records[history.next];
     record.time=e.time;record.received=e.received;
-    record.lease=e.evidence.lease_until_ns;record.value=value;
+    record.lease=e.evidence.lease_until_ns;record.value=e.value;
+    record.spread=e.wheel_spread;record.wheel_max=e.wheel_max;
     history.next=(history.next+1)%HISTORY_CAPACITY;
     if(history.size<HISTORY_CAPACITY)++history.size;
 }
@@ -261,7 +262,7 @@ bool Pipeline::can_keep_stationary_heading(const adapter::Observation& o) const 
     // endpoint at GPS time; never refresh its original measurement or lease.
     const SensorRecord* speed=causal(wheel_history_,o.mono_ns);
     const SensorRecord* reverse=causal(reverse_history_,o.mono_ns);
-    if(!speed||!reverse||speed->value>0.05)return false;
+    if(!speed||!reverse||speed->wheel_max>0.05)return false;
     const uint64_t anchor_utc=core_.anchor.utc_ns/1000000000ULL;
     if(o.position.utc_seconds<anchor_utc ||
        o.position.utc_seconds-anchor_utc>
@@ -288,6 +289,23 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
         if (position_mode_!=0) { position_mode_=0; return control(MX5_DR_GAP); }
         return PIPELINE_OK;
     }
+    // Select the samples for this GPS decision before GPS_RETURN discards the
+    // old prediction history. Only these values survive that single decision;
+    // no sample time/lease is rewritten or copied into the next history.
+    GpsAnchorSupport support=GpsAnchorSupport();
+    if(model_&&good_fix(o)) {
+        const SensorRecord* wheel=causal(wheel_history_,o.mono_ns);
+        const SensorRecord* reverse=causal(reverse_history_,o.mono_ns);
+        if(wheel) {
+            support.wheel_time_ns=wheel->time;support.wheel_received_ns=wheel->received;
+            support.wheel_lease_ns=wheel->lease;support.wheel_speed_mps=wheel->value;
+            support.wheel_spread_mps=wheel->spread;
+        }
+        if(reverse) {
+            support.reverse_time_ns=reverse->time;support.reverse_received_ns=reverse->received;
+            support.reverse_lease_ns=reverse->lease;support.reverse=int(reverse->value);
+        }
+    }
     if (position_mode_==0||position_mode_==3) {
         control(MX5_DR_GPS_RETURN); have_fix_=false; gps_wheel_.unavailable();
     }
@@ -304,16 +322,13 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     // GPS travel bearing can be converted to body heading only with reverse
     // evidence already received by this fix and still within its original
     // bounded lease. A later reverse callback cannot repair a prior anchor.
-    if (!status_.have_reverse || reverse_.time>o.mono_ns ||
-        reverse_.received>o.mono_ns ||
-        reverse_.evidence.lease_until_ns<o.mono_ns ||
-        o.mono_ns-reverse_.time>core_.config.sample_age_max_ns) {
+    if (!status_.have_reverse || !support.reverse_time_ns) {
         gps_wheel_.unavailable(GPS_GATE_REVERSE);
         have_fix_=false; control(MX5_DR_DISABLE); return PIPELINE_NO_ANCHOR;
     }
     bool consistent=false;
     if (gps_wheel_.status().enabled) {
-        consistent=gps_wheel_.fix(o);
+        consistent=gps_wheel_.fix(o,support);
         if (!consistent) {
             // Faster callbacks retain the one-second pair baseline. Actual
             // rejection revokes READY before a subsequent GPS gap.
@@ -340,7 +355,7 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     a.body_heading_rad=o.position.heading_deg*PI/180;
     // Travel heading becomes body heading only under this stated model. Reverse
     // evidence was checked against the anchor above; reverse rotates by pi.
-    if (reverse_.value==1) a.body_heading_rad=std::fmod(a.body_heading_rad+PI,2*PI);
+    if (support.reverse==1) a.body_heading_rad=std::fmod(a.body_heading_rad+PI,2*PI);
     a.position_error_m=profile_.anchor_error_m; a.heading_error_rad=profile_.heading_error_rad;
     a.quality=MX5_DR_MODEL;
     status_.uncertainties|=GPS_TIME_HEADING_MODEL;
@@ -427,11 +442,11 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
         switch(e.kind) {
         case SPEED_EVENT:
             speed_=e; status_.have_speed=true;
-            if(model_)remember(wheel_history_,e,e.wheel_max);
+            if(model_)remember(wheel_history_,e);
             gps_wheel_.wheels(e.time,e.received,e.value,e.wheel_spread); break;
         case REVERSE_EVENT:
             reverse_=e; status_.have_reverse=true;
-            if(model_)remember(reverse_history_,e,e.value);
+            if(model_)remember(reverse_history_,e);
             gps_wheel_.reverse(e.time,e.received,int(e.value)); break;
         case YAW_EVENT:
             yaw_=e; status_.have_yaw=true;

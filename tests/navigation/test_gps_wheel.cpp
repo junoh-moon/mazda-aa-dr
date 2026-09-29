@@ -639,11 +639,185 @@ static void stationary_pending_window() {
         }
     }
 }
+static void transport_anchor_receipts() {
+    // Independent new-anchor failure reproduction, now with the success
+    // criterion: preceding fresh causal wheel/reverse samples remain usable
+    // when newer transport samples have already reached the worker queue.
+    for(unsigned transport=0;transport<2;++transport)
+    for(unsigned mask=0;mask<4;++mask)
+    for(unsigned phase=0;phase<=25;phase+=25) {
+        Pipeline p;init(p);uint64_t initial_anchor=0;
+        for(unsigned ms=50;ms<=5000;ms+=25) {
+            if(ms%50==0) {
+                for(unsigned j=0;j<3;++j) {
+                    if(j==2&&ms%100)continue;
+                    const unsigned measured=ms-((mask&(1u<<j))?50:0);
+                    RawEvent e=raw(j==0?WHEELS:j==1?REVERSE:YAW,measured);
+                    e.source_mono_ms=transport?int64_t(T(measured)/1000000):0;
+                    e.received_ns=T(ms);e.receive_seq=ms+1;
+                    const PipelineResult r=p.enqueue_raw(e);
+                    CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
+                }
+            }
+            if(ms==500+phase||ms==1500+phase||ms==2500+phase||ms==3500+phase||
+               ms==4500+phase||ms==4750+phase)
+                CHECK(p.enqueue_position(fix(ms,1,ms==2500+phase||ms==4750+phase?0:1))==PIPELINE_OK);
+            const PipelineResult r=p.drain(T(ms)-p.reorder_ns());
+            CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
+            if(ms==1700) {
+                const Diagnostic d=p.diagnostic(T(ms));
+                if(d.snapshot.state!=MX5_DR_READY)
+                    std::fprintf(stderr,"transport anchor clock=%u delay-mask=%u phase=%u gate=%s\n",
+                        transport,mask,phase,anchor_gate_name(p.anchor_gate()));
+                CHECK(d.snapshot.state==MX5_DR_READY&&d.snapshot.anchor_id);
+                initial_anchor=d.snapshot.anchor_id;
+            }
+            if(ms==3000)CHECK(p.diagnostic(T(ms)).snapshot.model_valid);
+            if(ms==4700)CHECK(p.diagnostic(T(ms)).snapshot.state==MX5_DR_READY);
+        }
+        const Diagnostic d=p.diagnostic(T(5000));
+        CHECK(d.snapshot.model_valid&&!d.snapshot.valid&&!p.status().resets);
+        CHECK(std::fabs(d.snapshot.body_heading_rad)<1e-9);
+        CHECK(d.snapshot.anchor_id!=initial_anchor);
+        CHECK(std::fabs(d.snapshot.elapsed_s-double(4900-4500-phase)/1000)<1e-9);
+    }
+}
+static void transport_anchor_direction() {
+    for(unsigned initial_reverse=0;initial_reverse<2;++initial_reverse)
+    for(unsigned causal_change=0;causal_change<2;++causal_change) {
+        Pipeline p;init(p);
+        for(unsigned ms=50;ms<=2300;ms+=25) {
+            if(ms%50==0) {
+                for(unsigned j=0;j<3;++j) {
+                    if(j==2&&ms%100)continue;
+                    const unsigned measured=ms-(j<2?50:0);
+                    const int reverse=measured>=(causal_change?1450:1500)?1-int(initial_reverse):int(initial_reverse);
+                    RawEvent e=raw(j==0?WHEELS:j==1?REVERSE:YAW,measured,
+                        measured>=1500&&measured<1800?10000:13600,reverse);
+                    e.source_mono_ms=int64_t(T(measured)/1000000);
+                    e.received_ns=T(ms);e.receive_seq=ms+1;
+                    const PipelineResult r=p.enqueue_raw(e);
+                    CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
+                }
+            }
+            if(ms==500||ms==1500||ms==2000)
+                CHECK(p.enqueue_position(fix(ms,1,ms==2000?0:1))==PIPELINE_OK);
+            const PipelineResult r=p.drain(T(ms)-p.reorder_ns());
+            CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
+            if(ms==1700) {
+                CHECK((p.diagnostic(T(ms)).snapshot.state==MX5_DR_READY)==!causal_change);
+                if(causal_change)CHECK(p.anchor_gate()==GPS_GATE_REVERSE);
+            }
+        }
+        const Diagnostic d=p.diagnostic(T(2300));
+        CHECK(bool(d.snapshot.model_valid)==!causal_change);CHECK(!d.snapshot.valid);
+        if(!causal_change) {
+            CHECK(std::fabs(d.snapshot.body_heading_rad-(initial_reverse?3.14159265358979323846:0))<1e-9);
+            CHECK(d.snapshot.accumulated_north_m< -3.9);
+        }
+    }
+}
+static void explicit_anchor_support() {
+    for(unsigned bad=0;bad<12;++bad) {
+        GpsWheel g;g.configure(true,250000000ULL);
+        for(unsigned ms=0;ms<=1000;ms+=100) {
+            helper_feed(g,ms);
+            if(!ms)CHECK(!g.fix(fix(ms)));
+        }
+        // The chronological learning inputs are newer and unavailable at GPS
+        // time. Choosing original causal support must not rewrite those inputs.
+        g.wheels(T(1000),T(1100),20,0);g.reverse(T(1000),T(1100),1);
+        GpsAnchorSupport s=GpsAnchorSupport();
+        s.wheel_time_ns=s.reverse_time_ns=T(900);
+        s.wheel_received_ns=s.reverse_received_ns=T(950);
+        s.wheel_lease_ns=s.reverse_lease_ns=T(1150);s.wheel_speed_mps=10;
+        if(bad==1)s.wheel_received_ns=T(1001);
+        if(bad==2)s.reverse_received_ns=T(1001);
+        if(bad==3)s.wheel_lease_ns=T(999);
+        if(bad==4)s.reverse_lease_ns=T(999);
+        if(bad==5)s.wheel_time_ns=T(700);
+        if(bad==6)s.reverse_time_ns=T(700);
+        if(bad==7)s.wheel_spread_mps=1;
+        if(bad==8)s.wheel_speed_mps=0;
+        if(bad==9)s.reverse=1;
+        if(bad==10)s.wheel_received_ns=T(800);
+        if(bad==11)s.reverse_received_ns=T(800);
+        CHECK(g.fix(fix(1000),s)==!bad);
+        if(!bad) {
+            CHECK(!g.fix(fix(1100)));CHECK(g.gate()==GPS_GATE_SPEED);
+            CHECK(!g.status().candidate_ready&&g.status().active_scale==1);
+        }
+    }
+}
+static void transport_anchor_missing_evidence() {
+    // Old causal evidence cannot be replaced with a newer future receipt, and
+    // a source reset cannot reuse the GPS pair or sensor history from before it.
+    for(unsigned missing=0;missing<4;++missing) {
+        Pipeline p;init(p);unsigned resets=0;
+        for(unsigned ms=50;ms<=3000;ms+=25) {
+            if(ms%50==0) {
+                for(unsigned j=0;j<3;++j) {
+                    if(j==2&&ms%100)continue;
+                    const unsigned measured=ms-(j<2?50:0);
+                    if(missing<2&&j==missing&&measured>1100&&measured<1500)continue;
+                    if(missing==2&&j==1&&measured<1500)continue;
+                    RawEvent e=raw(j==0?WHEELS:j==1?REVERSE:YAW,measured);
+                    e.source_mono_ms=int64_t(T(measured)/1000000);
+                    e.received_ns=T(ms);e.receive_seq=ms+1;
+                    if(missing==3&&ms>=1000)e.epoch=2;
+                    const PipelineResult r=p.enqueue_raw(e);
+                    if(r==PIPELINE_SOURCE_RESET)++resets;
+                    CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING||(missing==3&&ms==1000&&j==0&&r==PIPELINE_SOURCE_RESET));
+                }
+            }
+            if(ms==500||ms==1500||ms==2500||ms==2800)
+                CHECK(p.enqueue_position(fix(ms,1,ms==2800?0:1))==PIPELINE_OK);
+            const PipelineResult r=p.drain(T(ms)-p.reorder_ns());
+            CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
+            if(ms==1700) {
+                CHECK(p.diagnostic(T(ms)).snapshot.state!=MX5_DR_READY);
+                if(missing<3)CHECK(p.anchor_gate()==(missing==0?GPS_GATE_WHEELS:GPS_GATE_REVERSE));
+            }
+        }
+        const Diagnostic d=p.diagnostic(T(3000));
+        CHECK(bool(d.snapshot.model_valid)==(missing==3));
+        CHECK(!d.snapshot.valid&&resets==unsigned(missing==3));
+    }
+}
+static void transport_anchor_history_capacity() {
+    for(unsigned period=1;period<=2;++period) {
+        Pipeline p;init(p);
+        for(unsigned ms=0;ms<=3000;++ms) {
+            if(ms>=75&&ms%period==0) {
+                RawEvent w=raw(WHEELS,ms-75);w.received_ns=T(ms);w.receive_seq=ms+1;
+                w.source_mono_ms=int64_t(T(ms-75)/1000000);
+                CHECK(p.enqueue_raw(w)==PIPELINE_OK);
+            }
+            if(ms%50==0) {
+                RawEvent r=raw(REVERSE,ms),y=raw(YAW,ms);
+                r.source_mono_ms=y.source_mono_ms=int64_t(T(ms)/1000000);
+                CHECK(p.enqueue_raw(r)==PIPELINE_OK);
+                const PipelineResult result=p.enqueue_raw(y);
+                CHECK(result==PIPELINE_OK||result==PIPELINE_WAITING);
+            }
+            if(ms==500||ms==1500||ms==2500)
+                CHECK(p.enqueue_position(fix(ms,1,ms==2500?0:1))==PIPELINE_OK);
+            const PipelineResult r=p.drain(T(ms)-p.reorder_ns());
+            CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
+        }
+        const Diagnostic d=p.diagnostic(T(3000));
+        CHECK(bool(d.snapshot.model_valid)==(period==2));
+        CHECK(!d.snapshot.valid&&!p.status().resets);
+    }
+}
 int main() {
     learning(); gates(); evidence_resets(); pipeline_learning_and_reacquisition(); rejected_anchor_revokes();
     fast_outlier_revokes(); asynchronous_windows(); stationary_heading_continuity();
     stationary_sensor_boundaries();stationary_receipt_boundaries();
     stationary_history_phases();stationary_history_capacity();stationary_history_resets();
     stationary_pending_window();
+    transport_anchor_receipts();
+    transport_anchor_direction();explicit_anchor_support();
+    transport_anchor_missing_evidence();transport_anchor_history_capacity();
     std::printf("MODEL GPS/wheel consistency and scale: %u checks (synthetic)\n",checks);
 }
