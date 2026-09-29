@@ -20,10 +20,15 @@ ARM_SYSROOT ?=
 ARM_FLAGS = -march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=softfp -marm
 ARM_CPPFLAGS = -Isrc -I$(ARM_SYSROOT)/usr/include/dbus-1.0 -I$(ARM_SYSROOT)/usr/lib/dbus-1.0/include
 ARM_CXXFLAGS = -std=c++11 -Os -Wall -Wextra -Werror -fPIC -fvisibility=hidden -fno-exceptions -fno-rtti -fno-omit-frame-pointer -ftls-model=initial-exec $(ARM_FLAGS)
+ARM_DEPFLAGS = -MMD -MP -MF $(@:.o=.d).tmp -MT $@
 ARM_SOURCES = src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/core_bridge.cpp $(NAVIGATION)
 ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o
+COLLECTOR_OBJECTS = $(BUILD)/arm/src/collector/collector.o $(BUILD)/arm/src/runtime/config.o
+GUARD_OBJECTS = $(BUILD)/arm/src/guard/guard.o $(BUILD)/arm/src/runtime/sha256.o
+HASH_OBJECTS = $(BUILD)/arm/src/tools/sha256_main.o $(BUILD)/arm/src/runtime/sha256.o
+ALL_ARM_OBJECTS = $(sort $(ARM_OBJECTS) $(SENSOR_OBJECTS) $(COLLECTOR_OBJECTS) $(GUARD_OBJECTS) $(HASH_OBJECTS))
 
-.PHONY: all test test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
+.PHONY: all test test-build-deps test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
 all: test
 $(BUILD):
 	mkdir -p $@
@@ -58,6 +63,8 @@ test-packaging: $(BUILD)/test_collector
 	$(PYTHON) -m unittest discover -s tests/packaging -v
 test-tools:
 	$(PYTHON) -m unittest discover -s tests/tools -v
+test-build-deps:
+	$(PYTHON) -m unittest discover -s tests/build -v
 test-integration: $(BUILD)/test_pipeline
 	$(BUILD)/test_pipeline
 $(BUILD)/core_host.o: $(CORE) src/core/dr_core.h | $(BUILD)
@@ -88,7 +95,7 @@ test-sensors: $(BUILD)/test_vim_source $(BUILD)/test_vim_tap
 $(BUILD)/test_vim_source: tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $^ -o $@
 
-test: test-motion-journal test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
+test: test-build-deps test-motion-journal test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
 
 $(BUILD)/test_motion_batch: tests/runtime/test_motion_batch.cpp src/runtime/motion_batch.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
@@ -103,25 +110,28 @@ arm: $(BUILD)/libmx5dr-vimtap.so $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $
 $(BUILD)/arm/%.o: %.cpp
 	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo 'Set ARM_PREFIX and ARM_SYSROOT'; exit 1; }
 	mkdir -p $(dir $@)
-	$(ARM_PREFIX)g++ $(ARM_CXXFLAGS) $(ARM_CPPFLAGS) -c $< -o $@
+	$(ARM_PREFIX)g++ $(ARM_CXXFLAGS) $(ARM_CPPFLAGS) $(ARM_DEPFLAGS) -c $< -o $@
+	mv $(@:.o=.d).tmp $(@:.o=.d)
 $(BUILD)/arm/%.o: %.c
 	mkdir -p $(dir $@)
-	$(ARM_PREFIX)gcc -std=c99 -Os -Wall -Wextra -Werror -pedantic -fPIC -fvisibility=hidden $(ARM_FLAGS) -c $< -o $@
+	$(ARM_PREFIX)gcc -std=c99 -Os -Wall -Wextra -Werror -pedantic -fPIC -fvisibility=hidden $(ARM_FLAGS) $(ARM_DEPFLAGS) -c $< -o $@
+	mv $(@:.o=.d).tmp $(@:.o=.d)
 $(BUILD)/arm/%.o: %.S
 	mkdir -p $(dir $@)
-	$(ARM_PREFIX)gcc -fPIC $(ARM_FLAGS) -c $< -o $@
+	$(ARM_PREFIX)gcc -fPIC $(ARM_FLAGS) $(ARM_DEPFLAGS) -c $< -o $@
+	mv $(@:.o=.d).tmp $(@:.o=.d)
 $(BUILD)/libmx5dr.so: $(ARM_OBJECTS)
 	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr.so -static-libstdc++ -static-libgcc $(ARM_OBJECTS) -ldl -lpthread -lrt -lm -o $@
-$(BUILD)/mx5dr-collector: $(BUILD)/arm/src/collector/collector.o $(BUILD)/arm/src/runtime/config.o
+$(BUILD)/mx5dr-collector: $(COLLECTOR_OBJECTS)
 	$(ARM_PREFIX)g++ $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -static-libstdc++ -static-libgcc $^ -ldbus-1 -lpthread -lrt -o $@
 clean:
 	rm -rf $(BUILD)
 
-$(BUILD)/mx5dr-guard: src/guard/guard.cpp src/runtime/sha256.cpp | $(BUILD)
+$(BUILD)/mx5dr-guard: $(GUARD_OBJECTS) | $(BUILD)
 	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo "Set ARM_PREFIX and ARM_SYSROOT"; exit 1; }
 	$(ARM_PREFIX)g++ $(ARM_CXXFLAGS) -Wl,-z,relro,-z,now,-z,noexecstack -static-libstdc++ -static-libgcc $^ -o $@
 
-$(BUILD)/mx5dr-sha256: src/tools/sha256_main.cpp src/runtime/sha256.cpp | $(BUILD)
+$(BUILD)/mx5dr-sha256: $(HASH_OBJECTS) | $(BUILD)
 	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo "Set ARM_PREFIX and ARM_SYSROOT"; exit 1; }
 	$(ARM_PREFIX)g++ $(ARM_CXXFLAGS) -static -Wl,-z,noexecstack $^ -o $@
 
@@ -147,3 +157,14 @@ $(BUILD)/arm/src/navigation/pipeline.o $(BUILD)/arm/src/navigation/holdout.o $(B
 
 $(BUILD)/test_gps_wheel: tests/navigation/test_gps_wheel.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
+
+# Keep compiler-discovered transitive headers, including for guard/hash objects.
+# An old build made before dependency tracking (or with a deleted .d file) must
+# compile once instead of silently treating its existing object as current.
+-include $(ALL_ARM_OBJECTS:.o=.d)
+ARM_MISSING_DEPS := $(foreach object,$(ALL_ARM_OBJECTS),$(if $(wildcard $(object:.o=.d)),,$(object)))
+ifneq ($(strip $(ARM_MISSING_DEPS)),)
+.PHONY: FORCE_ARM_DEPS
+$(ARM_MISSING_DEPS): FORCE_ARM_DEPS
+FORCE_ARM_DEPS:
+endif
