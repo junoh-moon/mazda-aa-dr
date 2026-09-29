@@ -270,3 +270,42 @@ guest XML과 같습니다. 발견한 필터 결함을 과거 OEM 기동 위조�
 아닙니다. 앞선 parser-r1, 빌드만 한 중간 후보와 실제 최종 r2를 구분해
 보존했습니다. 제품 및 USB 변경은 없으며 전체 host/production ARM suite와
 원본 전체 부팅을 재실행했다고 주장하지 않습니다.
+
+## r4: VIM·SM의 strace를 제거한 baseline 대조
+
+r3의 정확한 initrd를 재포장하고 진단 `/init`에서 VIM과 SM 하위 프로세스의
+`strace` 실행을 제거했습니다. `taskset`, 원본 서비스 affinity와 기존 touch는
+유지했고, product preload·collector는 baseline과 같이 시작하지 않았습니다.
+재포장 중 archive 루트 `.`의 UID/GID도 1000:1000에서 0:0으로 바뀌었으며
+0755 권한은 같습니다. 독립 member 비교에서 `/init`과 이 루트 소유권 외의
+내용·mode·UID/GID·link count·device 번호는 같았습니다. 이 차이도 대조 조건에
+포함하며 완전히 동일한 파일 metadata의 단일 변경 실험으로 표현하지 않습니다.
+mtime도 전체 10,143개 항목 중 1,650개에서 달라 위 동일성 판단에 포함하지
+않았습니다.
+내보낸 XML은 줄바꿈 정규화 뒤 r3와 바이트 단위로 일치했습니다. 이는 당시
+고정한 init의 대조 실행이며 최종 XML 필터나 원본 전체 그래프의 재실행이 아닙니다.
+
+- 원본 LDS는 guest 17.224초에 STARTED였습니다. 이후 세 직접 위치 조회는
+  아홉 값 모두 0, selected GPS=0, READ_NOT_READY=5였습니다.
+- VBS는 여전히 CAN ReadyHandler timeout을 반복했습니다. 약 60.022초에
+  시작 제한, 65.045초에 종료 제한, 65.123초에 SM의 watchdog ping 중단을
+  기록했습니다. 마지막 유효 상태는 같은 네 서비스 STOPPED/15개 RUNNING입니다.
+- 세 snapshot의 프로세스 관측 28개에서 TracerPid가 모두 0이었습니다.
+  중간 smctl의 timeout 143은 유효 상태 응답으로 세지 않았습니다. 이 실행에는
+  syscall trace가 없으므로 syscall 수준의 새 주장을 하지 않습니다.
+
+따라서 관찰한 시작 실패는 우리 preload와 VIM·SM의 ptrace 없이도 발생합니다.
+에뮬레이션·장치 peer 등 나머지 원인을 분리하거나 production tap의 모든
+지연·경쟁 위험을 해소한 결과는 아닙니다. 원본 커널·Sabrelite와 kernel-entry
+r1 조정, `nohlt enable_wait_mode=off`, NIC·호스트 장치·공유 디렉터리 없는
+조건을 유지했습니다. 정확한 지연 비교 실험으로 해석하지 않습니다.
+
+| 비공개 대조 실행 입력/출력 | SHA-256 |
+| --- | --- |
+| 진단 init | `c5e54c36a8ff20352f6d2efbadef0660609179878382a1067368657495c76d95` |
+| initrd | `4e9adc8b4d4ea3bead807843c9723fe20f3c455051493dc58817fb0ceca60ecb` |
+| console | `5dba3a3bd6fa6059d8eab827b86a4c30e34dd5a7ce179a70de47a4e1efd0eb9e` |
+
+inspection shell까지 진행한 뒤 240.024초 제한 종료, runner=124,
+timed_out=true, QEMU exit=0이었습니다. 정상 기동 PASS가 아닙니다.
+제품 소스·공개 ZIP은 이 대조 실행으로 변경하지 않았습니다.

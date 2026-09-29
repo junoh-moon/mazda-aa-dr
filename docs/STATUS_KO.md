@@ -18,6 +18,7 @@ VBS를 종료했고, 의존성을 유지한 jcinavi·jciAAPA는 시작되지 않
 또는 정상 전체 기동으로 판정하지 않습니다.
 같은 이미지에서 우리 preload·collector 없는 baseline도 VBS 시작 제한과
 같은 네 서비스의 STOPPED 상태를 보였습니다. 정확한 실패 원인은 미분리입니다.
+후속으로 VIM·SM의 strace까지 제거한 baseline에서도 같은 실패가 발생했습니다.
 
 [원본 VIM/CAN 콜백 실행](../validation/VIM_CALLBACK_2026-09-30.md)에서는
 실제 등록과 합성 입력 세 건의 원본 MQ·CAN callback 진입/복귀·AA raw 수신을
