@@ -169,6 +169,57 @@ static void receipt_worker_and_reacquisition() {
     }
     CHECK(!silent.diagnostic(T(700)).snapshot.model_valid);
 }
+static void single_stopped_wheel_consistency() {
+    // A persistent stopped wheel among three agreeing moving wheels is not a
+    // plausible straight-motion input. Do not average it into a slower car.
+    // Tire differences, ordinary cornering, and brief staggered braking remain
+    // distinct; use the completed yaw window, including delayed transport data.
+    for(unsigned scenario=0;scenario<6;++scenario) {
+        Pipeline p;mx5_dr_context x={1,1,1};
+        CHECK(p.init_model(research_model_profile(),mx5_dr_default_config(),x,true,true));
+        unsigned rejected=0;
+        for(unsigned ms=0;ms<=3050;ms+=50) {
+            RawEvent w=raw(WHEELS,ms,ms+1);
+            if(ms>=1500) {
+                if(scenario==0||scenario==4||scenario==5||
+                   (scenario==3&&ms<=1700))w.raw[0]=10000;
+                else if(scenario==1) {
+                    w.raw[0]=w.raw[2]=13492;w.raw[1]=w.raw[3]=13708; // 9.7/10.3 m/s
+                } else if(scenario==2) {
+                    w.raw[0]=w.raw[2]=11008;w.raw[1]=w.raw[3]=11152; // 2.8/3.2 m/s
+                } else if(scenario==3&&ms<=1900)
+                    for(unsigned j=0;j<4;++j)w.raw[j]=10000;
+            }
+            CHECK(p.enqueue_raw(w)==PIPELINE_OK);
+            CHECK(p.enqueue_raw(raw(REVERSE,ms,ms+1))==PIPELINE_OK);
+            const bool delayed=(scenario==4||scenario==5)&&ms>=1500;
+            if(!delayed||ms%100==50) {
+                const unsigned measured=delayed?ms-50:ms;
+                RawEvent y=raw(YAW,measured,ms+1);y.received_ns=T(ms);
+                if(measured>=1500&&(scenario==2||scenario==4||
+                   (scenario==5&&measured<2000)))y.raw[0]=2199;
+                const PipelineResult r=p.enqueue_raw(y);
+                CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
+            }
+            if(ms==0||ms==1000) {
+                adapter::Observation o=pos(ms,1,ms+1);
+                o.position.latitude_deg+=double(ms)*0.01/111320;
+                o.position.utc_seconds+=ms/1000;
+                CHECK(p.enqueue_position(o)==PIPELINE_OK);
+            }
+            if(ms==1100)CHECK(p.enqueue_position(pos(ms,0,ms+1))==PIPELINE_OK);
+            const PipelineResult r=p.drain(T(ms)-p.reorder_ns());
+            CHECK(r==PIPELINE_OK||r==PIPELINE_BAD_INPUT);
+            if(r==PIPELINE_BAD_INPUT)++rejected;
+        }
+        const bool bad=scenario==0||scenario==5;
+        const Diagnostic d=p.diagnostic(T(3050));
+        CHECK(bool(d.snapshot.model_valid)!=bad);
+        CHECK(!d.snapshot.valid);
+        CHECK(rejected==unsigned(bad));
+        CHECK(p.status().resets==unsigned(bad));
+    }
+}
 static mx5_dr_evidence evidence(uint64_t id,uint64_t seq,unsigned ms) {
     mx5_dr_evidence e=mx5_dr_evidence(); e.source_id=id; e.source_epoch=1; e.producer_seq=seq;
     e.measured_ns=e.received_ns=T(ms); e.lease_until_ns=T(ms+250);
@@ -221,5 +272,6 @@ static void qualified() {
     CHECK(overlap.enqueue_yaw(evidence(2,2,150),0,2047,1,T(50),T(150))==PIPELINE_BAD_INPUT);
     CHECK(!overlap.diagnostic(T(150)).snapshot.valid);
 }
-int main() { model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition(); qualified();
+int main() { model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
+    single_stopped_wheel_consistency();qualified();
     std::printf("navigation: %u checks passed\n",checks); return 0; }

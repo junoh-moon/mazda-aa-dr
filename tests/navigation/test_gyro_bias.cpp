@@ -191,7 +191,43 @@ static void anchor_reverse_evidence() {
         } else CHECK(!d.snapshot.model_valid);
     }
 }
+static void candidate_receipt_causality() {
+    // A completed MODEL transport-time window may be received after the GPS
+    // anchor it would otherwise calibrate. Both wheel and yaw evidence must
+    // have arrived; declining that anchor must retain the previous calibration
+    // and the pending candidate for a later causal anchor.
+    const unsigned wheel_delay[] = {200,0,250};
+    const unsigned yaw_delay[] = {0,200,100};
+    for(unsigned scenario=0;scenario<3;++scenario) {
+        GyroBias b;b.configure(true,2047,250000000ULL);
+        double stopped[4]={0,0,0,0},moving[4]={1,1,1,1};
+        for(unsigned ms=0;ms<=3200;ms+=100) {
+            b.wheels(T(ms),T(ms),true,stopped);
+            if(ms)b.yaw(T(ms-100),T(ms),T(ms),true,2050);
+        }
+        CHECK(b.apply_at_anchor(T(3300)));
+        CHECK(b.status().active_zero==2050&&b.status().calibration_version==1);
+        b.wheels(T(3300),T(3300),true,moving);
+        b.yaw(T(3200),T(3300),T(3300),true,2050);
+        for(unsigned ms=3400;ms<=6600;ms+=100) {
+            b.wheels(T(ms),T(ms+wheel_delay[scenario]),true,stopped);
+            b.yaw(T(ms-100),T(ms),T(ms+yaw_delay[scenario]),true,2067);
+        }
+        CHECK(b.status().candidate_ready);
+        CHECK(b.status().candidate_zero==2067);
+        CHECK(b.status().evidence_end_ns==T(6600));
+        CHECK(!b.apply_at_anchor(T(6700)));
+        CHECK(b.status().candidate_ready);
+        CHECK(b.status().active_zero==2050&&b.status().calibration_version==1);
+        const unsigned delay=wheel_delay[scenario]>yaw_delay[scenario]?
+            wheel_delay[scenario]:yaw_delay[scenario];
+        CHECK(b.apply_at_anchor(T(6600+delay)));
+        CHECK(!b.status().candidate_ready);
+        CHECK(b.status().active_zero==2067&&b.status().calibration_version==2);
+    }
+}
 int main() {
     drift_reduction();estimator_gates();freeze_reanchor_reset();anchor_inside_received_window();anchor_reverse_evidence();
+    candidate_receipt_causality();
     std::printf("MODEL stationary gyro bias: %u checks (synthetic)\n",checks);return 0;
 }

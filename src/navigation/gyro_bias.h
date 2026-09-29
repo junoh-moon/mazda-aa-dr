@@ -26,7 +26,7 @@ public:
         status_.active_zero=status_.candidate_zero=nominal_;
         status_.state=enabled_?GYRO_BIAS_WAITING:GYRO_BIAS_DISABLED;
         wheel_time_=wheel_received_=stationary_since_=yaw_time_=yaw_received_=0;
-        wheel_clock_=yaw_clock_=-1; clear_collection();
+        wheel_clock_=yaw_clock_=-1; candidate_received_=0; clear_collection();
     }
     // A completed holdout may discard prediction geometry without forgetting
     // the applied model. Partial and pending stationary evidence never carries.
@@ -76,11 +76,14 @@ public:
             if (high-low>4 || next_m2/double(n_+1)>1.0) { invalidate(); return; }
             low_=low; high_=high; mean_=next_mean; m2_=next_m2; ++n_;
         }
+        const uint64_t received_through=received>wheel_received_?received:wheel_received_;
+        if(received_through>collection_received_)collection_received_=received_through;
         status_.state=GYRO_BIAS_COLLECTING;
         if (n_>=20 && end-start_>=3000000000ULL) {
             status_.candidate_ready=true; status_.candidate_zero=mean_;
             status_.samples=n_; status_.variance_counts2=m2_/double(n_);
             status_.evidence_start_ns=start_; status_.evidence_end_ns=end;
+            candidate_received_=collection_received_;
             status_.state=GYRO_BIAS_READY;
         }
         // Bound both memory and accumulator duration. A completed estimate is
@@ -88,27 +91,34 @@ public:
         if (n_>=4096) clear_collection();
     }
     bool apply_at_anchor(uint64_t time) {
-        if (!enabled_ || !status_.candidate_ready || time<status_.evidence_end_ns)
+        // Measurement endpoints alone do not establish when the candidate was
+        // available. Preserve it and the active zero until all of its actual
+        // wheel/yaw receipts are causal for the new anchor.
+        if (!enabled_ || !status_.candidate_ready || time<status_.evidence_end_ns ||
+            time<candidate_received_)
             return false;
         if (time-status_.evidence_end_ns>30000000000ULL) { invalidate(); return false; }
         if (status_.calibration_version==UINT64_MAX) { invalidate(); return false; }
         status_.active_zero=status_.candidate_zero; ++status_.calibration_version;
         status_.candidate_ready=false; status_.state=GYRO_BIAS_APPLIED;
+        candidate_received_=0;
         return true;
     }
 private:
     bool enabled_;
     double nominal_,mean_,m2_,low_,high_;
     uint64_t gap_,wheel_time_,wheel_received_,stationary_since_,yaw_time_,yaw_received_,start_,n_;
+    uint64_t collection_received_,candidate_received_;
     int wheel_clock_,yaw_clock_;
     GyroBiasStatus status_;
     void clear_collection() {
-        n_=start_=0; mean_=m2_=low_=high_=0;
+        n_=start_=collection_received_=0; mean_=m2_=low_=high_=0;
         if (enabled_) status_.state=status_.candidate_ready?GYRO_BIAS_READY:
             (status_.calibration_version?GYRO_BIAS_APPLIED:GYRO_BIAS_WAITING);
     }
     void invalidate() {
         status_.candidate_ready=false; status_.samples=0;
+        candidate_received_=0;
         status_.evidence_start_ns=status_.evidence_end_ns=0;
         status_.variance_counts2=0; status_.candidate_zero=nominal_;
         clear_collection();

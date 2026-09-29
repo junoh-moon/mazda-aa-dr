@@ -19,11 +19,12 @@ ModelProfile research_model_profile() {
     return p;
 }
 Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
-    last_yaw_time_(0), interval_seq_(0), position_seq_(0), position_mode_(-1),
+    last_yaw_time_(0), interval_seq_(0), position_seq_(0), wheel_conflict_since_(0), position_mode_(-1),
     configured_(false), model_(false), have_fix_(false) {
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
+    clear_history();
     profile_=research_model_profile();
 }
 bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias,bool gps_wheel) {
@@ -52,6 +53,7 @@ void Pipeline::reset(mx5_dr_context x) {
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
     last_yaw_time_=0; interval_seq_=0; position_seq_=0; position_mode_=-1;
+    wheel_conflict_since_=0;clear_history();
     have_fix_=false; status_.have_speed=status_.have_yaw=status_.have_reverse=false;
     status_.result=PIPELINE_WAITING; status_.core_result=MX5_DR_E_NO_SEED;
 }
@@ -131,7 +133,20 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
             if (wheels[j]<low) low=wheels[j];
             if (wheels[j]>high) high=wheels[j];
         }
-        e.wheel_spread=high-low;
+        e.wheel_spread=high-low;e.wheel_max=high;
+        unsigned stopped=0;
+        double moving_low=std::numeric_limits<double>::max(),moving_high=0,moving_sum=0;
+        for(unsigned j=0;j<4;++j) {
+            if(wheels[j]<=0.05)++stopped;
+            else {
+                moving_sum+=wheels[j];
+                if(wheels[j]<moving_low)moving_low=wheels[j];
+                if(wheels[j]>moving_high)moving_high=wheels[j];
+            }
+        }
+        const double moving_tolerance=moving_sum/3*0.05;
+        e.wheel_zero_conflict=stopped==1&&moving_low>=2.0&&
+            moving_high-moving_low<=(moving_tolerance>0.3?moving_tolerance:0.3);
         gyro_bias_.wheels(time,r.received_ns,r.source_mono_ms!=0,wheels);
     } else if (r.kind==REVERSE) {
         e.kind=REVERSE_EVENT;
@@ -195,15 +210,71 @@ PipelineResult Pipeline::control(mx5_dr_control_kind kind) {
     if (x.generation==UINT64_MAX || position_seq_==UINT64_MAX) return fault(PIPELINE_BAD_INPUT);
     ++x.generation; ++position_seq_;
     status_.core_result=mx5_dr_control(&core_,kind,x,position_seq_);
+    clear_history();
     return status_.core_result==MX5_DR_OK?PIPELINE_OK:PIPELINE_NO_ANCHOR;
 }
-bool Pipeline::good_fix(const adapter::Observation& o) const {
+void Pipeline::clear_history() {
+    wheel_history_.size=wheel_history_.next=reverse_history_.size=reverse_history_.next=0;
+}
+void Pipeline::remember(SensorHistory& history,const Event& e,double value) {
+    SensorRecord& record=history.records[history.next];
+    record.time=e.time;record.received=e.received;
+    record.lease=e.evidence.lease_until_ns;record.value=value;
+    history.next=(history.next+1)%HISTORY_CAPACITY;
+    if(history.size<HISTORY_CAPACITY)++history.size;
+}
+const Pipeline::SensorRecord* Pipeline::causal(const SensorHistory& history,uint64_t time) const {
+    // Drain consumes each stream chronologically. Select the latest eligible
+    // evidence first; its value must not influence which record is selected.
+    for(size_t j=0;j<history.size;++j) {
+        const SensorRecord& record=history.records[(history.next+HISTORY_CAPACITY-1-j)%HISTORY_CAPACITY];
+        if(record.time<=time&&record.received<=time&&record.lease>=time&&
+           time-record.time<=core_.config.sample_age_max_ns)return &record;
+    }
+    return 0;
+}
+bool Pipeline::valid_gps_position(const adapter::Observation& o) const {
     const adapter::PositionInput& p=o.position;
     return (p.mode==1||p.mode==2)&&p.utc_seconds&&p.utc_seconds<=UINT64_MAX/1000000000ULL &&
         finite(p.latitude_deg)&&std::fabs(p.latitude_deg)<85 &&
         finite(p.longitude_deg)&&std::fabs(p.longitude_deg)<=180 &&
-        finite(p.heading_deg)&&p.heading_deg>=0&&p.heading_deg<360 &&
-        finite(p.velocity_kmh)&&p.velocity_kmh>=1.8&&p.velocity_kmh<=360;
+        finite(p.velocity_kmh)&&p.velocity_kmh>=0&&p.velocity_kmh<=360;
+}
+bool Pipeline::good_fix(const adapter::Observation& o) const {
+    const adapter::PositionInput& p=o.position;
+    return valid_gps_position(o)&&finite(p.heading_deg)&&p.heading_deg>=0&&p.heading_deg<360 &&
+        p.velocity_kmh>=1.8;
+}
+bool Pipeline::can_keep_stationary_heading(const adapter::Observation& o) const {
+    // A stopped GPS fix cannot establish travel heading. It may leave a prior
+    // READY prediction alone only when continuous sensor coverage still carries
+    // that heading and the GPS position agrees with its existing MODEL budget.
+    // This does not seed from GPS, reset elapsed time, or apply a calibration.
+    if(!model_||!valid_gps_position(o)||o.position.velocity_kmh>=1.8 ||
+       !core_.seeded||!core_.have_interval||core_.estimate.state!=MX5_DR_READY ||
+       core_.estimate.frontier_ns!=o.mono_ns ||
+       !status_.have_speed||!status_.have_yaw||!status_.have_reverse ||
+       std::fabs(core_.last_interval.yaw_rad_s)>core_.config.stop_yaw_max_rad_s)
+        return false;
+    // The worker can already have consumed newer transport samples received
+    // after GPS. Use retained causal evidence, including a causal braking
+    // endpoint at GPS time; never refresh its original measurement or lease.
+    const SensorRecord* speed=causal(wheel_history_,o.mono_ns);
+    const SensorRecord* reverse=causal(reverse_history_,o.mono_ns);
+    if(!speed||!reverse||speed->value>0.05)return false;
+    const uint64_t anchor_utc=core_.anchor.utc_ns/1000000000ULL;
+    if(o.position.utc_seconds<anchor_utc ||
+       o.position.utc_seconds-anchor_utc>
+           (o.mono_ns-core_.anchor.measured_ns)/1000000000ULL+2)
+        return false;
+    double longitude=o.position.longitude_deg-core_.estimate.longitude_deg;
+    if(longitude>180)longitude-=360;
+    if(longitude< -180)longitude+=360;
+    const double north=(o.position.latitude_deg-core_.estimate.latitude_deg)*111320;
+    const double east=longitude*111320*std::cos((o.position.latitude_deg+
+        core_.estimate.latitude_deg)*0.5*PI/180);
+    return std::sqrt(north*north+east*east)<=
+        core_.estimate.error_budget_m+profile_.anchor_error_m;
 }
 PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     const int mode=o.position.mode;
@@ -223,6 +294,10 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     position_mode_=mode;
     if (!model_) return PIPELINE_OK;
     if (!good_fix(o)) {
+        if(can_keep_stationary_heading(o)) {
+            gps_wheel_.unavailable(); have_fix_=false;
+            return PIPELINE_WAITING;
+        }
         gps_wheel_.unavailable(GPS_GATE_BAD_FIX);
         have_fix_=false; control(MX5_DR_DISABLE); return PIPELINE_NO_ANCHOR;
     }
@@ -271,15 +346,30 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     status_.uncertainties|=GPS_TIME_HEADING_MODEL;
     status_.core_result=mx5_dr_seed(&core_,&a);
     if (status_.core_result==MX5_DR_OK) {
+        wheel_conflict_since_=0;
         gyro_bias_.apply_at_anchor(o.mono_ns); gps_wheel_.apply_at_anchor(o.mono_ns);
     }
     return status_.core_result==MX5_DR_OK?PIPELINE_OK:PIPELINE_CORE_REJECTED;
 }
 PipelineResult Pipeline::advance(uint64_t end) {
-    if (!core_.seeded||end<=core_.estimate.frontier_ns) return PIPELINE_OK;
+    if (!core_.seeded) { wheel_conflict_since_=0; return PIPELINE_OK; }
+    if(end<=core_.estimate.frontier_ns)return PIPELINE_OK;
     uint64_t begin=core_.estimate.frontier_ns;
     if (!status_.have_speed||!status_.have_yaw||!status_.have_reverse||
         yaw_.time>begin || yaw_.window_end<end) return PIPELINE_WAITING;
+    const double yaw_rate=model_?(double(yaw_.raw)-gyro_bias_.status().active_zero)*
+        profile_.yaw_rad_per_count:yaw_.value;
+    // Do not apply the straight GPS-training wheel-spread gate to cornering.
+    // This narrower MODEL contradiction needs exactly one stopped wheel, three
+    // agreeing moving wheels, and the yaw window for this integration interval.
+    // Require fresh conflicting wheel events across a full allowed sensor-age
+    // interval, so a brief staggered update while braking does not revoke DR.
+    if(model_&&speed_.wheel_zero_conflict&&std::fabs(yaw_rate)<=0.03) {
+        if(!wheel_conflict_since_)wheel_conflict_since_=begin;
+        if(speed_.time>wheel_conflict_since_&&
+           speed_.time-wheel_conflict_since_>core_.config.sample_age_max_ns)
+            return fault(PIPELINE_BAD_INPUT);
+    } else wheel_conflict_since_=0;
     while (begin<end) {
         if (interval_seq_==UINT64_MAX) return PIPELINE_CORE_REJECTED;
         mx5_dr_interval i=mx5_dr_interval(); i.context=context(); i.interval_seq=++interval_seq_;
@@ -292,8 +382,7 @@ PipelineResult Pipeline::advance(uint64_t end) {
         // Convert at consumption: a fresh anchor may switch zero while this
         // window (or a future queued window) was received with the old zero.
         i.speed_mps=speed_.value*(model_?gps_wheel_.status().active_scale:1.0);
-        i.yaw_rad_s=model_?(double(yaw_.raw)-gyro_bias_.status().active_zero)*
-            profile_.yaw_rad_per_count:yaw_.value;
+        i.yaw_rad_s=yaw_rate;
         i.reverse_active=int(reverse_.value); i.raw_yaw=yaw_.raw; i.yaw_count=yaw_.count;
         i.yaw_is_mean=1; i.yaw_window_start_ns=yaw_.time; i.yaw_window_end_ns=yaw_.window_end;
         status_.core_result=mx5_dr_step(&core_,&i);
@@ -308,15 +397,22 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
     while (size_ && queue_[0].time<=watermark) {
         Event e=queue_[0];
         PipelineResult r=advance(e.time);
-        // Revocation is never held behind absent sensor coverage or earlier
-        // queued speed events. Once revoked, drain the chronological backlog
-        // unseeded so a new GPS sequence can establish a fresh anchor.
+        // A READY stationary observation may await its closed mean window
+        // within the original sensor-age deadline. Pending GPS already hides
+        // diagnostics. Other GPS/anchor revocation must drain past missing
+        // coverage so a fresh sequence can establish a new anchor.
         if (r!=PIPELINE_OK) {
             bool revoke=false;
-            for (size_t j=0;j<size_&&queue_[j].time<=watermark;++j)
-                if ((queue_[j].kind==POSITION_EVENT&&queue_[j].observation.position.mode!=0)||
-                    queue_[j].kind==ANCHOR_EVENT)
-                    revoke=true;
+            const bool stopped_ready_wait=r==PIPELINE_WAITING&&model_&&core_.seeded&&
+                core_.estimate.state==MX5_DR_READY;
+            for (size_t j=0;j<size_&&queue_[j].time<=watermark;++j) {
+                if(queue_[j].kind==ANCHOR_EVENT)revoke=true;
+                if(queue_[j].kind==POSITION_EVENT&&queue_[j].observation.position.mode!=0) {
+                    const adapter::Observation& o=queue_[j].observation;
+                    if(!stopped_ready_wait||!valid_gps_position(o)||o.position.velocity_kmh>=1.8)
+                        revoke=true;
+                }
+            }
             if (revoke) { control(MX5_DR_DISABLE); have_fix_=false; }
             else {
                 if (core_.seeded&&watermark>core_.estimate.frontier_ns&&
@@ -331,9 +427,11 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
         switch(e.kind) {
         case SPEED_EVENT:
             speed_=e; status_.have_speed=true;
+            if(model_)remember(wheel_history_,e,e.wheel_max);
             gps_wheel_.wheels(e.time,e.received,e.value,e.wheel_spread); break;
         case REVERSE_EVENT:
             reverse_=e; status_.have_reverse=true;
+            if(model_)remember(reverse_history_,e,e.value);
             gps_wheel_.reverse(e.time,e.received,int(e.value)); break;
         case YAW_EVENT:
             yaw_=e; status_.have_yaw=true;
