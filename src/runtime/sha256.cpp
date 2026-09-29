@@ -99,8 +99,8 @@ void mx5_sha256_bytes(const void *p, size_t n, char out[65]) {
   h.update((const unsigned char *)p, n);
   h.finish(out);
 }
-bool mx5_verify_file_sha256(const char *p, const char *expected) {
-  if (!p || !expected || strlen(expected) != 64)
+bool mx5_sha256_file(const char *p, char actual[65]) {
+  if (!p || !actual)
     return false;
   FILE *f = fopen(p, "rb");
   if (!f)
@@ -111,8 +111,12 @@ bool mx5_verify_file_sha256(const char *p, const char *expected) {
   while ((n = fread(b, 1, sizeof b, f)))
     h.update(b, n);
   bool ok = !ferror(f);
-  fclose(f);
-  char actual[65];
+  if (fclose(f)) ok = false;
   h.finish(actual);
-  return ok && strcmp(actual, expected) == 0;
+  return ok;
+}
+bool mx5_verify_file_sha256(const char *p, const char *expected) {
+  char actual[65];
+  return expected && strlen(expected) == 64 && mx5_sha256_file(p, actual) &&
+         strcmp(actual, expected) == 0;
 }

@@ -22,7 +22,7 @@ function edit(block, mask,rest,pos,start,len,tag,val,n,a,i,newval,out,count,wher
             count++; where=start; sz=len
             if (tag !~ /\/[[:space:]]*>$/) die("LD_PRELOAD must be self-closing")
             val=attr(tag,"env_value")
-            if (val ~ /[^A-Za-z0-9_./:+ \t-]/) die("unsupported preload syntax")
+            if (val ~ /[^A-Za-z0-9_.\/:+ \t-]/) die("unsupported preload syntax")
         }
         pos=start+len; rest=substr(mask,pos)
     }
@@ -33,10 +33,10 @@ function edit(block, mask,rest,pos,start,len,tag,val,n,a,i,newval,out,count,wher
         n=split(val,a,/[: \t]+/); newval=""; owned=0
         for(i=1;i<=n;i++) {
             if(a[i]==token) owned++
-            else if(a[i]!="") newval=newval (newval==""?"":":") a[i]
+            else if(a[i]!="") newval=newval "" (newval==""?"":":") a[i]
         }
         if(action=="remove" && !owned) return block
-        if(action=="add") newval=token (newval==""?"":":" newval)
+        if(action=="add") newval=token "" (newval==""?"":":" newval)
         tag=substr(block,where,sz)
         if(newval!="") {
             match(tag,/[[:space:]]env_value[[:space:]]*=[[:space:]]*"[^"]*"/)
@@ -64,7 +64,7 @@ END {
     if(target_service=="jciAAPA") target_path="/jci/aapa/blmjciaapa.so"
     else if(target_service=="jciVBS") target_path="/jci/vbs/svcjcivbs.so"
     else die("unsupported target service")
-    if(token=="" || token ~ /[^A-Za-z0-9_./+-]/) die("unsupported token")
+    if(token=="" || token ~ /[^A-Za-z0-9_.\/+-]/) die("unsupported token")
     if(index(all,"\r")) die("CRLF configuration unsupported")
     mask=all; pos=1
     while ((i=index(substr(mask,pos),"<!--"))>0) {

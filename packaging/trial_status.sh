@@ -3,7 +3,8 @@
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
 [ "$#" = 0 ] || fail 'Usage: sh trial_status.sh (while parked)'
-for directory in "$ROOT/data_persist" "$BASE" "$BASE/logs" "$BASE/guard"; do
+validate_persist
+for directory in "$BASE" "$BASE/logs" "$BASE/guard"; do
     [ -d "$directory" ] && [ ! -L "$directory" ] || fail "Missing or symlink directory: $directory"
 done
 regular "$ROOT/proc/sys/kernel/random/boot_id"

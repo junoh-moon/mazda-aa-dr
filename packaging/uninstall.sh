@@ -1,8 +1,9 @@
 #!/bin/sh
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
-ALLOW_REMOUNT=0
-for arg in "$@"; do case "$arg" in --remount) ALLOW_REMOUNT=1;; *) fail "Unknown option $arg";; esac; done
+ALLOW_REMOUNT=1
+[ -z "$ROOT" ] || ALLOW_REMOUNT=0
+for arg in "$@"; do case "$arg" in --remount) ALLOW_REMOUNT=1;; --no-remount) ALLOW_REMOUNT=0;; *) fail "Unknown option $arg";; esac; done
 [ -z "$ROOT" ] || [ "$ALLOW_REMOUNT" = 0 ] || fail 'No remounts permitted for fixtures'
 prepare_storage
 mount_rw "$ROOT/jci/sm"
@@ -29,14 +30,25 @@ for name in sm.conf sm_WCP.conf; do
     TARGETS="$TARGETS $name"
 done
 MODE=OFF; set_config
+# Make the staged contents durable before replacing any OEM directory entry.
+sync
 for name in $TARGETS; do
     file=$ROOT/jci/sm/$name
-    [ "$(hash "$file")" = "$(cat "$BASE/$name.remove-before")" ] || fail 'Concurrent service configuration edit'
-    mv -f "$file.mx5dr-remove.$$" "$file"
+    before=$(cat "$BASE/$name.remove-before")
+    [ "$(hash "$file")" = "$before" ] || fail 'Concurrent service configuration edit'
+    if [ "$(hash "$file.mx5dr-remove.$$")" = "$before" ]; then
+        rm -f "$file.mx5dr-remove.$$"
+    else
+        mv -f "$file.mx5dr-remove.$$" "$file"
+    fi
     rm -f "$BASE/$name.remove-before"
 done
 [ "$(hash "$ROOT/usr/bin/autostart")" = "$autostart_before" ] || fail 'Concurrent autostart edit'
-mv -f "$ROOT/usr/bin/autostart.mx5dr-remove.$$" "$ROOT/usr/bin/autostart"
+if [ "$(hash "$ROOT/usr/bin/autostart.mx5dr-remove.$$")" = "$autostart_before" ]; then
+    rm -f "$ROOT/usr/bin/autostart.mx5dr-remove.$$"
+else
+    mv -f "$ROOT/usr/bin/autostart.mx5dr-remove.$$" "$ROOT/usr/bin/autostart"
+fi
 rm -f "$BASE/pending" "$BASE/installed.txt"
 sync
 echo 'Removed owned one-boot autostart blocks and mx5dr preload tokens; OFF config staged. No restart/kill. Library/logs/backups retained for mapped-code lifetime and diagnosis.'

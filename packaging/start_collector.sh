@@ -2,6 +2,7 @@
 # Parked authorized root shell, or verified root startup. Not a recovery guard.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
+validate_persist
 [ -n "$ROOT" ] || [ "$(id -u)" = 0 ] || fail 'Run this helper from an authorized root shell'
 [ "$#" -le 1 ] || fail 'Usage: sh start_collector.sh [session-seconds]'
 seconds=${1:-28800}
@@ -17,7 +18,8 @@ regular "$BASE/mx5dr.conf"
 # A kernel flock in the executable rejects duplicate starts, without stale-PID kills.
 (
     unset LD_PRELOAD LD_AUDIT
-    exec nohup "$BASE/mx5dr-collector" --session-seconds "$seconds"
+    trap '' HUP
+    exec "$BASE/mx5dr-collector" --session-seconds "$seconds"
 ) </dev/null >/dev/null 2>&1 &
 echo "Collector launch requested (PID $!); verify collector_boot while parked. No AA process was changed."
 echo 'The collector does not restart after reboot; use the verified external startup path when available.'

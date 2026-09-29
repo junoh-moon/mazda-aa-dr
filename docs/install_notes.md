@@ -9,9 +9,11 @@ phone/app acceptance. The build/runtime validation gates still apply.
 
 ## Actual entry point
 
-An **already authorized root shell or existing authorized installer** is
-required to run the scripts. This package supplies no USB auto-execution exploit,
-jailbreak, unlock or firmware flash. Merely putting it on USB does not install it.
+The flat USB ZIP includes the MP3/JS diagnostic-terminal entry used by the
+successful AA touch and km/L installers. Copy its contents to the USB root;
+play a track, then run `sh install.sh` in that USB directory. Merely putting it
+on USB does not install it. The shell needs UID 0, regardless of its account name.
+See [USB instructions](../packaging/USB_START_KO.md) and the bundled entry notice.
 The upstream oem-aa-mod project's installation guide documents per-service
 environment injection; this package uses that scoped mechanism and does not alter the source
 project's touch/HUD configuration or system-attribute XMLs.
@@ -106,16 +108,20 @@ attempt to repair arbitrary XML or guess the intent of a modified launcher.
 
 The package serializes its own operations with a lock directory. It preserves
 config ownership/mode using `cp -p`, stages sibling temporary files and validates
-all chosen launchers before replacing one. It compares the source file hash again
+autostart before replacing it. Installation reads and backs up the persistent
+SM configurations without rewriting them. Removal can edit those files to
+remove exact legacy tokens. It compares the source file hash again
 before rename to detect intervening edits. Existing configuration snapshots are
 saved under `/data_persist/mx5-aa-dr/backups/`; removal does **not** restore these
 snapshots over newer changes. The new library is copied and atomically renamed,
 never truncated while it might be mapped. Logs are owned by the existing `cmu` user; configuration, tools, guard and payload
 are root-owned; the service is not changed to run as root.
 
-On the CMU, read-only mounts are detected through `/proc/mounts`. Default operation
-refuses a read-only mount. From the authorized root shell, `--remount` explicitly
-allows temporarily changing only the containing mounts to read/write. Exit and
+On the CMU, paths are resolved through the stock storage aliases before reading
+`/proc/mounts`. The last entry wins for equal mountpoints, so a `rootfs / rw`
+entry cannot hide the actual read-only root. Install, uninstall and USB export
+temporarily remount their containing filesystems by default. `--no-remount`
+is available on install/uninstall. Exit and
 signal cleanup restores mounts it changed to read-only and reports restoration
 failure. Existing read/write mounts remain read/write. No fixture run can
 remount. Abrupt power loss cannot run shell cleanup; after recovery inspect mount
@@ -141,7 +147,7 @@ an interrupted preflight are not active launcher files.
 sh /data_persist/mx5-aa-dr/tools/uninstall.sh
 ```
 
-Use `--remount` under the same explicit rules if needed. Both pinned launcher
+No separate remount command is needed. Both pinned launcher
 files are inspected, and only the exact mx5dr preload token is removed from
 `jciAAPA`, along with this package's marked autostart blocks. The arm is removed
 first. Other tokens and unrelated edits remain. Runtime mode OFF is staged.

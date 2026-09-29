@@ -33,8 +33,11 @@ class InstallDefaultsTests(unittest.TestCase):
 ROOT=${MX5DR_FIXTURE_ROOT:-}
 fail() { echo "$*" >&2; exit 1; }
 regular() { [ -f "$1" ] && [ ! -L "$1" ] || fail "nonregular"; }
+hash() { printf 'test-hash'; }
 verify_firmware() { echo "mode=$MODE remount=$ALLOW_REMOUNT"; exit 0; }
 ''')
+        (bundle / 'mx5dr-sha256').write_text('never executed')
+        (bundle / 'mx5dr-sha256.sha256').write_text('test-hash  mx5dr-sha256\n')
         env = dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root) if fixture else '')
         return subprocess.run(['sh', str(bundle / 'install.sh'), *options],
                               env=env, capture_output=True, text=True)
@@ -81,14 +84,16 @@ verify_firmware() { echo "mode=$MODE remount=$ALLOW_REMOUNT"; exit 0; }
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('remount=', result.stdout)
 
-    def mounts(self, initial='ro', fail_stage='', policy=1, body='mount_rw /jci/sm'):
+    def mounts(self, initial='ro', fail_stage='', policy=1, body='mount_rw "$TEST_DIR"', stacked=False):
         fixture = self.root / 'fixture'
         fixture.mkdir()
+        (fixture / 'tmp').mkdir()
         (fixture / '.mx5dr-fixture').touch()
         bin_dir = self.root / 'bin'
         bin_dir.mkdir()
         table = self.root / 'mounts'
-        table.write_text('rootfs / rootfs ' + initial + ' 0 0\n')
+        table.write_text(('rootfs / rootfs rw 0 0\n' if stacked else '') +
+                         '/dev/root / ext3 ' + initial + ' 0 0\n')
         log = self.root / 'mount.log'
         # Use the system awk with the synthetic mount table; selection logic in
         # common.sh is unchanged. Only the /proc/mounts input is redirected.
@@ -109,11 +114,22 @@ case "$2" in
   *) exit 90;;
 esac
 ''')
+        # macOS lacks the flock CLI. Use the same kernel advisory lock on the
+        # inherited descriptor; the production stock BusyBox applet is also
+        # exercised by cmu_emulation.py.
+        (bin_dir / 'flock').write_text('''#!/usr/bin/env python3
+import fcntl, sys
+try:
+    fcntl.flock(int(sys.argv[-1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(1)
+''')
         for path in bin_dir.iterdir():
             path.chmod(0o755)
         env = dict(os.environ, MX5DR_FIXTURE_ROOT=str(fixture),
                    PATH=str(bin_dir) + os.pathsep + os.environ['PATH'],
                    REAL_AWK=awk, TEST_MOUNTS=str(table), TEST_MOUNT_LOG=str(log),
+                   TEST_DIR=str(fixture),
                    TEST_MOUNT_FAIL=fail_stage, COMMON=str(PACK / 'common.sh'))
         # ROOT is emptied only inside this test harness after sourcing common;
         # there are no install/storage calls. All mount commands are mocked.
@@ -122,13 +138,13 @@ esac
         return result, log.read_text().splitlines() if log.exists() else [], table.read_text()
 
     def test_read_only_mount_restored_on_success_and_no_duplicate_remount(self):
-        result, log, table = self.mounts(body='mount_rw /jci/sm\nmount_rw /usr/bin')
+        result, log, table = self.mounts(body='mount_rw "$TEST_DIR"\nmount_rw "$TEST_DIR"')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(log, ['-o remount,rw /', '-o remount,ro /'])
         self.assertIn(' ro ', table)
 
     def test_read_only_mount_restored_after_install_error(self):
-        result, log, table = self.mounts(body='mount_rw /jci/sm\nfail "synthetic install failure"')
+        result, log, table = self.mounts(body='mount_rw "$TEST_DIR"\nfail "synthetic install failure"')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(log, ['-o remount,rw /', '-o remount,ro /'])
         self.assertIn(' ro ', table)
@@ -138,6 +154,12 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(log, [])
         self.assertIn(' rw ', table)
+
+    def test_rootfs_rw_does_not_hide_real_readonly_root(self):
+        result, log, table = self.mounts(stacked=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(log, ['-o remount,rw /', '-o remount,ro /'])
+        self.assertIn(' ro ', table)
 
     def test_failed_rw_remount_does_not_claim_install_success(self):
         result, log, _ = self.mounts(fail_stage='rw')
@@ -154,6 +176,28 @@ esac
         result, log, _ = self.mounts(policy=0)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(log, [])
+
+    def test_mount_mutex_covers_persistent_unlock_and_restore(self):
+        body = '''BASE=$TEST_DIR/base
+LOCK=$TEST_DIR/install-lock
+mkdir "$BASE"
+lock
+mount_rw "$TEST_DIR"
+sync() {
+    sh -c '. "$COMMON"; ROOT=""; ALLOW_REMOUNT=1; mount_rw "$TEST_DIR"' > "$TEST_DIR/second.out" 2>&1 && return 99
+    grep -q 'Another installer or USB export is active' "$TEST_DIR/second.out"
+}
+'''
+        result, log, table = self.mounts(body=body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(log, ['-o remount,rw /', '-o remount,ro /'])
+        self.assertIn(' ro ', table)
+
+    def test_cleanup_sync_failure_still_restores_mount(self):
+        result, log, table = self.mounts(body='mount_rw "$TEST_DIR"\nsync() { return 1; }')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(log, ['-o remount,rw /', '-o remount,ro /'])
+        self.assertIn(' ro ', table)
 
 
 if __name__ == '__main__':

@@ -29,9 +29,11 @@ done
 # Published bundles carry a full manifest; developer bundles still use the
 # mandatory per-binary hashes below. Do not require a separate user command.
 if [ -e "$HERE/SHA256SUMS" ] || [ -L "$HERE/SHA256SUMS" ]; then
-    regular "$HERE/SHA256SUMS"
-    (cd "$HERE" && sha256sum -c SHA256SUMS) || fail 'Bundle checksum mismatch; no installation changes made'
+    verify_bundle_manifest
 fi
+regular "$HERE/mx5dr-sha256"
+regular "$HERE/mx5dr-sha256.sha256"
+[ "$(hash "$HERE/mx5dr-sha256")" = "$(awk 'NR==1{print $1}' "$HERE/mx5dr-sha256.sha256")" ] || fail 'Hash helper checksum mismatch'
 verify_firmware
 regular "$HERE/libmx5dr.so"
 regular "$HERE/libmx5dr.so.sha256"
@@ -73,6 +75,10 @@ for name in sm.conf sm_WCP.conf; do
     ! grep -F "$TOKEN" "$ROOT/jci/sm/$name" >/dev/null || fail 'Legacy persistent mx5dr preload found; run uninstall.sh first, then install one-boot package'
     ! grep -F "$TAP_TOKEN" "$ROOT/jci/sm/$name" >/dev/null || fail 'Persistent VBS tap preload found; run uninstall.sh first, then install one-boot package'
 done
+if [ -z "$ROOT" ]; then
+    cmu_uid=$(id -u cmu) || fail 'cmu account unavailable'
+    [ "$cmu_uid" != 0 ] || fail 'cmu must have a nonzero UID for the collector'
+fi
 prepare_storage
 [ ! -e "$BASE/pending" ] || fail 'Incomplete transaction: run uninstall.sh before retrying'
 mount_rw "$ROOT/jci/sm"
@@ -80,7 +86,7 @@ mount_rw "$ROOT/usr/bin"
 [ ! -L "$BASE/guard" ] || fail 'Symlink guard directory'
 mkdir -p "$BASE/guard"
 chmod 0700 "$BASE/guard"
-if [ -z "$ROOT" ]; then chown root "$BASE" "$BASE/guard"; fi
+if [ -z "$ROOT" ]; then chown 0 "$BASE" "$BASE/guard"; fi
 # No old arm may survive a partial replacement.
 rm -f "$BASE/guard/arm"
 clear_capture_markers
@@ -93,17 +99,18 @@ for name in $TARGETS; do
     file=$ROOT/jci/sm/$name
     regular "$file"
     cp -p "$file" "$TX/$name.before"
-    edit_to "$file" "$file.mx5dr-new.$$" remove
     case "$name" in sm.conf) trial=normal.trial;; sm_WCP.conf) trial=wcp.trial;; esac
-    trial_to "$file.mx5dr-new.$$" "$BASE/guard/$trial.new.$$"
-    hash "$file" > "$TX/$name.before.sha256"
+    trial_to "$TX/$name.before" "$BASE/guard/$trial.new.$$"
+    hash "$TX/$name.before" > "$TX/$name.before.sha256"
+    cp "$TX/$name.before.sha256" "$BASE/guard/${trial%.trial}.source.sha256.new.$$"
+    chmod 0600 "$BASE/guard/${trial%.trial}.source.sha256.new.$$"
 done
 file=$ROOT/usr/bin/autostart
 regular "$file"
 cp -p "$file" "$TX/autostart.before"
-hash "$file" > "$TX/autostart.before.sha256"
-cp -p "$file" "$file.mx5dr-new.$$"
-awk -v action=add -f "$HERE/edit_autostart.awk" "$file" > "$file.mx5dr-new.$$" || fail 'Unsupported autostart anchors'
+hash "$TX/autostart.before" > "$TX/autostart.before.sha256"
+cp -p "$TX/autostart.before" "$file.mx5dr-new.$$"
+awk -v action=add -f "$HERE/edit_autostart.awk" "$TX/autostart.before" > "$file.mx5dr-new.$$" || fail 'Unsupported autostart anchors'
 sh -n "$file.mx5dr-new.$$" || fail 'Invalid staged autostart shell'
 # Never truncate mapped objects. Guard and config are root-owned; logs alone are cmu writable.
 for name in libmx5dr.so libmx5dr-vimtap.so mx5dr-guard mx5dr-collector; do
@@ -111,33 +118,39 @@ for name in libmx5dr.so libmx5dr-vimtap.so mx5dr-guard mx5dr-collector; do
     [ "$name" != mx5dr-guard ] || dest=$BASE/guard/$name
     cp "$HERE/$name" "$dest.new.$$"
     chmod 0755 "$dest.new.$$"
-    if [ -z "$ROOT" ]; then chown root "$dest.new.$$"; fi
+    if [ -z "$ROOT" ]; then chown 0 "$dest.new.$$"; fi
     mv -f "$dest.new.$$" "$dest"
 done
 set_config
 [ ! -L "$BASE/tools" ] || fail 'Symlink tools directory'
 mkdir -p "$BASE/tools"
 chmod 0755 "$BASE/tools"
-if [ -z "$ROOT" ]; then chown root "$BASE/tools"; fi
-for name in common.sh edit_service.awk edit_autostart.awk arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk firmware.sha256; do
+if [ -z "$ROOT" ]; then chown 0 "$BASE/tools"; fi
+for name in common.sh edit_service.awk edit_autostart.awk arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk firmware.sha256 mx5dr-sha256; do
     cp "$HERE/$name" "$BASE/tools/$name.new.$$"
     chmod 0644 "$BASE/tools/$name.new.$$"
-    if [ -z "$ROOT" ]; then chown root "$BASE/tools/$name.new.$$"; fi
+    if [ -z "$ROOT" ]; then chown 0 "$BASE/tools/$name.new.$$"; fi
     mv -f "$BASE/tools/$name.new.$$" "$BASE/tools/$name"
 done
+# Publish local templates while disarmed, and exercise the real guard against
+# the real filesystem/libc before changing the OEM startup script.
+mv -f "$BASE/guard/normal.trial.new.$$" "$BASE/guard/normal.trial"
+mv -f "$BASE/guard/wcp.trial.new.$$" "$BASE/guard/wcp.trial"
+mv -f "$BASE/guard/normal.source.sha256.new.$$" "$BASE/guard/normal.source.sha256"
+mv -f "$BASE/guard/wcp.source.sha256.new.$$" "$BASE/guard/wcp.source.sha256"
+if [ -z "$ROOT" ]; then
+    "$BASE/guard/mx5dr-guard" check || fail 'Guard preflight failed; autostart not changed'
+fi
 printf '%s\n' 'one-boot install: baseline configs and autostart' > "$BASE/pending"
 sync
 for name in $TARGETS; do
     file=$ROOT/jci/sm/$name
     [ "$(hash "$file")" = "$(cat "$TX/$name.before.sha256")" ] || fail "Concurrent edit: $name"
-    mv -f "$file.mx5dr-new.$$" "$file"
 done
 file=$ROOT/usr/bin/autostart
 [ "$(hash "$file")" = "$(cat "$TX/autostart.before.sha256")" ] || fail 'Concurrent autostart edit'
 mv -f "$file.mx5dr-new.$$" "$file"
 # Templates bind the current preserved touch settings; later changes decline a trial.
-mv -f "$BASE/guard/normal.trial.new.$$" "$BASE/guard/normal.trial"
-mv -f "$BASE/guard/wcp.trial.new.$$" "$BASE/guard/wcp.trial"
 printf 'mode=%s\npolicy=one-boot\nbackup=%s\npayload_sha256=%s\ntap_sha256=%s\n' "$MODE" "$TX" "$want" "$tap_want" > "$BASE/installed.txt.new.$$"
 mv -f "$BASE/installed.txt.new.$$" "$BASE/installed.txt"
 rm -f "$BASE/pending"

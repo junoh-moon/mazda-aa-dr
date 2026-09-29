@@ -28,20 +28,43 @@ uid_t expected_owner(){
 #endif
 }
 bool safe_stat(int fd,bool directory){struct stat s;return fstat(fd,&s)==0 && s.st_uid==expected_owner() && !(s.st_mode&022) && (directory?S_ISDIR(s.st_mode):S_ISREG(s.st_mode));}
-// Walk every component without following symlinks; no mutable helper is sourced.
+bool stock_alias(const std::string &path,const char *absolute,const char *relative,bool &link){
+ struct stat st;if(lstat(path.c_str(),&st))return false;link=S_ISLNK(st.st_mode);
+ if(!link)return S_ISDIR(st.st_mode);
+ char target[64];ssize_t n=readlink(path.c_str(),target,sizeof target);
+ if(n<0||n==ssize_t(sizeof target))return false;
+ const std::string value(target,size_t(n));return value==absolute||value==relative;
+}
 int trusted(const std::string &path,bool directory=false){
- int fd=open("/",O_RDONLY|O_DIRECTORY|O_CLOEXEC);if(fd<0)return -1;
- size_t i=1;
- while(i<path.size()){size_t end=path.find('/',i);bool last=end==std::string::npos;std::string c=path.substr(i,last?path.size()-i:end-i);
+ // OEM sm.conf and its parents are 0775 in this exact firmware. Bind their
+ // bytes in the arm manifest; do not impose our private-directory permissions
+ // on the stock OS or chown/chmod it. Reject a replaced final symlink.
+ if(path==prefix+"/jci/sm/sm.conf"||path==prefix+"/jci/sm/sm_WCP.conf"){
+  int fd=open(path.c_str(),O_RDONLY|O_NOFOLLOW|O_CLOEXEC);struct stat st;
+  if(fd>=0&&(fstat(fd,&st)||!S_ISREG(st.st_mode))){close(fd);return -1;}
+  return fd;
+ }
+ const std::string base=prefix+"/data_persist/mx5-aa-dr";
+ if(path.compare(0,base.size()+1,base+"/")!=0)return -1;
+ // Preserve both stock aliases, including when mapping a test fixture root.
+ bool link=false;std::string storage=prefix+"/data_persist";
+ if(!stock_alias(storage,"/mnt/data_persist","mnt/data_persist",link))return -1;
+ if(link){
+  if(!stock_alias(prefix+"/mnt","/tmp/mnt","tmp/mnt",link))return -1;
+  storage=prefix+(link?"/tmp/mnt/data_persist":"/mnt/data_persist");
+ }
+ // Only our installation subtree must be UID 0 owned and non-writable by cmu.
+ int fd=open((storage+"/mx5-aa-dr").c_str(),O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+ if(fd<0)return -1;
+ if(!safe_stat(fd,true)){close(fd);return -1;}
+ size_t i=base.size()+1;
+ while(i<path.size()){
+  size_t end=path.find('/',i);bool last=end==std::string::npos;
+  std::string c=path.substr(i,last?path.size()-i:end-i);
   if(c.empty()||c=="."||c==".."){close(fd);return -1;}
-  int n=openat(fd,c.c_str(),O_RDONLY|O_NOFOLLOW|O_CLOEXEC|((!last||directory)?O_DIRECTORY:0));close(fd);fd=n;if(fd<0)return -1;
-  // /tmp may be traversed only as an ancestor of the host-only fixture root.
-#ifdef MX5DR_GUARD_TESTING
-  bool fixture_ancestor=!prefix.empty() && path.substr(0,last?path.size():end).size()<prefix.size();
-#else
-  bool fixture_ancestor=false;
-#endif
-  if(!fixture_ancestor&&!safe_stat(fd,!last||directory)){close(fd);return -1;}
+  int n=openat(fd,c.c_str(),O_RDONLY|O_NOFOLLOW|O_CLOEXEC|((!last||directory)?O_DIRECTORY:0));close(fd);fd=n;
+  if(fd<0)return -1;
+  if(!safe_stat(fd,!last||directory)){close(fd);return -1;}
   if(last)break;
   i=end+1;
  }
@@ -61,7 +84,21 @@ bool sync_dir(int fd,const char*stage){
  return fsync(fd)==0;
 }
 bool atomic_file(const char*name,const std::string&s){char temp[96];snprintf(temp,sizeof temp,".%s.%ld",name,(long)getpid());int fd=openat(gd,temp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return false;bool ok=write_all(fd,s)&&fsync(fd)==0;int e=close(fd);ok=ok&&e==0;if(ok)ok=renameat(gd,temp,gd,name)==0&&sync_dir(gd,name);if(!ok)unlinkat(gd,temp,0);return ok;}
-bool manifest(std::string&s){s="mx5dr-one-boot-v2\n";for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){std::string h;if(!digest(prefix+names[i],h))return false;s+=h+"\n";}return true;}
+bool manifest(std::string&s){
+ s="mx5dr-one-boot-v2\n";
+ for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){
+  std::string h;if(!digest(prefix+names[i],h))return false;
+  if(i==2||i==4){
+   // Bind a template to the snapshot from which the editor created it. Merely
+   // hashing today's baseline and yesterday's template would authorize both.
+   std::string source;
+   const char *name=i==2?"normal.source.sha256":"wcp.source.sha256";
+   if(!read_file(prefix+"/data_persist/mx5-aa-dr/guard/"+name,source,65)||source!=h+"\n")return false;
+  }
+  s+=h+"\n";
+ }
+ return true;
+}
 bool boot_id(std::string&s){std::string p=prefix+"/proc/sys/kernel/random/boot_id";int fd=open(p.c_str(),O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return false;bool ok=read_fd(fd,s,80);close(fd);if(!ok)return false;if(!s.empty()&&s[s.size()-1]=='\n')s.resize(s.size()-1);if(s.size()!=36)return false;for(size_t i=0;i<s.size();i++){if(i==8||i==13||i==18||i==23){if(s[i]!='-')return false;}else if(!((s[i]>='0'&&s[i]<='9')||(s[i]>='a'&&s[i]<='f')))return false;}s+='\n';return true;}
 bool owned_read(const char*name,std::string&s){int fd=openat(gd,name,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return false;bool ok=safe_stat(fd,false)&&read_fd(fd,s,1024);close(fd);return ok;}
 bool baseline_clean(){for(unsigned i=2;i<=4;i+=2){std::string s;if(!read_file(prefix+names[i],s,1024*1024)||s.find(token)!=std::string::npos||s.find(tap_token)!=std::string::npos)return false;}return true;}
@@ -72,6 +109,9 @@ int run(int argc,char**argv){if(geteuid()!=expected_owner()||argc<2)return 2;
  gd=trusted(prefix+"/data_persist/mx5-aa-dr/guard",true);if(gd<0)return 2;
  int lock=openat(gd,"lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(lock<0||!safe_stat(lock,false)||flock(lock,LOCK_EX|LOCK_NB))return 2;
  std::string expected;if(!baseline_clean()||!manifest(expected))return 2;
+ if(!strcmp(argv[1],"check")){
+  std::string id;return argc==2&&boot_id(id)?0:2;
+ }
  if(!strcmp(argv[1],"arm")){
   if(argc!=2)return 2;
   if(atomic_file("arm",expected))return 0;

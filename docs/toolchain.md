@@ -6,6 +6,11 @@ at commit `61ec0343de84f6fc7c46840056df1d600d44be8a`: GCC 4.9.1 from crosstool-N
 includes the old glibc and DBus 1.6.30 headers/libraries. A current host ARM
 compiler is useful for additional checks but is not the release compiler.
 
+The ARM build also creates `mx5dr-sha256`, a statically linked file-hash helper
+for the CMU's missing sha256sum applet. It uses the existing streaming SHA-256
+implementation. USB packaging and installed recovery/export helpers carry it;
+the target needs neither a compiler nor an extra software installation.
+
 From the project directory:
 
 ```sh

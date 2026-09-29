@@ -8,10 +8,12 @@
 
 [첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. 같은 실행 중인 SM의 재시도와 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
-이 브랜치의 설치 묶음은 CMU root 셸에서 압축을 푼 뒤 `sh ./install.sh` 한 줄로
-OBSERVE 설치·검사·일회성 예약을 수행한다. [한 줄 설치 설명](docs/ONE_COMMAND_INSTALL_KO.md).
-이미 배포한 `v0.2.0-observe.1` ZIP에는 아직 이 변경이 없으며, 그 ZIP의 명령은
-`sh ./install.sh --remount`다. 설치 성공 후 정상적인 전원 종료·다음 기동이 필요하다.
+USB 설치 ZIP의 내용물을 FAT32 USB 최상위에 복사하면 MP3/JS로 진단 셸에
+진입할 수 있다. 해당 USB 디렉터리에서 `sh install.sh`를 실행한다.
+[사용 안내](packaging/USB_START_KO.md) · [설치 수정과 검증](validation/USB_INSTALL_2026-09-29.md).
+현재 소스는 CMU의 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
+이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리한다. 이미 게시한
+`v0.3.0-shadow.1` ZIP은 이 수정을 포함하지 않는다.
 
 **master의 추가 변경(PR #12):** 실제 VIM 센서 콜백 → 시간 정렬 → DR 코어 → LOCATION 미리보기의 SHADOW 계산을 구현했다. [기능·계약·남은 조건](docs/LIVE_SHADOW_2026-09-29_KO.md). 배포된 `v0.2.0-observe.2`에는 이 기능이 없으며 live ASSIST는 계속 차단된다.
 

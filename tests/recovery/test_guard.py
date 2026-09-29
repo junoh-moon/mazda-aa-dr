@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Host gate/editor tests. No target binaries or OEM dumps are shipped/executed."""
-import os, pathlib, subprocess, tempfile, unittest, shutil, shlex, resource
+import os, pathlib, subprocess, tempfile, unittest, shutil, shlex, resource, hashlib
 HERE=pathlib.Path(__file__).resolve().parents[2]
 BASE='data_persist/mx5-aa-dr'
 STOCK='''#!/bin/sh
@@ -29,20 +29,70 @@ class Gate(unittest.TestCase):
   for p in ['jci/sm/sm.conf','jci/sm/sm_WCP.conf']:self.put(p,CFG.encode())
   trial=CFG.replace('/data_persist/touch.so','/data_persist/mx5-aa-dr/libmx5dr.so:/data_persist/touch.so').encode()
   for p in ['normal.trial','wcp.trial']:self.put(BASE+'/guard/'+p,trial)
+  for p in ['normal.source.sha256','wcp.source.sha256']:self.put(BASE+'/guard/'+p,(hashlib.sha256(CFG.encode()).hexdigest()+'\n').encode())
   self.put('proc/sys/kernel/random/boot_id',b'01234567-1234-1234-1234-0123456789ab\n')
  def tearDown(self):self.tmp.cleanup()
  def put(self,p,b):x=self.root/p;x.write_bytes(b);x.chmod(0o600)
  def call(self,*a,env=None):return subprocess.run(self.command+list(a),env=env or self.env,text=True,capture_output=True)
  def arm(self):self.assertEqual(self.call('arm').returncode,0)
+ def test_check_does_not_arm_and_rejects_missing_boot_id(self):
+  self.assertEqual(self.call('check').returncode,0)
+  self.assertFalse((self.root/BASE/'guard/arm').exists())
+  (self.root/'proc/sys/kernel/random/boot_id').unlink()
+  self.assertNotEqual(self.call('check').returncode,0)
+  self.assertFalse((self.root/BASE/'guard/arm').exists())
  def test_one_boot_and_new_boot_baseline(self):
   self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0);self.arm();r=self.call('select','/jci/sm/sm.conf');self.assertEqual(r.returncode,0,r.stderr)
   self.assertIn('/mx5dr-trial-',r.stdout);self.assertIn('touch.so',pathlib.Path(r.stdout.strip()).read_text());self.assertFalse((self.root/BASE/'guard/arm').exists())
   self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
   self.arm();self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
   (self.root/BASE/'guard/arm').unlink();self.put('proc/sys/kernel/random/boot_id',b'11234567-1234-1234-1234-0123456789ab\n');self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_stock_absolute_and_relative_persist_alias(self):
+  (self.root/'mnt').mkdir();(self.root/'data_persist').rename(self.root/'mnt/data_persist')
+  alias=self.root/'data_persist'
+  for target in ['/mnt/data_persist','mnt/data_persist']:
+   with self.subTest(target=target):
+    alias.symlink_to(target)
+    self.arm();r=self.call('select','/jci/sm/sm.conf');self.assertEqual(r.returncode,0,r.stderr)
+    self.assertIn(TOKEN,pathlib.Path(r.stdout.strip()).read_text())
+    self.assertFalse((self.root/'mnt/data_persist/mx5-aa-dr/guard/arm').exists())
+    self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+    (self.root/'mnt/data_persist/mx5-aa-dr/guard/last-boot').unlink();alias.unlink()
+ def test_full_stock_alias_chain_and_group_writable_oem_config(self):
+  (self.root/'tmp/mnt').mkdir();(self.root/'data_persist').rename(self.root/'tmp/mnt/data_persist')
+  (self.root/'data_persist').symlink_to('/mnt/data_persist');(self.root/'mnt').symlink_to('/tmp/mnt')
+  for path in ['jci','jci/sm','jci/sm/sm.conf','jci/sm/sm_WCP.conf']:(self.root/path).chmod(0o775)
+  self.arm();r=self.call('select','/jci/sm/sm.conf');self.assertEqual(r.returncode,0,r.stderr)
+  self.assertIn(TOKEN,pathlib.Path(r.stdout.strip()).read_text())
+  self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_persist_alias_does_not_allow_payload_or_target_symlink(self):
+  (self.root/'mnt').mkdir();(self.root/'data_persist').rename(self.root/'mnt/data_persist')
+  alias=self.root/'data_persist';alias.symlink_to('/mnt/data_persist');self.arm()
+  p=self.root/'mnt/data_persist/mx5-aa-dr/libmx5dr.so';p.rename(p.with_suffix('.save'));p.symlink_to(p.with_suffix('.save'))
+  self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  alias.unlink();alias.symlink_to('/tmp/untrusted')
+  self.assertNotEqual(self.call('arm').returncode,0)
  def test_wcp_and_input_binding(self):
   self.arm();self.put('jci/sm/sm.conf',(CFG+'<!-- later touch edit -->').encode());self.assertNotEqual(self.call('select','/jci/sm/sm_WCP.conf').returncode,0)
+  self.assertNotEqual(self.call('arm').returncode,0)
+  self.put('jci/sm/sm.conf',CFG.encode())
   self.arm();r=self.call('select','/jci/sm/sm_WCP.conf');self.assertEqual(r.returncode,0);self.assertIn('args="new_hw"',pathlib.Path(r.stdout.strip()).read_text())
+ def test_regenerated_template_binds_new_touch_snapshot(self):
+  updated=CFG.replace('touch.so','touch-v2.so')
+  self.put('jci/sm/sm.conf',updated.encode())
+  self.assertNotEqual(self.call('check').returncode,0)
+  self.assertNotEqual(self.call('arm').returncode,0)
+  self.put(BASE+'/guard/normal.trial',updated.replace('/data_persist/touch-v2.so',TOKEN+':/data_persist/touch-v2.so').encode())
+  self.put(BASE+'/guard/normal.source.sha256',(hashlib.sha256(updated.encode()).hexdigest()+'\n').encode())
+  self.arm();r=self.call('select','/jci/sm/sm.conf');self.assertEqual(r.returncode,0,r.stderr)
+  self.assertIn('touch-v2.so',pathlib.Path(r.stdout.strip()).read_text())
+ def test_source_identity_missing_symlink_or_malformed_declines(self):
+  p=self.root/BASE/'guard/normal.source.sha256';saved=p.read_bytes()
+  p.unlink();self.assertNotEqual(self.call('arm').returncode,0)
+  p.symlink_to(self.root/BASE/'guard/wcp.source.sha256');self.assertNotEqual(self.call('arm').returncode,0)
+  p.unlink()
+  for value in [saved.rstrip(b'\n'),saved+b'\n',saved.upper()]:
+   self.put(BASE+'/guard/normal.source.sha256',value);self.assertNotEqual(self.call('arm').returncode,0)
  def test_payload_change_declines(self):
   self.arm();self.put(BASE+'/libmx5dr.so',b'corruption');self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
  def test_tap_change_declines(self):

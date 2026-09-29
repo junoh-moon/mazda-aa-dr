@@ -9,7 +9,7 @@
 - 이 절차 작성 시점(2026-09-29)의 master는 PR #12의 실제 센서 기반 SHADOW 계산을 포함한다. 기존 `v0.2.0-observe.2` 설치 파일은 이 변경을 포함하지 않는다. 새 릴리즈는 선택한 커밋의 전체 변경 범위를 설명해야 한다.
 - 현재 설치 기본값은 OBSERVE, live ASSIST는 코드에서 차단된 상태다. SHADOW 지원 코드가 포함돼도 기본 설치에서 SHADOW가 켜지는 것은 아니다. 릴리즈 생성 과정에서 설정이나 차단 조건을 바꾸지 않는다.
 - 예외적으로 [드문 실차 기회의 통합 시험](FIELD_TRIAL_KO.md)을 준비할 때는 의도적으로 선택한 `--default-mode=SHADOW` 묶음을 만들 수 있다. 일반 묶음의 OBSERVE 기본값은 유지한다. 이 경우 `bundle-default-mode`, build-info의 `default_mode`, 설치 안내와 릴리즈 노트가 모두 SHADOW로 일치해야 한다. 아래 일반 OBSERVE 예시를 그대로 복사해 잘못 표시하지 않는다. ASSIST 차단은 그대로다.
-- 아래 명령은 **PR #12 이후의 네 바이너리 구성** 기준이다. 예전 태그를 재현할 때는 그 태그의 Makefile/packaging을 사용하며, 현재 스크립트나 바이너리를 섞지 않는다.
+- 아래 명령은 **PR #12 이후의 다섯 바이너리 구성** 기준이다. 예전 태그를 재현할 때는 그 태그의 Makefile/packaging을 사용하며, 현재 스크립트나 바이너리를 섞지 않는다.
 - 실차 미검증 개발판은 pre-release로 발행한다. 빌드·호스트·QEMU 성공을 실제 차량 복구, 위치 정확도, 폰/지도 앱 수용 검증으로 표현하지 않는다. [현재 상태](STATUS_KO.md)가 기능·실차 시험 범위를 정한다.
 
 ## 1. 환경과 배포 대상 고정
@@ -66,7 +66,7 @@ make arm ARM_PREFIX="$RELEASE_ARM_PREFIX" ARM_SYSROOT="$RELEASE_SYSROOT" \
 sh packaging/make_bundle.sh build/libmx5dr.so "$RELEASE_BUNDLE"
 ```
 
-묶음에는 같은 빌드의 `libmx5dr.so`, `libmx5dr-vimtap.so`, `mx5dr-collector`, `mx5dr-guard`, 각각의 `.sha256`, 설치·제거·로그 회수 helper와 기본 설정이 들어간다. `make_bundle.sh`는 ZIP, 전체 파일 manifest, 릴리즈 노트, GitHub Release를 생성하지 않는다. 출력 디렉터리가 이미 있으면 실패하므로 기존 묶음 위에 덮어쓰지 않는다.
+묶음에는 같은 빌드의 `libmx5dr.so`, `libmx5dr-vimtap.so`, `mx5dr-collector`, `mx5dr-guard`, 정적 `mx5dr-sha256`, 각각의 `.sha256`, 설치·제거·로그 회수 helper와 기본 설정이 들어간다. `make_bundle.sh`는 ZIP, 전체 파일 manifest, 릴리즈 노트, GitHub Release를 생성하지 않는다. 출력 디렉터리가 이미 있으면 실패하므로 기존 묶음 위에 덮어쓰지 않는다.
 
 ## 3. 실제 배포 바이너리와 테스트 확인
 
@@ -82,7 +82,7 @@ MX5DR_RELEASE_BUNDLE="$RELEASE_BUNDLE" \
 CROSS_COMPILE="$RELEASE_ARM_PREFIX" QEMU_SYSROOT="$RELEASE_SYSROOT" \
   sh tests/run_arm_all.sh 2>&1 | tee "$RELEASE_WORK/evidence/arm-tests.txt"
 
-for artifact in libmx5dr.so libmx5dr-vimtap.so mx5dr-collector mx5dr-guard; do
+for artifact in libmx5dr.so libmx5dr-vimtap.so mx5dr-collector mx5dr-guard mx5dr-sha256; do
   file "build/$artifact"
   "${RELEASE_ARM_PREFIX}readelf" -h -A -d -V "build/$artifact"
 done > "$RELEASE_WORK/evidence/elf.txt"
@@ -91,64 +91,45 @@ done > "$RELEASE_WORK/evidence/elf.txt"
 확인 사항:
 
 - `set -o pipefail`로 `tee` 성공이 빌드/테스트 실패를 가리지 않게 한다.
-- `make test` 종료 코드만으로 판정하지 않는다. fixture 누락에 따른 packaging skip과 소켓 금지 환경의 exit 77은 전체 명령에서 성공처럼 보일 수 있다. 실제 PASS/FAIL/SKIP과 이유를 기록한다. 이번 네 바이너리를 사용하는 packaging 시험이 생략된 채 차량용 설치 ZIP의 검증이 끝났다고 하지 않는다.
+- `make test` 종료 코드만으로 판정하지 않는다. fixture 누락에 따른 packaging skip과 소켓 금지 환경의 exit 77은 전체 명령에서 성공처럼 보일 수 있다. 실제 PASS/FAIL/SKIP과 이유를 기록한다. 이번 다섯 바이너리를 사용하는 packaging 시험이 생략된 채 차량용 설치 ZIP의 검증이 끝났다고 하지 않는다.
 - ELF32 little-endian ARM, softfp 호출 규약, TEXTREL 부재, GLIBC 버전/의존성을 확인한다. 현재 기대값은 GLIBC_2.4만 필요하고 동적 libstdc++ 의존성이 없는 것이다. D-Bus는 collector에 필요하며 AA preload로 돌아가면 안 된다. 과거 elf.txt를 새 바이너리의 결과로 재사용하지 않는다.
 - 변경 부분에 따른 추가 ARM 로더/guard 시험은 [통합 검증](../validation/INTEGRATION_2026-09-28.md), SHADOW 범위는 [기능 검증](../validation/LIVE_SHADOW_2026-09-29.md)을 참고한다.
 - 원본 펌웨어, 개인 경로, 실차 위치 로그를 공개하지 않는다. 실행 로그는 먼저 비공개 evidence에 보관하고, 공개 검증 요약에 실행 환경·커밋·생략·미검증을 적는다.
 
-## 4. 메타데이터·전체 체크섬·ZIP 생성
+## 4. USB 최상위 ZIP과 전체 체크섬
 
-아래는 빌드 출처와 네 바이너리 해시를 JSON에 기록한다. 도구체인 고정은 재빌드 경로를 제공하지만 ZIP 시간 정보까지 포함한 비트 단위 재현성을 보장하는 것은 아니다.
-
-```bash
-python3 - "$RELEASE_BUNDLE" "$RELEASE_TAG" "$RELEASE_COMMIT" <<'PY'
-import hashlib, json, pathlib, sys
-bundle = pathlib.Path(sys.argv[1])
-names = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'mx5dr-collector', 'mx5dr-guard')
-record = {
-    'tag': sys.argv[2], 'source_commit': sys.argv[3],
-    'toolchain_commit': '61ec0343de84f6fc7c46840056df1d600d44be8a',
-    'target': 'NA 74.00.324A', 'default_mode': 'OBSERVE',
-    'artifacts': {n: hashlib.sha256((bundle / n).read_bytes()).hexdigest() for n in names},
-}
-(bundle / 'build-info.json').write_text(json.dumps(record, indent=2) + '\n')
-PY
-
-python3 - "$RELEASE_BUNDLE" "$RELEASE_COMMIT" <<'PY'
-import pathlib, posixpath, re, sys
-text = pathlib.Path('docs/FIRST_TRIAL_KO.md').read_text()
-base = 'https://github.com/junoh-moon/mazda-aa-dr/blob/' + sys.argv[2] + '/'
-def link(match):
-    target = posixpath.normpath(posixpath.join('docs', match.group(1)))
-    return '](' + base + target + ')'
-text = re.sub(r'\]\((?![a-z]+:|#)([^)]+)\)', link, text)
-(pathlib.Path(sys.argv[1]) / 'INSTALL_KO.md').write_text(text)
-PY
-cp tools/analyze_logs.py "$RELEASE_BUNDLE/analyze_logs.py"
-```
-
-위 코드는 `INSTALL_KO.md`의 상대 문서 링크를 같은 커밋의 GitHub 절대 링크로 바꾼다. PC용 분석기는 CMU에서 실행하지 않는다. 사용자에게는 압축을 풀고 해당 폴더에서 `sh ./install.sh`를 실행한다고 안내한다.
-
-최종 설명 파일까지 넣은 다음 manifest를 만든다. `SHA256SUMS`는 자기 자신을 제외한 **묶음 내 모든 파일**을 상대 경로로 담는다. installer가 이 파일을 확인하므로 생성 후 파일 내용을 바꾸면 다시 생성·검증해야 한다.
+다음 빌더는 MP3/JS 진입 파일, 정적 해시 도구, 한국어 안내, 소스/바이너리
+해시가 포함된 build-info, 전체 SHA256SUMS와 ZIP 외부 체크섬을 만듭니다.
+SHADOW 통합 시험은 아래 모드를 `SHADOW`로 명시하십시오. 기존 3절에서
+검사한 바이너리와 동일한 build 디렉터리를 사용하십시오.
 
 ```bash
-python3 - "$RELEASE_BUNDLE" <<'PY'
-import hashlib, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-paths = sorted(p for p in root.rglob('*') if p.is_file() and p.name != 'SHA256SUMS')
-lines = [hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(root).as_posix() for p in paths]
-(root / 'SHA256SUMS').write_text('\n'.join(lines) + '\n')
-PY
-(cd "$RELEASE_BUNDLE" && sha256sum -c SHA256SUMS)
-(cd "$RELEASE_WORK/dist" && zip -X -r "$RELEASE_NAME.zip" "$RELEASE_NAME")
-(cd "$RELEASE_WORK/dist" && sha256sum "$RELEASE_NAME.zip" > "$RELEASE_NAME.zip.sha256")
+python3 tools/make_usb_zip.py --build-dir build --default-mode OBSERVE \
+  --output "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
 unzip -t "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
 mkdir "$RELEASE_WORK/unpacked"
 unzip -q "$RELEASE_WORK/dist/$RELEASE_NAME.zip" -d "$RELEASE_WORK/unpacked"
-(cd "$RELEASE_WORK/unpacked/$RELEASE_NAME" && sha256sum -c SHA256SUMS)
+(cd "$RELEASE_WORK/unpacked" && sha256sum -c SHA256SUMS)
 ```
 
-SHA-256은 동일성/손상 확인용이며 서명이나 배포자 인증을 대신하지 않는다. ZIP 안에 OEM 파일, 도구체인, 비공개 fixture, 위치 로그가 없는지 파일 목록을 확인한다.
+ZIP에는 상위 폴더가 없어야 합니다. `install.sh`, `mp3/`, `js/`가 최상위에
+있어야 MP3 태그의 고정 USB 경로가 동작합니다. `INSTALL_KO.md`를 과거
+OBSERVE 문서로 덮어쓰지 마십시오. 묶음 내 파일을 고치면 다시 빌드하십시오.
+
+가능하면 실제 펌웨어 rootfs와 ARM binfmt/QEMU가 있는 격리된 Linux 컨테이너에서
+압축을 푼 최종 파일로 전체 설치 경로를 실행하십시오. 이 명령은 컨테이너
+UID 0으로 실행하며 호스트를 재마운트하지 않습니다.
+
+```bash
+python3 tests/packaging/cmu_emulation.py \
+  --stock "$MX5DR_STOCK_ROOT" --bundle "$RELEASE_WORK/unpacked"
+```
+
+SHA-256은 손상/동일성 검사이며 서명이 아닙니다. `build-info.json`의
+`source_modified`는 정식 릴리즈에서 false여야 합니다. 로컬 수정 후보를
+배포 커밋 그대로의 빌드로 표시하지 마십시오. ZIP에 원본 펌웨어, 위치 로그,
+개인 공유 링크가 없음을 확인하십시오. MP3/JS 출처는 묶음의
+`USB_ENTRY_NOTICE.md`에 보존합니다.
 
 ## 5. 릴리즈 노트와 게시
 

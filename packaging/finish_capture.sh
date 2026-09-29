@@ -3,11 +3,12 @@
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
 [ "$#" = 0 ] || fail 'Usage: sh finish_capture.sh (while parked)'
-for directory in "$ROOT/data_persist" "$BASE" "$BASE/logs"; do
+validate_persist
+for directory in "$BASE" "$BASE/logs"; do
     [ -d "$directory" ] && [ ! -L "$directory" ] || fail "Missing or symlink directory: $directory"
 done
 regular "$ROOT/proc/sys/kernel/random/boot_id"
-[ "$(wc -c < "$ROOT/proc/sys/kernel/random/boot_id")" = 37 ] || fail 'Invalid current boot ID'
+[ "$(wc -c < "$ROOT/proc/sys/kernel/random/boot_id")" -eq 37 ] || fail 'Invalid current boot ID'
 boot_id=$(cat "$ROOT/proc/sys/kernel/random/boot_id")
 valid_boot_id "$boot_id" || fail 'Invalid current boot ID'
 for name in capture.stop collector.stop; do
@@ -32,7 +33,7 @@ while :; do
     ack=0
     if [ -e "$BASE/logs/capture.done" ] || [ -L "$BASE/logs/capture.done" ]; then
         regular "$BASE/logs/capture.done"
-        [ "$(wc -c < "$BASE/logs/capture.done")" = 37 ] &&
+        [ "$(wc -c < "$BASE/logs/capture.done")" -eq 37 ] &&
             [ "$(cat "$BASE/logs/capture.done")" = "$boot_id" ] || fail 'Capture acknowledgement is not from this boot; retain/export available logs without claiming completion'
         ack=1
     fi

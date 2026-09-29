@@ -2,6 +2,7 @@
 # Cooperative request only; never signal a potentially reused PID or AA process.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
+validate_persist
 [ -n "$ROOT" ] || [ "$(id -u)" = 0 ] || fail 'Run this helper from an authorized root shell'
 [ "$#" = 0 ] || fail 'Usage: sh stop_collector.sh'
 [ -d "$BASE/logs" ] && [ ! -L "$BASE/logs" ] || fail 'Missing logs directory'

@@ -4,6 +4,12 @@
 
 ## SHADOW 기능 변경
 
+USB 설치 경로를 수정했다. 기존 `v0.3.0-shadow.1`의 MP3 진입 파일 누락,
+해시 도구·계정 이름·저장소 링크·마운트·구형 awk 가정을 해결한다.
+[현재 USB 사용 안내](../packaging/USB_START_KO.md)와
+[새 검증 기록](../validation/USB_INSTALL_2026-09-29.md)을 따른다.
+기존 공개 ZIP을 소급 변경하거나 실제 차량 검증을 완료한 것은 아니다.
+
 후속 [GPS 기준점 검사와 제한된 휠 거리 보정](GPS_WHEEL_MODEL_KO.md)을 추가한다. GPS-visible 구간에서만 보정 근거를 모으고, 비교 구간에서는 적용값을 고정한다. 기존 모델 구조 안의 변경이며 설치 기본값·ASSIST 자격·배포 릴리즈를 바꾸지 않는다.
 
 기존 VBS VIMC 콜백의 센서 입력을 복사하여 실제 SHADOW 항법을 계산하는 경로를 추가했다. [설계·소스 계약·남은 조건](LIVE_SHADOW_2026-09-29_KO.md), [검증 기록](../validation/LIVE_SHADOW_2026-09-29.md)이 이 변경의 기준이다. 아래 OBSERVE 시험 절차는 이미 발행된 v0.2.0-observe.2의 범위이며, 새 SHADOW 변경을 차량에서 확인했다는 뜻이 아니다.

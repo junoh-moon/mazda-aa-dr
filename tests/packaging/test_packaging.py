@@ -45,15 +45,19 @@ class PackagingTests(unittest.TestCase):
         (self.bundle / 'mx5dr-collector.sha256').write_text(digest + '  mx5dr-collector\n')
         (self.bundle / 'mx5dr-guard').write_bytes(fake)
         (self.bundle / 'mx5dr-guard.sha256').write_text(hashlib.sha256(fake).hexdigest() + '  mx5dr-guard\n')
+        (self.bundle / 'mx5dr-sha256').write_bytes(fake)  # never run; host hash tool used
+        (self.bundle / 'mx5dr-sha256.sha256').write_text(hashlib.sha256(fake).hexdigest() + '  mx5dr-sha256\n')
         files = [line.split()[1] for line in (PACK / 'firmware.sha256').read_text().splitlines()]
         files += ['jci/version.ini', 'jci/sm/sm.conf', 'jci/sm/sm_WCP.conf', 'usr/bin/autostart']
         for file in files:
-            source = STOCK / file
+            source = getattr(self, 'stock_root', STOCK) / file
             if not source.exists():
                 self.skipTest(f'Stock identity fixture unavailable: {source}')
             target = self.root / file
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+        if hasattr(self, 'synthetic_manifest'):
+            (self.bundle / 'firmware.sha256').write_text(self.synthetic_manifest)
         self.sm = self.root / 'jci/sm/sm.conf'
         self.wcp = self.root / 'jci/sm/sm_WCP.conf'
         self.original = self.sm.read_bytes()

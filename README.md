@@ -8,6 +8,12 @@ See [first stationary trial](docs/FIRST_TRIAL_KO.md) and [integration evidence](
 
 [한국어](README_KO.md) · [Current status / handoff](docs/STATUS_KO.md) · [Review corrections](docs/REVIEW_2026-09-28_KO.md)
 
+The current USB packaging includes the MP3 diagnostic-terminal entry and supports
+the target's BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock storage aliases
+and read-only root. See [USB instructions](packaging/USB_START_KO.md) and
+[new installation evidence](validation/USB_INSTALL_2026-09-29.md).
+The already published v0.3.0-shadow.1 ZIP does not contain these fixes.
+
 ## Goal and current implementation
 
 The goal is to let Android Auto navigation, initially Naver Map, benefit from vehicle motion during GNSS outages. Other apps and other firmware versions are separate compatibility questions.
