@@ -1,5 +1,13 @@
 # Separate observation collector — 2026-09-28
 
+**2026-09-29 correction:** the historical account assumption below was wrong for
+the supplied NA 74.00.324A firmware. Its official passwd update makes `cmu`
+UID 0 and `service` UID 1001. Current production code and installer select a
+non-root `cmu` where present, or non-root `service` when `cmu` is UID 0;
+removal does not require either collector identity. See the
+[new verification record](../validation/OEM_RUNTIME_2026-09-29.md).
+Historical test results below are retained as originally recorded.
+
 This change addresses R2 in `REVIEW_2026-09-28_KO.md`. It does not approve vehicle installation or resolve the separate preload recovery and loader blockers. Historical 0.1 test counts remain historical.
 
 `libmx5dr.so` now contains the hook, bounded observation queue and trace writer, with no D-Bus dependency, bus calls, SMDB reads, child spawning, or collector startup. A standalone `mx5dr-collector` performs read-only SMDB and D-Bus polling in a separate address space. It initializes D-Bus threading before opening a connection. There is no shared-memory/IPC interface from the collector to the adapter, and no live ASSIST input is produced.

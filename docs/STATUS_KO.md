@@ -1,8 +1,16 @@
 # 현재 상태와 인계 — 2026-09-29
 
-이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 0.1 설치 가능 판단보다 우선한다. 현재 통합 브랜치는 0.2 시험 후보이며 OFF·폴링 분리·일회성 기동 보호를 구현하고 검증했다. master에 병합됐는지는 PR 상태와 구분한다.
+이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 설치 가능 판단보다 우선한다. 현재 USB는 SHADOW 시험 후보이며 OFF·폴링 분리·일회성 기동 보호를 구현했다. 호스트·ARM·부분 OEM 실행과 실제 차량 검증을 구분한다. 소스 커밋과 공개 릴리즈는 별개다.
 
 ## SHADOW 기능 변경
+
+순정 커널·OEM 서비스 실행 검증과 계정 수정은
+[새 OEM 실행 기록](../validation/OEM_RUNTIME_2026-09-29.md)을 우선한다.
+기존 설치 검증의 `cmu` 비특권 계정 가정은 틀렸다. 공식 passwd update는
+`cmu=UID 0`, `service=UID 1001`이며 collector와 로그 소유권을 이에 맞췄다.
+이전 로컬 USB ZIP도 이 수정이 없어 교체 대상이다.
+순정 커널 및 일부 OEM 서비스 실행은 확인했지만 정상 전체 기동·차량 센서·
+폰 수용 검증은 완료하지 못했다. ASSIST는 계속 꺼져 있다.
 
 USB 설치 경로를 수정했다. 기존 `v0.3.0-shadow.1`의 MP3 진입 파일 누락,
 해시 도구·계정 이름·저장소 링크·마운트·구형 awk 가정을 해결한다.
@@ -76,6 +84,8 @@ NNG의 순정 DR이 실제로 충분하면 자체 ASSIST보다 기존 경로 확
 
 ## 검증 기록의 해석
 
-0.1의 호스트/ARM 합성 시험 기록은 [VALIDATION.md](VALIDATION.md)에 보존했다. 공개 이관 검사는 [PUBLIC_IMPORT.md](../validation/PUBLIC_IMPORT.md), 후속 수정 검사는 [INTEGRATION_2026-09-28.md](../validation/INTEGRATION_2026-09-28.md)에 따로 적는다. QEMU는 합성 프로그램을 실행한 것이며 OEM 실행 또는 차량 시험이 아니다. 새 커밋의 검사 결과와 과거 결과를 섞지 않는다.
+0.1의 호스트/ARM 합성 시험 기록은 [VALIDATION.md](VALIDATION.md)에 보존했다. 공개 이관 검사는 [PUBLIC_IMPORT.md](../validation/PUBLIC_IMPORT.md), 후속 수정 검사는 [INTEGRATION_2026-09-28.md](../validation/INTEGRATION_2026-09-28.md)에 따로 적는다. 그 당시 QEMU 검사는 합성 프로그램 실행이며 OEM 실행 또는 차량 시험이 아니다. 이후 실제 OEM 실행은 위의 2026-09-29 기록에 별도로 남겼다. 새 커밋의 검사 결과와 과거 결과를 섞지 않는다.
 
-과거 검토에는 Astra 하위 에이전트가 참여했다. Claude를 실행했다고 주장하지 않는다. 호출 가능한 Claude 경로는 확보되지 않았다.
+과거 검토에는 Astra 하위 에이전트가 참여했다. 당시에는 Claude 실행 경로가
+없었다. 이후 USB 수정에서는 실제 Claude Code 실행과 독립 Codex 리뷰를
+수행했다. 각 후속 검증 기록의 실행 범위를 따르며 차량 시험을 의미하지 않는다.

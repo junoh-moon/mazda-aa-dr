@@ -2,7 +2,7 @@
 
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
-**This integration branch is a 0.2 candidate for a first stationary OBSERVE trial.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented and checked on host and synthetic ARM/QEMU fixtures. No vehicle or phone validation has been performed. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
+**The current USB bundle is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. No vehicle or phone validation has been performed. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
 
 See [first stationary trial](docs/FIRST_TRIAL_KO.md) and [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate removes our preload from persistent service configurations and consumes one explicit authorization before exposing a trial. Same-running-SM retry behavior is not established.
 
@@ -13,6 +13,10 @@ the target's BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock storage alia
 and read-only root. See [USB instructions](packaging/USB_START_KO.md) and
 [new installation evidence](validation/USB_INSTALL_2026-09-29.md).
 The already published v0.3.0-shadow.1 ZIP does not contain these fixes.
+The [OEM execution and account correction](validation/OEM_RUNTIME_2026-09-29.md)
+supersedes the earlier non-root `cmu` test assumption: stock `cmu` is UID 0,
+so the separate collector uses the existing non-root `service` account.
+Stock-kernel/OEM service execution remains incomplete and is not vehicle validation.
 
 ## Goal and current implementation
 

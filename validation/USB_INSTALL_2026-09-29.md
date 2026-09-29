@@ -1,5 +1,11 @@
 # CMU USB installation correction — 2026-09-29
 
+**Correction after OEM execution:** the original account fixture in this record
+used a non-root `cmu` and did not match the official NA 74.00.324A passwd update.
+That account conclusion and the earlier local ZIP are superseded by
+[OEM_RUNTIME_2026-09-29.md](OEM_RUNTIME_2026-09-29.md).
+The historical checks below are not rewritten as new results.
+
 This record covers the installation correction based on `be1179350b4fb6bfb3a9e6e264d6ad85e969bde4`
 (v0.3.0-shadow.1 source), not the earlier release artifacts. The supplied private
 NA 74.00.324A firmware was extracted locally. All four original-file SHA-256
