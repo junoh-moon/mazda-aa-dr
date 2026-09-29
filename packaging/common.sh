@@ -11,6 +11,7 @@ fi
 [ -n "$ROOT" ] || [ "$(id -u)" = 0 ] || { echo "Root installation shell required" >&2; exit 2; }
 BASE=$ROOT/data_persist/mx5-aa-dr
 TOKEN=/data_persist/mx5-aa-dr/libmx5dr.so
+TAP_TOKEN=/data_persist/mx5-aa-dr/libmx5dr-vimtap.so
 LOCK=$ROOT/data_persist/.mx5dr-install-lock
 REMOUNTED=''
 LOCKED=0
@@ -59,6 +60,21 @@ edit_to() {
     regular "$1"
     cp -p "$1" "$2"
     awk -v action="$3" -v token="$TOKEN" -f "$HERE/edit_service.awk" "$1" > "$2" || fail "Unsupported service configuration: $1"
+    if [ "$3" = remove ] && grep -F "$TAP_TOKEN" "$2" >/dev/null; then
+        awk -v action=remove -v target_service=jciVBS -v token="$TAP_TOKEN" -f "$HERE/edit_service.awk" "$2" > "$2.tap.$$" || fail "Unsupported VBS service configuration: $1"
+        cat "$2.tap.$$" > "$2"
+        rm -f "$2.tap.$$"
+    fi
+}
+trial_to() {
+    regular "$1"
+    awk -v action=add -v token="$TOKEN" -f "$HERE/edit_service.awk" "$1" > "$2" || fail "Unsupported AA service configuration: $1"
+    if [ "$MODE" = SHADOW ]; then
+        awk -v action=add -v target_service=jciVBS -v token="$TAP_TOKEN" -f "$HERE/edit_service.awk" "$2" > "$2.tap.$$" || fail "Unsupported VBS service configuration: $1"
+        cat "$2.tap.$$" > "$2"
+        rm -f "$2.tap.$$"
+    fi
+    chmod 0600 "$2"
 }
 verify_firmware() {
     regular "$ROOT/jci/version.ini"

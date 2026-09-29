@@ -27,6 +27,7 @@ static double lon_wrap(double x) {
 }
 static mx5_dr_result fail(mx5_dr_core *c, mx5_dr_result why) {
     c->estimate.valid = 0;
+    c->estimate.model_valid = 0;
     c->estimate.reason = why;
     c->estimate.state = why == MX5_DR_E_LIMIT ? MX5_DR_LIMIT_REACHED : MX5_DR_INVALID;
     c->seeded = 0;
@@ -71,11 +72,16 @@ mx5_dr_result mx5_dr_init(mx5_dr_core *c, const mx5_dr_config *p, mx5_dr_context
     c->estimate.reason = MX5_DR_E_NO_SEED;
     return MX5_DR_OK;
 }
+mx5_dr_result mx5_dr_init_model(mx5_dr_core *c, const mx5_dr_config *p, mx5_dr_context x) {
+    mx5_dr_result r=mx5_dr_init(c,p,x);
+    if (c) { c->domain=MX5_DR_MODEL_DOMAIN; c->estimate.domain=MX5_DR_MODEL_DOMAIN; }
+    return r;
+}
 mx5_dr_result mx5_dr_reset(mx5_dr_core *c, mx5_dr_context x) {
     mx5_dr_config p;
     if (!c || !c->configured) return MX5_DR_E_CONFIG;
     p = c->config;
-    return mx5_dr_init(c, &p, x);
+    return c->domain==MX5_DR_MODEL_DOMAIN ? mx5_dr_init_model(c,&p,x) : mx5_dr_init(c, &p, x);
 }
 mx5_dr_result mx5_dr_seed(mx5_dr_core *c, const mx5_dr_anchor *a) {
     mx5_dr_snapshot s;
@@ -83,7 +89,10 @@ mx5_dr_result mx5_dr_seed(mx5_dr_core *c, const mx5_dr_anchor *a) {
     if (!context_equal(a->context, c->estimate.context)) return MX5_DR_E_CONTEXT;
     if (c->estimate.state == MX5_DR_ACTIVE || c->estimate.state == MX5_DR_NATIVE)
         return MX5_DR_E_STATE;
-    if (!a->validated || !a->heading_valid || !a->calibration_verified || a->quality != MX5_DR_VALID)
+    if (c->domain==MX5_DR_MODEL_DOMAIN) {
+        if (a->quality!=MX5_DR_MODEL || a->validated || a->heading_valid || a->calibration_verified)
+            return fail(c,MX5_DR_E_QUALITY);
+    } else if (!a->validated || !a->heading_valid || !a->calibration_verified || a->quality != MX5_DR_VALID)
         return fail(c, MX5_DR_E_QUALITY);
     if (!a->anchor_id || !a->position_seq || !a->measured_ns || !a->utc_ns ||
         a->position_seq <= c->highest_position_seq || a->position_seq <= c->last_control_seq ||
@@ -97,6 +106,7 @@ mx5_dr_result mx5_dr_seed(mx5_dr_core *c, const mx5_dr_anchor *a) {
         return fail(c, MX5_DR_E_NUMERIC);
     if (a->position_error_m > c->config.error_max_m) return fail(c, MX5_DR_E_LIMIT);
     memset(&s, 0, sizeof(s));
+    s.domain = c->domain;
     s.context = a->context; s.anchor_id = a->anchor_id;
     s.processed_position_seq = a->position_seq;
     s.frontier_ns = a->measured_ns; s.derived_utc_ns = a->utc_ns;
@@ -117,7 +127,7 @@ mx5_dr_result mx5_dr_control(mx5_dr_core *c, mx5_dr_control_kind kind,
         return MX5_DR_E_CONTEXT;
     if (kind < MX5_DR_GAP || kind > MX5_DR_DISABLE) return fail(c, MX5_DR_E_CONFIG);
     c->estimate.context = x; c->estimate.processed_position_seq = seq;
-    c->last_control_seq = seq; c->estimate.valid = 0;
+    c->last_control_seq = seq; c->estimate.valid = 0; c->estimate.model_valid = 0;
     if (kind == MX5_DR_GAP) {
         if (c->seeded && c->estimate.state != MX5_DR_READY) return fail(c,MX5_DR_E_STATE);
         if (!c->seeded) {
@@ -153,9 +163,12 @@ static int same_interval(const mx5_dr_interval *a, const mx5_dr_interval *b) {
 }
 static mx5_dr_result evidence_check(const mx5_dr_core *c, const mx5_dr_evidence *e,
                                     const mx5_dr_interval *i, int mean_yaw) {
-    if (e->quality != MX5_DR_VALID || (e->freshness != MX5_DR_PRODUCER_TIME &&
-        e->freshness != MX5_DR_SEQUENCE_WITH_BOUND) || !e->source_id || !e->source_epoch || !e->producer_seq)
-        return MX5_DR_E_QUALITY;
+    if (c->domain==MX5_DR_MODEL_DOMAIN) {
+        if (e->quality!=MX5_DR_MODEL || e->freshness!=MX5_DR_MODEL_TIME)
+            return MX5_DR_E_QUALITY;
+    } else if (e->quality != MX5_DR_VALID || (e->freshness != MX5_DR_PRODUCER_TIME &&
+        e->freshness != MX5_DR_SEQUENCE_WITH_BOUND)) return MX5_DR_E_QUALITY;
+    if (!e->source_id || !e->source_epoch || !e->producer_seq) return MX5_DR_E_QUALITY;
     if (!e->measured_ns || e->measured_ns > (mean_yaw ? i->yaw_window_end_ns : i->start_ns) ||
         e->received_ns < e->measured_ns || e->received_ns > i->received_ns ||
         e->lease_until_ns < i->end_ns || e->time_uncertainty_ns > c->config.time_uncertainty_max_ns ||
@@ -268,18 +281,22 @@ mx5_dr_result mx5_dr_step(mx5_dr_core *c, const mx5_dr_interval *i) {
     s.speed_mps=s.stopped ? 0.0 : i->speed_mps;
     s.has_bearing=!s.stopped && i->speed_mps>0.0;
     s.travel_bearing_rad=s.has_bearing ? wrap(s.body_heading_rad+(i->reverse_active ? PI : 0.0)) : 0.0;
-    s.solution_seq=i->interval_seq; s.valid=s.state==MX5_DR_ACTIVE; s.reason=MX5_DR_OK;
+    s.solution_seq=i->interval_seq;
+    s.valid=s.state==MX5_DR_ACTIVE && c->domain==MX5_DR_QUALIFIED_DOMAIN;
+    s.model_valid=s.state==MX5_DR_ACTIVE && c->domain==MX5_DR_MODEL_DOMAIN;
+    s.reason=MX5_DR_OK;
     c->estimate=s; c->stop_dwell_s=dwell; c->last_interval=*i; c->have_interval=1;
     return MX5_DR_OK;
 }
-mx5_dr_result mx5_dr_get_snapshot(const mx5_dr_core *c, uint64_t now,
-                                 mx5_dr_context expected, mx5_dr_snapshot *out) {
+static mx5_dr_result get_snapshot(const mx5_dr_core *c, uint64_t now,
+                                 mx5_dr_context expected, mx5_dr_snapshot *out, mx5_dr_domain domain) {
     mx5_dr_result r=MX5_DR_OK;
     if (!out) return MX5_DR_E_CONFIG;
     memset(out,0,sizeof(*out));
     if (!c || !c->configured) { out->reason=MX5_DR_E_CONFIG; return out->reason; }
     *out=c->estimate;
-    if (!context_equal(expected,c->estimate.context)) r=MX5_DR_E_CONTEXT;
+    if (c->domain!=domain) r=MX5_DR_E_QUALITY;
+    else if (!context_equal(expected,c->estimate.context)) r=MX5_DR_E_CONTEXT;
     else if (!c->seeded || c->estimate.state!=MX5_DR_ACTIVE || !c->have_interval) r=MX5_DR_E_NO_SEED;
     else if (now<c->estimate.frontier_ns || now<c->last_interval.received_ns) r=MX5_DR_E_TIME;
     else if (now-c->estimate.frontier_ns>c->config.snapshot_age_max_ns || now>c->estimate.sensor_lease_until_ns) r=MX5_DR_E_STALE;
@@ -289,8 +306,17 @@ mx5_dr_result mx5_dr_get_snapshot(const mx5_dr_core *c, uint64_t now,
         if ((double)(now-c->anchor.measured_ns)/NS_PER_S>c->config.duration_max_s ||
             out->error_budget_m>c->config.error_max_m) r=MX5_DR_E_LIMIT;
     }
-    out->valid=r==MX5_DR_OK; out->reason=r;
+    out->valid=r==MX5_DR_OK && domain==MX5_DR_QUALIFIED_DOMAIN;
+    out->model_valid=r==MX5_DR_OK && domain==MX5_DR_MODEL_DOMAIN; out->reason=r;
     return r;
+}
+mx5_dr_result mx5_dr_get_snapshot(const mx5_dr_core *c, uint64_t now,
+                                 mx5_dr_context expected, mx5_dr_snapshot *out) {
+    return get_snapshot(c,now,expected,out,MX5_DR_QUALIFIED_DOMAIN);
+}
+mx5_dr_result mx5_dr_get_model_snapshot(const mx5_dr_core *c, uint64_t now,
+                                       mx5_dr_context expected, mx5_dr_snapshot *out) {
+    return get_snapshot(c,now,expected,out,MX5_DR_MODEL_DOMAIN);
 }
 const char *mx5_dr_result_name(mx5_dr_result r) {
     static const char *const names[]={"OK","DUPLICATE","E_CONFIG","E_NO_SEED","E_CONTEXT",

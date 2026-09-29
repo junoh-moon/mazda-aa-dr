@@ -8,9 +8,12 @@ extern "C" {
 /* Pure C99, single-owner worker. No live-source verification is inferred here.
  * All timestamps are one validated monotonic ns domain. Structures are NOT an
  * IPC/wire ABI. Raw-yaw guards do not establish physical units or validity. */
-typedef enum { MX5_DR_UNKNOWN=0, MX5_DR_VALID=1, MX5_DR_INVALID_QUALITY=2 } mx5_dr_quality;
+typedef enum { MX5_DR_UNKNOWN=0, MX5_DR_VALID=1, MX5_DR_INVALID_QUALITY=2,
+               MX5_DR_MODEL=3 } mx5_dr_quality;
 typedef enum { MX5_DR_UNPROVEN_POLL=0, MX5_DR_PRODUCER_TIME=1,
-               MX5_DR_SEQUENCE_WITH_BOUND=2 } mx5_dr_freshness;
+               MX5_DR_SEQUENCE_WITH_BOUND=2, MX5_DR_MODEL_TIME=3 } mx5_dr_freshness;
+/* Model results are diagnostic hypotheses, never qualified locations. */
+typedef enum { MX5_DR_QUALIFIED_DOMAIN=0, MX5_DR_MODEL_DOMAIN=1 } mx5_dr_domain;
 typedef enum { MX5_DR_UNSEEDED=0, MX5_DR_READY, MX5_DR_ACTIVE,
                MX5_DR_REACQUIRING, MX5_DR_NATIVE, MX5_DR_INVALID,
                MX5_DR_LIMIT_REACHED } mx5_dr_state;
@@ -78,6 +81,8 @@ typedef struct {
     /* Flat-frame displacement is a numerical diagnostic, not an ENU datum. */
     double accumulated_east_m, accumulated_north_m;
     int has_bearing, stopped, valid;
+    mx5_dr_domain domain;
+    int model_valid; /* numerical diagnostic only; valid remains zero */
     mx5_dr_state state;
     mx5_dr_result reason;
 } mx5_dr_snapshot;
@@ -90,10 +95,14 @@ typedef struct {
     double stop_dwell_s;
     uint64_t last_control_seq, highest_position_seq;
     int configured, seeded, have_interval;
+    mx5_dr_domain domain;
 } mx5_dr_core;
 
 mx5_dr_config mx5_dr_default_config(void);
 mx5_dr_result mx5_dr_init(mx5_dr_core *, const mx5_dr_config *, mx5_dr_context);
+/* Explicit speculative calculation. Requires MODEL evidence and unverified
+ * anchor flags. Neither ordinary snapshot API nor bridge accepts its output. */
+mx5_dr_result mx5_dr_init_model(mx5_dr_core *, const mx5_dr_config *, mx5_dr_context);
 /* Reset clears all source bindings/history; new epoch/generation supplied by
  * runtime. Calling reset is not permission to reuse a historical anchor. */
 mx5_dr_result mx5_dr_reset(mx5_dr_core *, mx5_dr_context);
@@ -108,6 +117,8 @@ mx5_dr_result mx5_dr_step(mx5_dr_core *, const mx5_dr_interval *);
  * live readiness, calibration, epoch and control sequence at send selection. */
 mx5_dr_result mx5_dr_get_snapshot(const mx5_dr_core *, uint64_t now_ns,
                                 mx5_dr_context expected, mx5_dr_snapshot *);
+mx5_dr_result mx5_dr_get_model_snapshot(const mx5_dr_core *, uint64_t now_ns,
+                                      mx5_dr_context expected, mx5_dr_snapshot *);
 const char *mx5_dr_result_name(mx5_dr_result);
 #ifdef __cplusplus
 }

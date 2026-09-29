@@ -1,5 +1,5 @@
 # Narrow, fail-closed editor; not a general XML parser. POSIX awk.
-# Only the jciAAPA service and its single LD_PRELOAD environment value change.
+# Only the explicitly selected service and its single LD_PRELOAD value change.
 function die(s) { print "edit_service: " s > "/dev/stderr"; bad=1; exit 2 }
 function spaces(n, s) { s=""; while(n-- > 0) s=s " "; return s }
 function attr(tag,key, p,s) {
@@ -60,6 +60,11 @@ function edit(block, mask,rest,pos,start,len,tag,val,n,a,i,newval,out,count,wher
 END {
     if(bad) exit 2
     if(action!="add" && action!="remove") die("bad action")
+    if(target_service=="") target_service="jciAAPA"
+    if(target_service=="jciAAPA") target_path="/jci/aapa/blmjciaapa.so"
+    else if(target_service=="jciVBS") target_path="/jci/vbs/svcjcivbs.so"
+    else die("unsupported target service")
+    if(token=="" || token ~ /[^A-Za-z0-9_./+-]/) die("unsupported token")
     if(index(all,"\r")) die("CRLF configuration unsupported")
     mask=all; pos=1
     while ((i=index(substr(mask,pos),"<!--"))>0) {
@@ -70,16 +75,16 @@ END {
     rest=mask; pos=1; targets=0
     while(match(rest,/<service[[:space:]][^>]*>/)) {
         start=pos+RSTART-1; len=RLENGTH; tag=substr(all,start,len)
-        if(attr(tag,"name")=="jciAAPA") {
+        if(attr(tag,"name")==target_service) {
             targets++; first=start
-            if(attr(tag,"path")!="/jci/aapa/blmjciaapa.so" || attr(tag,"type")!="jci_service") die("unexpected jciAAPA identity")
+            if(attr(tag,"path")!=target_path || attr(tag,"type")!="jci_service") die("unexpected " target_service " identity")
             end=index(substr(mask,start+len),"</service>")
             if(!end || tag ~ /\/[[:space:]]*>$/) die("missing service closure")
             total=len+end-1+10; target=substr(all,start,total)
         }
         pos=start+len; rest=substr(mask,pos)
     }
-    if(targets!=1) die("expected exactly one jciAAPA service")
+    if(targets!=1) die("expected exactly one " target_service " service")
     result=edit(target)
     printf "%s",substr(all,1,first-1) result substr(all,first+total)
 }

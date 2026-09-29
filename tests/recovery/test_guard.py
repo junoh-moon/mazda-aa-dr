@@ -13,7 +13,9 @@ case "$BOARD" in
 ;;
 esac
 '''.replace('2) taskset','2)\n taskset').replace('*) taskset','*)\n taskset')
-CFG='''<sm_config><services><service type="jci_service" name="jciAAPA" path="/jci/aapa/blmjciaapa.so" args="new_hw"><environ_var env_name="LD_PRELOAD" env_value="/data_persist/touch.so"/></service></services></sm_config>\n'''
+TOKEN='/data_persist/mx5-aa-dr/libmx5dr.so'
+TAP_TOKEN='/data_persist/mx5-aa-dr/libmx5dr-vimtap.so'
+CFG='''<sm_config><services><service type="jci_service" name="jciAAPA" path="/jci/aapa/blmjciaapa.so" args="new_hw"><environ_var env_name="LD_PRELOAD" env_value="/data_persist/touch.so"/></service><service type="jci_service" name="jciVBS" path="/jci/vbs/svcjcivbs.so" args=""><environ_var env_name="LD_PRELOAD" env_value="/data_persist/vbs.so"/></service></services></sm_config>\n'''
 class Gate(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
@@ -23,7 +25,7 @@ class Gate(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.root=pathlib.Path(self.tmp.name);self.env=dict(os.environ,MX5DR_GUARD_ROOT=str(self.root));(self.root/'.mx5dr-fixture').touch()
   for p in [BASE+'/guard','jci/sm','proc/sys/kernel/random','tmp']:(self.root/p).mkdir(parents=True,exist_ok=True)
-  self.put(BASE+'/libmx5dr.so',b'author-fixture-payload');self.put(BASE+'/mx5dr.conf',b'mode=OBSERVE\n')
+  self.put(BASE+'/libmx5dr.so',b'author-fixture-payload');self.put(BASE+'/libmx5dr-vimtap.so',b'author-fixture-tap');self.put(BASE+'/mx5dr.conf',b'mode=OBSERVE\n')
   for p in ['jci/sm/sm.conf','jci/sm/sm_WCP.conf']:self.put(p,CFG.encode())
   trial=CFG.replace('/data_persist/touch.so','/data_persist/mx5-aa-dr/libmx5dr.so:/data_persist/touch.so').encode()
   for p in ['normal.trial','wcp.trial']:self.put(BASE+'/guard/'+p,trial)
@@ -43,6 +45,27 @@ class Gate(unittest.TestCase):
   self.arm();r=self.call('select','/jci/sm/sm_WCP.conf');self.assertEqual(r.returncode,0);self.assertIn('args="new_hw"',pathlib.Path(r.stdout.strip()).read_text())
  def test_payload_change_declines(self):
   self.arm();self.put(BASE+'/libmx5dr.so',b'corruption');self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_tap_change_declines(self):
+  self.arm();self.put(BASE+'/libmx5dr-vimtap.so',b'changed tap');self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_missing_symlink_or_unsafe_tap_declines(self):
+  p=self.root/BASE/'libmx5dr-vimtap.so';saved=p.with_suffix('.saved')
+  self.arm();p.rename(saved);self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  p.symlink_to(saved);self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  p.unlink();saved.rename(p);p.chmod(0o666);self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_old_manifest_does_not_authorize_new_guard(self):
+  self.arm();p=self.root/BASE/'guard/arm';lines=p.read_text().splitlines();self.assertEqual(lines[0],'mx5dr-one-boot-v2')
+  self.put(BASE+'/guard/arm',('\n'.join(['mx5dr-one-boot-v1']+lines[1:-1])+'\n').encode());self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_shadow_two_services_share_consumed_arm(self):
+  self.put(BASE+'/mx5dr.conf',b'mode=SHADOW\n')
+  for name in ['normal.trial','wcp.trial']:
+   p=self.root/BASE/'guard'/name;self.put(BASE+'/guard/'+name,p.read_bytes().replace(b'/data_persist/vbs.so',(TAP_TOKEN+':/data_persist/vbs.so').encode()))
+  self.arm();r=self.call('select','/jci/sm/sm_WCP.conf');self.assertEqual(r.returncode,0,r.stderr)
+  trial=pathlib.Path(r.stdout.strip()).read_text();self.assertIn(TOKEN+':/data_persist/touch.so',trial);self.assertIn(TAP_TOKEN+':/data_persist/vbs.so',trial)
+  self.assertFalse((self.root/BASE/'guard/arm').exists());self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  self.put('proc/sys/kernel/random/boot_id',b'11234567-1234-1234-1234-0123456789ab\n');self.assertNotEqual(self.call('select','/jci/sm/sm_WCP.conf').returncode,0)
+ def test_persistent_vbs_tap_prevents_arm_and_select(self):
+  self.arm();self.put('jci/sm/sm_WCP.conf',CFG.replace('/data_persist/vbs.so',TAP_TOKEN+':/data_persist/vbs.so').encode())
+  self.assertNotEqual(self.call('arm').returncode,0);self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
  def test_symlink_and_permissions_decline(self):
   self.arm();p=self.root/BASE/'guard/normal.trial';p.rename(p.with_suffix('.save'));p.symlink_to(p.with_suffix('.save'));self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
   p.unlink();p.with_suffix('.save').rename(p);p.chmod(0o666);self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
@@ -88,6 +111,27 @@ class Gate(unittest.TestCase):
    self.assertEqual(r.returncode,-6)
    self.put('proc/sys/kernel/random/boot_id',b'21234567-1234-1234-1234-0123456789ab\n')
    self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+class ServiceEditor(unittest.TestCase):
+ def edit(self,s,action,service=None,token=None):
+  args=['awk','-v','action='+action,'-v','token='+(token or TOKEN)]
+  if service is not None:args+=['-v','target_service='+service]
+  return subprocess.run(args+['-f',str(HERE/'packaging/edit_service.awk')],input=s,text=True,capture_output=True)
+ def test_explicit_vbs_and_default_aapa_are_independent(self):
+  aa=self.edit(CFG,'add');self.assertEqual(aa.returncode,0,aa.stderr)
+  both=self.edit(aa.stdout,'add','jciVBS',TAP_TOKEN);self.assertEqual(both.returncode,0,both.stderr)
+  self.assertIn(TOKEN+':/data_persist/touch.so',both.stdout);self.assertIn(TAP_TOKEN+':/data_persist/vbs.so',both.stdout)
+  self.assertEqual(self.edit(both.stdout,'add','jciVBS',TAP_TOKEN).stdout,both.stdout)
+  self.assertEqual(self.edit(both.stdout,'remove','jciVBS',TAP_TOKEN).stdout,aa.stdout)
+  self.assertEqual(self.edit(self.edit(both.stdout,'remove').stdout,'remove','jciVBS',TAP_TOKEN).stdout,CFG)
+ def test_pinned_vbs_identity_and_ambiguity(self):
+  for source in [CFG.replace('/jci/vbs/svcjcivbs.so','/jci/vbs/other.so'),CFG.replace('name="jciVBS"','name="missing"'),CFG+CFG]:
+   self.assertNotEqual(self.edit(source,'add','jciVBS',TAP_TOKEN).returncode,0)
+  self.assertNotEqual(self.edit(CFG,'add','other',TAP_TOKEN).returncode,0)
+ def test_remove_only_exact_vbs_token(self):
+  other=TAP_TOKEN+'.backup:/data_persist/vbs.so'
+  source=CFG.replace('/data_persist/vbs.so',TAP_TOKEN+':'+other)
+  result=self.edit(source,'remove','jciVBS',TAP_TOKEN);self.assertEqual(result.returncode,0,result.stderr)
+  self.assertEqual(result.stdout,CFG.replace('/data_persist/vbs.so',other))
 class Editor(unittest.TestCase):
  def edit(self,s,action):return subprocess.run(['awk','-v','action='+action,'-f',str(HERE/'packaging/edit_autostart.awk')],input=s,text=True,capture_output=True)
  def test_roundtrip_and_idempotent(self):

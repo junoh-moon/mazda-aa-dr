@@ -22,7 +22,7 @@ CoreBridgeResult map_core_snapshot(const mx5_dr_snapshot& s,
                                   adapter::DrSnapshot* out) {
     if (!out) return CORE_BRIDGE_NO_OUTPUT;
     std::memset(out,0,sizeof(*out));
-    if (s.valid!=1 || s.state!=MX5_DR_ACTIVE || s.reason!=MX5_DR_OK ||
+    if (s.domain!=MX5_DR_QUALIFIED_DOMAIN || s.model_valid || s.valid!=1 || s.state!=MX5_DR_ACTIVE || s.reason!=MX5_DR_OK ||
         !q.profile_verified || !q.input_quality_verified)
         return CORE_BRIDGE_UNQUALIFIED;
     if (!s.context.source_epoch || !s.context.session_epoch || !s.context.generation)
@@ -85,5 +85,17 @@ const char* core_bridge_result_name(CoreBridgeResult r) {
     static const char* const names[]={"OK","NO_OUTPUT","UNQUALIFIED","CONTEXT","OVERFLOW",
         "TIME","LIMIT","NUMERIC","BEARING"};
     return static_cast<unsigned>(r)<sizeof(names)/sizeof(names[0]) ? names[r] : "UNKNOWN";
+}
+bool encode_model_location_preview(const mx5_dr_snapshot& s,uint8_t out[48]) {
+    if(!out)return false;
+    std::memset(out,0,48);
+    if(s.domain!=MX5_DR_MODEL_DOMAIN || !s.model_valid || s.valid ||
+       s.state!=MX5_DR_ACTIVE || s.reason!=MX5_DR_OK || !s.solution_seq ||
+       (!s.stopped && !s.has_bearing))return false;
+    adapter::DrSnapshot preview=adapter::DrSnapshot();
+    preview.latitude_deg=s.latitude_deg;preview.longitude_deg=s.longitude_deg;
+    preview.derived_utc_ns=s.derived_utc_ns;preview.speed_mps=s.speed_mps;
+    preview.travel_bearing_deg=s.travel_bearing_rad*180.0/PI;preview.stopped=s.stopped!=0;
+    return adapter::encode_location(preview,out);
 }
 } }

@@ -4,7 +4,7 @@ Read `docs/STATUS_KO.md`, `docs/REVIEW_2026-09-28_KO.md`, and the relevant sourc
 
 - Target: first-generation Mazda Connect NA 74.00.324A. Do not generalize offsets, hashes or ABI to another firmware.
 - This integration branch is a first stationary OBSERVE trial candidate, not a vehicle-approved release. OFF, collector isolation and one-boot recovery are implemented; target execution, same-running-SM retries and phone acceptance remain unverified. Read docs/FIRST_TRIAL_KO.md and validation/INTEGRATION_2026-09-28.md.
-- Keep live ASSIST disabled until documented sensor, provenance, recovery and phone/app gates are satisfied. SHADOW does not currently run live DR.
+- Keep live ASSIST disabled until documented sensor, provenance, recovery and phone/app gates are satisfied. This draft adds actual MODEL-domain SHADOW calculation from an existing VBS callback tap; it is not vehicle-validated and must never promote receipt time or model assumptions into qualified ASSIST. Read docs/LIVE_SHADOW_2026-09-29_KO.md and validation/LIVE_SHADOW_2026-09-29.md.
 - Preserve OEM forwarding contracts, registers, errno, preload coexistence and installer token ownership. A proposed DROP mode needs an explicit different send/return contract.
 - Keep observed receipt time separate from producer measurement time. Never promote a successful SMDB poll into a fresh/VALID sample.
 - No driving-time CMU interaction. Observation must run automatically; configuration and collection occur while parked.

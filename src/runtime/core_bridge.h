@@ -33,6 +33,9 @@ CoreBridgeResult map_core_snapshot(const mx5_dr_snapshot& source,
                                   const CoreBridgeQualification& qualification,
                                   adapter::DrSnapshot* out);
 const char* core_bridge_result_name(CoreBridgeResult);
+// Diagnostic serialization only: never returns a ready DrSnapshot. Model
+// values cannot pass map_core_snapshot, even with externally forged q flags.
+bool encode_model_location_preview(const mx5_dr_snapshot&, uint8_t out[48]);
 
 } }
 #endif
