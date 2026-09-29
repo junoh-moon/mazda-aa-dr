@@ -21,7 +21,11 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
 - [x] 실제 OEM SM의 명시적 재시작과 지연 종료 정책을 실행·정적 근거로 확인합니다.
   정상 전체 기동과 물리 watchdog 재부팅은 아래 별도 조건으로 남깁니다.
 - [ ] 실제 센서 callback부터 계산까지의 통합 경로와 입력 단위·품질·시간 근거를 확보합니다.
+  [원본 callback 실행](../validation/VIM_CALLBACK_2026-09-30.md)에서 합성 세 건의
+  원본 등록·MQ·callback·AA 수신은 확인했습니다. 물리 센서와 유효 위치 계산은 남습니다.
 - [ ] 실제 요청의 provider/receiver/session 출처를 보존하는 ASSIST 연결을 구현·검사합니다.
+  [원본 위치 객체 ABI](../validation/REQUEST_PROVENANCE_2026-09-30.md)를 실행했으나
+  큐 lifetime·실제 요청 연결·qualified runtime 구현의 완료로 세지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
@@ -33,7 +37,7 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
 | 깨끗한 USB에 압축 해제 후 `sh install.sh` | MP3/JS·정적 해시 도구 포함. 실제 ARM BusyBox/libc에서 최종 ZIP 설치·제거·재설치 성공 | 실제 CMU 미디어의 MP3→shell 동작, 실제 저장소의 remount·내구성은 미검증 |
 | 정확한 펌웨어·계정·경로 | 네 원본 identity 유지. `cmu=0`, `service=1001`, 순정 저장소 symlink 반영 | 다른 펌웨어에 일반화하지 않음. 현장 설치 정보와 대조 필요 |
 | OEM 호출 계약·터치 공존 | ARM veneer/encoder 합성 시험. 순정 커널에서 실제 AA 후크와 터치 DSO 동시 로드 | 실제 AA 송신·터치 입력, 수명·동시성·지연 장애의 전 범위 미검증 |
-| 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. journal·종료·회수 회귀 | 실제 VBS callback 수신과 주행 전체의 누락·부하·로그 보관량 미검증 |
+| 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. 원본 VBS callback과 AA 수신을 합성 입력으로 실행. journal·종료·회수 회귀 | 물리 센서 callback과 주행 전체의 누락·부하·로그 보관량 미검증 |
 | 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음 |
 | 적분 시간·신선도 | receipt와 producer 시각 분리, MODEL이 qualified로 승격되지 않는 검사 | 현재 IPC payload에는 생산자 시각/순번이 없음. 검증된 지연 상한 등 대체 근거도 없음 |
 | 위치 계산·재획득 | 코어·정차 보정·GPS holdout·wheel 보정 합성 시험 | 실제 경로·독립 기준 위치 비교 없음. GPS holdout 차이를 ground truth로 세지 않음 |
@@ -56,9 +60,13 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
 원본 호출을 성공 stub으로 바꾸거나 장치 응답을 합성한 검사는 물리 장치 성공으로
 계산하지 않습니다. OEM 원본·전체 로그·자격증명·개인 공유 링크는 게시하지 않습니다.
 
-현재 순정 커널 VM은 VIM 초기화와 AA 후크 실행까지 진행하지만 baseline에서도
-GUI 크래시가 발생합니다. CAN 준비와 위치 조회도 실패합니다. 이 실패는 전체
-기동 검증의 미완료이며, timeout·프로세스 생존·health만으로 성공을 선언하지 않습니다.
+순정 커널 VM에서 VIM 초기화·AA 후크와 원본 LDS의 mode=0 위치 응답을
+확인했습니다. 실제 SM 부분 그래프에서도 LDS는 시작했지만 VBS의 CAN 준비
+timeout으로 jcinavi·jciAAPA는 시작되지 않았습니다. 별도 aap_service는
+RUNNING이었습니다. 전체 그래프 baseline의 GUI
+크래시도 해결된 것으로 세지 않습니다. [위치 서비스 실행 기록](../validation/OEM_LOCATION_2026-09-30.md)의
+부분 진행과 정상 전체 기동을 구별하며 timeout·프로세스 생존·health만으로
+성공을 선언하지 않습니다.
 
 ASSIST의 미구현 연결은 실제 근거를 확보하여 구현해야 합니다. 상수 false를 true로
 바꾸거나, receipt 시각과 MODEL 보정을 검증된 센서 입력으로 바꾸어 종료하지 않습니다.

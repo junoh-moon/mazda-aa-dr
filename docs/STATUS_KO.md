@@ -6,13 +6,24 @@
 커밋 `bcdfda9b6a98e1ec9bc6d880015d5de2222c593b`에서 빌드하여 게시했습니다.
 전체 host/ARM·순정 BusyBox 설치 검사와 공개 ZIP 재다운로드 검증을 완료했습니다.
 [최종 검증 기록](../validation/RELEASE_2026-09-30.md)에 파일 해시와 실행 범위를
-고정했습니다. 기본 모드는 SHADOW이며 ASSIST는 비활성입니다. 실제 센서 callback,
+고정했습니다. 기본 모드는 SHADOW이며 ASSIST는 비활성입니다. 실차 센서 callback,
 위치 정확도, 정상 전체 차량 기동·복구와 폰 수용은 미검증입니다.
 
 [후속 OEM 위치 서비스 실행](../validation/OEM_LOCATION_2026-09-30.md)에서는
 원본 LDS 제공자와 실제 위치 API 응답을 확인했습니다. mode·UTC·좌표는 모두
-0이며 READ_NOT_READY 상태입니다. 내비의 SM 의존성 실패도 남아 있어 유효한
-GPS 또는 정상 전체 기동으로 판정하지 않습니다.
+0이며 READ_NOT_READY 상태입니다. 후속 실제 SM 부분 그래프에서는 LDS의 SM
+연결과 NNG 상태 조회가 진행됐으나 VBS의 CAN 준비 timeout으로 순정 SM이
+VBS를 종료했고, 의존성을 유지한 jcinavi·jciAAPA는 시작되지 않았습니다.
+별도 aap_service는 RUNNING이었습니다. 유효한 GPS
+또는 정상 전체 기동으로 판정하지 않습니다.
+같은 이미지에서 우리 preload·collector 없는 baseline도 VBS 시작 제한과
+같은 네 서비스의 STOPPED 상태를 보였습니다. 정확한 실패 원인은 미분리입니다.
+
+[원본 VIM/CAN 콜백 실행](../validation/VIM_CALLBACK_2026-09-30.md)에서는
+실제 등록과 합성 입력 세 건의 원본 MQ·CAN callback 진입/복귀·AA raw 수신을
+확인했습니다. [위치 객체 ABI 실행](../validation/REQUEST_PROVENANCE_2026-09-30.md)에서는
+원본 생성·파괴와 주소 재사용을 확인했습니다. 합성 소프트웨어 경로의 증거이며
+물리 센서·실제 요청 출처·폰 수용이나 ASSIST 연결의 완료는 아닙니다.
 
 ## SHADOW 기능 변경
 
