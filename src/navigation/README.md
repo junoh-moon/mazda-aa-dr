@@ -33,8 +33,8 @@ The remaining hypotheses are exposed in `Status.uncertainties`:
 * Wheel and reverse events are held within the original sample-age lease,
   normally 250 ms. Successful unrelated traffic cannot extend that lease.
 * GPS callback receipt time, travel-to-body heading conversion, affine physical
-  scale, offset, and error budget parameters are model assumptions. There is no
-  adaptive calibration or measured accuracy guarantee.
+  scale, offset, and error budget parameters are model assumptions. Stationary zero learning is an explicit MODEL-only opt-in; it is not a
+  physical calibration or measured accuracy guarantee.
 
 The runtime enqueues original copied records and calls `drain(now-100ms)` with
 the default profile. The fixed 128-event sorted queue splits integration at
@@ -84,3 +84,20 @@ qualified fixture exercises the pipeline, bridge and actual adapter replacement
 path, including expiry. Despite the test filename, it does not connect to a live
 sensor or execute a socket transport; synthetic data is not promoted into live
 qualification.
+
+## Stationary zero and GPS holdout
+
+`Pipeline::init_model(..., true)` enables the bounded stationary gyro estimator.
+It uses all four wheels, stable yaw and explicit time/gap gates, and applies a
+pending zero only at a successful new GPS seed. Raw yaw windows are converted
+at integration time so queued windows do not retain the previous zero. Resets
+clear the anchor and applied calibration together; qualified ingestion is
+unchanged. Default MODEL callers retain the fixed-profile baseline.
+
+`GpsHoldout` owns another MODEL pipeline. After a moving GPS warmup it withholds
+GPS updates from DR for a bounded 10-second window, compares only exactly
+receipt-aligned frontiers, and requires a new warmup after completion or abort.
+References can invalidate a comparison but never correct its prediction.
+The primary SHADOW and OEM sends are independent. See
+[`docs/SHADOW_CALIBRATION_KO.md`](../../docs/SHADOW_CALIBRATION_KO.md) for thresholds,
+logs, limitations and reset semantics.

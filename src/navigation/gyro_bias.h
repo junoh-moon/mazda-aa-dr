@@ -1,0 +1,118 @@
+#ifndef MX5_NAVIGATION_GYRO_BIAS_H
+#define MX5_NAVIGATION_GYRO_BIAS_H
+#include <stdint.h>
+#include <cmath>
+
+namespace mx5 { namespace navigation {
+// All thresholds and evidence here are MODEL hypotheses, never a physical
+// calibration claim. Raw yaw is the same integer sum/count mean used by DR.
+enum GyroBiasState { GYRO_BIAS_DISABLED=0, GYRO_BIAS_WAITING,
+    GYRO_BIAS_COLLECTING, GYRO_BIAS_READY, GYRO_BIAS_APPLIED };
+struct GyroBiasStatus {
+    bool enabled, candidate_ready;
+    GyroBiasState state;
+    double active_zero, candidate_zero, variance_counts2;
+    uint64_t calibration_version, samples, evidence_start_ns, evidence_end_ns;
+};
+class GyroBias {
+public:
+    GyroBias() { configure(false,2047,250000000ULL); }
+    void configure(bool enabled,double nominal,uint64_t age) {
+        nominal_=nominal; gap_=age<250000000ULL?age:250000000ULL;
+        enabled_=enabled; reset();
+    }
+    void reset() {
+        status_=GyroBiasStatus(); status_.enabled=enabled_;
+        status_.active_zero=status_.candidate_zero=nominal_;
+        status_.state=enabled_?GYRO_BIAS_WAITING:GYRO_BIAS_DISABLED;
+        wheel_time_=wheel_received_=stationary_since_=yaw_time_=yaw_received_=0;
+        wheel_clock_=yaw_clock_=-1; clear_collection();
+    }
+    // A completed holdout may discard prediction geometry without forgetting
+    // the applied model. Partial and pending stationary evidence never carries.
+    void restart_prediction() {
+        const double active=status_.active_zero;
+        const uint64_t version=status_.calibration_version;
+        reset(); status_.active_zero=active; status_.calibration_version=version;
+        if (enabled_ && version) status_.state=GYRO_BIAS_APPLIED;
+    }
+    const GyroBiasStatus& status() const { return status_; }
+    void wheels(uint64_t time,uint64_t received,bool transport,const double mps[4]) {
+        if (!enabled_) return;
+        if (wheel_clock_!=-1 && wheel_clock_!=int(transport)) { reset(); }
+        wheel_clock_=int(transport);
+        bool fresh=received>=time && received-time<=gap_;
+        if (wheel_time_ && (time<=wheel_time_ || time-wheel_time_>gap_ ||
+            received<wheel_received_ || received-wheel_received_>gap_)) {
+            invalidate(); stationary_since_=0;
+        }
+        wheel_time_=time; wheel_received_=received;
+        bool stopped=fresh;
+        for (unsigned i=0;i<4;++i)
+            stopped=stopped&&std::isfinite(mps[i])&&mps[i]>=0&&mps[i]<=0.05;
+        if (!fresh) invalidate();
+        if (!stopped) { stationary_since_=0; clear_collection(); return; }
+        if (!stationary_since_) stationary_since_=time;
+    }
+    void yaw(uint64_t begin,uint64_t end,uint64_t received,bool transport,double mean) {
+        if (!enabled_) return;
+        if (yaw_clock_!=-1 && yaw_clock_!=int(transport)) { reset(); }
+        yaw_clock_=int(transport);
+        bool fresh=begin && end>begin && end-begin<=gap_ && received>=end &&
+            received-end<=gap_ && (!yaw_time_ || (begin==yaw_time_ &&
+            received>=yaw_received_ && received-yaw_received_<=gap_));
+        yaw_time_=end; yaw_received_=received;
+        if (!fresh || !wheel_time_ || wheel_time_>end || end-wheel_time_>gap_) {
+            invalidate(); return;
+        }
+        if (!stationary_since_ || stationary_since_>begin) { clear_collection(); return; }
+        if (!std::isfinite(mean)||std::fabs(mean-nominal_)>64) { invalidate(); return; }
+        if (!n_) { start_=begin; mean_=low_=high_=mean; m2_=0; n_=1; }
+        else {
+            const double low=mean<low_?mean:low_,high=mean>high_?mean:high_;
+            const double delta=mean-mean_;
+            const double next_mean=mean_+delta/double(n_+1);
+            const double next_m2=m2_+delta*(mean-next_mean);
+            if (high-low>4 || next_m2/double(n_+1)>1.0) { invalidate(); return; }
+            low_=low; high_=high; mean_=next_mean; m2_=next_m2; ++n_;
+        }
+        status_.state=GYRO_BIAS_COLLECTING;
+        if (n_>=20 && end-start_>=3000000000ULL) {
+            status_.candidate_ready=true; status_.candidate_zero=mean_;
+            status_.samples=n_; status_.variance_counts2=m2_/double(n_);
+            status_.evidence_start_ns=start_; status_.evidence_end_ns=end;
+            status_.state=GYRO_BIAS_READY;
+        }
+        // Bound both memory and accumulator duration. A completed estimate is
+        // retained while the next independent stationary window accumulates.
+        if (n_>=4096) clear_collection();
+    }
+    bool apply_at_anchor(uint64_t time) {
+        if (!enabled_ || !status_.candidate_ready || time<status_.evidence_end_ns)
+            return false;
+        if (time-status_.evidence_end_ns>30000000000ULL) { invalidate(); return false; }
+        if (status_.calibration_version==UINT64_MAX) { invalidate(); return false; }
+        status_.active_zero=status_.candidate_zero; ++status_.calibration_version;
+        status_.candidate_ready=false; status_.state=GYRO_BIAS_APPLIED;
+        return true;
+    }
+private:
+    bool enabled_;
+    double nominal_,mean_,m2_,low_,high_;
+    uint64_t gap_,wheel_time_,wheel_received_,stationary_since_,yaw_time_,yaw_received_,start_,n_;
+    int wheel_clock_,yaw_clock_;
+    GyroBiasStatus status_;
+    void clear_collection() {
+        n_=start_=0; mean_=m2_=low_=high_=0;
+        if (enabled_) status_.state=status_.candidate_ready?GYRO_BIAS_READY:
+            (status_.calibration_version?GYRO_BIAS_APPLIED:GYRO_BIAS_WAITING);
+    }
+    void invalidate() {
+        status_.candidate_ready=false; status_.samples=0;
+        status_.evidence_start_ns=status_.evidence_end_ns=0;
+        status_.variance_counts2=0; status_.candidate_zero=nominal_;
+        clear_collection();
+    }
+};
+} }
+#endif

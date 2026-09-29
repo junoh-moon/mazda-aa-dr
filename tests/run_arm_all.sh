@@ -19,7 +19,7 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/core-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/pipeline-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch src/runtime/config.cpp src/runtime/sha256.cpp tests/runtime/test_runtime.cpp -o "$build/runtime-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/runtime-test"
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch $dbus tests/collector/test_journal.cpp src/runtime/config.cpp -ldbus-1 -pthread -lrt -o "$build/collector-journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/collector-journal-test"
@@ -27,7 +27,7 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/collector-journal-test"
 qemu-arm -L "$QEMU_SYSROOT" -E "LD_PRELOAD=$project/build/libmx5dr.so" "$build/loader-test"
 sh tests/adapter/run_arm.sh
 
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/navigation/pipeline.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp tests/navigation/test_navigation.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/navigation-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp tests/navigation/test_navigation.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/navigation-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/navigation-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp -o "$build/vim-parser-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/vim-parser-test"
@@ -40,3 +40,12 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/motion-channel-test" || result=$?
 
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/navigation/test_live_pipeline.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/navigation/pipeline.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/live-pipeline-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/live-pipeline-test"
+
+# The same worker algorithms and test fixtures on the release ARM32 ABI.
+for fixture in gyro_bias holdout; do
+  "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc "tests/navigation/test_${fixture}.cpp" src/navigation/pipeline.cpp src/navigation/holdout.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/${fixture}-test"
+  qemu-arm -L "$QEMU_SYSROOT" "$build/${fixture}-test"
+done
+
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_shadow_log.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/shadow-log-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/shadow-log-test"
