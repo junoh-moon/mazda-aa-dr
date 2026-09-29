@@ -110,6 +110,10 @@ static void expect_abort(Fixture& f,N::HoldoutReason reason) {
     CHECK(r.reason==reason);CHECK(f.h.phase()==N::HOLDOUT_COOLDOWN);
 }
 static void aborts_and_reset() {
+    {Fixture f;f.warm();mx5_dr_context x={1,1,1};f.h.reset(x,N::HOLDOUT_CAPTURE_STOP);
+     N::HoldoutResult r;CHECK(f.h.pop(&r));CHECK(r.event==N::HOLDOUT_ABORT);
+     CHECK(r.reason==N::HOLDOUT_CAPTURE_STOP && r.anchor_ns==T(100));
+     CHECK(!f.h.pop(&r));}
     {Fixture f;f.warm();A::Observation o=gps(250);o.position.mode=0;
      f.h.enqueue_position(o);expect_abort(f,N::HOLDOUT_REAL_GAP);}
     {Fixture f;f.warm();A::Observation o=gps(250);o.position.mode=3;

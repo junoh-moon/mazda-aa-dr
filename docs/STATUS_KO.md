@@ -14,6 +14,8 @@
 
 2019 MX-5 ND2 6MT, 1세대 Mazda Connect NA 74.00.324A에서 Android Auto 네이버 지도가 터널에서도 차량 속도·회전에 맞춰 움직이도록 하는 것이 최종 목표다. 대상 사용 환경은 기존 OEM AA touch preload, Galaxy S25, 무선 AA 동글이다. 운전 중 CMU 조작을 요구하지 않는다. 로그는 자동 수집하고 주차 후 회수한다.
 
+실차 접근은 한두 번뿐일 수도 있는 제약이다. 새 시험 계획은 [통합 시험 준비](FIELD_TRIAL_KO.md)를 우선한다. 별도 OBSERVE/SHADOW 방문을 기본 전제로 두지 않고, 한 번의 준비된 SHADOW 시험에서 순정 관측·raw 수집·계산·주차 중 종료와 회수를 묶는다. 이 계획/소스 변경은 기존 공개 릴리즈를 바꾸거나 현재 차량 설치를 승인하지 않는다.
+
 현재 코어의 개발 범위는 짧은 GNSS 단절이다. 기본 제한은 60초·1,500m·추정 오차 100m이며 실제 정확도 보증이 아니다. 지도 매칭과 장터널 대응은 구현하지 않았다. **speed-only 직진 DR은 허용하지 않는다.** 유효하고 신선한 yaw를 증명하지 못하면 자체 DR 송신을 허용하지 않는다.
 
 ## 설치 판정
@@ -59,7 +61,7 @@ OFF/로더, collector 분리, 외부 가드는 코드와 호스트/합성 ARM �
 
 | 남은 확인 | 완료 조건 |
 | --- | --- |
-| 첫 주차 OBSERVE 시험 | AA/touch 시작, 정상 hook/health 로그, collector 버스 권한과 별도 로그, 다음 부팅 baseline 복귀 |
+| 통합 시험의 주차 확인 | AA/touch 시작, 정상 hook/health와 원본 수신, collector 버스 권한과 별도 로그, 다음 부팅 baseline 복귀. SHADOW 방문에 묶고 별도 OBSERVE 방문을 기본 요구하지 않음 |
 | 순정 DR/폰 수용 | native provider의 mode·위치와 폰/앱 로그를 같은 부팅·세션에서 비교. send 성공으로 폰 수용을 대체하지 않음 |
 | SCRUB/DROP 비교 | 실제 변형 이벤트·audit 상태로 유효 구간 판정. DROP은 caller/반환값/상태 부작용 분석 후 별도 계약 결정 |
 | 자체 ASSIST | 생산자 시각·품질·보정·후진·오차 한계 확보. poll receipt로 대체하지 않음 |

@@ -50,15 +50,47 @@ bool decode_motion(const unsigned char* p,size_t n,RawEvent* out) {
     *out=e;return true;
 }
 bool MotionCursor::accept(pid_t pid,uint64_t epoch,uint64_t sequence) {
-    if(pid<=0 || !epoch || !sequence)return false;
-    if(!pid_) { pid_=pid;epoch_=epoch;sequence_=sequence;return true; }
+    return check(pid,epoch,sequence)==RECEIVE_OK;
+}
+ReceiveFault MotionCursor::check(pid_t pid,uint64_t epoch,uint64_t sequence) {
+    if(pid<=0 || !epoch || !sequence)return RECEIVE_SEQUENCE;
+    if(!pid_) { pid_=pid;epoch_=epoch;sequence_=sequence;return RECEIVE_OK; }
     if(pid_!=pid || epoch_!=epoch) {
-        pid_=pid;epoch_=epoch;sequence_=sequence;return false;
+        pid_=pid;epoch_=epoch;sequence_=sequence;return RECEIVE_SOURCE_CHANGED;
     }
     // A replay must never rewind the same source's high-water mark.
-    if(sequence_==UINT64_MAX || sequence<=sequence_)return false;
+    if(sequence_==UINT64_MAX || sequence<=sequence_)return RECEIVE_SEQUENCE;
     const bool contiguous=sequence==sequence_+1;
-    sequence_=sequence;return contiguous;
+    sequence_=sequence;return contiguous?RECEIVE_OK:RECEIVE_SEQUENCE;
+}
+const char* receive_fault_name(ReceiveFault reason) {
+    static const char* const names[]={"ok","syscall","truncated","credentials_missing",
+        "credentials_mismatch","decode","clock_unavailable","future","stale",
+        "source_changed","sequence_discontinuity"};
+    return unsigned(reason)<sizeof names/sizeof names[0]?names[reason]:"unknown";
+}
+ReceiveResult inspect_motion_datagram(const MotionDatagram& packet,uid_t expected_uid,
+    uint64_t now,MotionCursor& cursor,RawEvent* out,ReceiveDiagnostic* diagnostic) {
+    ReceiveDiagnostic d=ReceiveDiagnostic();d.checked_ns=now;
+    d.credentials_present=packet.credentials_present;
+    d.sender_pid=packet.sender_pid;d.sender_uid=packet.sender_uid;
+    RawEvent e=RawEvent();
+    if(out)*out=RawEvent();
+    if(packet.truncated)d.reason=RECEIVE_TRUNCATED;
+    else if(!packet.credentials_present)d.reason=RECEIVE_CREDENTIALS_MISSING;
+    else if(packet.sender_uid!=expected_uid || packet.sender_pid<=0)d.reason=RECEIVE_CREDENTIALS_MISMATCH;
+    else if(!out || !decode_motion(packet.bytes,packet.size,&e))d.reason=RECEIVE_DECODE;
+    else {
+        d.authenticated_decoded=true;
+        if(!now)d.reason=RECEIVE_CLOCK_UNAVAILABLE;
+        else if(now<e.received_ns)d.reason=RECEIVE_FUTURE;
+        else if(now-e.received_ns>250000000ULL)d.reason=RECEIVE_STALE;
+        else d.reason=cursor.check(packet.sender_pid,e.epoch,e.receive_seq);
+        if(d.reason==RECEIVE_OK)*out=e;
+        else d.rejected=e;
+    }
+    if(diagnostic)*diagnostic=d;
+    return d.reason==RECEIVE_OK?CHANNEL_EVENT:CHANNEL_FAULT;
 }
 MotionReceiver::MotionReceiver():fd_(-1) {}
 MotionReceiver::~MotionReceiver(){if(fd_>=0)close(fd_);}
@@ -72,9 +104,14 @@ bool MotionReceiver::open_channel(const char* name) {
        bind(fd,reinterpret_cast<sockaddr*>(&a),n)){close(fd);return false;}
     fd_=fd;return true;
 }
-ReceiveResult MotionReceiver::receive(uint64_t now,RawEvent* out) {
-    if(!out || fd_<0)return CHANNEL_FAULT;
-    *out=RawEvent();unsigned char bytes[MOTION_RECORD_SIZE];
+ReceiveResult MotionReceiver::receive(uint64_t now,RawEvent* out,ReceiveDiagnostic* diagnostic) {
+    if(diagnostic) { *diagnostic=ReceiveDiagnostic();diagnostic->checked_ns=now; }
+    if(out)*out=RawEvent();
+    if(!out || fd_<0) {
+        if(diagnostic) { diagnostic->reason=RECEIVE_SYSCALL;diagnostic->syscall_errno=EBADF; }
+        return CHANNEL_FAULT;
+    }
+    unsigned char bytes[MOTION_RECORD_SIZE];
     union { cmsghdr alignment; unsigned char bytes[CMSG_SPACE(sizeof(ucred))]; } ancillary;
     memset(&ancillary,0,sizeof(ancillary));
     iovec iov={bytes,sizeof(bytes)};msghdr msg;memset(&msg,0,sizeof(msg));
@@ -82,6 +119,10 @@ ReceiveResult MotionReceiver::receive(uint64_t now,RawEvent* out) {
     msg.msg_controllen=sizeof(ancillary.bytes);
     ssize_t n=recvmsg(fd_,&msg,MSG_DONTWAIT);
     if(n<0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR))return CHANNEL_EMPTY;
+    if(n<0) {
+        if(diagnostic) { diagnostic->reason=RECEIVE_SYSCALL;diagnostic->syscall_errno=errno; }
+        return CHANNEL_FAULT;
+    }
     bool credentials=false;ucred credential;memset(&credential,0,sizeof(credential));
     for(cmsghdr* c=CMSG_FIRSTHDR(&msg);n>=0 && c;c=CMSG_NXTHDR(&msg,c)) {
         if(c->cmsg_level==SOL_SOCKET && c->cmsg_type==SCM_CREDENTIALS &&
@@ -89,15 +130,9 @@ ReceiveResult MotionReceiver::receive(uint64_t now,RawEvent* out) {
             memcpy(&credential,CMSG_DATA(c),sizeof(credential));credentials=true;
         }
     }
-    RawEvent e=RawEvent();
-    if(n<0 || (msg.msg_flags&(MSG_TRUNC|MSG_CTRUNC)) || !credentials ||
-       credential.uid!=getuid() || credential.pid<=0 ||
-       !decode_motion(bytes,static_cast<size_t>(n),&e) || !now ||
-       now<e.received_ns || now-e.received_ns>250000000ULL)return CHANNEL_FAULT;
-    // Discard the discontinuity record as well. Runtime resets its navigation
-    // state; the next record can resume acquisition but cannot revive an anchor.
-    if(!cursor_.accept(credential.pid,e.epoch,e.receive_seq))return CHANNEL_FAULT;
-    *out=e;return CHANNEL_EVENT;
+    const MotionDatagram packet={bytes,static_cast<size_t>(n),
+        (msg.msg_flags&(MSG_TRUNC|MSG_CTRUNC))!=0,credentials,credential.pid,credential.uid};
+    return inspect_motion_datagram(packet,getuid(),now,cursor_,out,diagnostic);
 }
 MotionSender::MotionSender():fd_(-1){name_[0]=0;}
 MotionSender::~MotionSender(){if(fd_>=0)close(fd_);}

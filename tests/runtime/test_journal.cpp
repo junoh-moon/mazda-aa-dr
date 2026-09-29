@@ -9,9 +9,111 @@
 static int32_t unused_next(void *, A::VehicleData *) { return 0; }
 static void arm_test_mode() {
   audit_fault = 0;
+  capture_stopped = 0;
   assert(A::set_mode(A::SCRUB_STALE));
 }
-int main() {
+struct FakeReceiver {
+  unsigned calls,limit;
+  bool gap;
+  N::MotionCursor cursor;
+  FakeReceiver(unsigned n,bool missing=false):calls(0),limit(n),gap(missing) {}
+  N::ReceiveResult receive(uint64_t now,N::RawEvent* out,N::ReceiveDiagnostic* d) {
+    if(calls==limit)return N::CHANNEL_EMPTY;
+    N::RawEvent e=N::RawEvent();e.kind=N::WHEELS;e.epoch=1;
+    ++calls;e.receive_seq=calls+(gap && calls>1?1:0);e.received_ns=now;
+    for(unsigned i=0;i<4;++i)e.raw[i]=10000;
+    unsigned char bytes[N::MOTION_RECORD_SIZE];assert(N::encode_motion(e,bytes));
+    const N::MotionDatagram packet={bytes,sizeof bytes,false,true,42,0};
+    return N::inspect_motion_datagram(packet,0,now,cursor,out,d);
+  }
+};
+static void receive_turn_tests(const char* root,const std::string& logs) {
+  config.max_log_bytes=65536;
+  const mx5_dr_context context={1,1,1};
+  for(unsigned mode=0;mode<3;++mode) {
+    arm_test_mode();
+    N::Pipeline navigation;N::GpsHoldout holdout;
+    assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+    assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+    if(mode==1)audit_fault=1;
+    {
+      Journal j(root);mx5::runtime::MotionBatch batch;FakeReceiver receiver(3,true);
+      drain_motion(j,batch,receiver,navigation,holdout,mode!=2);j.flush();
+      assert(!j.failed && batch.empty() && receiver.calls==3);
+      assert(navigation.status().events==(mode==0?2:0));
+      assert(navigation.context().generation==(mode==0?2:1));
+    }
+    std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
+    unsigned batches=0,rejected=0,resets=0;
+    while(std::getline(f,line)) {
+      if(line.find("motion_batch")!=std::string::npos)++batches;
+      if(line.find("motion_rejected")!=std::string::npos) {
+        ++rejected;
+        assert(line.find("\"reason\":\"sequence_discontinuity\"")!=std::string::npos);
+        assert(line.find("\"receive_seq\":3")!=std::string::npos);
+        assert(line.find("\"authenticated_decoded\":true")!=std::string::npos);
+      }
+      if(line.find("shadow_input_reset")!=std::string::npos)++resets;
+    }
+    assert(batches==2 && rejected==1 && resets==1);
+  }
+  arm_test_mode();
+  N::Pipeline navigation;N::GpsHoldout holdout;
+  Journal j(root);mx5::runtime::MotionBatch batch;FakeReceiver receiver(300);
+  drain_motion(j,batch,receiver,navigation,holdout,false);
+  assert(receiver.calls==256 && batch.empty() && !j.failed);
+}
+static void stop_tests(const char* root,const std::string& logs) {
+  const char* boot="12345678-1234-1234-1234-123456789abc";
+  const std::string request=logs+"/capture.stop",ack=logs+"/capture.done";
+  assert(!stop_requested(root));
+  assert(mkdir(request.c_str(),0700)==0 && stop_requested(root));
+  {
+    std::ifstream before((logs+"/trace.0.jsonl").c_str());
+    const std::string saved((std::istreambuf_iterator<char>(before)),std::istreambuf_iterator<char>());
+    arm_test_mode();assert(worker_at(root)==0 && capture_stopped==1);
+    std::ifstream after((logs+"/trace.0.jsonl").c_str());
+    const std::string retained((std::istreambuf_iterator<char>(after)),std::istreambuf_iterator<char>());
+    assert(saved==retained && access(ack.c_str(),F_OK)!=0);
+  }
+  arm_test_mode();qhead=qtail=qsize=0;dropped=0;
+  A::Observation event=A::Observation();sink(&event,0);
+  freeze_capture();sink(&event,0);
+  assert(qsize==1 && dropped==0 && A::mode()==A::OBSERVE);
+  assert(!pthread_mutex_lock(&queue_mu));sink(&event,0);pthread_mutex_unlock(&queue_mu);
+  assert(dropped==0 && qsize==1);
+  assert(pop(&event) && !pop(&event));
+  {
+    Journal j(root);j.line("{\"kind\":\"fixture\",\"mono_ns\":9}");
+    assert(finish_capture(j,boot,10,11));
+    std::ifstream a(ack.c_str());std::string value;std::getline(a,value);assert(value==boot);
+    std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
+    assert(std::getline(f,line) && line.find("fixture")!=std::string::npos);
+    assert(std::getline(f,line) && line.find("capture_end")!=std::string::npos);
+    assert(std::getline(f,line) && line.find("health")!=std::string::npos);
+    assert(line.find("\"capture_active\":false")!=std::string::npos);
+    assert(!std::getline(f,line));
+  }
+  unlink(ack.c_str());
+  {
+    Journal j(root);assert(!finish_capture(j,"unknown",10,11));
+    assert(access(ack.c_str(),F_OK)!=0);
+  }
+  {
+    Journal j(root);j.f=fopen("/dev/null","w");assert(j.f);
+    assert(!finish_capture(j,boot,10,11)); // fflush succeeds; fsync fails.
+    assert(j.failed && access(ack.c_str(),F_OK)!=0);
+  }
+  assert(rmdir(request.c_str())==0);
+}
+int main(int argc,char** argv) {
+  if(argc==2 && !strcmp(argv[1],"--emit-rejected")) {
+    N::ReceiveDiagnostic d=N::ReceiveDiagnostic();d.reason=N::RECEIVE_STALE;
+    d.authenticated_decoded=d.credentials_present=true;d.checked_ns=1250000001;
+    d.sender_pid=42;d.rejected.kind=N::REVERSE;d.rejected.epoch=9;
+    d.rejected.receive_seq=3;d.rejected.received_ns=1000000000;d.rejected.reverse=1;
+    char line[1200];assert(format_motion_rejected(line,sizeof line,d));puts(line);return 0;
+  }
   A::Options opt = A::Options();
   assert(A::configure(unused_next, opt));
   config.max_log_bytes = 64;
@@ -127,8 +229,11 @@ int main() {
   sink(&event, 0);
   assert(!pthread_mutex_unlock(&queue_mu));
   assert(dropped == 2 && A::mode() == A::OBSERVE);
+  receive_turn_tests(tmp,logs);
+  stop_tests(tmp,logs);
+  for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
   rmdir(logs.c_str());
   rmdir(tmp);
-  puts("Journal tests: bounded rotation, open/flush/rotation/size failures and "
-       "queue loss disable mutation");
+  puts("Journal tests: bounded rotation, audit failure, continued raw capture, "
+       "separate rejected evidence, bounded receive turns and durable requested stop passed");
 }
