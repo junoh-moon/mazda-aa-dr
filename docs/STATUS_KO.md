@@ -36,6 +36,11 @@ sender·userdata callback·정상 정리를 hardware breakpoint만으로 관찰�
 JCIDBUS connect는 0이 아닌 값이 성공이라는 계약 정정도 기록했습니다. 값은 모두
 mode 0이며 BLM worker 큐·AA 세션·수신기 자격·취소 경로는 여전히 미검증입니다.
 
+[별도 LDS API 장애 시험](../validation/LDS_CLIENT_API_2026-09-30.md)에서는
+userspace debugger 없이 64건 동시 대기의 userdata callback, 버스 부재의 연결
+실패, 제공자 부재의 실제 ServiceUnknown callback을 확인했습니다. data client를
+직접 호출한 결과이며 제품 BLM의 util 계층·정리 hook·ASSIST 연결 검증은 아닙니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

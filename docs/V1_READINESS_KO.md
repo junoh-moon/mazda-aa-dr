@@ -31,6 +31,9 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   [원본 LDS 비동기 요청 실행](../validation/LDS_ASYNC_2026-09-30.md)으로 요청→reply
   sender→callback→정상 정리의 실제 identity 경계는 확인했지만, BLM 이후 큐와
   취소·timeout 정리, 제품 hook은 남아 있습니다.
+  [별도 다중 요청·오류 응답 시험](../validation/LDS_CLIENT_API_2026-09-30.md)에서
+  64건의 userdata 대응과 버스·제공자 부재를 검사했습니다. data client API
+  직접 호출이며 제품의 util·worker·송신 경로 검증을 대신하지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
