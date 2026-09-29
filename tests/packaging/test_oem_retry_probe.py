@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -40,6 +41,7 @@ class RetryDiagnostic(unittest.TestCase):
         script = SCRIPT.read_text()
         block = script.split('# RETRY_CONFIG_AWK_BEGIN\n', 1)[1].split(
             '# RETRY_CONFIG_AWK_END', 1)[0]
+        cls.block = block
         cls.program = re.search(r"awk '(.*?)' \"\$trial\"", block, re.S).group(1)
 
     def reduce(self, source):
@@ -74,6 +76,69 @@ class RetryDiagnostic(unittest.TestCase):
     def test_changed_dependency_graph_is_rejected(self):
         source = FIXTURE.replace('      <dependency type="service" value="seven"/>\n', '')
         self.assertNotEqual(self.reduce(source).returncode, 0)
+
+    def test_commented_service_cannot_become_active(self):
+        # A double hyphen is not legal inside an XML comment.
+        source = FIXTURE.replace('--uri=server:// --proxy=tcpip://',
+                                 'uri=server:// proxy=tcpip://')
+        for name in ('settings', 'jciAAPA'):
+            block = re.search(r'    <service type="jci_service" name="' + name +
+                              r'".*?</service>', source, re.S).group(0)
+            commented = source.replace(block, '    <!--\n' + block + '\n    -->')
+            self.assertIsNone(ET.fromstring(commented).find(
+                './services/service[@name="' + name + '"]'))
+            with self.subTest(name=name):
+                self.assertNotEqual(self.reduce(commented).returncode, 0)
+
+    def test_truncated_wrappers_are_not_repaired(self):
+        for removed in ('  </services>\n</sm_config>\n',
+                        '  </services>\n', '</sm_config>\n'):
+            with self.subTest(removed=removed):
+                self.assertNotEqual(self.reduce(FIXTURE.replace(removed, '')).returncode, 0)
+
+    def test_requires_one_root_opening_before_services(self):
+        for source in (
+                FIXTURE.replace('<sm_config>\n', ''),
+                FIXTURE.replace('<sm_config>', '<different_root>'),
+                FIXTURE.replace('<sm_config>', '<!-- <sm_config> -->'),
+                FIXTURE.replace('<sm_config>', '<sm_config>\n<sm_config>'),
+                FIXTURE.replace('<sm_config>\n', '').replace(
+                    '  <services retry_count="0" user_account="cmu">',
+                    '  <services retry_count="0" user_account="cmu">\n<sm_config>')):
+            with self.subTest(source=source):
+                self.assertNotEqual(self.reduce(source).returncode, 0)
+
+    def test_rejects_unclosed_selected_service(self):
+        for name in ('settings', 'jciAAPA'):
+            block = re.search(r'    <service type="jci_service" name="' + name +
+                              r'".*?</service>', FIXTURE, re.S).group(0)
+            source = FIXTURE.replace(block, block.removesuffix('</service>'))
+            with self.subTest(name=name):
+                self.assertNotEqual(self.reduce(source).returncode, 0)
+
+    def test_rejects_mixed_multiline_comment_and_markup(self):
+        edge = '<dependency type="service" value="stage_1"/>'
+        for replacement in (edge + ' <!--\n      comment\n      -->',
+                            '<!--\n      comment\n      --> ' + edge):
+            source = FIXTURE.replace(edge, replacement)
+            ET.fromstring(source)  # Valid XML, unsupported diagnostic layout.
+            with self.subTest(replacement=replacement):
+                self.assertNotEqual(self.reduce(source).returncode, 0)
+
+    def test_failure_removes_partial_configuration(self):
+        # Run the actual filter and failure branch, without launching services.
+        source = FIXTURE.replace('      <dependency type="service" value="seven"/>\n', '')
+        shell = 'probe() {\n' + self.block + '\n}\ntrial=$1\nretry_trial=$2\nprobe\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / 'input.xml'
+            output_path = Path(tmp) / 'partial.xml'
+            input_path.write_text(source)
+            result = subprocess.run(['sh', '-c', shell, 'retry-filter',
+                                     str(input_path), str(output_path)],
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertFalse(output_path.exists())
+            self.assertIn('VM_RETRY_CONFIG_FAILED', result.stdout)
 
     def test_guest_shell_syntax(self):
         subprocess.run(['sh', '-n', str(SCRIPT)], check=True)

@@ -77,3 +77,196 @@ Sabrelite를 사용했습니다. CMU entry의 r1 조정과 `nohlt`,
 C/C++ 실행 모두 통과, 생략 0입니다. 실제 제품 ARM 코드는 바뀌지 않았으므로
 ARM 합성 전체 검사는 재실행하지 않았습니다. 그 결과는 기존 배포 기록을
 따르며 이번 OEM 실행의 성공 범위로 확대하지 않습니다.
+
+## r2: 실제 SM의 부분 서비스 그래프 (`location-sm-r1`)
+
+`02c5f9d`에 새 `location-sm` 진단을 적용했습니다. 원본 SM이 원본
+launcher와 서비스들을 기동하도록 했으며, 별도 standalone 실행이나 수동
+Start 호출로 실패한 의존성을 우회하지 않았습니다. 원본 전체 그래프의 정상
+부팅이 아니라 아래 19개 서비스를 선택한 진단입니다.
+
+- settings, jciUSBMGR, jciVBS, jciLDS, jcinavi, jciBLMSettings,
+  jciTime, aap_service, jciAAPA
+- stage_1, stage_2, stage_3, stage_navi, usb_drivers, jciBLMTIME
+- 실제 PID 파일을 사용하는 vim_app, dbus_service, dbus_hmi
+- 원본 `autorun=no` 일반 프로세스 NNG
+
+원본 전역 설정과 서비스의 argv·환경·계정·재시도·reset_board·watchdog·
+시간 제한을 유지하고, 기존 touch와 guard가 선택한 AA/VBS trial preload를
+환경에 추가했습니다.
+stage 스크립트와 USB readiness 스크립트도 원본을
+실행했습니다. NNG는 원본 `autorun=no`와 SD 경로를 유지합니다. 실제 guest에
+생성된 XML을 원본과 파싱 대조하여 내부 dependency 21개와 connection 2개를
+확인했습니다. 다음 외부 연결만 명시적으로 생략했습니다.
+
+- dependency 10개: stage_3→jciMMUI;
+  jciBLMSettings→devices/audio_config/dsp_config/system_mazda_my14;
+  aap_service→devicemanager;
+  jciAAPA→devicemanager/audio_manager/jciRM/jciUpdatea.
+- connection 1개: jciBLMSettings→jciaudiosettings.
+
+### 실제로 진행한 경계와 실패
+
+| 항목 | 실제 관찰 |
+| --- | --- |
+| SM→LDS | 원본 SM이 LDS를 기동. 실제 localhost SM 연결 반환 0, guest 약 39.892초에 STARTED |
+| LDS→SM의 NNG 상태 조회 | 실제 callback state=9 수신. r1의 연결 거부·NNG 조회 오류는 이 실행에서 해소 |
+| VBS | 약 29.914초 STARTING 후 CAN ReadyHandler timeout 반복. 74.744초에 원본 45,000ms 시작 제한 도달 |
+| 순정 SM의 실패 처리 | SIGTERM 뒤 약 79.791초에 5,002ms 종료 제한으로 SIGKILL. 79.862초에 reset_board 정책에 따라 watchdog ping 중단을 기록 |
+| jcinavi·jciAAPA·NNG | jcinavi와 jciAAPA 실행은 관찰되지 않음. 마지막 상태에서 VBS·jcinavi·jciAAPA·NNG STOPPED, aap_service를 포함한 나머지 15개 RUNNING |
+| USB readiness | 원본 스크립트가 모듈의 No such device 및 usb0 부재 오류 뒤 readiness 파일 생성. USB 장치 성공으로 세지 않음 |
+| 외부 PID | VIM과 두 D-Bus의 원본 PID 파일이 실제 살아 있는 해당 실행 파일과 일치 |
+| SM 조회 | 초기·마지막 조회 반환 0. 중간 조회는 timeout 143이며 유효한 상태 응답으로 세지 않음 |
+
+VBS의 유지된 의존성 때문에 후속 jcinavi·jciAAPA가 시작되지 않았습니다. CAN 준비
+실패의 모든 원인이 물리 하드웨어 부재라는 것까지 분리해 입증하지는 않았습니다.
+watchdog ping 중단은 관찰했지만 실제 보드 재부팅·다음 전원 주기의 복구를
+검증한 것은 아닙니다.
+
+### 위치 관측과 판정
+
+collector는 실제 UID/GID 1001, 보조 그룹 없이 65회 poll을 수행했습니다.
+초기 위치 오류 12건 뒤 실제 LDS 위치 응답 53건, owner 10건, receiver 10건을
+기록했습니다. 모든 위치는 mode·UTC·좌표·heading·속도 0이며 receiver도 0입니다.
+직접 D-Bus 조회는 `before-sm`과 `after-sm`에서 아직 owner/서비스가 없어
+오류였고, `after-start-timeout`과 `late`에서 READ_NOT_READY=5를 반환했습니다.
+제공자의 PID·PPid·argv·매핑과 실제 SM 자식 관계를 대조했습니다.
+
+collector는 `stop_marker`로 종료됐습니다. 요청 provenance는 false,
+producer time은 unknown이며 GPS serial open은 내보낸 syscall에서 관찰되지
+않았습니다. 우리 AA 후크가 들어가는 jciAAPA가 시작되지 않아 이 실행에는
+해당 runtime의 health나 SHADOW 계산 성공도 없습니다. 별도의 aap_service가
+RUNNING인 사실을 폰 수용으로 해석하지 않습니다. LDS API 응답도 유효한 GPS
+fix의 증거가 아닙니다.
+
+### 입력과 실행 범위
+
+배포 ZIP의 다섯 production 바이너리와 touch·원본 rootfs·순정 커널은 r1과
+같습니다. QEMU 7.2.22, Sabrelite의 기존 CMU r1 조정, `nohlt`,
+`enable_wait_mode=off`, 네트워크·호스트 장치·공유 디렉터리 없는 조건입니다.
+SM은 `taskset 0x02`와 `strace -ff`로 실행했으며 원본 서비스 설정의
+`affinity_mask=0x01`은 유지했습니다. 각 자식의 최종 CPU affinity를 이
+기록에서 실측한 것은 아닙니다. ptrace와 SHADOW의 VBS preload는 타이밍에
+영향을 줄 수 있습니다. syscall 로그는 실행 중 내보낸 부분 관찰입니다.
+
+| 비공개 실행 입력/출력 | SHA-256 |
+| --- | --- |
+| 진단 init | `62270105905004e9cf2d86d0ffc411e2cd136f421bde7445614ca50bbacd2af9` |
+| initrd | `82215879eff5269532abcb7bc5d22b1a49631d4ca08cee60df3e5d5dad32d40b` |
+| console | `146d90ae5434d542748ec9bf55e0157bd5428feaf59cf16893daf4bab2b25934` |
+
+`run --board cmu --mode shadow --phase location-sm --seconds 360`과 위 kernel
+인자를 사용했습니다. collector 한도는 이 phase에서 120초입니다. 실제 마지막
+상태 관측은 guest 약 115.58–118.10초였고 inspection shell에 도달했습니다.
+360.018초 제한 종료, timed_out=true, QEMU exit=0이며 PASS 판정이 아닙니다.
+runner 기본 제한 120초로 실행하면 마지막 snapshot까지 도달하지 못할 수
+있습니다. collector 종료 사유도 이 실행의 `stop_marker` 관찰이며, 다른
+실행에서 120초 duration 만료보다 항상 먼저 끝난다는 보장은 아닙니다.
+
+이 실행 후 독립 코드 리뷰에서 진단 XML 필터가 주석 속 서비스를 다시 살리거나
+잘린 XML 끝을 복구할 수 있는 두 입력 결함을 재현했습니다. 해당 패턴은 이번
+정확한 원본 입력에 없었습니다. 각각 실패하는 회귀를 먼저 확인한 뒤 주석과
+실제 닫는 태그를 검사하도록 수정했습니다. 실행 init 해시는 수정 전의 실제
+입력을 가리키며, 후속 소스를 실행한 것처럼 소급하지 않습니다.
+
+후속 검증에서 정확한 normal 원본 XML의 구·신 필터 출력이 바이트까지 같았고,
+원본 XML에 실제 console의 AA/VBS 환경을 복원한 full trial도 동일했습니다.
+그 출력은 LF로 정규화한 기존 guest XML과 일치했습니다. 이 비교는 console에서
+복원한 입력이며 실행 VM에서 원본 파일을 다시 추출한 것으로 표현하지 않습니다.
+
+원본 ARM BusyBox·loader·libc·libm만 넣은 별도 최소 VM에서도 정상 원본,
+복원 trial, 작성한 정상 fixture의 구·신 출력 일치와 두 음성 fixture의
+구 필터 반환 0→신 필터 반환 2를 확인했습니다. OEM 서비스는 이 parser
+검사에서 실행하지 않았습니다. 새 location 회귀 6개와 기존 retry 회귀 4개,
+셸 문법·Python 문법·diff 검사도 통과했습니다. 새 진단은 정확한 normal
+설정용이며 범용 XML 변환기가 아닙니다.
+
+production 코드와 ZIP은 바뀌지 않았으며 전체 host/ARM 합성 검사는 이번
+진단 변경에서 다시 실행하지 않았습니다. 앞선 전체 검사와 이번 제한된
+parser/OEM 실행의 범위를 구분합니다.
+
+parser 전용 실행의 initrd SHA-256은
+`c6307049c5e87177c22fa654c58b388b35d8a3e2dc9f31183102dabd5f5d2e61`,
+console은 `6e92d535c59752ada4ccae673aefdfebfb373cbe6f615d1f60c6c126c1d297c3`입니다.
+이 단계에서 검사한 첫 수정 AWK의 SHA-256은
+`3884d322bff38f0a3455d9be020bb1e6a7f310f70fa8563306e3c40b492499a4`입니다.
+`PARSER_FINISHED_FAILURES=0` 및 각 RC/cmp로 판정했으며,
+120.004초 제한 종료나 QEMU exit=0을 PASS 조건으로 쓰지 않았습니다.
+
+실제 Claude Code 2.1.284의 도구 없는 독립 텍스트 리뷰도 수행했습니다.
+원본 OEM 파일·전체 console은 입력하지 않았으며 리뷰 프로세스는 종료 0,
+success를 반환했습니다. 이 리뷰는 실행 검증이 아닙니다. 중간 서비스의
+닫는 태그 누락을 추가 재현하여 거부하도록 고쳤고, 모든 선택 서비스에 대해
+회귀를 확장했습니다. 혼합 multiline comment 배치 거부도 검사합니다.
+설정 생성 실패 시 부분 XML을 제거하고 실패를 반환하도록 수정했습니다.
+실행 init은 `02c5f9d` 위의 당시 미커밋 작업본이며 그 initrd와 수정 전
+필터를 비공개 증거로 보존했습니다.
+
+## r3: 같은 이미지의 baseline 대조 (`location-sm-baseline-r1`)
+
+VBS timeout이 우리 preload 없이도 발생하는지 확인하려고 r2와 동일한
+initrd·순정 커널·부분 그래프·strace·taskset·kernel 인자로 실행했습니다.
+변경한 runner 인자는 `--mode baseline`입니다. 이 모드는 USB 설치·guard
+선택과 collector를 시작하지 않습니다. 따라서 preload 외 모든 실행 부하가
+같은 실험으로 표현하지 않습니다. 기존 touch 설정은 유지했습니다.
+
+내보낸 XML을 파싱 대조하여 전역 설정·19개 서비스 속성·dependency 21개·
+connection 2개가 일치함을 확인했습니다. 서비스 자식 설정 차이는 jciVBS와
+jciAAPA의 trial preload 환경뿐이었습니다. baseline XML과 내보낸
+exec/maps에는 우리 설치 경로의 참조가 0개였고 collector 기록도 없었습니다.
+
+- 원본 LDS는 guest 약 24.023초에 STARTED였습니다. `after-start-timeout`과
+  `late`의 직접 조회는 mode·UTC·좌표 0, receiver=0, READ_NOT_READY=5였습니다.
+- VBS는 CAN ReadyHandler timeout을 반복했고 약 60.913초에 원본 45,000ms
+  시작 제한, 약 65.970초에 5,002ms 종료 제한에 도달했습니다.
+  약 66.065초에 순정 SM의 watchdog ping 중단 정책도 관찰됐습니다.
+- 마지막 상태는 동일하게 VBS·jcinavi·jciAAPA·NNG STOPPED,
+  aap_service를 포함한 15개 RUNNING이었습니다. 중간 smctl은 timeout 143,
+  마지막 조회는 반환 0이었습니다.
+
+따라서 이 VM 조건의 VBS 시작 실패는 우리 preload가 없어도 발생합니다.
+센서 peer·에뮬레이션·계측 부하 등 정확한 원인을 분리한 것은 아니며,
+production tap의 모든 동시성·지연 위험이 해소됐다는 증거도 아닙니다.
+
+initrd SHA-256은 r2와 같은
+`82215879eff5269532abcb7bc5d22b1a49631d4ca08cee60df3e5d5dad32d40b`,
+새 console은 `3ad93cd7726756fb252d32ab27cd46a60befdcb94440b626c3eddec95be33cdd`입니다.
+inspection shell까지 진행한 뒤 360.023초 제한으로 종료됐습니다.
+timed_out=true, QEMU exit=0이며 이 상태를 정상 기동 PASS로 세지 않았습니다.
+
+## 최종 XML 필터 회귀 — location과 retry
+
+후속 독립 리뷰에서 같은 결함을 기존 retry reduced 필터에도 재현했습니다.
+두 필터에 실제 root opening의 존재·순서·중복 검사, 주석 제외, 실제 닫는
+태그와 중간 selected service의 종료 검사를 적용했습니다. 실패하면 부분
+출력을 제거하고 1을 반환합니다. 선택한 원본 서비스의 속성·환경과 각
+유지/제거 간선 수의 계약은 유지합니다. 범용 XML 검증기로 사용하지 않습니다.
+
+수정 전 실패 회귀를 먼저 기록한 뒤 최종 host 검사 18개(location 8,
+retry 10)를 통과했습니다. 별도 최소 VM의 순정 ARM BusyBox에서도 입력
+99개(location 75, retry 24)의 실제 반환값을 manifest와 대조했습니다.
+정상 7개·거부 92개가 모두 기대와 일치했고, 정상 7개의 이전/현재/host 출력은
+바이트 단위로 같았습니다. 두 실제 셸 실패 분기도 반환 1과 부분 파일 삭제를
+확인했습니다. `PARSER_FINISHED_CASES=99 FAILURES=0`이며 상위 작업자가
+현재 소스·두 AWK·두 fixture·case manifest와 99개 고유 결과를 다시 대조했습니다.
+
+location은 기존대로 normal sm.conf만 지원하며 WCP는 간선 수가 달라
+거부합니다. retry의 원본 normal/WCP 출력은 기존과 같습니다. 이전 retry
+실행 세 initrd의 해시를 해당 metadata와 확인하고 archive 안의 원본 설정도
+대조했습니다. 주석 속 대상 서비스나 잘린 wrapper는 없었습니다. runtime
+전체 trial은 별도 보존되지 않았지만, r3 환경을 원본에 복원한 출력이 기존
+guest XML과 같습니다. 발견한 필터 결함을 과거 OEM 기동 위조로 소급하지 않습니다.
+
+| 최종 parser-only 실행 입력/출력 | SHA-256 |
+| --- | --- |
+| 저장소 진단 init 소스 | `7aca78501df9327730b7184842ef97859e510fa44966eb0c4d7fe65a8c9d3226` |
+| location AWK | `fdd771def39a8b81643aa2a8870eadc43aebe505b54bbf770039fd948937023d` |
+| retry AWK | `50b4604e66dbe2226dd55644f3d41e38d4cc1eef78ccf9bcefe44fbbfd768287` |
+| initrd | `7f7d91030d9e3d68a0bb6e3c4c8b2aa9b3182e6f3c967dc242290f2435dad043` |
+| console | `081e9c82c7d9a2ccc05a9dc8bd6ac5f819615cb8cde483bb8ec4bedcca54a07d` |
+
+이 최종 parser VM은 원본 BusyBox·loader·libc·libm만 사용하고 OEM 서비스는
+실행하지 않았습니다. 120.016초 제한 종료와 QEMU exit=0은 판정 근거가
+아닙니다. 앞선 parser-r1, 빌드만 한 중간 후보와 실제 최종 r2를 구분해
+보존했습니다. 제품 및 USB 변경은 없으며 전체 host/production ARM suite와
+원본 전체 부팅을 재실행했다고 주장하지 않습니다.

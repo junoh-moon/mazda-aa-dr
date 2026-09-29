@@ -67,6 +67,7 @@ if [ "$mode" = shadow ]; then
     [ "$rc" = 0 ] || exec /bin/sh
     collector_seconds=20
     [ "$phase" != location ] || collector_seconds=60
+    [ "$phase" != location-sm ] || collector_seconds=120
     sh /data_persist/mx5-aa-dr/tools/start_collector.sh "$collector_seconds"
     sleep 1
     for process in /proc/[0-9]*; do
@@ -144,19 +145,71 @@ retry_probe() {
             retry_trial=/tmp/oem-check/retry-sm.conf
             # RETRY_CONFIG_AWK_BEGIN
             awk '
-                !services { print; if ($0 ~ /<services /) services=1; next }
-                /<service .*name="jciAAPA"/ { active=1; aa++ }
-                /<service .*name="settings"/ { active=1; settings++ }
+                {
+                    # Match only live XML markup, retaining original comment
+                    # lines inside selected services. Mixed multiline comment
+                    # and markup lines are outside this diagnostic format.
+                    remaining=$0; code=""; was_comment=comment
+                    while (length(remaining)) {
+                        if (comment) {
+                            end=index(remaining, "-->")
+                            if (!end) break
+                            remaining=substr(remaining, end+3); comment=0
+                        } else {
+                            begin=index(remaining, "<!--")
+                            if (!begin) { code=code remaining; break }
+                            code=code substr(remaining, 1, begin-1)
+                            remaining=substr(remaining, begin+4); comment=1
+                        }
+                    }
+                    if ((was_comment || comment) && code !~ /^[[:space:]]*$/) exit 2
+                }
+                code ~ /^[[:space:]]*<sm_config([[:space:]][^<>]*)?>[[:space:]]*$/ {
+                    if (root_open || services || closed_root || code ~ /\/>[[:space:]]*$/) exit 2
+                    root_open=1; print; next
+                }
+                code ~ /^[[:space:]]*<\/services>[[:space:]]*$/ {
+                    if (!services || active || closed_services) exit 2
+                    closed_services=1; next
+                }
+                code ~ /^[[:space:]]*<\/sm_config>[[:space:]]*$/ {
+                    if (!root_open || !closed_services || closed_root) exit 2
+                    closed_root=1; next
+                }
+                !services {
+                    if (code ~ /<services /) {
+                        if (!root_open) exit 2
+                        services=1
+                    }
+                    print; next
+                }
+                closed_services { if (code !~ /^[[:space:]]*$/) exit 2; next }
+                code ~ /^[[:space:]]*<service .*name="/ {
+                    if (active) exit 2
+                    name=code; sub(/^.* name="/, "", name); sub(/".*$/, "", name)
+                    active=(name == "jciAAPA" || name == "settings")
+                    if (active) {
+                        if (name == "jciAAPA") aa++; else settings++
+                        print
+                    }
+                    if (code ~ /\/>[[:space:]]*$/) active=0
+                    next
+                }
                 active {
-                    if ($0 ~ /<dependency /) removed++
+                    if (code ~ /^[[:space:]]*<dependency /) removed++
                     else print
-                    if ($0 ~ /<\/service>/) active=0
+                    if (code ~ /<\/service>/) active=0
                 }
                 END {
+                    if (comment || active || !root_open || !services || !closed_services || !closed_root) exit 2
+                    if (aa != 1 || settings != 1 || removed != 8) exit 2
                     print "    </services>\n</sm_config>"
-                    if (aa != 1 || settings != 1 || removed != 8 || active) exit 2
                 }
-            ' "$trial" > "$retry_trial" || { echo 'VM_RETRY_CONFIG_FAILED'; return; }
+            ' "$trial" > "$retry_trial" || {
+                rm -f "$retry_trial"
+                echo 'VM_RETRY_CONFIG_FAILED'
+                return 1
+            }
             # RETRY_CONFIG_AWK_END
             echo 'VM_RETRY_CONFIG=reduced original settings and jciAAPA; eight dependency edges omitted; retry/reset/timeouts unchanged'
             # The real AA backend remains fallible and is not counted as
@@ -234,8 +287,137 @@ location_snapshot() {
     location_query "$location_stage.read-status" --dest=com.jci.lds.control \
         /com/jci/lds/control com.jci.lds.control.GetReadStatus_sync
 }
+location_sm_snapshot() {
+    location_stage=$1
+    location_snapshot "$location_stage" >> /tmp/oem-check/location-dbus.log 2>&1
+    {
+        echo "VM_LOCATION_SM_SNAPSHOT_BEGIN=$location_stage UPTIME=$(cat /proc/uptime)"
+        timeout -t 5 /jci/sm/smctl -g
+        echo "VM_LOCATION_SM_GET_RC=$?"
+        # Read only original daemon-created PID files. A file alone is not
+        # proof of readiness; record the actual process identity as well.
+        for location_pid_file in /tmp/dbus_service.pid /tmp/dbus_hmi.pid /tmp/vim_app.pid; do
+            if [ ! -f "$location_pid_file" ]; then
+                echo "VM_LOCATION_EXTERNAL_PID_FILE=$location_pid_file absent"
+                continue
+            fi
+            location_pid=$(cat "$location_pid_file")
+            case "$location_pid" in
+                ''|*[!0-9]*) echo "VM_LOCATION_EXTERNAL_PID_FILE=$location_pid_file invalid"; continue;;
+            esac
+            echo "VM_LOCATION_EXTERNAL_PID_FILE=$location_pid_file PID=$location_pid EXE=$(readlink "/proc/$location_pid/exe" 2>/dev/null)"
+        done
+        for location_process in /proc/[0-9]*; do
+            location_exe=$(readlink "$location_process/exe" 2>/dev/null)
+            case "$location_exe" in /jci/sm/sm|/jci/sm/sm_svclauncher|/jci/vim/vim_app|/usr/bin/aap_service) ;; *) continue;; esac
+            location_argv=$(tr '\000' ' ' < "$location_process/cmdline" 2>/dev/null)
+            echo "VM_LOCATION_PROCESS=${location_process#/proc/} EXE=$location_exe ARGV=$location_argv"
+            grep -E '^(Name|Pid|PPid|Uid|Gid):' "$location_process/status"
+            tr '\000' '\n' < "$location_process/environ" | grep '^LD_PRELOAD='
+            grep -E '/jci/(sm|settings|time|usbmgr|vbs|lds|navi|aapa)/|libmx5dr|libpatch-blmjciaapa' "$location_process/maps"
+        done
+        echo "VM_LOCATION_SM_SNAPSHOT_END=$location_stage UPTIME=$(cat /proc/uptime)"
+    } >> /tmp/oem-check/location-sm-state.log 2>&1
+}
+location_sm_probe() {
+    echo 'VM_LOCATION_SM_SCOPE=19 original services in an explicitly partial graph; not a full OEM boot; no manual service Start or launch'
+    location_trial=/tmp/oem-check/location-sm.conf
+    # Keep the original global settings, complete service attributes, injected
+    # trial environment, and every edge whose target is selected. The actual
+    # OEM stage scripts and USB readiness script run unchanged. In particular,
+    # usb_drivers can create its flag after module errors; that is not proof of
+    # real USB hardware. NNG remains autorun=no with its original SD path.
+    # LOCATION_SM_CONFIG_AWK_BEGIN
+    awk '
+        BEGIN {
+            count=split("settings jciUSBMGR jciVBS jciLDS jcinavi jciBLMSettings jciTime aap_service jciAAPA stage_1 stage_2 stage_3 stage_navi usb_drivers vim_app dbus_service dbus_hmi NNG jciBLMTIME", names, " ")
+            for (i=1; i<=count; i++) selected[names[i]]=1
+        }
+        {
+            # Ignore markup inside XML comments. Preserve complete comment
+            # lines only inside a selected block; refuse mixed multiline
+            # comment/markup lines rather than emit an unmatched comment.
+            remaining=$0; code=""; was_comment=comment
+            while (length(remaining)) {
+                if (comment) {
+                    end=index(remaining, "-->")
+                    if (!end) break
+                    remaining=substr(remaining, end+3); comment=0
+                } else {
+                    begin=index(remaining, "<!--")
+                    if (!begin) { code=code remaining; break }
+                    code=code substr(remaining, 1, begin-1)
+                    remaining=substr(remaining, begin+4); comment=1
+                }
+            }
+            if ((was_comment || comment) && code !~ /^[[:space:]]*$/) exit 2
+        }
+        code ~ /^[[:space:]]*<sm_config([[:space:]][^<>]*)?>[[:space:]]*$/ {
+            if (root_open || services || closed_root || code ~ /\/>[[:space:]]*$/) exit 2
+            root_open=1; print; next
+        }
+        code ~ /^[[:space:]]*<\/services>[[:space:]]*$/ {
+            if (!services || active || closed_services) exit 2
+            closed_services=1; next
+        }
+        code ~ /^[[:space:]]*<\/sm_config>[[:space:]]*$/ {
+            if (!root_open || !closed_services || closed_root) exit 2
+            closed_root=1; next
+        }
+        !services {
+            if (code ~ /<services /) {
+                if (!root_open) exit 2
+                services=1
+            }
+            print; next
+        }
+        closed_services { if (code !~ /^[[:space:]]*$/) exit 2; next }
+        code ~ /^[[:space:]]*<service .*name="/ {
+            if (active) exit 2
+            name=code; sub(/^.* name="/, "", name); sub(/".*$/, "", name)
+            active=(name in selected)
+            if (active) { seen[name]++; print }
+            if (code ~ /\/>[[:space:]]*$/) active=0
+            next
+        }
+        active {
+            if (code ~ /^[[:space:]]*<(dependency|connection) /) {
+                target=code; sub(/^.* value="/, "", target); sub(/".*$/, "", target)
+                if (target in selected) {
+                    print
+                    if (code ~ /<dependency /) kept_dependency++; else kept_connection++
+                } else {
+                    if (code ~ /<dependency /) removed_dependency++; else removed_connection++
+                }
+            } else print
+            if (code ~ /<\/service>/) active=0
+        }
+        END {
+            if (comment || active || !root_open || !services || !closed_services || !closed_root) exit 2
+            for (name in selected) if (seen[name] != 1) exit 2
+            if (kept_dependency != 21 || kept_connection != 2 || removed_dependency != 10 || removed_connection != 1) exit 2
+            print "    </services>\n</sm_config>"
+        }
+    ' "$trial" > "$location_trial" || {
+        rm -f "$location_trial"
+        echo 'VM_LOCATION_SM_CONFIG_FAILED'
+        return 1
+    }
+    # LOCATION_SM_CONFIG_AWK_END
+    echo 'VM_LOCATION_SM_OMITTED_DEPENDENCY=stage_3->jciMMUI; jciBLMSettings->devices,audio_config,dsp_config,system_mazda_my14; aap_service->devicemanager; jciAAPA->devicemanager,audio_manager,jciRM,jciUpdatea'
+    echo 'VM_LOCATION_SM_OMITTED_CONNECTION=jciBLMSettings->jciaudiosettings'
+    echo 'VM_LOCATION_SM_CONFIG=21 internal dependencies and 2 internal connections retained; original attributes/environment/retry/reset/timeouts preserved'
+    location_snapshot before-sm > /tmp/oem-check/location-dbus.log 2>&1
+    (strace -ff -tt -e trace=file,process,network,ipc,ioctl -o /tmp/oem-check/sm.syscalls taskset 0x02 /jci/sm/sm -f "$location_trial" -e /tmp/smevents.txt; rc=$?; echo "TRACE_WRAPPER_RC=$rc" > /tmp/oem-check/sm.exit) > /tmp/oem-check/sm.log 2>&1 &
+    echo "VM_LOCATION_SM_TRACE_WRAPPER_PID=$!"
+    sleep 8
+    location_sm_snapshot after-sm
+    sleep 45
+    location_sm_snapshot after-start-timeout
+}
 case "$phase" in
     retry) retry_probe;;
+    location-sm) location_sm_probe;;
     services)
         # Execute the unchanged full SM configuration. Do not fabricate the
         # external PID files or replace failed services with success stubs.
@@ -282,8 +464,12 @@ case "$phase" in
     *) echo 'UNKNOWN_VM_PHASE';;
 esac
 sleep 25
-if [ "$phase" = location ]; then
-    location_snapshot late >> /tmp/oem-check/location-dbus.log 2>&1
+if [ "$phase" = location ] || [ "$phase" = location-sm ]; then
+    if [ "$phase" = location-sm ]; then
+        location_sm_snapshot late
+    else
+        location_snapshot late >> /tmp/oem-check/location-dbus.log 2>&1
+    fi
     if [ "$mode" = shadow ]; then
         sh /data_persist/mx5-aa-dr/tools/stop_collector.sh
         echo "VM_LOCATION_COLLECTOR_STOP_RC=$?"
