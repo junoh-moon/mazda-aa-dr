@@ -6,7 +6,7 @@
 
 **실차 기회가 한두 번뿐일 수 있다는 전제로 준비한다.** [통합 시험 계획](docs/FIELD_TRIAL_KO.md)에 따라 한 방문에서 주차 중 기동 확인, 자동 순정 관측·SHADOW·원본 수집, 종료·회수와 다음 부팅 복귀 확인을 묶는다. 새 후보에는 원본 진단 보존과 주차 중 상태/종료 도구를 추가했다. [검증 결과와 생략 항목](validation/FIELD_TRIAL_2026-09-29.md). 기존 `v0.2.0-observe.2`에는 이 기능이 없다.
 
-[첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. 같은 실행 중인 SM의 재시도와 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
+[첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
 USB 설치 ZIP의 내용물을 FAT32 USB 최상위에 복사하면 MP3/JS로 진단 셸에
 진입할 수 있다. 해당 USB 디렉터리에서 `sh install.sh`를 실행한다.
@@ -46,6 +46,6 @@ USB 설치 ZIP의 내용물을 FAT32 USB 최상위에 복사하면 MP3/JS로 진
 
 ## 개발과 공개 범위
 
-Linux 호스트에 C/C++ 컴파일러, make, Python 3, pkg-config, D-Bus 개발 파일을 준비한 뒤 `make test`를 실행한다. 원본 펌웨어가 필요한 설치 fixture는 공개하지 않으며, 없으면 해당 시험은 skip으로 표시된다. 상세 방법은 [CONTRIBUTING.md](CONTRIBUTING.md)와 [ARM 도구체인](docs/toolchain.md)에 있다.
+Linux 호스트에 C/C++ 컴파일러, make, Python 3, Git, pkg-config, D-Bus 개발 파일을 준비한 뒤 `make test`를 실행한다. 원본 펌웨어가 필요한 설치 fixture는 공개하지 않으며, 없으면 해당 시험은 skip으로 표시된다. 상세 방법은 [CONTRIBUTING.md](CONTRIBUTING.md)와 [ARM 도구체인](docs/toolchain.md)에 있다.
 
 소스·설계·검증 기록을 공개한다. 원본 펌웨어·라이브러리·지도·디스어셈블 덤프·개인 공유 링크·실차 이동 로그·빌드된 설치 묶음은 포함하지 않는다. 과거 설치 문서는 검토용 기록이며 현재 설치 안내가 아니다. 프로젝트 라이선스는 아직 선택하지 않았다.

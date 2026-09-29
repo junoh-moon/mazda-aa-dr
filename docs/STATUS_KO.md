@@ -4,6 +4,14 @@
 
 ## SHADOW 기능 변경
 
+추가 독립 감사에서 헤더 변경 누락, ZIP 빌드 출처 혼합, collector 종료 오판,
+정차 GPS의 heading 상실, 보정 수신 시각과 단일 휠 모순 처리를 수정했습니다.
+[새 오프라인 감사 기록](../validation/OFFLINE_AUDIT_2026-09-29.md)과
+[v1.0 완료 조건](V1_READINESS_KO.md)을 함께 읽으십시오.
+실제 SM의 명시적 재시작 및 지연 종료 정책은
+[SM 실행 기록](../validation/SM_RETRY_2026-09-29.md)에 별도로 정리했습니다.
+정상 전체 차량 기동·물리 재부팅·휴대폰 수용은 아직 검증하지 못했습니다.
+
 순정 커널·OEM 서비스 실행 검증과 계정 수정은
 [새 OEM 실행 기록](../validation/OEM_RUNTIME_2026-09-29.md)을 우선한다.
 기존 설치 검증의 `cmu` 비특권 계정 가정은 틀렸다. 공식 passwd update는

@@ -4,7 +4,7 @@ Start with [current status](docs/STATUS_KO.md). Review one problem at a time, li
 
 ## Host validation
 
-Linux requirements: C99/C++11 compiler, make, Python 3, pkg-config, D-Bus development headers/library. On Debian/Ubuntu these typically come from `build-essential`, `python3`, `pkg-config`, and `libdbus-1-dev`.
+Linux requirements: C99/C++11 compiler, make, Python 3, Git, pkg-config, D-Bus development headers/library. On Debian/Ubuntu these typically come from `build-essential`, `python3`, `git`, `pkg-config`, and `libdbus-1-dev`. Release-input tests use temporary local Git repositories; they do not contact a remote or modify the working repository's index.
 
 ```sh
 make test
