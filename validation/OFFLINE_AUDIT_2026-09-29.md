@@ -79,6 +79,11 @@ collector 분석기 회귀는 30개입니다. 전체 최종 빌드·실행은 �
 packaging 93, analyzer 30 Python tests와 C/C++ 실행을 포함합니다.
 첫 host 재실행은 검증 컨테이너의 Git 부재로 실패했고 설치 후 새 BUILD에서
 통과했습니다. 해당 실패 로그를 성공 결과로 덮어쓰지 않았습니다.
+이어 `bb814a6`의 깨끗한 clone 검사는 journal formatter의 경로 전달 누락을
+드러냈습니다. `test-motion-journal`이 선택한 BUILD를 전달하지 않아 앞선 작업
+폴더에서는 기존 기본 build의 formatter를 사용했습니다. 그 이전 host PASS를
+모든 새 formatter 바이트의 검사로 해석하지 않습니다. 경로를 수정하고 깨끗한
+clone의 전체 결과를 최종 릴리즈 기록에 따로 남깁니다.
 
 독립 리뷰어가 실제 ARM 로더 시험의 정상 preload, symlink, 상대 경로와 누락,
 빈 파일, 비인터포저, 잘못된 expected, preload 순서 등 12개 조건을 대조했습니다.

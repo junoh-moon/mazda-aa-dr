@@ -279,7 +279,7 @@ for file in /tmp/oem-check/* /tmp/smevents.txt /data_persist/mx5-aa-dr/logs/*.js
     case "$file" in
         # Keep tap initialization evidence even when it is outside the final
         # thread tail. These are file/socket calls, not OEM read-buffer dumps.
-        *.syscalls.*) grep -E 'execve|exit_group|SIG[A-Z]+|mx5dr|/data_persist/mx5-aa-dr/|libjcivim_api|svcjcivbs|/jci/vim/vim_app|socket\(AF_UNIX|Watchdog|cmu_io|spidev|/dev/shm' "$file"; tail -n 40 "$file";;
+        *.syscalls.*) grep -E 'execve|exit_group|SIG[A-Z]+|mx5dr|/data_persist/mx5-aa-dr/|libjcivim_api|svcjcivbs|libjcimod_can|/jci/vim/vim_app|socket\((AF_UNIX|AF_LOCAL|PF_FILE|PF_LOCAL)|Watchdog|cmu_io|spidev|/dev/shm' "$file"; tail -n 40 "$file";;
         *) cat "$file";;
     esac
     echo "VM_LOG_END $file"
