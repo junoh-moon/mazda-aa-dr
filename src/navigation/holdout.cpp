@@ -27,7 +27,7 @@ bool GpsHoldout::init_model(const ModelProfile& p,const mx5_dr_config& c,
                             mx5_dr_context x,const HoldoutConfig& h) {
     if(!h.duration_ns||h.duration_ns>60000000000ULL||!h.cooldown_ns||
        !h.gps_timeout_ns||h.gps_timeout_ns>2000000000ULL)return false;
-    configured_=pipeline_.init_model(p,c,x,true);
+    configured_=pipeline_.init_model(p,c,x,true,true);
     if(!configured_)return false;
     config_=h;sample_age_ns_=c.sample_age_max_ns;phase_=HOLDOUT_WARMUP;reference_count_=result_head_=result_count_=0;
     window_id_=anchor_ns_=end_ns_=cooldown_until_=last_gps_ns_=0;
@@ -69,6 +69,8 @@ void GpsHoldout::emit(HoldoutEvent event,HoldoutReason reason,
     r.anchor_ns=phase_==HOLDOUT_RUNNING?anchor_ns_:0;
     r.applied_yaw_zero=pipeline_.calibration().active_zero;
     r.calibration_version=pipeline_.calibration().calibration_version;
+    r.applied_wheel_scale=pipeline_.wheel_calibration().active_scale;
+    r.wheel_scale_version=pipeline_.wheel_calibration().calibration_version;
     if(o) { r.reference=o->position;r.reference_ns=o->mono_ns; }
     if(s) { r.prediction=*s;r.prediction_frontier_ns=s->frontier_ns; }
     if(event==HOLDOUT_COMPARED&&o&&s) {
@@ -112,7 +114,9 @@ PipelineResult GpsHoldout::enqueue_position(const adapter::Observation& o) {
         abort(o.position.mode==0?HOLDOUT_REAL_GAP:HOLDOUT_NATIVE,o.mono_ns);
         return PIPELINE_NO_ANCHOR;
     }
-    if(phase_==HOLDOUT_COOLDOWN)return PIPELINE_WAITING;
+    // Cooldown is GPS-visible training time. Only RUNNING excludes references
+    // from the predictor and its calibration; cooldown still cannot start a
+    // new holdout before the configured deadline.
     if(!eligible(o,false)) { abort(HOLDOUT_BAD_GPS,o.mono_ns);return PIPELINE_BAD_INPUT; }
     if(last_gps_ns_&&o.mono_ns<=last_gps_ns_) {
         abort(HOLDOUT_TIME_ORDER,o.mono_ns);return PIPELINE_LATE;
@@ -136,11 +140,13 @@ void GpsHoldout::drain(uint64_t watermark) {
     if(!configured_)return;
     if(watermark<watermark_) { abort(HOLDOUT_TIME_ORDER,latest_received_ns_);return; }
     watermark_=watermark;
-    if(phase_==HOLDOUT_COOLDOWN&&watermark>=cooldown_until_)phase_=HOLDOUT_WARMUP;
     while(reference_count_&&references_[0].mono_ns<=watermark) {
         const adapter::Observation o=references_[0];
+        // A delayed drain may contain older cooldown fixes. The reference's
+        // time, not the later worker watermark, determines eligibility.
+        if(phase_==HOLDOUT_COOLDOWN&&o.mono_ns>=cooldown_until_)phase_=HOLDOUT_WARMUP;
         if(phase_==HOLDOUT_RUNNING&&o.mono_ns>end_ns_)break;
-        if(phase_==HOLDOUT_WARMUP) {
+        if(phase_!=HOLDOUT_RUNNING) {
             // Stationary fixes remain references only; a moving pair is needed
             // to establish the unverified GPS travel-heading/body model.
             if(!eligible(o,true)) { remove_reference();continue; }
@@ -153,9 +159,11 @@ void GpsHoldout::drain(uint64_t watermark) {
         // A completed mean yaw window may arrive after the reference. Query at
         // actual receipt frontier, while retaining the EXACT prediction time.
         Diagnostic d=pipeline_.diagnostic(maximum(latest_received_ns_,watermark));
-        if(phase_==HOLDOUT_WARMUP) {
+        if(phase_!=HOLDOUT_RUNNING) {
             remove_reference();
-            if(d.snapshot.state!=MX5_DR_READY||d.snapshot.frontier_ns!=o.mono_ns)continue;
+            if(phase_==HOLDOUT_COOLDOWN)continue;
+            if(pipeline_.anchor_gate()!=GPS_GATE_ACCEPTED||
+               d.snapshot.state!=MX5_DR_READY||d.snapshot.frontier_ns!=o.mono_ns)continue;
             adapter::Observation gap=adapter::Observation();gap.kind=adapter::Observation::POSITION;
             gap.mono_ns=o.mono_ns;gap.position.mode=0;
             if(!source_ok(pipeline_.enqueue_position(gap))||!source_ok(pipeline_.drain(o.mono_ns))) {

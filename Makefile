@@ -9,7 +9,7 @@ CXX_WARN = -std=c++11 -O2 -Wall -Wextra -Werror -Isrc
 CORE = src/core/dr_core.c
 ADAPTER = src/adapter/adapter.cpp src/adapter/v74_install.cpp
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
-NAV_HEADERS = src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/holdout.h
+NAV_HEADERS = src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
 SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
@@ -70,10 +70,11 @@ test-loader:
 test-recovery:
 	$(PYTHON) tests/recovery/test_guard.py
 
-test-navigation: $(BUILD)/test_navigation $(BUILD)/test_channel $(BUILD)/test_live_pipeline $(BUILD)/test_gyro_bias $(BUILD)/test_holdout
+test-navigation: $(BUILD)/test_navigation $(BUILD)/test_channel $(BUILD)/test_live_pipeline $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout
 	$(BUILD)/test_navigation
 	$(BUILD)/test_live_pipeline
 	$(BUILD)/test_gyro_bias
+	$(BUILD)/test_gps_wheel
 	$(BUILD)/test_holdout
 	@$(BUILD)/test_channel; result=$$?; test $$result -eq 0 -o $$result -eq 77
 $(BUILD)/test_navigation: tests/navigation/test_navigation.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
@@ -136,6 +137,9 @@ $(BUILD)/test_holdout: tests/navigation/test_holdout.cpp $(NAVIGATION) src/runti
 $(BUILD)/test_shadow_log: tests/runtime/test_shadow_log.cpp src/runtime/shadow_log.h $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 
-$(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_holdout $(BUILD)/test_shadow_log: $(NAV_HEADERS)
+$(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: $(NAV_HEADERS)
 $(BUILD)/test_journal $(BUILD)/arm/src/runtime/runtime.o: src/runtime/shadow_log.h
 $(BUILD)/arm/src/navigation/pipeline.o $(BUILD)/arm/src/navigation/holdout.o $(BUILD)/arm/src/runtime/runtime.o: $(NAV_HEADERS)
+
+$(BUILD)/test_gps_wheel: tests/navigation/test_gps_wheel.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@

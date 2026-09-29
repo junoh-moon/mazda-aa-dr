@@ -226,7 +226,7 @@ void *worker(void *) {
   const N::ModelProfile model=N::research_model_profile();
   mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
   bool shadow=config.mode==4 && hook_installed &&
-      navigation.init_model(model,mx5_dr_default_config(),nav_context,true) &&
+      navigation.init_model(model,mx5_dr_default_config(),nav_context,true,true) &&
       holdout.init_model(model,mx5_dr_default_config(),nav_context) &&
       motion.open_channel();
   if(config.mode==4) {
@@ -235,6 +235,7 @@ void *worker(void *) {
         "\"source\":\"existing_vbs_vim_callback\",\"assist_ready\":false,"
         "\"motion_log_format\":\"motion_batch_v1\",\"motion_sampling\":false,"
         "\"stationary_bias_model\":true,\"gps_holdout_model\":true,"
+        "\"gps_anchor_gate_model\":true,\"wheel_scale_model\":true,"
         "\"yaw_zero\":%.9g,\"yaw_rad_per_count\":%.9g,"
         "\"wheel_kmh_per_count\":%.9g,\"wheel_zero_kmh\":%.9g,"
         "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu}",
@@ -331,7 +332,8 @@ void *worker(void *) {
         journal_holdout(j,holdout,now);
         if(now>=last_calibration_log && now-last_calibration_log>=1000000000ULL) {
           last_calibration_log=now;
-          if(mx5::runtime::format_shadow_calibration(line,sizeof line,now,navigation.calibration()))
+          if(mx5::runtime::format_shadow_calibration(line,sizeof line,now,navigation.calibration(),
+              navigation.wheel_calibration(),N::anchor_gate_name(navigation.anchor_gate())))
             j.line(line);
           else j.fail();
         }
@@ -352,14 +354,17 @@ void *worker(void *) {
               "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
               "\"frontier_ns\":%llu,\"lat\":%s,\"lon\":%s,\"heading_rad\":%s,"
               "\"speed_mps\":%s,\"error_model_m\":%s,\"stopped\":%s,"
-              "\"yaw_zero\":%.17g,\"calibration_version\":%llu,\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
+              "\"yaw_zero\":%.17g,\"calibration_version\":%llu,\"wheel_scale\":%.17g,"
+              "\"wheel_scale_version\":%llu,\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
               (unsigned long long)now,d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),
               mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
               (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
               (unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
               (unsigned long long)d.snapshot.frontier_ns,lat,lon,heading,speed,error,
               d.snapshot.stopped?"true":"false",navigation.calibration().active_zero,
-              (unsigned long long)navigation.calibration().calibration_version,encoded?"true":"false",preview);
+              (unsigned long long)navigation.calibration().calibration_version,
+              navigation.wheel_calibration().active_scale,
+              (unsigned long long)navigation.wheel_calibration().calibration_version,encoded?"true":"false",preview);
           j.line(line);
         }
       }

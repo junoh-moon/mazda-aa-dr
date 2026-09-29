@@ -25,6 +25,8 @@ struct HoldoutResult {
     bool has_heading_error;
     double applied_yaw_zero;
     uint64_t calibration_version;
+    double applied_wheel_scale;
+    uint64_t wheel_scale_version;
 };
 // Diagnostic-only worker: independent MODEL pipeline, fixed queues, no I/O or
 // allocation. GNSS references are receipt-time aligned, not ground truth.

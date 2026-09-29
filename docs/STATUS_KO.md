@@ -4,6 +4,8 @@
 
 ## SHADOW 기능 변경
 
+후속 [GPS 기준점 검사와 제한된 휠 거리 보정](GPS_WHEEL_MODEL_KO.md)을 추가한다. GPS-visible 구간에서만 보정 근거를 모으고, 비교 구간에서는 적용값을 고정한다. 기존 모델 구조 안의 변경이며 설치 기본값·ASSIST 자격·배포 릴리즈를 바꾸지 않는다.
+
 기존 VBS VIMC 콜백의 센서 입력을 복사하여 실제 SHADOW 항법을 계산하는 경로를 추가했다. [설계·소스 계약·남은 조건](LIVE_SHADOW_2026-09-29_KO.md), [검증 기록](../validation/LIVE_SHADOW_2026-09-29.md)이 이 변경의 기준이다. 아래 OBSERVE 시험 절차는 이미 발행된 v0.2.0-observe.2의 범위이며, 새 SHADOW 변경을 차량에서 확인했다는 뜻이 아니다.
 
 정차 자이로 영점의 자동 추정·새 GPS 기준점에서의 적용과, 별도 GPS 제외 구간의 센서 DR 비교를 추가했다. [상세 계약](SHADOW_CALIBRATION_KO.md), [새 검증 기록](../validation/SHADOW_CALIBRATION_2026-09-29.md)을 따른다. 두 기능은 MODEL 계산이며 ASSIST 자격을 만들지 않는다.

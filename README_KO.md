@@ -17,6 +17,8 @@ OBSERVE 설치·검사·일회성 예약을 수행한다. [한 줄 설치 설명
 
 ## 문서 읽는 순서
 
+후속 [GPS 기준점 검사와 휠 거리 보정](docs/GPS_WHEEL_MODEL_KO.md)은 GPS와 차량 입력의 불일치를 검사하고, 충분한 전진 직진 구간에서만 ±5% 이내의 MODEL 보정을 적용한다.
+
 1. [현재 상태와 인계](docs/STATUS_KO.md): 목표, 증거 수준, 구현 범위, 남은 일.
 2. [2026-09-28 리뷰와 해결 조건](docs/REVIEW_2026-09-28_KO.md): 실제 결함과 가설의 구분.
 3. [구현 설명](docs/IMPLEMENTATION_REVIEW_KO.md) 및 `src/`: 현재 코드의 데이터 계약.
