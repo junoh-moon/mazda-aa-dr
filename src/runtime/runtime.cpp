@@ -6,6 +6,7 @@
 #include "loader.h"
 #include "boot_id.h"
 #include "sha256.h"
+#include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -22,6 +23,7 @@
 
 namespace {
 namespace A = mx5::adapter;
+namespace N = mx5::navigation;
 const char *const ROOT = "/data_persist/mx5-aa-dr";
 A::Observation queue[256];
 unsigned qhead = 0, qtail = 0, qsize = 0;
@@ -191,6 +193,26 @@ void *worker(void *) {
            boot_result);
   j.line(line);
   j.flush();
+  N::Pipeline navigation;
+  N::MotionReceiver motion;
+  const N::ModelProfile model=N::research_model_profile();
+  mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
+  bool shadow=config.mode==4 && hook_installed &&
+      navigation.init_model(model,mx5_dr_default_config(),nav_context) &&
+      motion.open_channel();
+  if(config.mode==4) {
+    snprintf(line,sizeof line,
+        "{\"kind\":\"shadow_boot\",\"active\":%s,\"domain\":\"model\","
+        "\"source\":\"existing_vbs_vim_callback\",\"assist_ready\":false,"
+        "\"yaw_zero\":%.9g,\"yaw_rad_per_count\":%.9g,"
+        "\"wheel_kmh_per_count\":%.9g,\"wheel_zero_kmh\":%.9g,"
+        "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu}",
+        shadow?"true":"false",model.yaw_zero,model.yaw_rad_per_count,
+        model.wheel_kmh_per_count,model.wheel_zero_kmh,
+        model.reverse_forward_value,model.reverse_reverse_value,
+        (unsigned long long)model.reorder_ns);
+    j.line(line);j.flush();
+  }
   if (hook_installed && config.mode == 2 && !j.failed &&
       !__sync_fetch_and_add(&audit_fault, 0)) {
     A::set_mode(A::SCRUB_STALE);
@@ -198,11 +220,15 @@ void *worker(void *) {
       A::set_mode(A::OBSERVE);
   }
   uint64_t last_flush = 0;
+  uint64_t last_shadow_log=0;
+  bool shadow_audit_reported=false;
   for (;;) {
     A::Observation o;
     unsigned drained = 0;
     while (drained++ < 256 && pop(&o)) {
       if (o.kind == A::Observation::POSITION) {
+        if(shadow && !__sync_fetch_and_add(&audit_fault,0))
+          navigation.enqueue_position(o);
         char lat[48], lon[48], h[48], v[48];
         json_number(o.position.latitude_deg, lat);
         json_number(o.position.longitude_deg, lon);
@@ -233,6 +259,68 @@ void *worker(void *) {
       j.line(line);
     }
     uint64_t now = clock_ns(0);
+    if(shadow) {
+      if(j.failed || __sync_fetch_and_add(&audit_fault,0)) {
+        if(!shadow_audit_reported) {
+          navigation.reset(navigation.context());
+          j.line("{\"kind\":\"shadow_disabled\",\"reason\":\"audit_fault\",\"assist_ready\":false}");
+          shadow_audit_reported=true;
+        }
+      } else {
+        for(unsigned i=0;i<256;++i) {
+          N::RawEvent raw=N::RawEvent();
+          const N::ReceiveResult received=motion.receive(clock_ns(0),&raw);
+          if(received==N::CHANNEL_EMPTY)break;
+          if(received==N::CHANNEL_FAULT) {
+            mx5_dr_context c=navigation.context();
+            if(c.source_epoch==UINT64_MAX || c.generation==UINT64_MAX) {
+              disable_mutation();break;
+            }
+            ++c.source_epoch;++c.generation;navigation.reset(c);
+            j.line("{\"kind\":\"shadow_input_reset\",\"reason\":\"channel_discontinuity\",\"assist_ready\":false}");
+          } else {
+            navigation.enqueue_raw(raw);
+            snprintf(line,sizeof line,
+                "{\"kind\":\"motion\",\"sensor\":%u,\"epoch\":%llu,\"receive_seq\":%llu,"
+                "\"received_ns\":%llu,\"source_mono_ms\":%lld,\"producer_time_status\":\"unknown\","
+                "\"raw\":[%u,%u,%u,%u],\"count\":%u,\"reverse\":%d}",
+                unsigned(raw.kind),(unsigned long long)raw.epoch,
+                (unsigned long long)raw.receive_seq,(unsigned long long)raw.received_ns,
+                (long long)raw.source_mono_ms,unsigned(raw.raw[0]),unsigned(raw.raw[1]),
+                unsigned(raw.raw[2]),unsigned(raw.raw[3]),unsigned(raw.count),raw.reverse);
+            j.line(line);
+          }
+        }
+        now=clock_ns(0);
+        if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
+        if(now>=last_shadow_log && now-last_shadow_log>=100000000ULL) {
+          last_shadow_log=now;
+          const N::Diagnostic d=navigation.diagnostic(now);
+          char lat[48],lon[48],heading[48],speed[48],error[48],preview[97]="";
+          json_number(d.snapshot.latitude_deg,lat);json_number(d.snapshot.longitude_deg,lon);
+          json_number(d.snapshot.body_heading_rad,heading);json_number(d.snapshot.speed_mps,speed);
+          json_number(d.snapshot.error_budget_m,error);
+          uint8_t bytes[48];
+          const bool encoded=mx5::runtime::encode_model_location_preview(d.snapshot,bytes);
+          if(encoded)hex48(bytes,preview);
+          snprintf(line,sizeof line,
+              "{\"kind\":\"shadow\",\"mono_ns\":%llu,\"domain\":\"model\","
+              "\"model_valid\":%s,\"assist_ready\":false,\"state\":%u,"
+              "\"result\":\"%s\",\"pipeline\":\"%s\",\"uncertainties\":%u,"
+              "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
+              "\"frontier_ns\":%llu,\"lat\":%s,\"lon\":%s,\"heading_rad\":%s,"
+              "\"speed_mps\":%s,\"error_model_m\":%s,\"stopped\":%s,"
+              "\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
+              (unsigned long long)now,d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),
+              mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
+              (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
+              (unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
+              (unsigned long long)d.snapshot.frontier_ns,lat,lon,heading,speed,error,
+              d.snapshot.stopped?"true":"false",encoded?"true":"false",preview);
+          j.line(line);
+        }
+      }
+    }
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;
       snprintf(line, sizeof line,

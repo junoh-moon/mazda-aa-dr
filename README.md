@@ -12,7 +12,7 @@ See [first stationary trial](docs/FIRST_TRIAL_KO.md) and [integration evidence](
 
 The goal is to let Android Auto navigation, initially Naver Map, benefit from vehicle motion during GNSS outages. Other apps and other firmware versions are separate compatibility questions.
 
-The source baseline contains an offline DR core, version-specific ARM hooks, automatic observation, a bounded journal, an installer, and a PC log analyzer. SCRUB removes optional stale speed/bearing fields from selected mode-0 cached locations; it does not generate a new position. SHADOW currently behaves as observation only. Runtime ASSIST is blocked in code and configuration.
+The source baseline contains an offline DR core, version-specific ARM hooks, automatic observation, a bounded journal, an installer, and a PC log analyzer. SCRUB removes optional stale speed/bearing fields from selected mode-0 cached locations; it does not generate a new position. The published OBSERVE release has an observation-only SHADOW placeholder; this draft replaces it with the MODEL calculation described below. Runtime ASSIST is blocked in code and configuration.
 
 The original 0.1 baseline is retained in Git history. The subsequent loader, collector and recovery changes have separate PRs and verification records. Branch contents do not imply that those PRs have been merged into master.
 
@@ -43,3 +43,7 @@ The packaging identity tests require separately obtained matching stock firmware
 This repository contains authored source, tests, technical interpretation, and validation records. OEM firmware, extracted libraries/maps, disassembly dumps, personal download links, vehicle location logs, the toolchain, and prebuilt installation bundles are omitted. Firmware hashes and narrow compatibility signatures remain so the target can be identified. The historical archive and imported-source identities are recorded in `validation/source-import.json`.
 
 No project license has been selected yet. See [provenance](docs/PROVENANCE.md) for referenced projects and the limits of the imported evidence.
+
+## Draft: live sensor SHADOW calculation
+
+This branch adds an existing-VBS-callback tap, raw sensor decoding, bounded local transport, time alignment and actual MODEL-domain navigation through the shared DR core. SHADOW records derived position and LOCATION bytes while forwarding OEM data unchanged. It does not promote model assumptions or receipt timestamps into qualified ASSIST. See [implementation and limits](docs/LIVE_SHADOW_2026-09-29_KO.md) and [validation](validation/LIVE_SHADOW_2026-09-29.md). This is separate from the published `v0.2.0-observe.2` release and has not run on the vehicle.

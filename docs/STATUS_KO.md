@@ -1,6 +1,10 @@
-# 현재 상태와 인계 — 2026-09-28
+# 현재 상태와 인계 — 2026-09-29
 
 이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 0.1 설치 가능 판단보다 우선한다. 현재 통합 브랜치는 0.2 시험 후보이며 OFF·폴링 분리·일회성 기동 보호를 구현하고 검증했다. master에 병합됐는지는 PR 상태와 구분한다.
+
+## 이번 Draft의 기능 변경
+
+기존 VBS VIMC 콜백의 센서 입력을 복사하여 실제 SHADOW 항법을 계산하는 경로를 추가했다. [설계·소스 계약·남은 조건](LIVE_SHADOW_2026-09-29_KO.md), [검증 기록](../validation/LIVE_SHADOW_2026-09-29.md)이 이 변경의 기준이다. 아래 OBSERVE 시험 절차는 이미 발행된 v0.2.0-observe.2의 범위이며, 새 SHADOW 변경을 차량에서 확인했다는 뜻이 아니다.
 
 ## 목표와 범위
 
@@ -39,10 +43,11 @@
 - `src/core/`: 외부 I/O 없는 C99 DR 상태 기계. 품질·시간·후진·재획득·오차 제한과 합성 리플레이.
 - `src/adapter/`: 상위 ARM veneer/TLS와 하위 GOT 후크. 원본 입력 복사, LOCATION 선택, 정확히 한 번 원본 send 호출.
 - `src/runtime/`: 설정 우선 dlopen 경계 설치, bounded queue/journal. 별도 `src/collector/`가 관찰용 폴링을 맡는다.
+- `src/sensors/`, `src/navigation/`: 기존 VBS 콜백의 원본 센서 복사, 비차단 datagram, 시간 정렬과 MODEL/qualified 공통 파이프라인. 새 구독자·차량 명령·TCP7035 접속 없음.
 - `packaging/`: 펌웨어 해시 검사, 기존 touch 보존, 영구 preload 없는 일회성 기동 가드, 명시적 arm·제거. 상시 설치 승인 아님.
 - `tools/analyze_logs.py`: 실제 이벤트·health·drop 등 분석. `audit_fault`를 이미 불완전 실험으로 판정함.
 
-SCRUB은 mode=0 캐시 LOCATION에서 `hasSpeed=false`, `hasBearing=false`로 만들고 값도 0으로 지운다. 유효한 speed=0을 제공하는 것과 다르다. 오래된 좌표는 계속 남는다. SHADOW는 관찰만 하는 예약 모드다. ASSIST는 `allow_assist=false`와 항상 false인 provenance 검사 등으로 차단되어 있다.
+SCRUB은 mode=0 캐시 LOCATION에서 `hasSpeed=false`, `hasBearing=false`로 만들고 값도 0으로 지운다. 유효한 speed=0을 제공하는 것과 다르다. 오래된 좌표는 계속 남는다. SHADOW는 이번 Draft에서 실제 센서 수신과 MODEL-domain DR 계산을 수행한다. 계산 위치와 LOCATION 미리보기만 기록하며 순정 송신을 유지한다. ASSIST는 `allow_assist=false`와 항상 false인 provenance 검사 등으로 차단되어 있다.
 
 ## 다음 작업과 종료 경로
 

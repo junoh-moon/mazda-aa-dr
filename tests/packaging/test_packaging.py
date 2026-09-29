@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parents[2]
 PACK = REPO / 'packaging'
 STOCK = Path(os.environ.get('MX5DR_STOCK_ROOT', str(REPO.parent / 'design_inputs/evidence/stock_reference')))
 TOKEN = '/data_persist/mx5-aa-dr/libmx5dr.so'
+TAP_TOKEN = '/data_persist/mx5-aa-dr/libmx5dr-vimtap.so'
 TOUCH = '/data_persist/oem-aa-mod/libpatch-blmjciaapa.so'
 
 
@@ -35,6 +36,9 @@ class PackagingTests(unittest.TestCase):
         fake[16:20] = b'\x03\x00\x28\x00'
         (self.bundle / 'libmx5dr.so').write_bytes(fake)
         self.set_payload_hash()
+        (self.bundle / 'libmx5dr-vimtap.so').write_bytes(fake)
+        (self.bundle / 'libmx5dr-vimtap.so.sha256').write_text(
+            hashlib.sha256(fake).hexdigest() + '  libmx5dr-vimtap.so\n')
         fake[16] = 2  # Separate test-only ARM ET_EXEC header; never run.
         (self.bundle / 'mx5dr-collector').write_bytes(fake)
         digest = hashlib.sha256(fake).hexdigest()
@@ -72,9 +76,9 @@ class PackagingTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
         return result
 
-    def preload(self, path=None):
+    def preload(self, path=None, service_name='jciAAPA'):
         tree = ET.parse(path or self.sm)
-        service = tree.find(".//service[@name='jciAAPA']")
+        service = tree.find(".//service[@name='" + service_name + "']")
         return [node.attrib['env_value'] for node in service.findall('environ_var')
                 if node.attrib.get('env_name') == 'LD_PRELOAD']
 
@@ -91,6 +95,7 @@ class PackagingTests(unittest.TestCase):
         self.run_script('install.sh')
         self.assertEqual(self.preload(), [])
         self.assertEqual(self.preload(self.trial), [TOKEN])
+        self.assertEqual(self.preload(self.trial, 'jciVBS'), [])
         self.assertEqual(self.autostart.read_text().count('ONE-BOOT BEGIN'), 2)
         self.assertEqual(self.wcp.read_bytes(), self.original_wcp)
         base = self.root / 'data_persist/mx5-aa-dr'
@@ -108,10 +113,10 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(self.sm.read_bytes(), self.original)
 
     def test_release_payload_with_existing_touch(self):
-        release = REPO / 'bundle/libmx5dr.so'
-        if not release.exists():
-            self.skipTest('Release bundle has not been built')
-        for name in ('libmx5dr.so', 'mx5dr-collector', 'mx5dr-guard'):
+        release = Path(os.environ.get('MX5DR_RELEASE_BUNDLE', str(REPO / 'bundle'))) / 'libmx5dr.so'
+        if not release.exists() or not (release.parent / 'libmx5dr-vimtap.so').exists():
+            self.skipTest('Current four-artifact release bundle has not been built')
+        for name in ('libmx5dr.so', 'libmx5dr-vimtap.so', 'mx5dr-collector', 'mx5dr-guard'):
             artifact = release.parent / name
             self.assertTrue(artifact.is_file(), str(artifact))
             shutil.copyfile(artifact, self.bundle / name)
@@ -123,6 +128,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(installed.read_bytes(), release.read_bytes())
         self.assertEqual(self.preload(), [TOUCH])
         self.assertEqual(self.preload(self.trial), [TOKEN + ':' + TOUCH])
+        self.assertEqual(self.preload(self.trial, 'jciVBS'), [])
         self.run_script('uninstall.sh')
         self.assertEqual(self.preload(), [TOUCH])
 
@@ -235,6 +241,90 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(len(list(dest.glob('*.tar'))), 1)
         self.assertEqual(len(list(dest.glob('*.sha256'))), 1)
         self.assertTrue(log.exists())
+
+    def test_shadow_trial_wraps_both_services_and_rearm_removes_tap(self):
+        self.add_touch(multiline=True)
+        other = '/data_persist/vbs-a.so:/data_persist/vbs-b.so'
+        for path in (self.sm, self.wcp):
+            text = path.read_text()
+            start = text.index('name="jciVBS"')
+            end = text.index('</service>', start)
+            path.write_text(text[:end] + '<environ_var env_name="LD_PRELOAD"\n'
+                            ' env_value="' + other + '"/>\n' + text[end:])
+        baseline = [path.read_bytes() for path in (self.sm, self.wcp)]
+        self.run_script('install.sh', '--mode=SHADOW')
+        for path, before in zip((self.sm, self.wcp), baseline):
+            self.assertEqual(path.read_bytes(), before)
+        for path in (self.trial, self.trial.with_name('wcp.trial')):
+            self.assertEqual(self.preload(path, 'jciVBS'), [TAP_TOKEN + ':' + other])
+            self.assertNotIn(TAP_TOKEN, self.preload(path)[0])
+        self.assertEqual(self.preload(self.trial), [TOKEN + ':' + TOUCH])
+        for mode in ('OBSERVE', 'SCRUB'):
+            self.run_script('arm.sh', '--mode=' + mode)
+            for path in (self.trial, self.trial.with_name('wcp.trial')):
+                self.assertEqual(self.preload(path, 'jciVBS'), [other])
+        self.run_script('arm.sh', '--mode=SHADOW')
+        self.assertEqual(self.preload(self.trial, 'jciVBS'), [TAP_TOKEN + ':' + other])
+        self.run_script('uninstall.sh')
+        for path, before in zip((self.sm, self.wcp), baseline):
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_shadow_bad_vbs_identity_does_not_publish_startup_or_payload(self):
+        self.wcp.write_text(self.wcp.read_text().replace(
+            'path="/jci/vbs/svcjcivbs.so"', 'path="/jci/vbs/different.so"'))
+        before = self.wcp.read_bytes()
+        self.run_script('install.sh', '--mode=SHADOW', ok=False)
+        self.assertEqual(self.sm.read_bytes(), self.original)
+        self.assertEqual(self.wcp.read_bytes(), before)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+        self.assertFalse((self.root / 'data_persist/mx5-aa-dr/libmx5dr-vimtap.so').exists())
+
+    def test_tap_checksum_and_arch_checked_before_installation(self):
+        tap = self.bundle / 'libmx5dr-vimtap.so'
+        original = tap.read_bytes()
+        tap.write_bytes(original + b'corrupt')
+        self.run_script('install.sh', ok=False)
+        fake = bytearray(original)
+        fake[18] = 3  # x86 instead of ARM, with matching checksum.
+        tap.write_bytes(fake)
+        tap.with_name(tap.name + '.sha256').write_text(hashlib.sha256(fake).hexdigest() + '\n')
+        self.run_script('install.sh', ok=False)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+        self.assertFalse((self.root / 'data_persist/mx5-aa-dr').exists())
+
+    def test_permanent_vbs_tap_rejected_then_removed_by_token_only(self):
+        other = TAP_TOKEN + '.backup:/data_persist/vbs-later.so'
+        text = self.sm.read_text()
+        start = text.index('name="jciVBS"')
+        end = text.index('</service>', start)
+        self.sm.write_text(text[:end] + '<environ_var env_name="LD_PRELOAD" env_value="' +
+                           TAP_TOKEN + ':' + other + '"/>' + text[end:])
+        before = self.sm.read_bytes()
+        old_tap = self.root / 'data_persist/mx5-aa-dr/libmx5dr-vimtap.so'
+        old_tap.parent.mkdir()
+        old_tap.write_bytes(b'mapped old tap')
+        self.run_script('install.sh', '--mode=SHADOW', ok=False)
+        self.assertEqual(self.sm.read_bytes(), before)
+        self.assertEqual(old_tap.read_bytes(), b'mapped old tap')
+        self.run_script('uninstall.sh')
+        self.assertEqual(self.preload(self.sm, 'jciVBS'), [other])
+        self.assertEqual(old_tap.read_bytes(), b'mapped old tap')
+
+    def test_bundle_requires_and_hashes_tap(self):
+        dest = Path(self.tmp.name) / 'new-release'
+        command = ['sh', str(PACK / 'make_bundle.sh'), str(self.bundle / 'libmx5dr.so'), str(dest)]
+        tap = self.bundle / 'libmx5dr-vimtap.so'
+        data = tap.read_bytes()
+        tap.unlink()
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(dest.exists())
+        tap.write_bytes(data)
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((dest / tap.name).read_bytes(), data)
+        self.assertEqual((dest / (tap.name + '.sha256')).read_text().split()[0],
+                         hashlib.sha256(data).hexdigest())
 
 
 if __name__ == '__main__':

@@ -33,6 +33,14 @@ want=$(awk 'NR==1{print $1}' "$HERE/libmx5dr.so.sha256")
 magic=$(od -An -t u1 -N 7 "$HERE/libmx5dr.so" | tr -s ' ' | sed 's/^ //;s/ $//')
 arch=$(od -An -t u1 -j 16 -N 4 "$HERE/libmx5dr.so" | tr -s ' ' | sed 's/^ //;s/ $//')
 [ "$magic" = '127 69 76 70 1 1 1' ] && [ "$arch" = '3 0 40 0' ] || fail 'Payload must be little-endian ARM32 ELF shared object'
+regular "$HERE/libmx5dr-vimtap.so"
+regular "$HERE/libmx5dr-vimtap.so.sha256"
+[ "$(wc -c < "$HERE/libmx5dr-vimtap.so")" -ge 52 ] || fail 'Truncated VBS tap ELF header'
+tap_want=$(awk 'NR==1{print $1}' "$HERE/libmx5dr-vimtap.so.sha256")
+[ "$(hash "$HERE/libmx5dr-vimtap.so")" = "$tap_want" ] || fail 'VBS tap checksum mismatch'
+magic=$(od -An -t u1 -N 7 "$HERE/libmx5dr-vimtap.so" | tr -s ' ' | sed 's/^ //;s/ $//')
+arch=$(od -An -t u1 -j 16 -N 4 "$HERE/libmx5dr-vimtap.so" | tr -s ' ' | sed 's/^ //;s/ $//')
+[ "$magic" = '127 69 76 70 1 1 1' ] && [ "$arch" = '3 0 40 0' ] || fail 'VBS tap must be little-endian ARM32 ELF shared object'
 regular "$HERE/mx5dr-collector"
 regular "$HERE/mx5dr-collector.sha256"
 [ "$(wc -c < "$HERE/mx5dr-collector")" -ge 52 ] || fail 'Truncated collector ELF header'
@@ -54,6 +62,7 @@ arch=$(od -An -t u1 -j 18 -N 2 "$HERE/mx5dr-guard" | tr -s ' ' | sed 's/^ //;s/ 
 for name in sm.conf sm_WCP.conf; do
     regular "$ROOT/jci/sm/$name"
     ! grep -F "$TOKEN" "$ROOT/jci/sm/$name" >/dev/null || fail 'Legacy persistent mx5dr preload found; run uninstall.sh first, then install one-boot package'
+    ! grep -F "$TAP_TOKEN" "$ROOT/jci/sm/$name" >/dev/null || fail 'Persistent VBS tap preload found; run uninstall.sh first, then install one-boot package'
 done
 prepare_storage
 [ ! -e "$BASE/pending" ] || fail 'Incomplete transaction: run uninstall.sh before retrying'
@@ -75,6 +84,8 @@ for name in $TARGETS; do
     regular "$file"
     cp -p "$file" "$TX/$name.before"
     edit_to "$file" "$file.mx5dr-new.$$" remove
+    case "$name" in sm.conf) trial=normal.trial;; sm_WCP.conf) trial=wcp.trial;; esac
+    trial_to "$file.mx5dr-new.$$" "$BASE/guard/$trial.new.$$"
     hash "$file" > "$TX/$name.before.sha256"
 done
 file=$ROOT/usr/bin/autostart
@@ -85,7 +96,7 @@ cp -p "$file" "$file.mx5dr-new.$$"
 awk -v action=add -f "$HERE/edit_autostart.awk" "$file" > "$file.mx5dr-new.$$" || fail 'Unsupported autostart anchors'
 sh -n "$file.mx5dr-new.$$" || fail 'Invalid staged autostart shell'
 # Never truncate mapped objects. Guard and config are root-owned; logs alone are cmu writable.
-for name in libmx5dr.so mx5dr-guard mx5dr-collector; do
+for name in libmx5dr.so libmx5dr-vimtap.so mx5dr-guard mx5dr-collector; do
     dest=$BASE/$name
     [ "$name" != mx5dr-guard ] || dest=$BASE/guard/$name
     cp "$HERE/$name" "$dest.new.$$"
@@ -115,10 +126,9 @@ file=$ROOT/usr/bin/autostart
 [ "$(hash "$file")" = "$(cat "$TX/autostart.before.sha256")" ] || fail 'Concurrent autostart edit'
 mv -f "$file.mx5dr-new.$$" "$file"
 # Templates bind the current preserved touch settings; later changes decline a trial.
-awk -v action=add -v token="$TOKEN" -f "$HERE/edit_service.awk" "$ROOT/jci/sm/sm.conf" > "$BASE/guard/normal.trial"
-awk -v action=add -v token="$TOKEN" -f "$HERE/edit_service.awk" "$ROOT/jci/sm/sm_WCP.conf" > "$BASE/guard/wcp.trial"
-chmod 0600 "$BASE/guard/normal.trial" "$BASE/guard/wcp.trial"
-printf 'mode=%s\npolicy=one-boot\nbackup=%s\npayload_sha256=%s\n' "$MODE" "$TX" "$want" > "$BASE/installed.txt.new.$$"
+mv -f "$BASE/guard/normal.trial.new.$$" "$BASE/guard/normal.trial"
+mv -f "$BASE/guard/wcp.trial.new.$$" "$BASE/guard/wcp.trial"
+printf 'mode=%s\npolicy=one-boot\nbackup=%s\npayload_sha256=%s\ntap_sha256=%s\n' "$MODE" "$TX" "$want" "$tap_want" > "$BASE/installed.txt.new.$$"
 mv -f "$BASE/installed.txt.new.$$" "$BASE/installed.txt"
 rm -f "$BASE/pending"
 sync

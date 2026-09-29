@@ -10,6 +10,7 @@ prepare_storage
 [ ! -e "$BASE/pending" ] || fail 'Pending installation transaction'
 [ -d "$BASE/guard" ] && [ ! -L "$BASE/guard" ] || fail 'Missing guard directory'
 regular "$BASE/guard/mx5dr-guard"
+regular "$BASE/libmx5dr-vimtap.so"
 # Disarm first: interrupted template refresh must not retain a previous authorization.
 rm -f "$BASE/guard/arm"
 sync
@@ -19,8 +20,8 @@ for pair in 'sm.conf normal.trial' 'sm_WCP.conf wcp.trial'; do
     regular "$ROOT/jci/sm/$1"
     # Any old persistent experimental token is an installation error, not silently accepted.
     ! grep -F "$TOKEN" "$ROOT/jci/sm/$1" >/dev/null || fail 'Persistent preload token remains; reinstall one-boot package'
-    awk -v action=add -v token="$TOKEN" -f "$HERE/edit_service.awk" "$ROOT/jci/sm/$1" > "$BASE/guard/$2.new.$$"
-    chmod 0600 "$BASE/guard/$2.new.$$"
+    ! grep -F "$TAP_TOKEN" "$ROOT/jci/sm/$1" >/dev/null || fail 'Persistent VBS tap token remains; reinstall one-boot package'
+    trial_to "$ROOT/jci/sm/$1" "$BASE/guard/$2.new.$$"
     mv -f "$BASE/guard/$2.new.$$" "$BASE/guard/$2"
 done
 sync
