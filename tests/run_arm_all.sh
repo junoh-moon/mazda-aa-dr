@@ -47,14 +47,14 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/pipeline-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/runtime-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/request_trace.cpp tests/runtime/test_request_trace.cpp -pthread -o "$build/request-trace-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-trace-test"
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o "$build/request-status-test"
-qemu-arm -L "$QEMU_SYSROOT" "$build/request-status-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/request_trace.cpp src/runtime/request_observer.cpp tests/runtime/test_request_observer.cpp -pthread -o "$build/request-observer-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-observer-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_model_session.cpp -o "$build/model-session-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/model-session-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_request_handoff.cpp -pthread -o "$build/request-handoff-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-handoff-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o "$build/request-status-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/request-status-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/packaging/test_oem_session_callbacks.cpp src/runtime/sha256.cpp -ldl -pthread -lrt -o "$build/session-callback-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/session-callback-test"
 MX5DR_PUBLICATION_BUILD="$build/request-publication" sh tests/runtime/run_request_publication.sh
@@ -64,8 +64,12 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/journal-queue-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_worker_session.cpp -ldl -pthread -lrt -lm -o "$build/worker-session-test"
-for scenario in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do
+for scenario in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
+done
+MX5DR_TEST_STALE_RAW=1 qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" bus_reuse
+for scenario in bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do
+    MX5DR_TEST_PREGAP=1 qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
 done
 for fixture in reset input; do
     "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" "tests/runtime/test_model_session_$fixture.cpp" -ldl -pthread -lrt -lm -o "$build/model-session-$fixture-test"
@@ -90,18 +94,18 @@ python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
     --suite bus --output-dir "$build/bus-dso"
 
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp tests/navigation/test_navigation.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -o "$build/navigation-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp tests/navigation/test_navigation.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -lrt -o "$build/navigation-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/navigation-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp -o "$build/vim-parser-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/vim-parser-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/sha256.cpp src/runtime/config.cpp -ldl -pthread -lrt -o "$build/vim-tap-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/vim-tap-test"
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/navigation/test_channel.cpp src/navigation/channel.cpp -pthread -lrt -o "$build/motion-channel-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -DMX5DR_CHANNEL_RECVMSG_WRAP -Wl,--wrap=recvmsg -Isrc tests/navigation/test_channel.cpp src/navigation/channel.cpp -pthread -lrt -o "$build/motion-channel-test"
 result=0
 qemu-arm -L "$QEMU_SYSROOT" "$build/motion-channel-test" || result=$?
 [ "$result" -eq 0 ] || [ "$result" -eq 77 ]
 
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/navigation/test_live_pipeline.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/navigation/pipeline.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -o "$build/live-pipeline-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/navigation/test_live_pipeline.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/navigation/pipeline.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -lrt -o "$build/live-pipeline-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/live-pipeline-test"
 
 # The same worker algorithms and test fixtures on the release ARM32 ABI.

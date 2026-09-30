@@ -141,13 +141,23 @@ B::Snapshot read_bus_connection(const void* connection) {
 }
 void observe_position_bus(const void* connection) {
     const PreserveErrno saved;
-    const B::Snapshot s=read_bus_connection(connection);
-    if(s.result!=B::CONNECTED || !s.object || !s.lifetime)return;
-    Context& c=contexts[s.object-1];
-    if(c.source_lifetime.load()==s.lifetime)return;
+    if(!prepared.load(std::memory_order_acquire) || faults.load())return;
+    // Pin the never-reused slot. Another source marker is not a lifecycle
+    // boundary and must not make this completed submission disappear.
+    Context* const c=lookup(connection);
+    if(!c || c->phase.load()!=ACTIVE)return;
+    const uint64_t lifetime=c->lifetime.load();
+    uint64_t source=c->source_lifetime.load();
+    if(!lifetime || source>=lifetime)return;
     Mutation mutation(false);
-    if(c.phase.load()==ACTIVE && c.lifetime.load()==s.lifetime &&
-       c.address.load()==reinterpret_cast<uintptr_t>(connection))c.source_lifetime.store(s.lifetime);
+    if(c->phase.load()==ACTIVE && c->lifetime.load()==lifetime &&
+       c->address.load()==reinterpret_cast<uintptr_t>(connection)) {
+        // A delayed older-lifetime marker cannot overwrite a newer marker.
+        // With strong CAS each failure raises source; this is lock-free,
+        // not a constant-time or wait-free bound.
+        while(source<lifetime && !c->source_lifetime.compare_exchange_strong(
+                source,lifetime,std::memory_order_seq_cst,std::memory_order_seq_cst)) {}
+    }
     mutation.complete=true;
 }
 B::Boundary read_position_bus() {

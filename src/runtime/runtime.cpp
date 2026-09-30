@@ -253,7 +253,7 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
   for(unsigned i=0;i<256 && !j.failed;++i) {
     N::RawEvent raw=N::RawEvent();
     N::ReceiveDiagnostic d=N::ReceiveDiagnostic();
-    const N::ReceiveResult received=motion.receive(clock_ns(0),&raw,&d);
+    const N::ReceiveResult received=motion.receive(&raw,&d);
     if(received==N::CHANNEL_EMPTY)break;
     const bool enabled=compute && !__sync_fetch_and_add(&audit_fault,0);
     if(received==N::CHANNEL_FAULT) {

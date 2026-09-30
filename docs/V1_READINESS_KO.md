@@ -95,7 +95,27 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   SYSTEM 응답·USB 목록 요청까지 진행했지만 mode 0·READ_NOT_READY입니다.
   작성한 NMEA의 체크섬 검사나 빌드만 한 caller를 이 항목의 완료로 세지 않습니다.
 - [ ] 실제 요청의 provider/receiver/session 출처를 보존하는 ASSIST 연결을 구현·검사합니다.
-  외부 master의 [세션 관측 수정·실행](../validation/SESSION_CONTEXT_REVIEW_2026-09-30.md)에서
+  [버스 연결 관측 검토](../validation/BUS_CONNECTION_REVIEW_2026-09-30.md)에서
+  실제 발행/응답 연결 수명과 daemon 종료의 단절 관측을 제품에 연결했습니다.
+  세 독립 리뷰와 host/ARM 전체 검사 뒤 원본 VM의 LDS 요청 30건, 단절 뒤
+  generation 철회와 bus fault 0을 확인했습니다. 관측 ID는 daemon/provider
+  인증이나 receiver 자격이 아닙니다.
+  [후속 MODEL 버스 경계 검토](../validation/MODEL_BUS_REVIEW_2026-09-30.md)에서
+  버스 reset을 구현하고 동시 출처 표시·분석기·실제 수신 시각 결함을 수정했습니다.
+  최종 제품의 원본 VM에서 LDS 응답 42건, 세션을 유지한 복수 연결·해제와
+  raw 보존을 확인했습니다. 유효 원본 GPS나 qualified 입력·폰 수용은 아니므로
+  이 상위 항목은 미완료입니다. 외부 SM·SYSTEM·USB 기동 조사도 따로 추적합니다.
+  [세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서
+  이전 세션의 기준점·학습 보정·대기 입력 잔류를 제거하고 원시 입력을 보존했습니다.
+  원본 VM의 두 조건에서 각각 지연 요청 네 건을 새 MODEL에서 제외했고, 재시작
+  조건의 원본 LOCATION 네 건은 그대로 전달됐습니다. 이는 음성 조건의 근거이며
+  qualified 출처·정상 폰 연결·유효한 원본 위치 계산을 구현했다는 뜻은 아닙니다.
+  [요청 경로 복사·저장 검토](../validation/REQUEST_ROUTE_REVIEW_2026-09-30.md)에서
+  외부 변경을 통합하고 네 issue-time 문자열을 journal까지 연결했습니다.
+  세 독립 리뷰의 파서/회귀 결함 수정, host/ARM 검사와 직접 원본 VM의 요청
+  30건 대조를 완료했습니다. 이는 route 이름 관측이며 bus 수명·실제 provider
+  소유권이나 receiver/session 자격을 구현한 결과는 아닙니다.
+  최신 [세션 관측 수정·실행](../validation/SESSION_CONTEXT_REVIEW_2026-09-30.md)에서
   issue 당시 문맥과 send 저장소를 연결하고 동시성·판정 결함을 수정했습니다.
   원본 세션 재생성 뒤 이전 요청 네 건이 새 세션으로 송신되는 경우도 구별했습니다.
   관측된 API 수명은 요청 소유권이나 폰 수용을 증명하지 않으므로 이 항목은 미완료입니다.
@@ -161,6 +181,8 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   원본 생성·송신·시작의 0 반환과 INVALID callback을 두 VM에서 직접 대조하고
   진단 판정기를 보강했습니다. 정상 폰 연결이나 제품 요청에 연결된 세션 자격의
   구현으로 세지 않으며 이 항목은 미완료입니다.
+- [ ] 기존 MODEL 로그의 valid/state/result/좌표 의미 모순을 재현·수정합니다.
+  버스 리뷰에서 발견한 기존 분석기 공백이며 아직 구현하지 않았습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.

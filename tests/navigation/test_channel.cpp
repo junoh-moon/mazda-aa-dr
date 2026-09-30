@@ -7,6 +7,9 @@
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef MX5DR_CHANNEL_RECVMSG_WRAP
+#include "receive_clock_fixture.h"
+#endif
 using namespace mx5::navigation;
 static uint64_t monotonic_ns() {
     timespec now;assert(clock_gettime(CLOCK_MONOTONIC,&now)==0);
@@ -16,6 +19,7 @@ struct DelayedInput { MotionSender* sender;RawEvent event; };
 static void* delayed_input(void* context) {
     DelayedInput* input=static_cast<DelayedInput*>(context);
     usleep(20000);
+    input->event.received_ns=monotonic_ns();
     assert(input->sender->send_event(input->event));return 0;
 }
 static void wait_tests() {
@@ -40,7 +44,7 @@ static void wait_tests() {
         if(elapsed<fastest)fastest=elapsed;
         assert(pthread_join(thread,0)==0);
         assert(receiver.wait_for_input(0)==1); // Readiness leaves the packet queued.
-        RawEvent out;assert(receiver.receive(input.event.received_ns,&out)==CHANNEL_EVENT);
+        RawEvent out;assert(receiver.receive(&out)==CHANNEL_EVENT);
         assert(out.receive_seq==trial+1&&out.received_ns==input.event.received_ns&&out.reverse==1);
     }
     // A fixed 50ms sleep followed by poll(0) must fail. Allow individual
@@ -84,7 +88,7 @@ static void inspect_tests() {
     ++e.receive_seq;assert(encode_motion(e,bytes));inspect(e.received_ns,RECEIVE_OK,true);
     ++packet.sender_pid;inspect(e.received_ns,RECEIVE_SOURCE_CHANGED,true);
     MotionReceiver unopened;
-    assert(unopened.receive(e.received_ns,&out,&d)==CHANNEL_FAULT);
+    assert(unopened.receive(&out,&d)==CHANNEL_FAULT);
     assert(d.reason==RECEIVE_SYSCALL && d.syscall_errno==EBADF && !d.authenticated_decoded);
     assert(out.received_ns==0 && out.receive_seq==0);
     puts("motion inspection: authenticated rejection retention and distinct bounded faults passed");
@@ -118,22 +122,26 @@ int main() {
         assert(false);
     }
     assert(!duplicate.open_channel(name));assert(sender.open_channel(name));
+#ifdef MX5DR_CHANNEL_RECVMSG_WRAP
+    receive_clock_order_test();
+#endif
     wait_tests();
-    assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_EMPTY);
-    assert(sender.send_event(e));assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_EVENT);
+    assert(receiver.receive(&decoded)==CHANNEL_EMPTY);
+    e.received_ns=monotonic_ns();assert(sender.send_event(e));assert(receiver.receive(&decoded)==CHANNEL_EVENT);
     assert(decoded.receive_seq==1 && decoded.epoch==9);
     e.receive_seq=3;assert(sender.send_event(e));
-    assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_FAULT); // lost datagram
+    assert(receiver.receive(&decoded)==CHANNEL_FAULT); // lost datagram
     e.receive_seq=4;assert(sender.send_event(e));
-    assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_EVENT);
-    assert(sender.send_event(e));assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_FAULT);
+    assert(receiver.receive(&decoded)==CHANNEL_EVENT);
+    assert(sender.send_event(e));assert(receiver.receive(&decoded)==CHANNEL_FAULT);
     e.epoch=10;e.receive_seq=1;assert(sender.send_event(e));
-    assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_FAULT); // source restart
+    assert(receiver.receive(&decoded)==CHANNEL_FAULT); // source restart
     ++e.receive_seq;assert(sender.send_event(e));
-    assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_EVENT);
-    ++e.receive_seq;assert(sender.send_event(e));
-    assert(receiver.receive(e.received_ns+250000001,&decoded)==CHANNEL_FAULT); // queued stale
-    ++e.receive_seq;assert(sender.send_event(e));
-    assert(receiver.receive(e.received_ns-1,&decoded)==CHANNEL_FAULT); // future clock
+    assert(receiver.receive(&decoded)==CHANNEL_EVENT);
+    ReceiveDiagnostic diagnostic;
+    ++e.receive_seq;e.received_ns=monotonic_ns()-250000001ULL;assert(sender.send_event(e));
+    assert(receiver.receive(&decoded,&diagnostic)==CHANNEL_FAULT && diagnostic.reason==RECEIVE_STALE);
+    ++e.receive_seq;e.received_ns=UINT64_MAX;assert(sender.send_event(e));
+    assert(receiver.receive(&decoded,&diagnostic)==CHANNEL_FAULT && diagnostic.reason==RECEIVE_FUTURE);
     puts("motion channel: exact encoding, credentials, singleton, datagram loss/restart/age passed");
 }

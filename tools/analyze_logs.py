@@ -236,6 +236,9 @@ class Auditor:
         self.bus_health_counts = {}
         self.bus_capacity = None
         self.bus_contexts_max = 0
+        self.model_bus_coherent = None
+        self.model_bus_lifetimes = {}
+        self.model_bus_seen_source = False
 
     def validate(self, row, source, ints=(), strings=(), bools=()):
         bad = [k for k in ints if not integer(row.get(k))]
@@ -573,6 +576,45 @@ class Auditor:
                     row['raw_since_ns'] < previous['raw_since_ns']))):
             self.issue('model_bus_malformed', source, 'Invalid MODEL bus boundary')
             return
+        result, revision = observed['result'], row['bus_revision']
+        # A coherent marked source includes completed create/connect calls and
+        # at least one source-marking mutation. Additional/failed/concurrent
+        # calls may increase the revision; these are lower bounds, not equality.
+        minimum = (observed['object'] + observed['lifetime'] + 1 if result == 'connected'
+                   else 4 if result == 'no_live_connection' else 6 if result == 'ambiguous' else 0)
+        if revision < minimum:
+            self.issue('model_bus_malformed', source, 'Bus revision cannot contain its observed lifecycle')
+            return
+        coherent = self.model_bus_coherent
+        stable = result not in ('transition', 'observation_fault')
+        unchanged = previous is not None and (revision, observed) == (
+            previous['bus_revision'], previous['connection'])
+        if (unchanged or
+                (previous is not None and previous['connection']['result'] == 'observation_fault') or
+                (self.model_bus_seen_source and result == 'unobserved') or
+                (stable and coherent is not None and (
+                    revision < coherent['bus_revision'] or
+                    (revision == coherent['bus_revision'] and (
+                        observed != coherent['connection'] or
+                        (previous is not None and previous['connection']['result'] == 'transition'))))) or
+                (result == 'connected' and observed['lifetime'] <
+                 self.model_bus_lifetimes.get(observed['object'], 0))):
+            self.issue('model_bus_history_inconsistent', source,
+                       'Worker-ordered MODEL bus boundary contradicts prior observation', True)
+            return
+        if stable:
+            self.model_bus_coherent = row
+        if result in ('connected', 'no_live_connection', 'ambiguous'):
+            self.model_bus_seen_source = True
+        if result == 'connected':
+            self.model_bus_lifetimes[observed['object']] = observed['lifetime']
+        # The worker clock follows its snapshot; use it only as an existence
+        # upper bound, preserving delayed request snapshot semantics.
+        self.bus_connection_record(observed, row['mono_ns'], row['mono_ns'], source)
+        if self.session['holdout_window'] is not None:
+            self.issue('holdout_crosses_bus_boundary', source,
+                       'MODEL bus boundary did not terminate the open holdout window', True)
+            self.session['holdout_window'] = None
         self.session['model_bus'] = row
         if row['reset']:
             self.issue('shadow_bus_reset', source, observed['result'])
@@ -592,6 +634,13 @@ class Auditor:
                 self.issue('model_session_malformed', source, 'Invalid excluded MODEL motion')
                 return
             boundary = self.session['model_bus' if row['reason'].endswith('_bus') else 'model_session']
+            session, bus = self.session['model_session'], self.session['model_bus']
+            if session is not None and bus is not None:
+                selected = bus if bus['raw_since_ns'] > session['raw_since_ns'] else session
+                if not session['input_available'] or not bus['input_available'] or boundary is not selected:
+                    self.issue('model_session_malformed', source,
+                               'Motion exclusion does not use the available, later MODEL boundary')
+                    return
             transport = row['source_mono_ms'] * 1000000
             if (boundary is None or row['raw_since_ns'] != boundary['raw_since_ns'] or
                     not boundary['input_available'] or
@@ -613,7 +662,8 @@ class Auditor:
                                              "bus_changed_since_issue", "request_before_bus_boundary")):
                 self.issue("model_session_malformed", source, "Invalid rejected MODEL position")
                 return
-            if ('bus' in row['reason'] or 'model_bus_epoch' in row or 'bus_revision' in row):
+            if (self.session['model_bus'] is not None or 'bus' in row['reason'] or
+                    'model_bus_epoch' in row or 'bus_revision' in row):
                 boundary = self.session['model_bus']
                 if (boundary is None or not bounded_int(row.get('model_bus_epoch'), 1, 2**64-1) or
                         not bounded_int(row.get('bus_revision'), 0, 2**64-1) or
@@ -621,6 +671,17 @@ class Auditor:
                         row['bus_revision'] != boundary['bus_revision'] or row['mono_ns'] < boundary['mono_ns']):
                     self.issue('model_bus_malformed', source, 'Rejected position has inconsistent bus boundary')
                     return
+                if ('bus' in row['reason'] and
+                        (row['reason'] == 'bus_unavailable') == boundary['input_available']):
+                    self.issue('model_bus_malformed', source, 'Rejection reason contradicts bus availability')
+                    return
+            boundary = self.session['model_session']
+            if boundary is not None and (
+                    row['session_revision'] != (boundary['session']['revision'] or 0) or
+                    row['mono_ns'] < boundary['mono_ns'] or
+                    ('bus' in row['reason'] and not boundary['input_available'])):
+                self.issue('model_session_malformed', source, 'Rejected position has inconsistent session boundary')
+                return
             self.issue("shadow_position_rejected", source, row["reason"])
             return
         previous = self.session["model_session"]
@@ -846,6 +907,15 @@ class Auditor:
                 (warmup_abort and (anchor or reference or frontier))):
             self.issue("invalid_holdout_time", source, "Holdout timestamp exceeds diagnostic time or anchor is absent")
             return
+        if row['reason'] == 'bus_reset' and event != 'ABORT':
+            self.issue('invalid_holdout_boundary', source, 'Bus reset can only abort a holdout window')
+            return
+        for boundary in (s for s in (self.session['model_bus'], self.session['model_session']) if s is not None):
+            if (row['mono_ns'] < boundary['mono_ns'] or (event != 'ABORT' and (
+                    not boundary['input_available'] or anchor < boundary['raw_since_ns']))):
+                self.issue('invalid_holdout_boundary', source,
+                           'Holdout output contradicts its available MODEL input boundary', True)
+                return
         if event == "COMPARED":
             if not (row["model_valid"] and anchor < reference == frontier):
                 self.issue("invalid_holdout_comparison", source, "Comparison requires MODEL output at the later GPS receipt time")

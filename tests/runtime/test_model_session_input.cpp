@@ -8,7 +8,7 @@
 struct EventReceiver {
     std::vector<N::RawEvent> rows;size_t at;
     EventReceiver():at(0) {}
-    N::ReceiveResult receive(uint64_t,N::RawEvent* raw,N::ReceiveDiagnostic*) {
+    N::ReceiveResult receive(N::RawEvent* raw,N::ReceiveDiagnostic*) {
         if(at==rows.size())return N::CHANNEL_EMPTY;
         *raw=rows[at++];return N::CHANNEL_EVENT;
     }

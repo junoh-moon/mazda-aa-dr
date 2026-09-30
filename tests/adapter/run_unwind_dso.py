@@ -107,7 +107,7 @@ def main():
             'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
             'VEHICLE_SEND': 'mx5_send_vehicle_data',
         }
-        cases = ('normal', 'position_source', 'signal', 'signal_reuse', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
+        cases = ('normal', 'position_source', 'position_sources_concurrent', 'signal', 'signal_reuse', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
                  'capacity', 'collision', 'bad_callback', 'throw_create', 'throw_connect',
                  'throw_disconnect', 'throw_free', 'throw_closed',
                  'prediction_entry_create', 'prediction_entry_connect', 'prediction_entry_disconnect',

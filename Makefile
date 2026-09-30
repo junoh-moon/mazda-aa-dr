@@ -10,7 +10,7 @@ CORE = src/core/dr_core.c
 REQUEST = src/adapter/request_hooks.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp
 ADAPTER = src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $(REQUEST)
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
-NAV_HEADERS = src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h
+NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
 SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
@@ -45,12 +45,12 @@ $(BUILD)/test_request_trace: src/runtime/request_trace.cpp src/runtime/request_t
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_trace.cpp -pthread -o $@
 $(BUILD)/test_model_session: tests/runtime/test_model_session.cpp src/runtime/model_bus.h src/runtime/model_session.h src/runtime/session_trace.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
-$(BUILD)/test_request_status: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_status.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
 $(BUILD)/test_request_observer: src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/request_observer.cpp src/runtime/request_observer.h tests/runtime/test_request_observer.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_request_handoff: tests/runtime/test_request_handoff.cpp src/runtime/request_trace.cpp src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
+$(BUILD)/test_request_status: tests/runtime/test_request_status.cpp src/runtime/request_trace.cpp src/runtime/request_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
 $(BUILD)/test_journal_queue: tests/runtime/test_journal_queue.cpp src/runtime/journal_queue.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
 $(BUILD)/test_journal: $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/motion_batch.h tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
@@ -93,20 +93,22 @@ test-adapter: $(BUILD)/test_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test
 	$(BUILD)/test_session_request
 	$(BUILD)/test_session_request bus_recreated
 	$(BUILD)/test_bus_early_init
-	@set -e; for case in normal position_source signal signal_reuse failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed prediction_entry_create prediction_entry_connect prediction_entry_disconnect prediction_entry_free prediction_entry_closed prediction_entry_signal prediction_exit_create prediction_exit_connect prediction_exit_disconnect prediction_exit_free prediction_exit_closed prediction_exit_signal; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
-test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
+	@set -e; for case in normal position_source position_sources_concurrent signal signal_reuse failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed prediction_entry_create prediction_entry_connect prediction_entry_disconnect prediction_entry_free prediction_entry_closed prediction_entry_signal prediction_exit_create prediction_exit_connect prediction_exit_disconnect prediction_exit_free prediction_exit_closed prediction_exit_signal; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
+test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
-	$(BUILD)/test_request_status
 	$(BUILD)/test_request_observer
 	$(BUILD)/test_request_handoff
+	$(BUILD)/test_request_status
 	$(BUILD)/test_journal_queue
 	$(BUILD)/test_journal
 	$(BUILD)/test_model_session
 	$(BUILD)/test_model_session_reset
 	$(BUILD)/test_model_session_reset bus
 	$(BUILD)/test_model_session_input
-	@set -e; for case in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do $(BUILD)/test_worker_session $$case; done
+	@set -e; for case in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do $(BUILD)/test_worker_session $$case; done
+	MX5DR_TEST_STALE_RAW=1 $(BUILD)/test_worker_session bus_reuse
+	@set -e; for case in bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do MX5DR_TEST_PREGAP=1 $(BUILD)/test_worker_session $$case; done
 test-journal-boundaries:
 	@result=0; MX5DR_JOURNAL_BOUNDARY_BUILD=$(BUILD)/journal-boundaries CXX="$(CXX)" CC="$(CC)" sh tests/runtime/run_journal_boundaries.sh || result=$$?; [ "$$result" -eq 0 ] || [ "$$result" -eq 77 ]
 test-request-publication:
@@ -138,8 +140,11 @@ test-navigation: $(BUILD)/test_navigation $(BUILD)/test_channel $(BUILD)/test_li
 	@$(BUILD)/test_channel; result=$$?; test $$result -eq 0 -o $$result -eq 77
 $(BUILD)/test_navigation: tests/navigation/test_navigation.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
-$(BUILD)/test_channel: tests/navigation/test_channel.cpp src/navigation/channel.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $^ -pthread -o $@
+ifeq ($(shell uname -s),Linux)
+CHANNEL_TEST_FLAGS = -DMX5DR_CHANNEL_RECVMSG_WRAP -Wl,--wrap=recvmsg
+endif
+$(BUILD)/test_channel: tests/navigation/test_channel.cpp tests/navigation/receive_clock_fixture.h src/navigation/channel.cpp $(NAV_HEADERS) | $(BUILD)
+	$(CXX) $(CXX_WARN) $(CHANNEL_TEST_FLAGS) $(filter %.cpp,$^) -pthread -o $@
 
 test-sensors: $(BUILD)/test_vim_source $(BUILD)/test_vim_tap
 	$(BUILD)/test_vim_source
@@ -232,7 +237,8 @@ FORCE_ARM_DEPS:
 endif
 
 # Bus snapshots are carried by every request and observation value.
-$(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log $(BUILD)/test_worker_session $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_model_session $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input: src/adapter/bus_hooks.h src/runtime/bus_trace.h
+$(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input: src/adapter/bus_hooks.h src/runtime/bus_trace.h
+$(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log $(BUILD)/test_worker_session $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_model_session $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request: src/adapter/bus_hooks.h src/runtime/bus_trace.h
 
 $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset: tests/runtime/model_bus_fixture.h src/runtime/model_bus.h
 $(BUILD)/test_journal $(BUILD)/test_model_session_input: src/runtime/model_bus.h

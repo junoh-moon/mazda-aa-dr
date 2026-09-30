@@ -53,7 +53,9 @@ public:
     // Bounded readiness wait only: 1=input, 0=timeout/interrupted, -1=error.
     // Does not consume records, alter their receipt times, or advance the cursor.
     int wait_for_input(unsigned timeout_ms) const;
-    ReceiveResult receive(uint64_t now_ns, RawEvent*, ReceiveDiagnostic* = 0);
+    // Sample the consumer check clock after recvmsg. A packet may arrive
+    // after the caller's earlier clock read; that is not a future timestamp.
+    ReceiveResult receive(RawEvent*, ReceiveDiagnostic* = 0);
     bool active() const { return fd_>=0; }
 private:
     int fd_;
