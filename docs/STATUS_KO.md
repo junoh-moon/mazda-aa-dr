@@ -95,7 +95,14 @@ SYSTEM을 포함한 구성에서 LDS의 실제 system state 2 응답·USB 목록
 진행했지만, 위치는 계속 mode 0·READ_NOT_READY였습니다. 누락된 온도 경로에
 따른 SYSTEM의 standby 전환 시도도 남았습니다. 원본 파서의 유효 fix와 이
 GPS 입력에서의 제품 MODEL은 아직 미검증이며, 빌드만 한 후속 caller를 실행
-증거로 세지 않습니다. 추가 도구는 후속 통합 검사에 사용 중이며 정리가 남습니다.
+증거로 세지 않습니다. 추가 도구의 정리는 아래 후속 통합 기록을 따릅니다.
+
+[버스 관측 수정과 MODEL 초기화 통합](../validation/BUS_MODEL_MERGE_2026-09-30.md)에서는
+외부 `00c6c5e`의 주소 재사용·연결 이력 수정을 기존 MODEL 경계와 합쳤습니다.
+수정 전 실패를 확인했고 통합 제품의 host Python 312개·C/C++와 고정 ARM 전체
+검사를 통과했습니다. 원본 LDS 요청 14건과 버스 해제 중 raw 69건 보존을
+확인했지만 유효 GPS와 ASSIST 자격은 미완료입니다. 추가 도구는 모두 제거했으며
+같은 `feat/session-observation` 브랜치를 유지합니다.
 
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
