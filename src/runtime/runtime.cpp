@@ -229,6 +229,20 @@ bool format_motion_rejected(char* line,size_t capacity,const N::ReceiveDiagnosti
   return d.authenticated_decoded && n>0 && size_t(n)<capacity;
 }
 
+void journal_model_motion_excluded(Journal& j,const N::RawEvent& raw,
+                                  uint64_t since,const char* reason) {
+  char line[600];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"shadow_motion_excluded\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"reason\":\"%s\",\"raw_since_ns\":%llu,"
+      "\"sensor\":%u,\"epoch\":%llu,\"receive_seq\":%llu,"
+      "\"received_ns\":%llu,\"source_mono_ms\":%lld}",
+      (unsigned long long)clock_ns(0),reason,(unsigned long long)since,unsigned(raw.kind),
+      (unsigned long long)raw.epoch,(unsigned long long)raw.receive_seq,
+      (unsigned long long)raw.received_ns,(long long)raw.source_mono_ms);
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+
 // One bounded worker receive turn. Capture survives model/AA audit failure;
 // rejected input is separate evidence and can never enter either estimator.
 template<class Receiver>
@@ -265,7 +279,19 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
           d.syscall_errno,enabled?"true":"false");
       j.line(line);
     } else {
-      if(enabled && raw.received_ns>=model_since_ns) {
+      // The existing MODEL pipeline uses a positive transport timestamp as
+      // event time. A later receipt cannot make a pre-boundary event new.
+      // Leave negative/overflow/future timestamps on the Pipeline fault path.
+      const bool old_transport=raw.source_mono_ms>0 &&
+          uint64_t(raw.source_mono_ms)<=UINT64_MAX/1000000ULL &&
+          uint64_t(raw.source_mono_ms)*1000000ULL<model_since_ns;
+      if(enabled && (raw.received_ns<model_since_ns || old_transport)) {
+        journal_motion(j,batch,raw);flush_motion(j,batch);
+        journal_model_motion_excluded(j,raw,model_since_ns,
+            raw.received_ns<model_since_ns?"receipt_before_session":"transport_before_session");
+        continue;
+      }
+      if(enabled) {
         navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);
       }
       journal_motion(j,batch,raw);

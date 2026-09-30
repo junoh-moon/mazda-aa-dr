@@ -52,6 +52,74 @@ class RequestJournal(unittest.TestCase):
                            assist_ready=False, bus_observer=dict(observer, **change)), 'health')
             self.assertTrue(any(i['code'].startswith('bus_observer') for i in a.issues))
 
+    def test_same_lifetime_callback_history(self):
+        command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+        rows = [json.loads(s) for s in subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()]
+        send = rows[1]
+        for event, state in ((1, -7), (2, 3), (None, None)):
+            for revision in (12, 13):
+                with self.subTest(event=event, state=state, revision=revision):
+                    a = audit.Auditor()
+                    a.consume(dict(send, send_session=dict(send['send_session'], event=event,
+                                   state=state, revision=revision)), 'contradiction')
+                    found = [i for i in a.issues if i['code'] == 'session_state_inconsistent']
+                    self.assertEqual(len(found), 1)
+                    self.assertEqual(found[0]['severity'], 'violation')
+        # A later callback may have any raw state, including the same value.
+        for event, state in ((2, -7), (3, -7), (3, 3)):
+            a = audit.Auditor()
+            a.consume(dict(send, send_session=dict(send['send_session'], event=event,
+                           state=state, revision=12+event-2)), 'valid')
+            self.assertFalse(any(i['code'].startswith('session_') and
+                                 i['code'] != 'session_changed_since_issue' for i in a.issues))
+        unknown = dict(send['request']['session_context'], event=None, state=None)
+        for event, state in ((None, None), (1, 0)):
+            a = audit.Auditor()
+            a.consume(dict(send, request=dict(send['request'], session_context=unknown),
+                           send_session=dict(send['send_session'], event=event, state=state,
+                                             revision=12+(event or 0))), 'first-status')
+            self.assertFalse(any(i['code'].startswith('session_') and
+                                 i['code'] != 'session_changed_since_issue' for i in a.issues))
+
+    def test_revision_cannot_go_backward_or_hide_completed_callbacks(self):
+        command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+        send = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[1])
+        for changes in ({'revision': 11}, {'event': 3}, {'event': 4, 'revision': 13},
+                        {'lifetime': 9, 'revision': 11}):
+            with self.subTest(changes=changes):
+                a = audit.Auditor()
+                a.consume(dict(send, send_session=dict(send['send_session'], **changes)), 'contradiction')
+                found = [i for i in a.issues if i['code'] == 'session_revision_inconsistent']
+                self.assertEqual(len(found), 1)
+                self.assertEqual(found[0]['severity'], 'violation')
+        unknown = dict(send['request']['session_context'], event=None, state=None)
+        a = audit.Auditor()
+        a.consume(dict(send, request=dict(send['request'], session_context=unknown),
+                       send_session=dict(send['send_session'], event=1)), 'hidden-first-callback')
+        self.assertIn('session_revision_inconsistent', [i['code'] for i in a.issues])
+        for changes in ({}, {'event': 3, 'revision': 13}, {'revision': 13},
+                        {'event': 5, 'revision': 15}):
+            a = audit.Auditor()
+            a.consume(dict(send, send_session=dict(send['send_session'], **changes)), 'valid')
+            self.assertFalse(any(i['severity'] == 'violation' for i in a.issues))
+        # Revision-free historical records retain their prior event contract.
+        legacy_issue = dict(send['request']['session_context'])
+        legacy_send = dict(send['send_session'], event=3)
+        del legacy_issue['revision'], legacy_send['revision']
+        a = audit.Auditor()
+        a.consume(dict(send, request=dict(send['request'], session_context=legacy_issue),
+                       send_session=legacy_send), 'legacy')
+        self.assertFalse(any(i['code'].startswith('session_') for i in a.issues))
+        for missing_issue in (False, True):
+            a = audit.Auditor()
+            issue = legacy_issue if missing_issue else send['request']['session_context']
+            target = send['send_session'] if missing_issue else legacy_send
+            a.consume(dict(send, request=dict(send['request'], session_context=issue),
+                           send_session=target), 'partial-schema')
+            found = [i for i in a.issues if i['code'] == 'session_revision_partial']
+            self.assertEqual(len(found), 1)
+            self.assertEqual(found[0]['severity'], 'inconclusive')
+
     def test_route_schema_and_old_records(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
         p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
@@ -75,34 +143,24 @@ class RequestJournal(unittest.TestCase):
                 a.consume(dict(p, request=dict(p['request'], route=bad)), 'bad-route')
                 self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
 
-    def test_same_lifetime_callback_history(self):
+    def test_text_fields_match_the_bytewise_encoder(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
-        rows = [json.loads(s) for s in subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()]
-        send = rows[1]
-        for event, state in ((1, -7), (2, 3), (None, None)):
-            with self.subTest(event=event, state=state):
-                a = audit.Auditor()
-                a.consume(dict(send, send_session=dict(send['send_session'], event=event, state=state)), 'contradiction')
-                found = [i for i in a.issues if i['code'] == 'session_state_inconsistent']
-                self.assertEqual(len(found), 1)
-                self.assertEqual(found[0]['severity'], 'violation')
-        # The merged revision check must not hide the independently impossible
-        # callback history. Both diagnostics describe this one send.
-        a = audit.Auditor()
-        a.consume(dict(send, send_session=dict(send['send_session'], event=1, revision=6)), 'changed-and-regressed')
-        self.assertIn('session_changed_since_issue', [i['code'] for i in a.issues])
-        self.assertIn('session_state_inconsistent', [i['code'] for i in a.issues])
-        # A later callback may have any raw state, including the same value.
-        for event, state in ((2, -7), (3, -7), (3, 3)):
-            a = audit.Auditor()
-            a.consume(dict(send, send_session=dict(send['send_session'], event=event, state=state)), 'valid')
-            self.assertFalse(any(i['code'].startswith('session_') for i in a.issues))
-        unknown = dict(send['request']['session_context'], event=None, state=None)
-        for event, state in ((None, None), (1, 0)):
-            a = audit.Auditor()
-            a.consume(dict(send, request=dict(send['request'], session_context=unknown),
-                           send_session=dict(send['send_session'], event=event, state=state)), 'first-status')
-            self.assertFalse(any(i['code'].startswith('session_') for i in a.issues))
+        p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
+        for field in ('destination', 'path', 'interface', 'member', 'sender', 'error'):
+            for value, complete, valid in (
+                    ('\0', True, False), ('a\0b', False, False),
+                    ('\u0100', True, False), ('\ud800', False, False),
+                    ('\U0001f680', True, False),
+                    ('\x01\xff', True, True), ('\xff' * 63, True, True),
+                    ('\xff' * 64, False, True), ('\xff' * 64, True, False)):
+                with self.subTest(field=field, value=repr(value), complete=complete):
+                    trace = dict(p['request'], route=dict(p['request']['route']))
+                    target = trace['route'] if field in trace['route'] else trace
+                    target[field] = dict(value=value, complete=complete)
+                    a = audit.Auditor()
+                    a.consume(dict(p, request=trace), 'byte-contract')
+                    malformed = 'request_record_malformed' in [i['code'] for i in a.issues]
+                    self.assertEqual(malformed, not valid)
 
     def test_production_records_and_bounds(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
@@ -123,9 +181,9 @@ class RequestJournal(unittest.TestCase):
                          zip(('destination', 'path', 'interface', 'member'),
                              ('com.jci.lds.data', '/com/jci/lds/data', 'com.jci.lds.data', 'GetPosition'))})
         self.assertEqual(trace['session_context'], dict(result='observed', basis='unique_live_context',
-                         lifetime=8, event=2, state=-7, revision=5))
+                         lifetime=8, event=2, state=-7, revision=12))
         self.assertEqual(s['send_session'], dict(result='observed', basis='send_storage',
-                         lifetime=8, event=2, state=-7, revision=5))
+                         lifetime=8, event=2, state=-7, revision=12))
         for key in ('bus_lifetime', 'session_lifetime', 'session_state', 'wire_serial'):
             self.assertIsNone(trace[key])
         self.assertEqual(failed['request']['result'], 'observation_capacity')

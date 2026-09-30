@@ -40,8 +40,9 @@ static void route_at_issue() {
     R::Observer o(api(),0,0,getters);
     Reply r={1,0,0,":1.9",0};Method m[2]={&r,&r};
     char target[]="com.jci.lds.data", object[]="/com/jci/lds/data", name[]="GetPosition";
+    char interface[]="org.example.RouteInterface"; // All four getters must be distinguishable.
     char long_name[100];memset(long_name,'x',sizeof long_name);long_name[99]=0;
-    m[0].destination=target;m[0].path=object;m[0].interface_name=target;m[0].member=name;
+    m[0].destination=target;m[0].path=object;m[0].interface_name=interface;m[0].member=name;
     m[1].member=long_name;
     R::Token q[2],work;int w[2]={},p[2]={};
     errno=EDOM;
@@ -49,6 +50,7 @@ static void route_at_issue() {
     // Destroy/mutate borrowed fields before either reply. Also change the live
     // method's pointer: late getter reads would silently associate a new route.
     memset(target,'z',sizeof target-1);memset(object,'z',sizeof object-1);
+    memset(interface,'z',sizeof interface-1);
     memset(name,'z',sizeof name-1);memset(long_name,'z',sizeof long_name-1);
     m[0].member="DifferentMethod";
     for(int i=1;i>=0;--i) {
@@ -61,7 +63,7 @@ static void route_at_issue() {
             assert(route.destination.known && route.destination.complete);
             assert(!strcmp(route.destination.bytes,"com.jci.lds.data"));
             assert(!strcmp(route.path.bytes,"/com/jci/lds/data"));
-            assert(!strcmp(route.interface_name.bytes,"com.jci.lds.data"));
+            assert(!strcmp(route.interface_name.bytes,"org.example.RouteInterface"));
             assert(!strcmp(route.member.bytes,"GetPosition"));
         } else {
             assert(!route.destination.known && !route.path.known && !route.interface_name.known);
@@ -289,16 +291,16 @@ static void session_context_copy() {
     namespace S=mx5::runtime::session_trace;
     R::Observer o(api());Reply r={1,0,17,":1.7",0};Method m={&r};
     R::Token q,t;int w=0,p=0;
-    S::Snapshot ambient={S::OBSERVED,41,5,-7,true,8};
+    S::Snapshot ambient={S::OBSERVED,41,5,-7,true,80};
     assert(o.request_begin(&m,&q,ambient)==R::OK);
-    ambient.lifetime=42;ambient.event=6;ambient.state=3;ambient.revision=9;
+    ambient.lifetime=42;ambient.event=6;ambient.state=3;ambient.revision=81;
     { R::ReplyScope scope(o,&m);assert(o.worker_post(&w,&p,&t)==R::OK); }
     assert(o.request_end(&m)==R::OK);
     { R::WorkerScope scope(o,&w);R::Trace trace;
       assert(o.position_take(&p,&trace)==R::OK);
       const S::Snapshot& copy=trace.issue.session_context;
       assert(copy.result==S::OBSERVED && copy.lifetime==41 && copy.event==5);
-      assert(copy.state_known && copy.state==-7 && copy.revision==8);
+      assert(copy.state_known && copy.state==-7 && copy.revision==80);
       assert(!trace.issue.known && !trace.issue.session_lifetime); }
     empty(o);puts("PASS observer retains issue-time ambient session without ownership promotion");
 }

@@ -27,13 +27,14 @@ static unsigned char expected_payload[2400];
 static size_t expected_size;
 static std::atomic<unsigned> block_create(0), block_callback(0), block_destroy(0);
 static bool cancel_create, cancel_destroy, cancel_status;
-static bool predict_in_create, predict_in_destroy, predict_in_status;
-static void prediction_attempt(bool replacement,bool publish);
 static bool null_success;
 enum ConcurrentCase { SERIAL, OUTPUT_RACE, LATE_DESTROY, DISTINCT_STORAGE };
 static ConcurrentCase concurrent_case;
 static pthread_mutex_t api_mu=PTHREAD_MUTEX_INITIALIZER;
 static std::atomic<unsigned> create_ready(0),destroy_entered(0),allow_destroy(0);
+static bool predict_in_create, predict_in_destroy, predict_in_status;
+static std::atomic<unsigned> prediction_pause_reader(0),prediction_pause_status(0);
+static void prediction_attempt(bool replacement,bool publish);
 // Use the target's pthread ABI. GCC 4.9 std::thread's internal implementation
 // is not compatible with the stock shared C++ runtime (even without our DSO).
 template<class Call> static void* thread_body(void* arg) {
@@ -53,6 +54,10 @@ static void status(void* user,void* info) {
     assert(!expected_size || !memcmp(info,expected_payload,expected_size));
     ++notifications;
     if(predict_in_status)prediction_attempt(false,true);
+    if(prediction_pause_status.load()) {
+        prediction_pause_status.store(2);
+        while(prediction_pause_status.load()!=3)sched_yield();
+    }
     errno=ERANGE;
     if(cancel_status)cancellation(block_callback);
     if(throw_status)throw 37;
@@ -335,6 +340,16 @@ static unsigned char prediction_input[72],prediction_payload[48],prediction_sent
 static A::VehicleData* prediction_original;
 static bool prediction_original_forwarded;
 static uint64_t prediction_clock(void*) { return prediction_time; }
+static void prediction_session_reader(const void* storage,S::Snapshot* out,void* user) {
+    const int saved_errno=errno;
+    A::read_send_session(storage,out,user);
+    if(prediction_pause_reader.load()) {
+        assert(out->result==S::OBSERVED);
+        prediction_pause_reader.store(2);
+        while(prediction_pause_reader.load()!=3)sched_yield();
+    }
+    errno=saved_errno;
+}
 static bool prediction_provenance(void*,const A::PositionInput*,A::Provenance* p,void*) {
     p->source_epoch=11;p->session_epoch=12;
     p->exact_request=p->verified_lds=p->legacy_receiver=true;return true;
@@ -388,11 +403,31 @@ static void prediction_lifecycle(const char* which) {
     A::Options options=A::Options();options.clock=prediction_clock;
     options.sink=prediction_sink;options.provenance=prediction_provenance;
     options.allow_assist=true;options.max_snapshot_age_ns=150000000;
-    options.session_reader=A::read_send_session;
+    options.session_reader=prediction_session_reader;
     assert(A::configure(prediction_next,options) && A::set_mode(A::ASSIST));
     for(unsigned i=0;i<48;++i)prediction_payload[i]=i+1;
     void* storage=0;prediction_storage=&storage;open(&storage);
     prediction_attempt(true,true); // Positive control before each boundary.
+    if(!strcmp(which,"prediction_cached_inflight")) {
+        // The reader has already copied OBSERVED before the callback starts.
+        // Only entry revocation can reject this old context/candidate while
+        // the original status call is still in flight (before exit cleanup).
+        prediction_pause_reader.store(1);
+        auto send_cached=[&]() { prediction_attempt(false,false); };
+        const pthread_t sender=start_thread(send_cached);
+        while(prediction_pause_reader.load()!=2)sched_yield();
+        prediction_pause_status.store(1);
+        auto blocked_status=[&]() { notify(0,7); };
+        const pthread_t callback=start_thread(blocked_status);
+        while(prediction_pause_status.load()!=2)sched_yield();
+        assert(A::read_issue_session().result==S::TRANSITION);
+        prediction_pause_reader.store(3);join_thread(sender);
+        prediction_pause_status.store(3);join_thread(callback);
+        prediction_pause_reader.store(0);prediction_pause_status.store(0);
+        prediction_attempt(false,false);
+        prediction_attempt(true,true);
+        close(&storage);assert(!A::session_hook_health().faults);return;
+    }
     const A::DrSnapshot before=prediction_candidate();
     const bool in_flight=strstr(which,"_inflight")!=0;
     if(!in_flight)A::position_enter(0,prediction_input);

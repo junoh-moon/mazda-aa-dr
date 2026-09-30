@@ -88,7 +88,7 @@ def main():
                  'cancel_create', 'cancel_destroy', 'cancel_status',
                  'prediction_destroy', 'prediction_recreate', 'prediction_create_failure',
                  'prediction_destroy_failure', 'prediction_status', 'prediction_create_inflight',
-                 'prediction_destroy_inflight', 'prediction_status_inflight')
+                 'prediction_destroy_inflight', 'prediction_status_inflight', 'prediction_cached_inflight')
         fixture, access = 'session_hooks', 'session_dso_access.h'
         macro, marker = '-DMX5_SESSION_DSO_TEST', 'PASS session wrappers '
     elif args.suite == 'bus':

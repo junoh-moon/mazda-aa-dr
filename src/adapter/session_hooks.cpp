@@ -36,8 +36,7 @@ struct ContextPool {
     Context& operator[](unsigned i) { return entries[i]; }
 };
 ContextPool contexts;
-std::atomic<unsigned> prepared(0), used(0), faults(0), mutations(0);
-std::atomic<unsigned> lifecycle_mutations(0);
+std::atomic<unsigned> prepared(0), used(0), faults(0), mutations(0), lifecycles(0);
 std::atomic<uint64_t> version(0);
 A::SessionBindings original=A::SessionBindings();
 bool attempted;
@@ -49,15 +48,16 @@ struct PreserveErrno {
 void ready() { if(!prepared.load(std::memory_order_acquire))__builtin_trap(); }
 void fault(unsigned reason) { faults.fetch_or(reason,std::memory_order_seq_cst); }
 struct Mutation {
-    bool complete;
     const bool lifecycle;
-    explicit Mutation(bool is_lifecycle=true):complete(false),lifecycle(is_lifecycle) {
+    bool complete;
+    explicit Mutation(bool changes_lifetime):lifecycle(changes_lifetime),complete(false) {
         const PreserveErrno saved;
         mutations.fetch_add(1);
-        // A status callback during create/destroy is expected. Only overlapping
-        // lifecycle calls lose the storage-order claim; all calls still revoke
-        // predictions and participate in the coherent reader boundary.
-        if(lifecycle && lifecycle_mutations.fetch_add(1))fault(A::SESSION_CONTENTION);
+        // Even APIs that serialize handle writes internally may overlap at
+        // this boundary. Return order cannot establish storage ownership.
+        // A status callback inside create/destroy is normal: it participates
+        // in revision/revocation, but is not a second storage lifecycle call.
+        if(lifecycle && lifecycles.fetch_add(1))fault(A::SESSION_CONTENTION);
         A::invalidate(); // Before the original lifecycle call can change state.
     }
     ~Mutation() {
@@ -66,7 +66,7 @@ struct Mutation {
         // Reject candidates published during the call, including unwind.
         A::invalidate();
         if(version.fetch_add(1)==UINT64_MAX)fault(A::SESSION_REVISION_EXHAUSTED);
-        if(lifecycle)lifecycle_mutations.fetch_sub(1);
+        if(lifecycle)lifecycles.fetch_sub(1);
         mutations.fetch_sub(1);
     }
 };
@@ -166,7 +166,7 @@ void read_send_session(const void* storage,S::Snapshot* out,void*) {
 } }
 
 extern "C" int32_t mx5_session_create(const char* xml,void* user,const A::SessionCallbacks* cb,void** storage) {
-    ready();Mutation mutation;
+    ready();Mutation mutation(true);
     Context* c;
     { const PreserveErrno saved;c=reserve(cb,user,storage); }
     const int32_t result=original.create(xml,user,c?&c->callbacks:cb,storage);
@@ -186,7 +186,7 @@ extern "C" int32_t mx5_session_create(const char* xml,void* user,const A::Sessio
     return result;
 }
 extern "C" int32_t mx5_session_destroy(void** storage) {
-    ready();Mutation mutation;
+    ready();Mutation mutation(true);
     uint64_t closing=0;
     {
         const PreserveErrno saved;

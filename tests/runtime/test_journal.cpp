@@ -163,8 +163,7 @@ static void stop_tests(const char* root,const std::string& logs) {
   }
   assert(rmdir(request.c_str())==0);
 }
-static void route_capture_tail(const char* root,const std::string& logs) {
-  arm_test_mode();
+static A::Observation long_route_event() {
   A::Observation event=A::Observation();event.kind=A::Observation::SEND;
   event.request_result=A::R::OK;
   A::R::Text text=A::R::Text();text.known=true;
@@ -172,14 +171,46 @@ static void route_capture_tail(const char* root,const std::string& logs) {
   A::R::Trace& t=event.request_trace;
   t.issue.route.destination=t.issue.route.path=t.issue.route.interface_name=t.issue.route.member=text;
   t.reply.sender=t.reply.error_name=text;
+  return event;
+}
+static void route_capture_tail(const char* root,const std::string& logs) {
+  arm_test_mode();
+  const A::Observation event=long_route_event();
+  char expected[mx5::runtime::OBSERVATION_JSON_CAPACITY];
+  assert(format_observation(expected,sizeof expected,event) && strlen(expected)>2200);
   sink(&event,0);freeze_capture();
   {
     Journal j(root);assert(drain_capture_tail(j));j.flush();
     assert(!j.failed && queue.drained());
   }
   std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
-  assert(std::getline(f,line) && line.size()>2200 && line.find("\"route\":{")!=std::string::npos);
+  assert(std::getline(f,line) && line==expected);
   assert(!std::getline(f,line));
+}
+static void* route_worker(void* root) { return worker_at(static_cast<const char*>(root)); }
+static void route_general_worker(const char* root,const std::string& logs) {
+  assert(!unlink((logs+"/trace.0.jsonl").c_str()) || errno==ENOENT);
+  arm_test_mode();config.mode=1;config.max_log_bytes=65536;
+  const A::Observation event=long_route_event();
+  char expected[mx5::runtime::OBSERVATION_JSON_CAPACITY];
+  assert(format_observation(expected,sizeof expected,event) && strlen(expected)>2200);
+  sink(&event,0);
+  pthread_t thread;assert(!pthread_create(&thread,0,route_worker,const_cast<char*>(root)));
+  bool found=false;
+  for(unsigned attempt=0;attempt<150&&!found;++attempt) {
+    usleep(20000);
+    std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
+    while(std::getline(f,line))if(line==expected)found=true;
+  }
+  // Require a persisted full row before requesting stop, so the final-tail
+  // buffer cannot conceal a regression in the ordinary worker's buffer.
+  assert(found && !__sync_fetch_and_add(&audit_fault,0));
+  assert(!mkdir((logs+"/capture.stop").c_str(),0700));
+  assert(!pthread_join(thread,0) && queue.drained() && !audit_fault);
+  assert(access((logs+"/capture.done").c_str(),F_OK)==0);
+  assert(!unlink((logs+"/capture.done").c_str()));
+  assert(!rmdir((logs+"/capture.stop").c_str()));
+  puts("Long route: ordinary worker and capture tail retain the entire row");
 }
 static void request_journal(bool emit) {
   namespace R=mx5::runtime::request_trace;
@@ -188,7 +219,7 @@ static void request_journal(bool emit) {
   R::Trace& t=o.request_trace;
   t.request.id=1;t.request.epoch=3;t.worker.id=2;t.worker.epoch=3;
   t.issue.observed_ns=101;t.reply.observed_ns=102;t.reply.type_known=true;t.reply.type=2;
-  const A::S::Snapshot session={A::S::OBSERVED,8,2,-7,true,5};
+  const A::S::Snapshot session={A::S::OBSERVED,8,2,-7,true,12};
   t.issue.session_context=session;o.send_session=session;
   t.reply.sender=R::copy_text(":1.42");t.reply.error_name=R::copy_text("org.freedesktop.DBus.Error.ServiceUnknown");
   t.issue.route.destination=R::copy_text("com.jci.lds.data");
@@ -361,6 +392,7 @@ int main(int argc,char** argv) {
   receive_turn_tests(tmp,logs);
   route_capture_tail(tmp,logs);
   stop_tests(tmp,logs);
+  route_general_worker(tmp,logs);
   for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
   rmdir(logs.c_str());
   rmdir(tmp);

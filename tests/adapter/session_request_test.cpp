@@ -36,6 +36,7 @@ static const char* get_sender(void*) { return ":1.7"; }
 static const char* get_error(void*) { return 0; }
 static const char* get_destination(void*) { return "com.jci.lds.data"; }
 static const char* get_path(void*) { return "/com/jci/lds/data"; }
+static const char* get_interface(void*) { return "org.example.RouteInterface"; }
 static const char* get_member(void*) { return "GetPosition"; }
 static int get_serial(void*,uint32_t* out) { *out=7;return 0; }
 static void original_notify(void*,void*,void*) {
@@ -66,7 +67,7 @@ int main(int argc,char** argv) {
     assert(mx5_session_create("authored",0,&cb,&storage)==0);status_for(0,-7);
     A::RequestBindings rb=A::RequestBindings();
     rb.reply={get_reply,get_type,get_sender,get_error,get_serial};rb.submit=original_submit;
-    rb.method={get_destination,get_path,get_destination,get_member};
+    rb.method={get_destination,get_path,get_interface,get_member};
     rb.notify=original_notify;rb.free_method=rb.free_method_only=original_free;rb.position_vptr=1;
     rb.post_trampoline=rb.work_trampoline=rb.destroy_trampoline=reinterpret_cast<void*>(&trampoline);
     assert(A::prepare_request_hooks(rb,clock_value,0));
@@ -106,7 +107,7 @@ int main(int argc,char** argv) {
     assert(route.path.known && route.path.complete &&
            !strcmp(route.path.bytes,"/com/jci/lds/data"));
     assert(route.interface_name.known && route.interface_name.complete &&
-           !strcmp(route.interface_name.bytes,"com.jci.lds.data"));
+           !strcmp(route.interface_name.bytes,"org.example.RouteInterface"));
     assert(route.member.known && route.member.complete && !strcmp(route.member.bytes,"GetPosition"));
     assert(!memcmp(&route,&position_event.request_trace.issue.route,sizeof route));
     assert(send_event.request_trace.issue.known==R::ISSUE_BUS_LIFETIME);

@@ -96,7 +96,9 @@ def session_snapshot(value, basis):
     return (bounded_int(value["lifetime"], 1, 2**32-1) and
             ((value["event"] is None and value["state"] is None) or
              (bounded_int(value["event"], 1, 2**32-1) and
-              bounded_int(value["state"], -2**31, 2**31-1))))
+              bounded_int(value["state"], -2**31, 2**31-1))) and
+            ("revision" not in value or
+             value["revision"] >= value["lifetime"] + (value["event"] or 0)))
 
 
 def finite_number(value):
@@ -458,7 +460,7 @@ class Auditor:
                 self.motion(event, source)
         elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled"):
             self.shadow(row, source)
-        elif kind in ("shadow_session", "shadow_position_rejected"):
+        elif kind in ("shadow_session", "shadow_position_rejected", "shadow_motion_excluded"):
             self.model_session(row, source)
         elif kind == "shadow_calibration":
             self.calibration(row, source)
@@ -545,6 +547,27 @@ class Auditor:
     def model_session(self, row, source):
         if not self.model_diagnostic(row, source):
             return
+        if row['kind'] == 'shadow_motion_excluded':
+            if (not all(bounded_int(row.get(k), 1, high) for k, high in
+                    (('raw_since_ns', row['mono_ns']), ('sensor', 3), ('epoch', 2**64-1),
+                     ('receive_seq', 2**64-1), ('received_ns', row['mono_ns']))) or
+                    not bounded_int(row.get('source_mono_ms'), -2**63, 2**63-1) or
+                    row.get('reason') not in ('receipt_before_session', 'transport_before_session')):
+                self.issue('model_session_malformed', source, 'Invalid excluded MODEL motion')
+                return
+            boundary = self.session['model_session']
+            transport = row['source_mono_ms'] * 1000000
+            if (boundary is None or row['raw_since_ns'] != boundary['raw_since_ns'] or
+                    not boundary['input_available'] or
+                    (row['reason'] == 'receipt_before_session' and
+                     row['received_ns'] >= row['raw_since_ns']) or
+                    (row['reason'] == 'transport_before_session' and not
+                     (row['received_ns'] >= row['raw_since_ns'] and
+                      0 < transport < row['raw_since_ns']))):
+                self.issue('model_session_malformed', source, 'Motion exclusion contradicts its boundary')
+                return
+            self.issue('shadow_motion_excluded', source, row['reason'])
+            return
         if row["kind"] == "shadow_position_rejected":
             if (not all(bounded_int(row.get(k), 0, high) for k, high in
                     (("call", 2**32-1), ("generation", 2**32-1), ("session_revision", 2**64-1))) or
@@ -561,6 +584,7 @@ class Auditor:
                 row["input_available"] != (observed["result"] == "observed") or
                 not bounded_int(row.get("model_session_epoch"), 1, 2**64-1) or
                 not bounded_int(row.get("raw_since_ns"), 1, row["mono_ns"]) or
+                row['raw_since_ns'] != row['mono_ns'] or
                 (previous is None and (row["reset"] or row["model_session_epoch"] != 1)) or
                 (previous is not None and (not row["reset"] or
                     row["model_session_epoch"] != previous["model_session_epoch"] + 1 or
@@ -616,6 +640,11 @@ class Auditor:
                     for key in ('events', 'intervals', 'resets', 'rejected', 'frontier_ns'))):
             self.issue('partial_record', source, 'SHADOW state/counter/time outside integer range')
             return
+        if boundary is not None and (
+                row['mono_ns'] < boundary['mono_ns'] or row['frontier_ns'] > row['mono_ns'] or
+                (row['model_valid'] and row['frontier_ns'] < boundary['raw_since_ns'])):
+            self.issue('shadow_session_time_inconsistent', source,
+                       'MODEL time contradicts its observed session boundary or capture time', True)
         self.session["last_diagnostic_ns"] = max(self.session["last_diagnostic_ns"], row["mono_ns"])
         if not self.wheel_scale_pair(row, source):
             return
@@ -838,6 +867,7 @@ class Auditor:
             return (isinstance(value, dict) and "value" in value and isinstance(value.get("complete"), bool) and
                     ((value.get("value") is None and not value["complete"]) or
                      (isinstance(value.get("value"), str) and len(value["value"]) <= 64 and
+                      all(0 < ord(c) <= 255 for c in value["value"]) and
                       (not value["complete"] or len(value["value"]) < 64))))
         valid = (isinstance(t, dict) and t.get("association_only") is True and
                  isinstance(t.get("result"), str) and t["result"] in results and
@@ -909,19 +939,27 @@ class Auditor:
                 request = row.get("request")
                 ambient = request.get("session_context") if isinstance(request, dict) else None
                 if (session_snapshot(ambient, "unique_live_context") and
+                        ("revision" in ambient) != ("revision" in target)):
+                    self.issue("session_revision_partial", source,
+                               "Issue and send snapshots mix revision schemas")
+                if (session_snapshot(ambient, "unique_live_context") and
                         ambient["result"] == target["result"] == "observed"):
                     if (ambient["lifetime"] != target["lifetime"] or
                             ("revision" in ambient and "revision" in target and
                              ambient["revision"] != target["revision"])):
                         self.issue("session_changed_since_issue", source,
                                    "Send target differs from issue-time ambient context; ownership is unproved")
-                    # A revision change does not excuse contradictory callback
-                    # history within the same lifetime. Report both when present.
-                    if (ambient["lifetime"] == target["lifetime"] and ambient["event"] is not None and (
+                    if ambient["lifetime"] == target["lifetime"] and ambient["event"] is not None and (
                             target["event"] is None or target["event"] < ambient["event"] or
-                            (target["event"] == ambient["event"] and target["state"] != ambient["state"]))):
+                            (target["event"] == ambient["event"] and target["state"] != ambient["state"])):
                         self.issue("session_state_inconsistent", source,
                                    "Same-lifetime callback history contradicts its issue-time snapshot", True)
+                    if "revision" in ambient and "revision" in target:
+                        delta = target["revision"] - ambient["revision"]
+                        if (delta < 0 or (ambient["lifetime"] == target["lifetime"] and
+                                (target["event"] or 0) - (ambient["event"] or 0) > delta)):
+                            self.issue("session_revision_inconsistent", source,
+                                       "Completed callback history contradicts lifecycle revisions", True)
                 if target["result"] in ("transition", "ambiguous", "observation_fault"):
                     self.issue("session_observation_unavailable", source, target["result"])
         position = self.positions.get((row["call"], row["generation"]))

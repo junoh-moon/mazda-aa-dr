@@ -40,6 +40,13 @@ POSITION and SEND records carry the same owned trace; health reports observation
 loss and ABI mismatches. These process-local IDs and receipt times do not prove
 provider/receiver/session qualification or producer measurement time.
 
+Before the original asynchronous submit, the observer copies the method's
+destination, object path, interface and member through four verified JCIDBUS
+getters. Each field owns up to 63 bytes; missing values remain unknown and
+truncated values remain incomplete. POSITION/SEND and final capture draining
+retain that issue-time route. A well-known destination is not an authenticated
+provider or bus lifetime, and these fields do not enable ASSIST.
+
 Connection observation wraps the pinned JCIDBUS create/connect/disconnect/free
 APIs, the original close callback, and the signal handler. The stock general
 signal filter consumes `org.freedesktop.DBus.Local.Disconnected` before its
@@ -76,25 +83,30 @@ validates the current handle, request ownership, a connected phone or acceptance
 The observer never dereferences the OEM handle storage after the API returns.
 Overlapping create/destroy calls, including distinct storage addresses, make the
 observation incomplete for the process; original calls continue unchanged.
-The older qualified session fields remain unknown. Lifecycle overlap, ambiguity
-and faults remain explicit journal results. Raw state is known only after a real
-callback. Snapshots include a coherent lifecycle `revision`, incremented even
-for failed calls and late callbacks; it is copied at request issue. This
-process-local number is not qualified request/session ownership. Exhaustion
-latches an observation fault instead of reusing a revision. Context storage is
-constant-initialized even on GCC 4.9; an early preload call must not
+Create, destroy and the full status callback each revoke prediction candidates
+on entry and exit, including failure or unwind. Callbacks nested inside create
+participate in the transition without being mistaken for overlapping storage
+lifecycles. A coherent completed `revision` counts these boundaries, including
+failed creates and late callbacks that leave the surviving context unchanged.
+The optional send-session reader is a negative selection condition; an OBSERVED
+result never supplies missing provenance. Entry revocation also protects a send
+that copied OBSERVED just before another thread entered a lifecycle call.
+The older qualified session fields remain unknown. Lifecycle overlap, ambiguity and faults remain
+explicit journal results. Raw state is known only after a real callback. Context
+storage is constant-initialized even on GCC 4.9; an early preload call must not
 be erased by later global constructors. See
 [independent session product record](https://github.com/junoh-moon/mazda-aa-dr/blob/56af56109f3828e56e175dfaef24881902cefcb1/validation/SESSION_PRODUCT_2026-09-30.md).
 
-Create, destroy and status callbacks revoke the adapter prediction generation
-before the original call and again at completion, including exceptions and
-deferred cancellation. The second revocation also rejects candidates published
-during the original call. While any such call is in flight, session readers
-report `transition`; concurrent readers never wait or suppress the callback.
-When a session reader is configured, ASSIST selection forwards the original
-payload unless that reader observed a live, unambiguous send storage. This is
-only a negative guard: it does not qualify a session, phone or queued request.
-It is not synchronization with OEM teardown after the selection check.
+The MODEL worker resets both prediction and holdout state, learned/applied
+calibration and pending inputs at observed session boundaries. It rejects old
+request revisions and waits for new sensor inputs and GPS anchors. Sensor receipt
+time and the existing MODEL transport-time interpretation must both be at or
+after the observed boundary; exclusions retain their raw records and reasons.
+Negative/overflow/future transport times and current clock-domain changes still
+follow the existing pipeline fault path. These are MODEL bookkeeping rules,
+not producer-time qualification or evidence of a connected phone. Ordinary
+GPS/GAP changes do not change this session fence. Raw capture continues when
+MODEL input is suspended.
 
 The backend's own `configure` call freezes runtime callback pointers. Do not
 configure separately and then call `install_v74`; that is rejected. A separate
@@ -122,17 +134,6 @@ source ownership/provenance, sensor quality/timing and lifecycle gates are
 verified. The application supplies a `ProvenanceReader` for the exact original
 request, not a poll of the most recent owner. Its epochs must follow source and
 AA lifecycle changes; call `invalidate` at each such change and on sensor loss.
-The v74 session hooks now perform the observed lifecycle revocations above.
-The worker separately resets MODEL/holdout prediction, calibration, and queued
-inputs when the coherent observed session boundary changes. A transition,
-missing/ambiguous session, or observation fault suspends MODEL input; raw
-capture continues. Old request revisions cannot seed either calculator after
-a reset, and raw receipts before the worker's boundary check are excluded.
-Recovery requires fresh post-boundary motion coverage and a new GPS anchor
-pair. Ordinary GPS/GAP changes do not alter this session fence, so normal
-tunnel prediction continues. These are negative MODEL guards: qualified
-request provenance, sensor timing and phone acceptance remain unimplemented
-or unverified, and live ASSIST remains disabled.
 
 The worker receives the POSITION event and can publish an owned normalized
 `DrSnapshot` tagged with the current generation after processing that control

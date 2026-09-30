@@ -75,7 +75,11 @@ ARM 합성 송신 시험 한 번의 실패는 후속 단독·전체 검사에서
 원본 LDS 요청 17건과 daemon 종료를 실행했습니다. 생성부터 관측한 연결의
 로컬 식별자이며 daemon/provider 신원이나 요청의 세션 소유권이 아닙니다.
 MODEL의 버스 경계 reset과 qualified 연결은 TODO이고 ASSIST는 비활성입니다.
-외부 master `e79ca52`의 추가 MODEL 보강은 다음 통합 대상으로 확인했습니다.
+이후 외부 master `e79ca52`·`d0c74d3`의 MODEL 시각·상태 이력·요청 문자열
+검사를 [같은 브랜치의 통합본](../validation/OBSERVATION_SYNC_2026-09-30.md)에
+반영했습니다. 이전 transport 입력의 잘못된 수락과 파서 결함을 직접 재현했고,
+통합 제품으로 원본 LDS 요청 12건과 세션 전환·실제 버스 단절을 확인했습니다.
+미관측 자격을 채우거나 ASSIST를 활성화한 변경은 아닙니다.
 
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
@@ -237,6 +241,27 @@ consumer/producer 잠금이 겹치면 기록을 버리는 경로를 재현·제�
 미완료입니다. 반복 VM 한 번의 정리 검사 실패는 원인이 미분리이며, 세부 진단을
 추가한 다음 VM의 성공으로 해결됐다고 판단하지 않습니다.
 공개 ZIP은 기존 v0.3.1-shadow.1 그대로입니다.
+
+[세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서는
+독립 변경을 통합하고 오래된 MODEL 계산의 재생성 후 잔류를 재현·수정했습니다.
+세션별 기준점·학습 보정값·대기 입력을 초기화하고 제외한 센서 원본과 사유를
+보존합니다. 세 독립 리뷰, host 300개 Python 및 C/C++·고정 ARM 전체 검사를
+완료했습니다. 최종 제품의 원본 VM에서 두 조건 각각 지연 LDS 요청 네 건의
+계산 제외와 순정 송신 보존, 합성 raw 336·587건 보존을 직접 확인했습니다.
+모든 MODEL은 invalid이며 일반 분석 결과는 inconclusive입니다. bus/provider/
+receiver 자격과 유효한 원본 GPS·실차·폰 검증은 남습니다. 앞선 반복 VM 정리
+실패의 원인도 미분리입니다. 새 외부 route 조사 커밋은 다음 검토 대상으로
+기록했으며 현재 공개 ZIP은 바꾸지 않았습니다.
+
+[요청 경로 복사·저장 검토](../validation/REQUEST_ROUTE_REVIEW_2026-09-30.md)에서는
+외부 route 변경을 통합하고 비동기 submit 전의 네 문자열을 journal까지 보존합니다.
+세 독립 리뷰에서 파서의 불가능한 문자열 허용과 getter 혼선·일반 worker 버퍼의
+회귀 공백을 재현·수정했습니다. host 301개 Python 및 C/C++·고정 ARM 전체 검사와
+후속 변경 대상 검사를 완료했습니다. 최종 제품의 원본 VM에서 실제 요청 30건의
+route, 세션 교체 뒤 지연 응답의 이전 문맥과 MODEL 제외를 직접 확인했습니다.
+raw 350·441건은 직접 넣은 합성 입력이며 모든 MODEL은 invalid, 일반 분석은
+inconclusive입니다. provider/bus/receiver 자격·실차·폰 검증 및 이전 정리 실패의
+원인은 남아 있으며 공개 ZIP은 변경하지 않았습니다.
 
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을

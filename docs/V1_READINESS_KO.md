@@ -43,6 +43,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   17건과 daemon 종료를 검사했습니다. close callback만으로 놓친 실제 단절을
   signal 관측으로 보강했습니다. daemon/provider 신원, MODEL의 버스 경계
   reset과 qualified 요청 연결은 여전히 미완료입니다.
+- [x] 외부 MODEL 시각·파서 보강을 버스 관측과 같은 브랜치에 통합합니다.
+  [통합 검사](../validation/OBSERVATION_SYNC_2026-09-30.md)는 이전 transport 입력과
+  상태 이력·문자열 오류를 재현하고 통합 제품의 원본 LDS·버스 경계를 검사합니다.
+  계산에서 제외한 입력의 원시 기록을 보존하며 ASSIST 자격은 채우지 않습니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
   [요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)은 발행 당시 원본
   목적지·경로·인터페이스·메서드명을 응답까지 연결합니다. well-known 서비스
