@@ -27,13 +27,18 @@ bool Observer::valid() const {
 }
 uint64_t Observer::now() const { return clock_ ? clock_(clock_user_) : 0; }
 
-Result Observer::request_begin(void* method, Token* out, const session_trace::Snapshot& context) {
+Result Observer::request_begin(void* method, Token* out, const session_trace::Snapshot& context,
+                               const bus_trace::Snapshot& connection) {
     const PreserveErrno saved;
     if (out) *out = Token();
     if (!valid() || !method || !out) return BAD_INPUT;
     Issue issue = Issue();
     issue.observed_ns = now();
     issue.session_context = context;
+    issue.connection = connection;
+    if(connection.result==bus_trace::CONNECTED && connection.object && connection.lifetime) {
+        issue.bus_lifetime=connection.lifetime;issue.known|=ISSUE_BUS_LIFETIME;
+    }
     if(method_api_.get_destination)issue.route.destination=copy_text(method_api_.get_destination(method));
     if(method_api_.get_path)issue.route.path=copy_text(method_api_.get_path(method));
     if(method_api_.get_interface)issue.route.interface_name=copy_text(method_api_.get_interface(method));
@@ -64,13 +69,15 @@ Reply Observer::read_reply(void* method) const {
     return copy;
 }
 
-ReplyScope::ReplyScope(Observer& owner, void* method)
+ReplyScope::ReplyScope(Observer& owner, void* method, const bus_trace::Snapshot& connection)
     : owner_(&owner), previous_(reply_scope), token_(), result_(BAD_INPUT) {
     const PreserveErrno saved;
     ReplyConstruction construction={previous_,false};
     reply_scope = this; // Mask the outer request even on NOT_FOUND/BUSY.
-    if (owner.valid())
-        result_ = owner.ledger_.reply_enter(method, owner.read_reply(method), &token_);
+    if (owner.valid()) {
+        Reply reply=owner.read_reply(method);reply.connection=connection;
+        result_ = owner.ledger_.reply_enter(method, reply, &token_);
+    }
     construction.complete=true;
 }
 ReplyScope::~ReplyScope() {

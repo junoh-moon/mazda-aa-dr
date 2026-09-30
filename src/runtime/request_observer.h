@@ -29,7 +29,7 @@ class WorkerScope;
 // Glue for verified live call boundaries. It does not install hooks, replace
 // callbacks/userdata, call the original operation, or establish qualification.
 // Production wrappers/installation live in adapter/request_hooks and v74_install.
-// TODO: verified bus/session/receiver lifetimes and ASSIST qualification.
+// TODO: provider identity, request/session ownership and receiver qualification.
 // The caller must forward each original call exactly once even on failure.
 // As with Ledger, initialize before producers and outlive every live scope.
 class Observer {
@@ -39,7 +39,8 @@ public:
     Observer(const ReplyApi&, ObservationClock = 0, void* clock_user = 0,
              const MethodApi& = MethodApi());
     bool valid() const;
-    Result request_begin(void* method, Token*, const session_trace::Snapshot& = session_trace::Snapshot());
+    Result request_begin(void* method, Token*, const session_trace::Snapshot& = session_trace::Snapshot(),
+                         const bus_trace::Snapshot& = bus_trace::Snapshot());
     Result request_end(void* method);
     // Exact worker and position supplied by the verified BLM ABI, before post.
     Result worker_post(void* worker, const void* position, Token*);
@@ -66,7 +67,7 @@ private:
 // Destruction must be LIFO on the creating thread; never heap-queue a scope.
 class ReplyScope {
 public:
-    ReplyScope(Observer&, void* method);
+    ReplyScope(Observer&, void* method, const bus_trace::Snapshot& = bus_trace::Snapshot());
     ~ReplyScope();
     Result result() const { return result_; }
     Token token() const { return token_; }

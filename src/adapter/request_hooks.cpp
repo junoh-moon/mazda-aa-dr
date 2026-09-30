@@ -1,5 +1,6 @@
 #include "request_hooks.h"
 #include "session_hooks.h"
+#include "bus_hooks.h"
 #include <atomic>
 #include <errno.h>
 #include <new>
@@ -24,7 +25,7 @@ struct PreserveErrno {
 };
 void notify(void* connection, void* method, void* context) {
     ready();
-    R::ReplyScope scope(*observer, method);
+    R::ReplyScope scope(*observer, method,A::read_bus_connection(connection));
     original.notify(connection, method, context);
     // RAII runs on normal return and unwinding; it preserves original errno.
 }
@@ -80,7 +81,7 @@ extern "C" int32_t mx5_request_submit(void* connection, void* method,
     if(callback!=original.notify)
         return original.submit(connection,method,callback,context,timeout);
     R::Token token;
-    observer->request_begin(method,&token,A::read_issue_session());
+    observer->request_begin(method,&token,A::read_issue_session(),A::read_bus_connection(connection));
     // Register before submission; another thread can notify before it returns.
     // Neither a failure status nor elapsed time substitutes for method end.
     return original.submit(connection,method,notify,context,timeout);

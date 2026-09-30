@@ -2,6 +2,7 @@
 #include "cold_patch.h"
 #include "request_hooks.h"
 #include "session_hooks.h"
+#include "bus_hooks.h"
 #include <cstring>
 
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -90,9 +91,14 @@ const ApiEntry kBusApi[]={
     {"JCIDBUS_method_get_name",0x19e5c,{0xe52db004,0xe28db000,0xe24dd00c,0xe50b0008}},
     {"JCIDBUS_method_send_async_with_notify",0x1a09c,{0xe92d4800,0xe28db004,0xe24dd038,0xe50b0020}},
     {"JCIDBUS_method_free",0x19494,{0xe92d4800,0xe28db004,0xe24dd010,0xe50b0010}},
-    {"JCIDBUS_free_method_only",0x195e8,{0xe92d4800,0xe28db004,0xe24dd010,0xe50b0010}}
+    {"JCIDBUS_free_method_only",0x195e8,{0xe92d4800,0xe28db004,0xe24dd010,0xe50b0010}},
+    {"JCIDBUS_conn_create",0xb8c4,{0xe92d4800,0xe28db004,0xe24dd018,0xe50b0018}},
+    {"JCIDBUS_conn_connect",0xb360,{0xe92d4800,0xe28db004,0xe24dd028,0xe50b0010}},
+    {"JCIDBUS_conn_disconnect",0xac54,{0xe92d4800,0xe28db004,0xe24dd040,0xe50b0030}},
+    {"JCIDBUS_conn_free",0xb930,{0xe92d4800,0xe28db004,0xe24dd020,0xe50b0010}},
+    {"JCIDBUS_signal_handler",0x2098c,{0xe92d4800,0xe28db004,0xe24dd038,0xe50b0028}}
 };
-A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::RequestBindings& bindings) {
+A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::RequestBindings& bindings,A::BusBindings& connection) {
     if(!in.blm_handle)return A::INVALID_INSTALL_ARGUMENT;
     void* bus_entry=dlsym(in.blm_handle,kBusApi[0].name);
     void* data_entry=dlsym(in.blm_handle,"LDS_DATA_GetPosition");
@@ -111,6 +117,17 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
             return A::MODULE_MISMATCH;
         if(std::memcmp(reinterpret_cast<void*>(address),e.words,16))return A::ORIGINAL_BYTES_MISMATCH;
     }
+    void* predicate=dlsym(in.blm_handle,"dbus_message_is_signal");Dl_info dbus=Dl_info();
+    if(!predicate || !dladdr(predicate,&dbus) || !dbus.dli_fbase || !dbus.dli_fname)
+        return A::MODULE_MISMATCH;
+    const uintptr_t lb=reinterpret_cast<uintptr_t>(dbus.dli_fbase),pa=lb+0x1459c;
+    if(!target_elf(dbus.dli_fname) ||
+       !in.verify_file_hash(dbus.dli_fname,"07b06516d6ba93bbfa9db1e817278c7c96bd86fdd0f9dc48c917b1c100a8fe6b"))
+        return A::FILE_IDENTITY_MISMATCH;
+    if(predicate!=reinterpret_cast<void*>(pa) || !matches_module(pa,lb,dbus.dli_fname) ||
+       !segment(lb,pa,16,PROT_READ|PROT_EXEC))return A::MODULE_MISMATCH;
+    const uint32_t predicate_bytes[]={0xe1a0c001,0xe1a03002,0xe3a01004,0xe1a0200c};
+    if(std::memcmp(predicate,predicate_bytes,16))return A::ORIGINAL_BYTES_MISMATCH;
     if(data_entry!=reinterpret_cast<void*>(db+0x27e0) ||
        !segment(db,db+0x2228,16,PROT_READ|PROT_EXEC) ||
        std::memcmp(reinterpret_cast<void*>(db+0x2228),kNotify,16))return A::ORIGINAL_BYTES_MISMATCH;
@@ -146,6 +163,34 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
         plan.slots[i]=s;
     }
     plan.slot_count=5;
+    // Install bus cleanup before connect/create, then request submit. The
+    // separately prepared session slots are appended by session_plan below.
+    // Only GOT data is changed: libjcidbus may already have running callers.
+    const C::Slot submit=plan.slots[--plan.slot_count];
+    const C::Slot signal={bb+0x34240,bb+0x2098c,reinterpret_cast<uintptr_t>(&mx5_bus_signal)};
+    if(!segment(bb,signal.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
+    if(*reinterpret_cast<uintptr_t*>(signal.address)!=signal.expected)return A::NEXT_CHAIN_MISMATCH;
+    plan.slots[plan.slot_count++]=signal;
+    const uintptr_t bus_slots[]={0x34560,0x34274,0x34400,0x345ec};
+    const uintptr_t blm_slots[]={0xf7710,0xf7ce8,0xf8b84,0xf81a0};
+    const uintptr_t targets[]={0xac54,0xb930,0xb360,0xb8c4};
+    const uintptr_t replacements[]={reinterpret_cast<uintptr_t>(&mx5_bus_disconnect),
+        reinterpret_cast<uintptr_t>(&mx5_bus_free),reinterpret_cast<uintptr_t>(&mx5_bus_connect),
+        reinterpret_cast<uintptr_t>(&mx5_bus_create)};
+    for(unsigned i=0;i<4;++i)for(unsigned owner=0;owner<2;++owner) {
+        const uintptr_t base=owner?blm:bb;
+        const C::Slot s={base+(owner?blm_slots[i]:bus_slots[i]),bb+targets[i],replacements[i]};
+        if(!segment(base,s.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
+        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return A::NEXT_CHAIN_MISMATCH;
+        plan.slots[plan.slot_count++]=s;
+    }
+    plan.slots[plan.slot_count++]=submit;
+    connection.create=reinterpret_cast<A::BusCreate>(bb+0xb8c4);
+    connection.connect=reinterpret_cast<A::BusConnect>(bb+0xb360);
+    connection.disconnect=reinterpret_cast<A::BusEnd>(bb+0xac54);
+    connection.free=reinterpret_cast<A::BusEnd>(bb+0xb930);
+    connection.signal=reinterpret_cast<A::BusSignal>(bb+0x2098c);
+    connection.is_signal=reinterpret_cast<A::BusIsSignal>(predicate);
     bindings.reply.get_reply=reinterpret_cast<decltype(bindings.reply.get_reply)>(bb+0x19778);
     bindings.reply.get_type=reinterpret_cast<decltype(bindings.reply.get_type)>(bb+0x10b20);
     bindings.reply.get_sender=reinterpret_cast<decltype(bindings.reply.get_sender)>(bb+0x10c10);
@@ -194,7 +239,7 @@ A::InstallResult session_plan(const A::InstallOptions& in,C::Plan& plan,A::Sessi
     bindings.status=reinterpret_cast<A::SessionStatus>(blm+0x8b128);
     return A::INSTALL_OK;
 }
-struct Setup { const A::InstallOptions* options; uintptr_t send; A::RequestBindings bindings; A::SessionBindings session; };
+struct Setup { const A::InstallOptions* options; uintptr_t send; A::RequestBindings bindings; A::SessionBindings session; A::BusBindings bus; };
 int protect(void* p,size_t n,int flags,void*) { return mprotect(p,n,flags); }
 void* allocate(size_t n,void*) {
     void* p=mmap(0,n,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
@@ -213,6 +258,7 @@ bool prepare(void* tramp,void* user) {
         setup.bindings.destroy_trampoline=static_cast<char*>(tramp)+48;
         if(!A::prepare_request_hooks(setup.bindings,in.runtime.clock,in.runtime.user))return false;
         if(!A::prepare_session_hooks(setup.session))return false;
+        if(!A::prepare_bus_hooks(setup.bus))return false;
     }
     mx5_position_trampoline=tramp;
     return true;
@@ -252,11 +298,11 @@ InstallResult install_v74(const InstallOptions& in) {
     const C::Entry position={entry,kPrologue,reinterpret_cast<uintptr_t>(&mx5_position_veneer)};
     const C::Slot send={slot_address,expected_next,reinterpret_cast<uintptr_t>(&mx5_send_vehicle_data)};
     plan.entries[0]=position;plan.entry_count=1;plan.slots[0]=send;plan.slot_count=1;
-    Setup setup={&in,expected_next,A::RequestBindings(),A::SessionBindings()};
+    Setup setup={&in,expected_next,A::RequestBindings(),A::SessionBindings(),A::BusBindings()};
     if(in.observe_requests) {
         if(in.runtime.request_reader!=A::read_request_trace ||
            in.runtime.session_reader!=A::read_send_session)return INVALID_INSTALL_ARGUMENT;
-        const InstallResult check=request_plan(in,plan,setup.bindings);
+        const InstallResult check=request_plan(in,plan,setup.bindings,setup.bus);
         if(check!=INSTALL_OK)return check;
         const InstallResult sessions=session_plan(in,plan,setup.session);
         if(sessions!=INSTALL_OK)return sessions;

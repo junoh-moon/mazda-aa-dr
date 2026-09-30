@@ -62,6 +62,12 @@ inline bool format_session_trace(char* out,size_t cap,const session_trace::Snaps
     j.signed_number("state",s.state,observed && s.state_known);j.add("}");
     return j.ok();
 }
+inline bool format_bus_trace(char* out,size_t cap,const bus_trace::Snapshot& s) {
+    request_log_detail::Json j(out,cap);
+    j.add("{\"result\":\"");j.add(bus_trace::result_name(s.result));j.add("\"");
+    j.number("object",s.object,s.result==bus_trace::CONNECTED || s.result==bus_trace::DISCONNECTED);
+    j.number("lifetime",s.lifetime,s.result==bus_trace::CONNECTED);j.add("}");return j.ok();
+}
 // Only the journal worker formats these copied records. No OEM strings/pointers
 // survive into this function. A diagnostic prefix never claims a full identity.
 inline bool format_request_trace(char* out,size_t cap,request_trace::Result result,
@@ -76,6 +82,11 @@ inline bool format_request_trace(char* out,size_t cap,request_trace::Result resu
     j.number("issue_observed_ns",t.issue.observed_ns,t.issue.observed_ns!=0);
     j.number("reply_observed_ns",t.reply.observed_ns,t.reply.observed_ns!=0);
     j.number("bus_lifetime",t.issue.bus_lifetime,t.issue.known&R::ISSUE_BUS_LIFETIME);
+    char connection[128];
+    if(!format_bus_trace(connection,sizeof connection,t.issue.connection))return false;
+    j.add(",\"issue_connection\":");j.add(connection);
+    if(!format_bus_trace(connection,sizeof connection,t.reply.connection))return false;
+    j.add(",\"reply_connection\":");j.add(connection);
     j.number("session_lifetime",t.issue.session_lifetime,t.issue.known&R::ISSUE_SESSION_LIFETIME);
     j.number("session_event",t.issue.session_event,t.issue.known&R::ISSUE_SESSION_STATE);
     j.signed_number("session_state",t.issue.session_state,t.issue.known&R::ISSUE_SESSION_STATE);

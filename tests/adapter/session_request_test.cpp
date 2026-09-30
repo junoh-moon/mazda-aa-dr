@@ -2,6 +2,7 @@
 // Observer for queue dispatch; no OEM object, binary or original API is used.
 #include "../../src/adapter/request_hooks.cpp"
 #include "adapter/adapter.h"
+#include "adapter/bus_hooks.h"
 #include <assert.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -13,6 +14,12 @@ alignas(8) static unsigned char position[72];
 static A::RequestNotify queued_notify;
 static A::Observation position_event, send_event;
 static unsigned positions, sends;
+static int32_t bus_closed(void*,void*) { return 0; }
+static void* bus_create(A::BusClosed,void*) { return &connection; }
+static int32_t bus_connect(void*,const char*,int32_t,uintptr_t) { return 1; }
+static void bus_end(void*) {}
+static int32_t bus_signal(void*,void*) { return 0; }
+static int32_t bus_is_signal(void*,const char*,const char*) { return 0; }
 static int32_t session_create(const char*,void*,const A::SessionCallbacks* cb,void** out) {
     assert(session_creates<2);callbacks[session_creates]=*cb;
     *out=&handles[session_creates++];return 0;
@@ -46,8 +53,13 @@ static void sink_copy(const A::Observation* e,void*) {
     else { send_event=*e;++sends; }
 }
 static int32_t original_send(void*,A::VehicleData*) { return 29; }
-int main() {
+int main(int argc,char** argv) {
+    assert(argc==1 || (argc==2 && !strcmp(argv[1],"bus_recreated")));
     alarm(15);
+    const A::BusBindings bb={bus_create,bus_connect,bus_end,bus_end,bus_signal,bus_is_signal};
+    assert(A::prepare_bus_hooks(bb));
+    assert(mx5_bus_create(bus_closed,0)==&connection);
+    assert(mx5_bus_connect(&connection,"authored",0,0)==1);
     A::SessionBindings sb={session_create,session_destroy,session_status};
     assert(A::prepare_session_hooks(sb));
     A::SessionCallbacks cb=A::SessionCallbacks();cb.entry[1]=reinterpret_cast<uintptr_t>(&session_status);
@@ -66,6 +78,11 @@ int main() {
     status_for(0,99);
     assert(mx5_session_destroy(&storage)==0);
     assert(mx5_session_create("authored",0,&cb,&storage)==0);status_for(1,3);
+    if(argc==2) {
+        mx5_bus_free(&connection);
+        assert(mx5_bus_create(bus_closed,0)==&connection);
+        assert(mx5_bus_connect(&connection,"authored",0,0)==1);
+    }
     queued_notify(&connection,&method,&notify_context);
     assert(mx5_request_free(&method)==13);
     {
@@ -93,7 +110,15 @@ int main() {
            !strcmp(route.interface_name.bytes,"org.example.RouteInterface"));
     assert(route.member.known && route.member.complete && !strcmp(route.member.bytes,"GetPosition"));
     assert(!memcmp(&route,&position_event.request_trace.issue.route,sizeof route));
-    assert(!send_event.request_trace.issue.known && !send_event.request_trace.issue.session_lifetime);
+    assert(send_event.request_trace.issue.known==R::ISSUE_BUS_LIFETIME);
+    assert(send_event.request_trace.issue.bus_lifetime==1 && !send_event.request_trace.issue.session_lifetime);
+    namespace B=mx5::runtime::bus_trace;
+    const B::Snapshot& issue=send_event.request_trace.issue.connection;
+    const B::Snapshot& reply=send_event.request_trace.reply.connection;
+    assert(issue.result==B::CONNECTED && issue.object==1 && issue.lifetime==1);
+    assert(reply.result==B::CONNECTED && reply.object==unsigned(argc) && reply.lifetime==unsigned(argc));
+    assert(position_event.request_trace.reply.connection.lifetime==reply.lifetime);
+    assert(!A::bus_hook_health().faults);
     assert(!send_event.provenance.exact_request);
     assert(!A::request_hook_health().ledger.requests && !A::request_hook_health().ledger.workers);
     assert(!A::session_hook_health().faults);

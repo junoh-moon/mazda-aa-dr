@@ -7,13 +7,13 @@ namespace A=mx5::adapter;
 namespace C=A::cold_patch;
 struct Fixture {
     enum { PAGE=4096, RX=PROT_READ|PROT_EXEC, RW=PROT_READ|PROT_WRITE };
-    unsigned calls,fail1,fail2,prepared,released;
+    unsigned calls,fail1,fail2,prepared,released,changed_slot_index;
     bool allocation_fail,prepare_fail,changed_code,changed_slot;
     unsigned char *code,*got,*tramp;
     int permissions[5];
     C::Plan plan;
     static const uint8_t bytes[16];
-    Fixture():calls(0),fail1(0),fail2(0),prepared(0),released(0),
+    Fixture():calls(0),fail1(0),fail2(0),prepared(0),released(0),changed_slot_index(0),
         allocation_fail(false),prepare_fail(false),changed_code(false),changed_slot(false),plan() {
         void* p;assert(!posix_memalign(&p,PAGE,4*PAGE));code=static_cast<unsigned char*>(p);
         assert(!posix_memalign(&p,PAGE,PAGE));got=static_cast<unsigned char*>(p);
@@ -25,7 +25,7 @@ struct Fixture {
             plan.entries[plan.entry_count++]=e;
         }
         permissions[4]=RW;
-        for(unsigned i=0;i<7;++i) {
+        for(unsigned i=0;i<16;++i) {
             uintptr_t* slot=reinterpret_cast<uintptr_t*>(got)+i;*slot=0x2000+16*i;
             C::Slot s={reinterpret_cast<uintptr_t>(slot),*slot,0x3000+16*i};
             plan.slots[plan.slot_count++]=s;
@@ -43,7 +43,7 @@ struct Fixture {
             f.permissions[offset/PAGE]=flags;
             if(offset==3*PAGE && flags==RW && !f.prepared) {
                 if(f.changed_code)f.code[32]^=1;
-                if(f.changed_slot)*reinterpret_cast<uintptr_t*>(f.got)=0xbad0;
+                if(f.changed_slot)reinterpret_cast<uintptr_t*>(f.got)[f.changed_slot_index]=0xbad0;
             }
         }
         return 0;
@@ -99,7 +99,7 @@ const uint8_t Fixture::bytes[16]={0x10,0x48,0x2d,0xe9,8,0xb0,0x8d,0xe2,1,2,3,4,5
 int main() {
     unsigned calls=0;
     { Fixture f;assert(f.run()==A::INSTALL_OK);f.restored(true);assert(f.prepared==1 && !f.released);calls=f.calls; }
-    assert(calls==16);
+    assert(calls==25);
     for(unsigned i=1;i<=calls;++i) {
         Fixture f;f.fail1=i;assert(f.run()==A::MEMORY_PROTECTION_FAILED);f.restored();
         if(f.prepared)assert(!f.released);
@@ -107,15 +107,19 @@ int main() {
     { Fixture f;f.allocation_fail=true;assert(f.run()==A::TRAMPOLINE_ALLOCATION_FAILED);f.restored(); }
     { Fixture f;f.prepare_fail=true;assert(f.run()==A::CONFIGURATION_FAILED);f.restored();assert(f.released==1); }
     { Fixture f;f.changed_code=true;assert(f.run()==A::ORIGINAL_BYTES_MISMATCH);assert(!f.prepared);f.code[32]^=1;f.restored(); }
-    { Fixture f;f.changed_slot=true;assert(f.run()==A::NEXT_CHAIN_MISMATCH);assert(!f.prepared);*reinterpret_cast<uintptr_t*>(f.got)=f.plan.slots[0].expected;f.restored(); }
-    for(unsigned second=17;second<=23;second+=3) {
-        Fixture f;f.fail1=13;f.fail2=second;assert(f.run()==A::RESTORE_FAILED_FATAL);
+    for(unsigned i=0;i<16;++i) {
+        Fixture f;f.changed_slot=true;f.changed_slot_index=i;
+        assert(f.run()==A::NEXT_CHAIN_MISMATCH && !f.prepared && f.released==1);
+        reinterpret_cast<uintptr_t*>(f.got)[i]=f.plan.slots[i].expected;f.restored();
+    }
+    for(unsigned second=26;second<=32;second+=3) {
+        Fixture f;f.fail1=22;f.fail2=second;assert(f.run()==A::RESTORE_FAILED_FATAL);
         assert(!f.released); // Patched or non-executable OEM page: stop the service.
         for(unsigned i=0;i<f.plan.slot_count;++i)assert(*reinterpret_cast<uintptr_t*>(f.plan.slots[i].address)==f.plan.slots[i].expected);
     }
     // The doWork and destructor may share a page under a different page size.
     { Fixture f;f.plan.entries[3].address=f.plan.entries[2].address+32;
       memcpy(reinterpret_cast<void*>(f.plan.entries[3].address),Fixture::bytes,16);
-      assert(f.run()==A::INSTALL_OK);assert(f.calls==14);f.restored(true); }
-    puts("PASS cold transaction: 16 protection failures, rechecks, preparation/allocation and fatal rollback");
+      assert(f.run()==A::INSTALL_OK);assert(f.calls==23);f.restored(true); }
+    puts("PASS cold transaction: 25 protection failures, rechecks, preparation/allocation and fatal rollback");
 }

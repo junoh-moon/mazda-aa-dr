@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request', 'session'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'session', 'bus'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -91,6 +91,29 @@ def main():
                  'prediction_destroy_inflight', 'prediction_status_inflight', 'prediction_cached_inflight')
         fixture, access = 'session_hooks', 'session_dso_access.h'
         macro, marker = '-DMX5_SESSION_DSO_TEST', 'PASS session wrappers '
+    elif args.suite == 'bus':
+        names = {
+            'PREPARE': '_ZN3mx57adapter17prepare_bus_hooksERKNS0_11BusBindingsE',
+            'HEALTH': '_ZN3mx57adapter15bus_hook_healthEv',
+            'READ': '_ZN3mx57adapter19read_bus_connectionEPKv',
+            'CREATE': 'mx5_bus_create', 'CONNECT': 'mx5_bus_connect',
+            'DISCONNECT': 'mx5_bus_disconnect', 'FREE': 'mx5_bus_free', 'SIGNAL': 'mx5_bus_signal',
+            'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
+            'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+            'GENERATION': '_ZN3mx57adapter10generationEv',
+            'PUBLISH': '_ZN3mx57adapter16publish_snapshotERKNS0_10DrSnapshotE',
+            'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
+            'VEHICLE_SEND': 'mx5_send_vehicle_data',
+        }
+        cases = ('normal', 'signal', 'signal_reuse', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
+                 'capacity', 'collision', 'bad_callback', 'throw_create', 'throw_connect',
+                 'throw_disconnect', 'throw_free', 'throw_closed',
+                 'prediction_entry_create', 'prediction_entry_connect', 'prediction_entry_disconnect',
+                 'prediction_entry_free', 'prediction_entry_closed', 'prediction_entry_signal',
+                 'prediction_exit_create', 'prediction_exit_connect', 'prediction_exit_disconnect',
+                 'prediction_exit_free', 'prediction_exit_closed', 'prediction_exit_signal')
+        fixture, access = 'bus_hooks', 'bus_dso_access.h'
+        macro, marker = '-DMX5_BUS_DSO_TEST', 'PASS bus connection '
     offsets = {}
     for label, name in names.items():
         rows = [line.split() for line in symbols.splitlines() if line.split()[-1] == name]
@@ -104,10 +127,13 @@ def main():
     (build / 'unwind_offsets.h').write_text(''.join(
         '#define TEST_' + label + ' 0x%xu\n' % offset for label, offset in offsets.items()))
     names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
-    if args.suite != 'session':
+    if args.suite not in ('session', 'bus'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
-    sources += sorted(p for p in (repo / 'src').rglob('*') if p.is_file())
+    for root, directories, files in os.walk(repo / 'src'):
+        depth = len(Path(root).relative_to(repo / 'src').parts)
+        require(depth < 16 or not directories, 'Source snapshot depth limit exceeded')
+        sources.extend(sorted(Path(root) / name for name in files))
     inputs = {str(p.relative_to(repo)): digest(p) for p in sources}
     for source in sources:
         copied = build / 'source' / source.relative_to(repo)
@@ -119,7 +145,7 @@ def main():
                '-D_GNU_SOURCE', macro, '-mcpu=cortex-a9', '-mfpu=neon',
                '-mfloat-abi=softfp', '-marm', '-I' + str(build / 'source/src'), '-I' + str(build),
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
-    if args.suite != 'session':
+    if args.suite not in ('session', 'bus'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
     command += ['-ldl', '-pthread', '-o', str(executable)]
     subprocess.run(command, check=True)

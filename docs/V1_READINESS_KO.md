@@ -38,6 +38,11 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   최종 원본 VM 두 실행(raw 936·855건)은 journal/요청 loss 0과 합성식 대조를
   완료했습니다. 과거 drop의 정확한 원인과 물리 입력 자격은 확정하지 않았습니다.
 - [ ] 실제 요청의 provider/receiver/session 출처를 보존하는 ASSIST 연결을 구현·검사합니다.
+  [버스 연결 관측 검토](../validation/BUS_CONNECTION_REVIEW_2026-09-30.md)에서
+  실제 발행/응답 연결 수명과 daemon 종료의 단절 관측을 제품에 연결했습니다.
+  세 독립 리뷰와 host/ARM 전체 검사 뒤 원본 VM의 LDS 요청 30건, 단절 뒤
+  generation 철회와 bus fault 0을 확인했습니다. 관측 ID는 daemon/provider
+  인증이나 receiver 자격이 아니며 MODEL 버스 reset도 TODO입니다.
   [세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서
   이전 세션의 기준점·학습 보정·대기 입력 잔류를 제거하고 원시 입력을 보존했습니다.
   원본 VM의 두 조건에서 각각 지연 요청 네 건을 새 MODEL에서 제외했고, 재시작
