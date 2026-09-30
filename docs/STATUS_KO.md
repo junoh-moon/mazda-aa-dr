@@ -89,6 +89,14 @@ MODEL의 버스 경계 reset과 qualified 연결은 TODO이고 ASSIST는 비활�
 원시 입력 78건을 확인했습니다. 이는 provider/receiver/session qualification이나
 유효한 원본 GPS·폰 수용의 증명이 아닙니다. live ASSIST는 계속 비활성입니다.
 
+[원본 LDS의 직렬 입력 기동 조사](../validation/LDS_INPUT_STARTUP_2026-09-30.md)에서는
+작성한 NMEA를 격리 PTY에 공급하며 여섯 VM을 실행했습니다. 원본 GpioChip과
+SYSTEM을 포함한 구성에서 LDS의 실제 system state 2 응답·USB 목록 요청까지
+진행했지만, 위치는 계속 mode 0·READ_NOT_READY였습니다. 누락된 온도 경로에
+따른 SYSTEM의 standby 전환 시도도 남았습니다. 원본 파서의 유효 fix와 이
+GPS 입력에서의 제품 MODEL은 아직 미검증이며, 빌드만 한 후속 caller를 실행
+증거로 세지 않습니다. 추가 도구는 후속 통합 검사에 사용 중이며 정리가 남습니다.
+
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
 생략 없이 통과했습니다. 원본 커널 VM의 baseline/SHADOW 비교에서 위치 API의

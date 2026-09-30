@@ -85,6 +85,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   독립 ARM 검토에서 찾은 64비트 load 후행 장벽 문제도 수정했습니다.
   최종 원본 VM 두 실행(raw 936·855건)은 journal/요청 loss 0과 합성식 대조를
   완료했습니다. 과거 drop의 정확한 원인과 물리 입력 자격은 확정하지 않았습니다.
+- [ ] 원본 직렬 읽기·GPS 파서의 유효 응답으로 단절·복귀와 제품 MODEL을 검사합니다.
+  [LDS 입력 기동 조사](../validation/LDS_INPUT_STARTUP_2026-09-30.md)의 여섯 VM에서
+  SYSTEM 응답·USB 목록 요청까지 진행했지만 mode 0·READ_NOT_READY입니다.
+  작성한 NMEA의 체크섬 검사나 빌드만 한 caller를 이 항목의 완료로 세지 않습니다.
 - [ ] 실제 요청의 provider/receiver/session 출처를 보존하는 ASSIST 연결을 구현·검사합니다.
   외부 master의 [세션 관측 수정·실행](../validation/SESSION_CONTEXT_REVIEW_2026-09-30.md)에서
   issue 당시 문맥과 send 저장소를 연결하고 동시성·판정 결함을 수정했습니다.
