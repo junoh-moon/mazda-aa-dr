@@ -209,4 +209,32 @@ static void overlapping_replies() {
     }
     empty(o);puts("PASS observer overlapping reply threads retain their own request");
 }
-int main() { metadata();nested();lifetime();cross_thread();invalid();overlapping_replies(); }
+static int throwing_type(void* p) {
+    if(static_cast<Reply*>(p)->type==99)throw 29;
+    return type(p);
+}
+static void failed_scope_construction() {
+    R::ReplyApi functions=api();functions.get_type=throwing_type;
+    R::Observer o(functions);
+    Reply good={1,0,23,":1.23",0},bad={99,0,0,0,0};Method outer={&good},inner={&bad};
+    R::Token q,t;int w=0,p=0;
+    assert(o.request_begin(&outer,&q)==R::OK && o.request_begin(&inner,&t)==R::OK);
+    for(unsigned nested_case=0;nested_case<2;++nested_case) {
+        if(!nested_case) {
+            bool caught=false;errno=EDOM;
+            try { R::ReplyScope fail(o,&inner); } catch(int value) { caught=value==29; }
+            assert(caught && errno==EDOM);
+            assert(o.worker_post(&w,&p,&t)==R::NOT_FOUND); // Detects dangling failed scope.
+        } else {
+            R::ReplyScope enclosing(o,&outer);
+            bool caught=false;
+            try { R::ReplyScope fail(o,&inner); } catch(int value) { caught=value==29; }
+            assert(caught && o.worker_post(&w,&p,&t)==R::OK); // Restores the actual outer scope.
+        }
+    }
+    { R::WorkerScope scope(o,&w);R::Trace trace;
+      assert(o.position_take(&p,&trace)==R::OK && trace.request.id==q.id); }
+    assert(o.request_end(&outer)==R::OK && o.request_end(&inner)==R::OK);empty(o);
+    puts("PASS observer constructor failure restores absent and outer reply scopes");
+}
+int main() { metadata();nested();lifetime();cross_thread();invalid();overlapping_replies();failed_scope_construction(); }

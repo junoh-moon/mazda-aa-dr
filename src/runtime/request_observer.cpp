@@ -11,6 +11,11 @@ struct PreserveErrno {
     PreserveErrno() : value(errno) {}
     ~PreserveErrno() { errno = value; }
 };
+struct ReplyConstruction {
+    ReplyScope* previous;
+    bool complete;
+    ~ReplyConstruction() { if(!complete)reply_scope=previous; }
+};
 }
 
 Observer::Observer(const ReplyApi& api, ObservationClock clock, void* user)
@@ -57,9 +62,11 @@ Reply Observer::read_reply(void* method) const {
 ReplyScope::ReplyScope(Observer& owner, void* method)
     : owner_(&owner), previous_(reply_scope), token_(), result_(BAD_INPUT) {
     const PreserveErrno saved;
+    ReplyConstruction construction={previous_,false};
     reply_scope = this; // Mask the outer request even on NOT_FOUND/BUSY.
     if (owner.valid())
         result_ = owner.ledger_.reply_enter(method, owner.read_reply(method), &token_);
+    construction.complete=true;
 }
 ReplyScope::~ReplyScope() {
     const PreserveErrno saved;

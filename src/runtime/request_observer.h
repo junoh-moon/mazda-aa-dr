@@ -22,7 +22,8 @@ class WorkerScope;
 
 // Glue for verified live call boundaries. It does not install hooks, replace
 // callbacks/userdata, call the original operation, or establish qualification.
-// TODO: production cold-install transaction, bus/session/receiver lifetimes.
+// Production wrappers/installation live in adapter/request_hooks and v74_install.
+// TODO: verified bus/session/receiver lifetimes and ASSIST qualification.
 // The caller must forward each original call exactly once even on failure.
 // As with Ledger, initialize before producers and outlive every live scope.
 class Observer {

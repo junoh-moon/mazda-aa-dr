@@ -24,6 +24,8 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   [원본 callback 실행](../validation/VIM_CALLBACK_2026-09-30.md)에서 합성 세 건의
   원본 등록·MQ·callback·AA 수신은 확인했습니다. 물리 센서와 유효 위치 계산은 남습니다.
 - [ ] 실제 요청의 provider/receiver/session 출처를 보존하는 ASSIST 연결을 구현·검사합니다.
+  아래는 조사 순서에 따른 이력입니다. 요청 관측의 제품 설치·journal 연결은
+  완료했으며, 최신 결과는 이 항목 마지막의 제품 연결 기록을 따릅니다.
   [원본 위치 객체 ABI](../validation/REQUEST_PROVENANCE_2026-09-30.md)를 실행했으나
   큐 lifetime·실제 요청 연결·qualified runtime 구현의 완료로 세지 않습니다.
   [별도 요청 관측 자료구조](../validation/REQUEST_TRACE_2026-09-30.md)와 합성 회귀를
@@ -63,6 +65,11 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   기존 ARM 후크의 합성 예외 abort를 고쳤고, 실제 제품 DSO와 원본 공유
   runtime의 작성 target에서 8개 예외/취소 사례를 통과했습니다. OEM 호출
   체인 전체와 요청 후크의 예외 경계 완료로 세지 않습니다.
+  [요청 관측의 제품 설치·journal 연결](../validation/REQUEST_PRODUCT_2026-09-30.md)을
+  구현·실행했습니다. 실제 제품 DSO에서 정상/제공자 부재의 24개 요청과
+  위치/send metadata, 축소된 8개 취소의 슬롯 회수를 검사했습니다. 전체 manager
+  이후 반복 취소·재개 timeout은 원인 미분리입니다. 최종 파이프라인 시험의
+  명시적 제외와 실패 기록을 유지하며 이 상위 ASSIST 항목은 완료하지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
@@ -78,7 +85,7 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
 | 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음 |
 | 적분 시간·신선도 | receipt와 producer 시각 분리, MODEL이 qualified로 승격되지 않는 검사 | 현재 IPC payload에는 생산자 시각/순번이 없음. 검증된 지연 상한 등 대체 근거도 없음 |
 | 위치 계산·재획득 | 코어·정차 보정·GPS holdout·wheel 보정 합성 시험 | 실제 경로·독립 기준 위치 비교 없음. GPS holdout 차이를 ground truth로 세지 않음 |
-| 요청 출처·ASSIST 실행 | adapter의 출처/epoch 검사와 qualified 파이프라인은 합성 입력으로 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 실제 요청 연계와 자격 입력은 미구현 |
+| 요청 출처·ASSIST 실행 | adapter의 출처/epoch 검사와 qualified 파이프라인은 합성 입력으로 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 요청 관측 연계는 제품에 연결했으나 qualified 자격 입력은 미구현. 전체 manager 이후 반복 취소 timeout 원인 미분리 |
 | 휴대폰·앱 수용 | OEM LOCATION 경로의 정적 근거와 VM의 실제 native API 호출. 폰 없이도 send=0을 반환함 | Galaxy S25·동글·네이버 지도에서 위치가 반영되는 실행 증거 없음 |
 | 다음 부팅과 장애 복구 | 일회 소비 가드·설치 중단 회귀. 실제 SM에서 명시적 재시작과 지연 SIGKILL 뒤 보드 재부팅 요청 관찰 | 다른 실패 경로와 물리 watchdog·전원 차단·다음 부팅의 복구는 미검증 |
 | 기존 설정 보존 | touch 설정 편집/제거 roundtrip, 무관한 파일을 변경하지 않는 설치기 | 기존 터치와 km/L의 실제 화면·입력 결과 미검증 |

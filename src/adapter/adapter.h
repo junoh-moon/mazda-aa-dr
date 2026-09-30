@@ -111,6 +111,10 @@ struct InstallOptions {
     // end(false) requires the caller to stop the process on fatal RX failure.
     bool (*begin_patch)();
     void (*end_patch)(bool executable_restored);
+    // Production includes request/worker observation in this SAME transaction.
+    // The existing BLM handle supplies its dependency scope during preflight.
+    bool observe_requests;
+    void* blm_handle;
 };
 InstallResult install_v74(const InstallOptions&);
 const char* install_result_name(InstallResult);

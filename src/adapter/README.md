@@ -5,8 +5,10 @@ backend. It is not evidence that the package has run on a CMU.
 
 ## Integration
 
-Build `adapter.cpp`, `v74_install.cpp`, and (only for ARM32 soft-float/softfp)
-`arm_veneer.S`. Link pthread, dl, and the usual math runtime. C++11 is required;
+Build `adapter.cpp`, `v74_install.cpp`, `request_hooks.cpp`, and the runtime
+`request_trace.cpp`/`request_observer.cpp`. ARM32 softfp also uses
+`arm_veneer.S` and `request_veneer.S`. The Makefile enables exception cleanup
+for the wrappers and Observer. Link pthread, dl, and the math runtime. C++11 is required;
 no STL containers or dynamic allocation are used on the hook path. Load the
 library at process startup: the fixed TLS storage uses the initial-exec model.
 
@@ -17,6 +19,25 @@ already loaded module. Both supplied paths must exactly match their `dladdr`
 names. The BLM dependency bindings must be eager (`RTLD_NOW`/`LD_BIND_NOW`).
 The backend refuses a lazy resolver or a different shim in the send GOT slot;
 it does not bypass that shim. It never changes the touch hooks.
+
+Production sets `observe_requests=true`, supplies the existing `blm_handle`,
+and uses `read_request_trace`. The same cold transaction installs four BLM
+entries and five GOT slots across BLM, JCIDBUS and the LDS data client. Their
+whole-file hashes, mappings, entry bytes and original slot targets are checked
+before the lease. BLM worker/vtable symbols are local ELF symbols; they cannot
+be queried with `dlsym`. JCIDBUS code pages remain executable and unchanged.
+After every fallible memory operation succeeds, cleanup slots are published
+before submit, with an ARM memory barrier after each pointer store. A failed
+RX restoration rolls back all BLM entries; an unrecoverable page failure stops
+the service. Prepared original targets remain valid until process exit.
+
+The request observer copies actual reply metadata before the AA util can
+flatten errors, then joins the exact live worker and position pointer. A
+request remains pending until its actual method free, including cancellation
+without notification. It never owns callback userdata or OEM reference counts.
+POSITION and SEND records carry the same owned trace; health reports observation
+loss and ABI mismatches. These process-local IDs and receipt times do not prove
+provider/receiver/session qualification or producer measurement time.
 
 The backend's own `configure` call freezes runtime callback pointers. Do not
 configure separately and then call `install_v74`; that is rejected. A separate
@@ -74,7 +95,7 @@ without retrying the original payload.
   return declaration. The examined caller has no stack arguments and ignores
   the return value. Hard-float ABI builds are rejected. EHABI records and C++
   cleanup propagate exceptions and deferred pthread cancellation through our
-  position/send frames. Authored ARM and exact production-DSO tests cover this
+  position/send and notify/worker frames. Authored ARM and exact production-DSO tests cover this
   boundary, including a relocated trampoline. This does not repair or prove
   unwind support in every OEM caller/body. Asynchronous cancellation and
   longjmp across a live C++ scope are outside this contract.
@@ -89,7 +110,8 @@ without retrying the original payload.
   of iostream/static enum maps. Examined static initializers have no VDM/AapProc
   startup or thread-create calls. GetServiceInterfaces only returns the static
   interfaces table. The first dlopen-return boundary is therefore the selected
-  cold installation point; runtime loader integration still needs target QA.
+  cold installation point. Actual product bootstrap is tested with original
+  APIs in a diagnostic VM; normal vehicle startup remains a separate test.
 
 No hot patch, dlclose, or live unpatch API is provided. Disabling stops new
 mutation and leaves hook/trampoline storage valid until process exit. Installation

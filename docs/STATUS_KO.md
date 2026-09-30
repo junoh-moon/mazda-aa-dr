@@ -9,6 +9,10 @@
 고정했습니다. 기본 모드는 SHADOW이며 ASSIST는 비활성입니다. 실차 센서 callback,
 위치 정확도, 정상 전체 차량 기동·복구와 폰 수용은 미검증입니다.
 
+아래 조사 이력의 미구현·미검증 범위는 각 기록 시점의 상태입니다. 요청 관측은
+후속 제품 설치·journal까지 연결했으며, 최신 결과와 남은 반복 취소 timeout은
+[제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)을 따릅니다.
+
 [후속 OEM 위치 서비스 실행](../validation/OEM_LOCATION_2026-09-30.md)에서는
 원본 LDS 제공자와 실제 위치 API 응답을 확인했습니다. mode·UTC·좌표는 모두
 0이며 READ_NOT_READY 상태입니다. 후속 실제 SM 부분 그래프에서는 LDS의 SM
@@ -89,6 +93,17 @@ timeout 만료·userdata 누수 여부와 제품 설치/journal 연결은 남아
 원본 libc/C++ runtime VM의 작성 target에서 예외·취소 8개 사례를 통과했습니다.
 OEM 함수 전체의 unwind나 비공개 요청 후크의 모든 예외 경계까지 검증한
 것은 아닙니다. 전체 host/ARM 회귀와 네 독립 코드 리뷰 결과도 기록했습니다.
+
+[요청 관측의 제품 연결](../validation/REQUEST_PRODUCT_2026-09-30.md)을 구현했습니다.
+실제 배포 DSO의 한 번의 cold-install과 journal을 원본 manager→LDS→worker→send에
+연결하여 정상 요청 13개와 제공자 부재 요청 11개의 metadata를 검사했습니다.
+util에서 사라지는 ServiceUnknown도 로그에 남습니다. host/ARM 전체 회귀와
+독립 리뷰 네 개를 완료했습니다. 작성 request 예외/취소 13개는 실제 DSO와
+원본 runtime에서도 통과했습니다. 축소된 free/resume 비교는 통과했지만,
+전체 manager 실행 뒤 반복 취소·재개에서 발생한 AA용 요청 timeout의 원인은
+미분리입니다. 이 실패와 최종 검사의 명시적 제외 범위를 새 기록에 보존했습니다.
+관측 ID는 receiver/session·센서 자격을 만들지 않으며 live ASSIST는 꺼져 있습니다.
+공개 ZIP은 아직 기존 v0.3.1-shadow.1입니다.
 
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을

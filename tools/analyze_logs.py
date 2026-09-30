@@ -127,6 +127,9 @@ class Auditor:
         self.choices = Counter()
         self.reasons = Counter()
         self.results = Counter()
+        self.request_results = Counter()
+        self.request_reply_types = Counter()
+        self.request_errors = Counter()
         self.owners = Counter()
         self.receivers = Counter()
         self.runtime_modes = Counter()
@@ -318,6 +321,7 @@ class Auditor:
                 kind not in ("health", "capture_end")):
             self.issue("record_after_capture_end", source, kind)
         if kind == "position":
+            self.request_record(row, source, count=True)
             if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "utc_s")):
                 return
             self.position_numbers(row, source)
@@ -352,6 +356,18 @@ class Auditor:
                         counter[str(row[key])] += 1
             if integer(row.get("audit_fault")) and row["audit_fault"] != 0:
                 self.issue("audit_fault", source, "Runtime disabled mutation because audit logging failed")
+            if "request_observer" in row:
+                observer = row["request_observer"]
+                if (not isinstance(observer, dict) or
+                        any(not isinstance(observer.get(k), bool) for k in ("prepared", "abi_fault", "exhausted")) or
+                        any(not integer(observer.get(k)) or observer[k] < 0
+                            for k in ("loss_epoch", "requests", "workers", "loss_reasons")) or
+                        not isinstance(observer.get("result"), str)):
+                    self.issue("request_observer_malformed", source, "Invalid request observation health")
+                elif (not observer["prepared"] or observer["result"] != "observed"):
+                    self.issue("request_observer_unavailable", source, "No current request observation health")
+                elif observer["abi_fault"] or observer["exhausted"] or observer["loss_reasons"]:
+                    self.issue("request_observer_loss", source, "Request association has incomplete lifetime evidence")
         elif kind == "owner_poll":
             if self.validate(row, source, ("receipt_ns", "pid"), ("owner", "comm"), ("request_provenance",)):
                 self.owners[(row["owner"], row["pid"], row["comm"])] += 1
@@ -709,10 +725,63 @@ class Auditor:
                 self.holdout_completed += 1
             s["holdout_window"] = None
 
+    def request_record(self, row, source, count=False):
+        # Older journals predate request observation. Presence opts into this
+        # schema; absence never proves a qualified request or receiver.
+        if "request" not in row:
+            return
+        t = row["request"]
+        results = {"observed", "not_observed", "reply_not_observed", "observation_gap",
+                   "observation_busy", "observation_capacity", "identity_conflict",
+                   "different_position_pointer", "scope_consumed", "invalid_observation_input",
+                   "observation_ids_exhausted"}
+        ids = ("request_id", "request_epoch", "worker_id", "worker_epoch")
+        optional = ("issue_observed_ns", "reply_observed_ns", "bus_lifetime",
+                    "session_lifetime", "session_event")
+        def unsigned(value, bits=64):
+            return integer(value) and 0 <= value < 2**bits
+        def text(value):
+            return (isinstance(value, dict) and "value" in value and isinstance(value.get("complete"), bool) and
+                    ((value.get("value") is None and not value["complete"]) or
+                     (isinstance(value.get("value"), str) and len(value["value"]) <= 64 and
+                      (not value["complete"] or len(value["value"]) < 64))))
+        valid = (isinstance(t, dict) and t.get("association_only") is True and
+                 isinstance(t.get("result"), str) and t["result"] in results and
+                 all(unsigned(t.get(k)) for k in ids) and
+                 all(k in t and (t[k] is None or unsigned(t[k])) for k in optional) and
+                 "session_state" in t and (t["session_state"] is None or
+                    (integer(t["session_state"]) and -2**31 <= t["session_state"] < 2**31)) and
+                 "reply_type" in t and (t["reply_type"] is None or
+                    (integer(t["reply_type"]) and t["reply_type"] in (1, 2))) and
+                 "wire_serial" in t and (t["wire_serial"] is None or
+                    (unsigned(t["wire_serial"], 32) and t["wire_serial"] > 0)) and
+                 all(text(t.get(k)) for k in ("sender", "error")))
+        if valid:
+            if t["result"] == "observed":
+                valid = all(t[k] > 0 for k in ids) and t["request_epoch"] == t["worker_epoch"]
+            else:
+                valid = (all(t[k] == 0 for k in ids) and
+                         all(t[k] is None for k in optional + ("session_state", "reply_type", "wire_serial")) and
+                         all(t[k]["value"] is None for k in ("sender", "error")))
+        if not valid:
+            self.issue("request_record_malformed", source, "Invalid request association record")
+            return
+        if count:
+            self.request_results[t["result"]] += 1
+            self.request_reply_types[str(t["reply_type"])] += 1
+            if t["error"]["complete"]:
+                self.request_errors[t["error"]["value"]] += 1
+        if t["result"] not in ("observed", "not_observed", "reply_not_observed"):
+            self.issue("request_observation_failed", source, t["result"])
+
     def send(self, row, source):
         if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "type", "length",
                                           "choice", "reason", "result"), ("original_hex", "outgoing_hex")):
             return
+        self.request_record(row, source)
+        position = self.positions.get((row["call"], row["generation"]))
+        if position and ("request" in position or "request" in row) and position.get("request") != row.get("request"):
+            self.issue("request_copy_mismatch", source, "Position/send request metadata differ", True)
         s = self.session
         s["sends"] += 1
         s["last_send_ns"] = max(s["last_send_ns"], row["mono_ns"])
@@ -904,6 +973,10 @@ class Auditor:
                                      per_session_max=[s["dropped_max"] for s in self.sessions],
                                      audit_fault_counts=dict(self.audit_faults)),
                     actual_runtime_modes=dict(self.runtime_modes),
+                    request_observation=dict(position_results=dict(self.request_results),
+                                             reply_types=dict(self.request_reply_types),
+                                             complete_error_names=dict(self.request_errors),
+                                             qualification="not_established"),
                     stream_correlation=dict(aa_boot_ids=aa_boot_ids, collector_boot_ids=collector_boot_ids,
                                             shared_kernel_boot_ids=sorted(set(aa_boot_ids) & set(collector_boot_ids)),
                                             meaning="same_kernel_boot_only_not_request_or_producer_provenance"),

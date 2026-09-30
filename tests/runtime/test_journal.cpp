@@ -106,7 +106,48 @@ static void stop_tests(const char* root,const std::string& logs) {
   }
   assert(rmdir(request.c_str())==0);
 }
+static void request_journal(bool emit) {
+  namespace R=mx5::runtime::request_trace;
+  A::Observation o=A::Observation();o.kind=A::Observation::POSITION;o.call_sequence=17;
+  o.mono_ns=103;o.request_result=R::OK;
+  R::Trace& t=o.request_trace;
+  t.request.id=1;t.request.epoch=3;t.worker.id=2;t.worker.epoch=3;
+  t.issue.observed_ns=101;t.reply.observed_ns=102;t.reply.type_known=true;t.reply.type=2;
+  t.reply.sender=R::copy_text(":1.42");t.reply.error_name=R::copy_text("org.freedesktop.DBus.Error.ServiceUnknown");
+  char line[2200];
+  assert(format_observation(line,sizeof line,o));if(emit)puts(line);
+  o.kind=A::Observation::SEND;o.type=1;o.length=48;o.has_payload=true;
+  assert(format_observation(line,sizeof line,o));if(emit)puts(line);
+  // Failed observation must not serialize a stale input Trace as associated.
+  o.request_result=R::FULL;
+  assert(format_observation(line,sizeof line,o));if(emit)puts(line);
+  o.request_result=R::OK;
+  t.reply.sender=R::copy_text("quote\"\\\n\001\377");
+  assert(format_observation(line,sizeof line,o));if(emit)puts(line);
+  // Worst bounded names and integers still fit the actual worker buffer.
+  memset(t.reply.sender.bytes,1,sizeof t.reply.sender.bytes);t.reply.sender.bytes[63]=0;
+  t.reply.sender.complete=false;t.reply.error_name=t.reply.sender;
+  t.request.id=t.request.epoch=t.worker.id=t.worker.epoch=UINT64_MAX;
+  t.issue.observed_ns=t.reply.observed_ns=UINT64_MAX;
+  t.issue.bus_lifetime=t.issue.session_lifetime=t.issue.session_event=UINT64_MAX;
+  t.issue.known=7;t.issue.session_state=INT32_MIN;
+  t.reply.wire_serial_known=true;t.reply.wire_serial=UINT32_MAX;
+  assert(format_observation(line,sizeof line,o));if(emit)puts(line);
+  // Exact-size success, one byte short failure, and adjacent bytes untouched.
+  char request[1800];assert(mx5::runtime::format_request_trace(request,sizeof request,R::OK,t));
+  const size_t required=strlen(request)+1;
+  char bounds[1802];memset(bounds,0x5a,sizeof bounds);
+  assert(mx5::runtime::format_request_trace(bounds+1,required,R::OK,t));
+  assert(bounds[0]==0x5a && bounds[required+1]==0x5a);
+  memset(bounds,0x5a,sizeof bounds);
+  assert(!mx5::runtime::format_request_trace(bounds+1,required-1,R::OK,t));
+  assert(!bounds[1] && bounds[0]==0x5a && bounds[required]==0x5a);
+  assert(!mx5::runtime::format_request_trace(0,0,R::OK,t));
+}
 int main(int argc,char** argv) {
+  const bool emit_requests=argc==2 && !strcmp(argv[1],"--emit-requests");
+  request_journal(emit_requests);
+  if(emit_requests)return 0;
   if(argc==2 && !strcmp(argv[1],"--emit-rejected")) {
     N::ReceiveDiagnostic d=N::ReceiveDiagnostic();d.reason=N::RECEIVE_STALE;
     d.authenticated_decoded=d.credentials_present=true;d.checked_ns=1250000001;

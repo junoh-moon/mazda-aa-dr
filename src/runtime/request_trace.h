@@ -8,8 +8,8 @@
 
 namespace mx5 { namespace runtime { namespace request_trace {
 
-// TODO: connect only after the exact OEM request, callback, post, doWork and
-// destruction ABIs are verified. This component currently has NO OEM hooks.
+// This Ledger is independent of OEM hooks. adapter/request_hooks connects the
+// verified request/notify/post/doWork/destruction boundaries in the pinned BLM.
 //
 // Observational association only: OK never means qualified Provenance, a
 // verified provider/receiver, fresh measurement time, or permission to ASSIST.
@@ -83,7 +83,7 @@ struct Trace {
     Reply reply; // Actual callback metadata, including an observed error.
 };
 
-// The future doWork hook owns this on its synchronous stack/TLS frame. It is
+// The doWork hook owns this on its synchronous stack/TLS frame. It is
 // deliberately not copyable or shareable between threads. Only Trace is an
 // owned, pointer-free record that may be queued after the OEM call returns.
 class WorkerContext {
@@ -118,7 +118,8 @@ public:
 
     // Only an actually observed method end/destruction permits reclamation.
     // A reply, elapsed time, disconnect intention or assumed cancellation does
-    // not release a pending slot. Cancel ABI integration remains unimplemented.
+    // not release a pending slot. The wrapper observes actual method free,
+    // including original pending cleanup without a notify callback.
     Result request_end(const void* method);
 
     // Called before original PostWorker, while a matching reply scope is live.

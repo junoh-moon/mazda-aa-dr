@@ -7,7 +7,8 @@ BUILD ?= build
 C_WARN = -std=c99 -O2 -Wall -Wextra -Werror -pedantic
 CXX_WARN = -std=c++11 -O2 -Wall -Wextra -Werror -Isrc
 CORE = src/core/dr_core.c
-ADAPTER = src/adapter/adapter.cpp src/adapter/v74_install.cpp
+REQUEST = src/adapter/request_hooks.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp
+ADAPTER = src/adapter/adapter.cpp src/adapter/v74_install.cpp $(REQUEST)
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
 NAV_HEADERS = src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
@@ -22,7 +23,7 @@ ARM_CPPFLAGS = -Isrc -I$(ARM_SYSROOT)/usr/include/dbus-1.0 -I$(ARM_SYSROOT)/usr/
 ARM_CXXFLAGS = -std=c++11 -Os -Wall -Wextra -Werror -fPIC -fvisibility=hidden -fno-exceptions -fno-rtti -fno-omit-frame-pointer -ftls-model=initial-exec $(ARM_FLAGS)
 ARM_DEPFLAGS = -MMD -MP -MF $(@:.o=.d).tmp -MT $@
 ARM_SOURCES = src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/core_bridge.cpp $(NAVIGATION)
-ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o
+ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o $(BUILD)/arm/src/adapter/request_veneer.o
 COLLECTOR_OBJECTS = $(BUILD)/arm/src/collector/collector.o $(BUILD)/arm/src/runtime/config.o
 GUARD_OBJECTS = $(BUILD)/arm/src/guard/guard.o $(BUILD)/arm/src/runtime/sha256.o
 HASH_OBJECTS = $(BUILD)/arm/src/tools/sha256_main.o $(BUILD)/arm/src/runtime/sha256.o
@@ -58,8 +59,11 @@ test-collector: $(BUILD)/test_collector $(BUILD)/mx5dr-collector-host $(BUILD)/t
 test-core: $(BUILD)/test_core $(BUILD)/replay
 	$(BUILD)/test_core
 	$(PYTHON) tests/core/test_replay.py $(BUILD)/replay
-test-adapter: $(BUILD)/test_adapter
+$(BUILD)/test_cold_patch: tests/adapter/cold_patch_test.cpp src/adapter/cold_patch.h src/adapter/adapter.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $< -o $@
+test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
+	$(BUILD)/test_cold_patch
 test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_journal
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
@@ -114,7 +118,7 @@ $(BUILD)/arm/src/runtime/runtime.o: src/runtime/motion_batch.h
 
 # Only wrappers that surround OEM calls need C++ cleanup/unwind tables.
 # A caller's exception or deferred cancellation must cross the shim intact.
-$(BUILD)/arm/src/adapter/adapter.o: override ARM_CXXFLAGS += -fexceptions
+$(BUILD)/arm/src/adapter/adapter.o $(BUILD)/arm/src/adapter/request_hooks.o $(BUILD)/arm/src/runtime/request_observer.o: override ARM_CXXFLAGS += -fexceptions
 
 arm: $(BUILD)/libmx5dr-vimtap.so $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $(BUILD)/mx5dr-guard $(BUILD)/mx5dr-sha256
 $(BUILD)/arm/%.o: %.cpp
@@ -163,6 +167,8 @@ $(BUILD)/test_shadow_log: tests/runtime/test_shadow_log.cpp src/runtime/shadow_l
 
 $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: $(NAV_HEADERS)
 $(BUILD)/test_journal $(BUILD)/arm/src/runtime/runtime.o: src/runtime/shadow_log.h
+$(BUILD)/test_journal: src/runtime/request_log.h src/adapter/request_hooks.h
+$(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/cold_patch.h src/adapter/request_hooks.h src/runtime/request_observer.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/adapter.h src/runtime/request_trace.h
 $(BUILD)/arm/src/navigation/pipeline.o $(BUILD)/arm/src/navigation/holdout.o $(BUILD)/arm/src/runtime/runtime.o: $(NAV_HEADERS)
 
