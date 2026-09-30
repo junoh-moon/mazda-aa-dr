@@ -67,14 +67,14 @@ test-core: $(BUILD)/test_core $(BUILD)/replay
 	$(PYTHON) tests/core/test_replay.py $(BUILD)/replay
 $(BUILD)/test_cold_patch: tests/adapter/cold_patch_test.cpp src/adapter/cold_patch.h src/adapter/adapter.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
-$(BUILD)/test_session_hooks: src/adapter/session_hooks.cpp src/adapter/session_hooks.h src/runtime/session_trace.h tests/adapter/session_hooks_test.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
-$(BUILD)/test_session_early_init: src/adapter/session_hooks.cpp src/adapter/session_hooks.h src/runtime/session_trace.h tests/adapter/session_early_init_test.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
+$(BUILD)/test_session_hooks: $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h src/runtime/session_trace.h src/runtime/request_trace.h src/adapter/request_hooks.h src/runtime/request_observer.h tests/adapter/session_hooks_test.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
+$(BUILD)/test_session_early_init: $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h src/runtime/session_trace.h src/runtime/request_trace.h src/adapter/request_hooks.h src/runtime/request_observer.h tests/adapter/session_early_init_test.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
 test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	$(BUILD)/test_cold_patch
-	@set -e; for case in normal failure overlap same_storage closing_create capacity callback_bad readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status; do $(BUILD)/test_session_hooks $$case; done
+	@set -e; for case in normal failure overlap same_storage closing_create capacity callback_bad readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight; do $(BUILD)/test_session_hooks $$case; done
 	$(BUILD)/test_session_early_init
 test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime

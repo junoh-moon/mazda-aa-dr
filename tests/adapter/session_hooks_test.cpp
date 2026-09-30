@@ -1,4 +1,5 @@
 #include "adapter/session_hooks.h"
+#include "adapter/adapter.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -23,6 +24,8 @@ static void* expected_info;
 static void* expected_user;
 static std::atomic<unsigned> block_create(0), block_callback(0), block_destroy(0);
 static bool cancel_create, cancel_destroy, cancel_status;
+static bool predict_in_create, predict_in_destroy, predict_in_status;
+static void prediction_attempt(bool replacement,bool publish);
 // Use the target's pthread ABI. GCC 4.9 std::thread's internal implementation
 // is not compatible with the stock shared C++ runtime (even without our DSO).
 template<class Call> static void* thread_body(void* arg) {
@@ -40,6 +43,7 @@ static void status(void* user,void* info) {
     assert(errno==EDOM);
     assert(user==expected_user && info==expected_info);
     ++notifications;
+    if(predict_in_status)prediction_attempt(false,true);
     errno=ERANGE;
     if(cancel_status)cancellation(block_callback);
     if(throw_status)throw 37;
@@ -49,6 +53,7 @@ static int32_t create(const char* xml,void* user,const A::SessionCallbacks* cb,v
     const unsigned index=creates++;
     assert(cb && storage && index<80);
     received[index]=*cb;retained[index]=cb;users[index]=user;
+    if(predict_in_create)prediction_attempt(false,true);
     for(unsigned i=0;i<19;++i)if(i!=1)assert(cb->entry[i]==supplied.entry[i]);
     if(early) {
         int32_t info[2]={-7,-1};expected_info=info;expected_user=user;
@@ -72,6 +77,7 @@ static int32_t create(const char* xml,void* user,const A::SessionCallbacks* cb,v
 }
 static int32_t destroy(void** storage) {
     assert(errno==EDOM);++destroys;
+    if(predict_in_destroy)prediction_attempt(false,true);
     assert(A::read_issue_session().result==(A::session_hook_health().faults?S::FAULT:S::TRANSITION));
     if(cancel_destroy)cancellation(block_destroy);
     if(throw_destroy) { errno=ERANGE;throw 31; }
@@ -179,9 +185,14 @@ static void readers() {
         unsigned local=0;
         do {
             const S::Snapshot s=A::read_issue_session();
-            assert(s.result==S::OBSERVED && s.lifetime==1);
-            if(s.state_known)assert(s.state>=0 && unsigned(s.state)+1==s.event);
-            assert(send(&storage).lifetime==1);++local;
+            assert(s.result==S::OBSERVED || s.result==S::TRANSITION);
+            if(s.result==S::OBSERVED) {
+                assert(s.lifetime==1);
+                if(s.state_known)assert(s.state>=0 && unsigned(s.state)+1==s.event);
+            } else assert(!s.lifetime && !s.state_known);
+            const S::Snapshot target=send(&storage);
+            assert((target.result==S::OBSERVED && target.lifetime==1) ||
+                   (target.result==S::TRANSITION && !target.lifetime));++local;
         }while(!done.load());
         reads.fetch_add(local);
     };
@@ -222,6 +233,99 @@ static void cancellations(const char* which) {
     assert(A::read_issue_session().result==S::FAULT);
     assert(A::session_hook_health().faults&A::SESSION_UNWIND);
 }
+
+// Authored qualification only. Exercise the real adapter's candidate selection
+// through the real lifecycle wrappers; no phone, sensor or OEM code is used.
+static const uint64_t prediction_time=1000000000;
+static void** prediction_storage;
+static A::Observation prediction_event;
+static A::DrSnapshot in_flight_candidate;
+static unsigned prediction_sends;
+static unsigned char prediction_input[72],prediction_payload[48],prediction_sent[48];
+static A::VehicleData* prediction_original;
+static bool prediction_original_forwarded;
+static uint64_t prediction_clock(void*) { return prediction_time; }
+static bool prediction_provenance(void*,const A::PositionInput*,A::Provenance* p,void*) {
+    p->source_epoch=11;p->session_epoch=12;
+    p->exact_request=p->verified_lds=p->legacy_receiver=true;return true;
+}
+static void prediction_sink(const A::Observation* o,void*) {
+    if(o->kind==A::Observation::SEND)prediction_event=*o;
+}
+static int32_t prediction_next(void* storage,A::VehicleData* data) {
+    assert(storage==prediction_storage && errno==EDOM);
+    assert(data && data->payload && data->length==48);++prediction_sends;
+    prediction_original_forwarded=data==prediction_original;
+    memcpy(prediction_sent,data->payload,48);errno=EINPROGRESS;return -713;
+}
+static A::DrSnapshot prediction_candidate() {
+    A::DrSnapshot s=A::DrSnapshot();
+    s.source_epoch=11;s.session_epoch=12;s.prediction_generation=A::generation();
+    s.frontier_mono_ns=prediction_time;s.valid_until_mono_ns=prediction_time+100000000;
+    s.derived_utc_ns=1700000000000000000ULL;s.latitude_deg=35;s.longitude_deg=135;
+    s.speed_mps=10;s.travel_bearing_deg=90;
+    s.ready=s.profile_verified=s.input_quality_verified=s.limits_ok=true;return s;
+}
+static bool publish_prediction(const A::DrSnapshot& s) {
+    // Keep publication on a distinct worker, as required by the adapter API.
+    // The authored OEM call can remain in flight while that worker publishes.
+    bool accepted=false;
+    auto publish=[&]() { accepted=A::publish_snapshot(s); };
+    const pthread_t worker=start_thread(publish);join_thread(worker);return accepted;
+}
+static void prediction_send(bool replacement) {
+    const int saved_errno=errno;
+    A::VehicleData data={1,prediction_payload,48};prediction_original=&data;
+    const unsigned before=prediction_sends;errno=EDOM;
+    assert(A::send_vehicle_data(prediction_storage,&data)==-713 && errno==EINPROGRESS);
+    assert(prediction_sends==before+1);
+    assert(prediction_event.choice==(replacement?A::DR_REPLACEMENT:A::ORIGINAL));
+    assert(prediction_original_forwarded==!replacement);
+    if(!replacement)assert(!memcmp(prediction_sent,prediction_payload,48));
+    for(unsigned i=0;i<48;++i)assert(prediction_payload[i]==i+1);
+    errno=saved_errno;
+}
+static void prediction_attempt(bool replacement,bool publish) {
+    const int saved_errno=errno;
+    A::position_enter(0,prediction_input);
+    if(publish) {
+        in_flight_candidate=prediction_candidate();
+        assert(publish_prediction(in_flight_candidate));
+    }
+    prediction_send(replacement);A::position_leave();errno=saved_errno;
+}
+static void prediction_lifecycle(const char* which) {
+    A::Options options=A::Options();options.clock=prediction_clock;
+    options.sink=prediction_sink;options.provenance=prediction_provenance;
+    options.allow_assist=true;options.max_snapshot_age_ns=150000000;
+    options.session_reader=A::read_send_session;
+    assert(A::configure(prediction_next,options) && A::set_mode(A::ASSIST));
+    for(unsigned i=0;i<48;++i)prediction_payload[i]=i+1;
+    void* storage=0;prediction_storage=&storage;open(&storage);
+    prediction_attempt(true,true); // Positive control before each boundary.
+    const A::DrSnapshot before=prediction_candidate();
+    const bool in_flight=strstr(which,"_inflight")!=0;
+    if(!in_flight)A::position_enter(0,prediction_input);
+    if(!strcmp(which,"prediction_destroy") || !strcmp(which,"prediction_recreate"))close(&storage);
+    else if(!strcmp(which,"prediction_create_failure")) { create_result=264;open(&storage);create_result=0; }
+    else if(!strcmp(which,"prediction_destroy_failure")) { destroy_result=264;close(&storage);destroy_result=0; }
+    else if(!strcmp(which,"prediction_status"))notify(0,7);
+    else if(!strcmp(which,"prediction_create_inflight")) {
+        close(&storage);predict_in_create=true;open(&storage);predict_in_create=false;
+    } else if(!strcmp(which,"prediction_destroy_inflight")) {
+        predict_in_destroy=true;close(&storage);predict_in_destroy=false;
+    } else if(!strcmp(which,"prediction_status_inflight")) {
+        predict_in_status=true;notify(0,7);predict_in_status=false;
+    } else assert(false);
+    if(!strcmp(which,"prediction_recreate"))open(&storage);
+    assert(!publish_prediction(before) && "pre-transition prediction was not revoked");
+    if(in_flight)assert(!publish_prediction(in_flight_candidate) && "in-flight prediction survived completion");
+    else { prediction_send(false);A::position_leave(); }
+    if(A::read_issue_session().result==S::NONE)open(&storage);
+    prediction_attempt(false,false); // A new POSITION alone cannot relabel it.
+    prediction_attempt(true,true);   // A freshly computed candidate can recover.
+    close(&storage);assert(!A::session_hook_health().faults);
+}
 int main(int argc,char** argv) {
 #ifdef MX5_SESSION_DSO_TEST
     initialize_session_test_dso();
@@ -238,6 +342,7 @@ int main(int argc,char** argv) {
     else if(!strcmp(c,"readers"))readers();
     else if(!strncmp(c,"throw_",6))exceptions(c);
     else if(!strncmp(c,"cancel_",7))cancellations(c);
+    else if(!strncmp(c,"prediction_",11))prediction_lifecycle(c);
     else assert(false);
     printf("PASS session wrappers %s: exact forwarding and lifetime observation\n",c);
 }

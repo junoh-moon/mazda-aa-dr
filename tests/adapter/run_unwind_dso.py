@@ -76,10 +76,19 @@ def main():
             'ISSUE': '_ZN3mx57adapter18read_issue_sessionEv',
             'SEND': '_ZN3mx57adapter17read_send_sessionEPKvPNS_7runtime13session_trace8SnapshotEPv',
             'CREATE': 'mx5_session_create', 'DESTROY': 'mx5_session_destroy',
+            'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
+            'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+            'GENERATION': '_ZN3mx57adapter10generationEv',
+            'PUBLISH': '_ZN3mx57adapter16publish_snapshotERKNS0_10DrSnapshotE',
+            'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
+            'VEHICLE_SEND': 'mx5_send_vehicle_data',
         }
         cases = ('normal', 'failure', 'overlap', 'same_storage', 'closing_create', 'capacity',
                  'callback_bad', 'readers', 'throw_create', 'throw_destroy', 'throw_status',
-                 'cancel_create', 'cancel_destroy', 'cancel_status')
+                 'cancel_create', 'cancel_destroy', 'cancel_status',
+                 'prediction_destroy', 'prediction_recreate', 'prediction_create_failure',
+                 'prediction_destroy_failure', 'prediction_status', 'prediction_create_inflight',
+                 'prediction_destroy_inflight', 'prediction_status_inflight')
         fixture, access = 'session_hooks', 'session_dso_access.h'
         macro, marker = '-DMX5_SESSION_DSO_TEST', 'PASS session wrappers '
     offsets = {}

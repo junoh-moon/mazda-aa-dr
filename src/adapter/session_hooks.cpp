@@ -1,4 +1,5 @@
 #include "session_hooks.h"
+#include "adapter.h"
 #include <atomic>
 #include <errno.h>
 #include <string.h>
@@ -48,24 +49,22 @@ void ready() { if(!prepared.load(std::memory_order_acquire))__builtin_trap(); }
 void fault(unsigned reason) { faults.fetch_or(reason,std::memory_order_seq_cst); }
 struct Mutation {
     bool complete;
-    Mutation():complete(false) { mutations.fetch_add(1); }
+    Mutation():complete(false) {
+        const PreserveErrno saved;
+        mutations.fetch_add(1);
+        A::invalidate(); // Before the original lifecycle call can change state.
+    }
     ~Mutation() {
         const PreserveErrno saved;
         if(!complete)fault(A::SESSION_UNWIND);
+        // Reject candidates published during the call, including unwind.
+        A::invalidate();
         version.fetch_add(1);
         mutations.fetch_sub(1);
     }
 };
-struct CallbackCall {
-    bool complete;
-    CallbackCall():complete(false) {}
-    ~CallbackCall() {
-        const PreserveErrno saved;
-        if(!complete)fault(A::SESSION_UNWIND);
-    }
-};
 template<unsigned index> void status(void* user,void* full_info) {
-    ready();
+    ready();Mutation mutation;
     Context& c=contexts[index];
     {
         const PreserveErrno saved;
@@ -86,9 +85,8 @@ template<unsigned index> void status(void* user,void* full_info) {
                 fault(A::SESSION_CONTENTION); // Do not reorder concurrent callbacks.
         }
     }
-    CallbackCall call;
     c.next(user,full_info); // Full original pointer/user, exactly once, also late.
-    call.complete=true;
+    mutation.complete=true;
 }
 template<unsigned... I> struct Indices {};
 template<unsigned N,unsigned... I> struct MakeIndices:MakeIndices<N-1,N-1,I...> {};

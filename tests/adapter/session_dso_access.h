@@ -23,10 +23,38 @@ static S::Snapshot dso_session_issue() {
 static void dso_session_send(const void* p,S::Snapshot* s,void* u) {
     reinterpret_cast<void(*)(const void*,S::Snapshot*,void*)>(session_dso_base+TEST_SEND)(p,s,u);
 }
+static bool dso_configure(SendFunction f,const Options& o) {
+    return reinterpret_cast<bool(*)(SendFunction,const Options&)>(session_dso_base+TEST_CONFIGURE)(f,o);
+}
+static bool dso_set_mode(Mode m) {
+    return reinterpret_cast<bool(*)(Mode)>(session_dso_base+TEST_MODE)(m);
+}
+static uint32_t dso_generation() {
+    return reinterpret_cast<uint32_t(*)()>(session_dso_base+TEST_GENERATION)();
+}
+static bool dso_publish(const DrSnapshot& s) {
+    return reinterpret_cast<bool(*)(const DrSnapshot&)>(session_dso_base+TEST_PUBLISH)(s);
+}
+static void dso_position_enter(void* manager,const void* p) {
+    reinterpret_cast<void(*)(void*,const void*)>(session_dso_base+TEST_POSITION_ENTER)(manager,p);
+}
+static void dso_position_leave() {
+    reinterpret_cast<void(*)()>(session_dso_base+TEST_POSITION_LEAVE)();
+}
+static int32_t dso_send_vehicle_data(void* storage,VehicleData* data) {
+    return reinterpret_cast<SendFunction>(session_dso_base+TEST_VEHICLE_SEND)(storage,data);
+}
 } }
 #define prepare_session_hooks dso_session_prepare
 #define session_hook_health dso_session_health
 #define read_issue_session dso_session_issue
 #define read_send_session dso_session_send
+#define configure dso_configure
+#define set_mode dso_set_mode
+#define generation dso_generation
+#define publish_snapshot dso_publish
+#define position_enter dso_position_enter
+#define position_leave dso_position_leave
+#define send_vehicle_data dso_send_vehicle_data
 #define mx5_session_create (reinterpret_cast<A::SessionCreate>(session_dso_base+TEST_CREATE))
 #define mx5_session_destroy (reinterpret_cast<A::SessionDestroy>(session_dso_base+TEST_DESTROY))

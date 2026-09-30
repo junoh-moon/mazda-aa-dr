@@ -57,6 +57,16 @@ storage is constant-initialized even on GCC 4.9; an early preload call must not
 be erased by later global constructors. See
 [session product verification](../../validation/SESSION_PRODUCT_2026-09-30.md).
 
+Create, destroy and status callbacks revoke the adapter prediction generation
+before the original call and again at completion, including exceptions and
+deferred cancellation. The second revocation also rejects candidates published
+during the original call. While any such call is in flight, session readers
+report `transition`; concurrent readers never wait or suppress the callback.
+When a session reader is configured, ASSIST selection forwards the original
+payload unless that reader observed a live, unambiguous send storage. This is
+only a negative guard: it does not qualify a session, phone or queued request.
+It is not synchronization with OEM teardown after the selection check.
+
 The backend's own `configure` call freezes runtime callback pointers. Do not
 configure separately and then call `install_v74`; that is rejected. A separate
 lower-only observer can use `configure` directly, but it has no mode context and
@@ -83,6 +93,10 @@ source ownership/provenance, sensor quality/timing and lifecycle gates are
 verified. The application supplies a `ProvenanceReader` for the exact original
 request, not a poll of the most recent owner. Its epochs must follow source and
 AA lifecycle changes; call `invalidate` at each such change and on sensor loss.
+The v74 session hooks now perform the observed lifecycle revocations above.
+The worker still owns source revocation, correct request qualification and
+fresh calculation after each boundary. Live MODEL/holdout reset across AA
+sessions is not implemented by these adapter generation changes.
 
 The worker receives the POSITION event and can publish an owned normalized
 `DrSnapshot` tagged with the current generation after processing that control

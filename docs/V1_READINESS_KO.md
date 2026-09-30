@@ -27,7 +27,11 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   [후속 검사](../validation/SESSION_TRANSITION_2026-09-30.md)에서 파괴 뒤 남은
   요청이 재시작한 새 세션으로 송신되는 것을 확인했습니다. 클라이언트 전달을
   지연한 진단이며 정상 폰 연결이나 물리 입력 지연을 재현한 것은 아닙니다.
-- [ ] 요청별 session/receiver 자격과 전환 중 계산 snapshot 수명을 구현·검사합니다.
+- [x] 관측된 세션 경계에서 adapter의 이전/전환 중 송신 후보를 철회합니다.
+  [후속 수정](../validation/SESSION_PREDICTION_LIFETIME_2026-09-30.md)의 새 회귀 8개,
+  제품 DSO·stock runtime 세션 22개와 원본 lifecycle의 generation 변경을 확인했습니다.
+- [ ] MODEL/holdout의 세션 reset·새 기준점 요구와 늦은 이전 요청 처리를 구현·검사합니다.
+- [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
 - [x] 외부 journal 큐 수정을 통합하고 동일 제품의 원본 실행에서 관측 loss 0을 확인합니다.
   과거 drop의 정확한 호출 조합·원인을 확정한 것으로 세지 않습니다.
 - [x] 세션 관측·전환 검사의 추가 도구는 설치 전후 목록을 남기고 모두 제거했습니다.
