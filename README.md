@@ -4,7 +4,13 @@ Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-gene
 
 **The current USB bundle is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. No vehicle or phone validation has been performed. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
 
-See [first stationary trial](docs/FIRST_TRIAL_KO.md) and [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate removes our preload from persistent service configurations and consumes one explicit authorization before exposing a trial. [Original-SM retry observations](validation/SM_RETRY_2026-09-29.md) cover explicit service restarts and delayed failure policy; physical watchdog recovery remains unverified.
+The current user requirement (2026-09-30) is to work with the supplied firmware
+files only and deliver a finished v1.0 for one final installation. Do not request
+vehicle trials or phone/dongle bench tests. Earlier trial procedures are retained
+as history. See [v1.0 completion criteria](docs/V1_READINESS_KO.md); firmware
+execution alone cannot establish physical sensor behavior or phone/app acceptance.
+
+See [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate removes our preload from persistent service configurations and consumes one explicit authorization before exposing a trial. [Original-SM retry observations](validation/SM_RETRY_2026-09-29.md) cover explicit service restarts and delayed failure policy; physical watchdog recovery remains unverified.
 
 [한국어](README_KO.md) · [Current status / handoff](docs/STATUS_KO.md) · [Review corrections](docs/REVIEW_2026-09-28_KO.md)
 
