@@ -3,7 +3,9 @@
 #endif
 #include "channel.h"
 #include <cerrno>
+#include <climits>
 #include <cstring>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -103,6 +105,17 @@ bool MotionReceiver::open_channel(const char* name) {
     if(setsockopt(fd,SOL_SOCKET,SO_PASSCRED,&one,sizeof(one)) ||
        bind(fd,reinterpret_cast<sockaddr*>(&a),n)){close(fd);return false;}
     fd_=fd;return true;
+}
+int MotionReceiver::wait_for_input(unsigned timeout_ms) const {
+    if(fd_<0 || timeout_ms>INT_MAX) {
+        errno=fd_<0?EBADF:EINVAL;return -1;
+    }
+    pollfd waiting={fd_,POLLIN,0};
+    const int result=poll(&waiting,1,static_cast<int>(timeout_ms));
+    if(result<0)return errno==EINTR?0:-1;
+    if(!result)return 0;
+    if(waiting.revents&POLLIN)return 1;
+    errno=(waiting.revents&POLLNVAL)?EBADF:EIO;return -1;
 }
 ReceiveResult MotionReceiver::receive(uint64_t now,RawEvent* out,ReceiveDiagnostic* diagnostic) {
     if(diagnostic) { *diagnostic=ReceiveDiagnostic();diagnostic->checked_ns=now; }

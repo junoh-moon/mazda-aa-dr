@@ -5,8 +5,62 @@
 #include <string>
 #include <fstream>
 #include <iterator>
+#include <vector>
 
 static int32_t unused_next(void *, A::VehicleData *) { return 0; }
+struct CadenceResult { unsigned late,holdout_late;uint64_t resets;std::vector<unsigned> drains; };
+static CadenceResult cadence_case(unsigned mode,unsigned wheel_period,unsigned reverse_period) {
+  N::Pipeline navigation;N::GpsHoldout holdout;const mx5_dr_context context={1,1,1};
+  assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context,true,true));
+  assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+  mx5::runtime::WorkerTick tick;CadenceResult result=CadenceResult();
+  std::vector<N::RawEvent> pending;uint64_t sequence=0;
+  unsigned wake_deadline=0,last_model=0;
+  for(unsigned ms=0;ms<=1500;++ms) {
+    const uint64_t now=1000000000ULL+uint64_t(ms)*1000000ULL;
+    for(unsigned sensor=1;sensor<=3;++sensor) {
+      const unsigned period=sensor==N::WHEELS?wheel_period:sensor==N::YAW?150:reverse_period;
+      if(ms%period)continue;
+      N::RawEvent event=N::RawEvent();event.kind=static_cast<N::SensorKind>(sensor);
+      event.epoch=1;event.receive_seq=++sequence;event.received_ns=now;
+      if(sensor==N::WHEELS)for(unsigned j=0;j<4;++j)event.raw[j]=13600;
+      if(sensor==N::YAW){event.raw[0]=2047;event.count=1;}
+      pending.push_back(event);
+    }
+    const bool woke=mode==0?ms%50==0:(!pending.empty()||ms>=wake_deadline);
+    if(!woke)continue;
+    for(size_t j=0;j<pending.size();++j) {
+      const N::PipelineResult a=navigation.enqueue_raw(pending[j]),b=holdout.enqueue_raw(pending[j]);
+      if(a==N::PIPELINE_LATE)++result.late;
+      else assert(a==N::PIPELINE_OK||a==N::PIPELINE_WAITING);
+      if(b==N::PIPELINE_LATE)++result.holdout_late;
+      else assert(b==N::PIPELINE_OK||b==N::PIPELINE_WAITING);
+    }
+    pending.clear();
+    const bool due=mode==3?tick.due(now):(mode<2||result.drains.empty()||ms-last_model>=50);
+    if(due) {
+      last_model=ms;result.drains.push_back(ms);
+      navigation.drain(now-navigation.reorder_ns());holdout.drain(now-navigation.reorder_ns());
+    }
+    wake_deadline=ms+(mode==3?tick.wait_ms(now):50);
+    N::HoldoutResult ignored;while(holdout.pop(&ignored)){}
+  }
+  result.resets=navigation.status().resets;return result;
+}
+static void cadence_tests() {
+  for(unsigned wheel=10;wheel<=20;wheel+=10) {
+    const CadenceResult old=cadence_case(0,wheel,5*wheel);
+    const CadenceResult every_input=cadence_case(1,wheel,5*wheel);
+    const CadenceResult minimum_gate=cadence_case(2,wheel,5*wheel);
+    const CadenceResult fixed=cadence_case(3,wheel,5*wheel);
+    assert(old.late==0&&old.holdout_late==0&&old.resets==0);
+    assert(every_input.late>0&&every_input.holdout_late>0);
+    if(wheel==20)assert(minimum_gate.late>0&&minimum_gate.holdout_late>0);
+    assert(fixed.late==0&&fixed.holdout_late==0&&fixed.resets==0);
+    assert(fixed.drains==old.drains&&fixed.drains.size()==31);
+  }
+  puts("worker cadence: receipt-only 150ms yaw, 10/20ms wheels; negative schedules fail, deadline preserves MODEL/holdout");
+}
 static void arm_test_mode() {
   audit_fault = 0;
   capture_stopped = 0;
@@ -155,6 +209,7 @@ int main(int argc,char** argv) {
     d.rejected.receive_seq=3;d.rejected.received_ns=1000000000;d.rejected.reverse=1;
     char line[1200];assert(format_motion_rejected(line,sizeof line,d));puts(line);return 0;
   }
+  cadence_tests();
   A::Options opt = A::Options();
   assert(A::configure(unused_next, opt));
   config.max_log_bytes = 64;

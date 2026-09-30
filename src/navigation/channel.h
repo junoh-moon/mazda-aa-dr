@@ -50,6 +50,9 @@ public:
     MotionReceiver();
     ~MotionReceiver();
     bool open_channel(const char* name="mx5dr.motion.v1");
+    // Bounded readiness wait only: 1=input, 0=timeout/interrupted, -1=error.
+    // Does not consume records, alter their receipt times, or advance the cursor.
+    int wait_for_input(unsigned timeout_ms) const;
     ReceiveResult receive(uint64_t now_ns, RawEvent*, ReceiveDiagnostic* = 0);
     bool active() const { return fd_>=0; }
 private:

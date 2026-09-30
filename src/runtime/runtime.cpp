@@ -10,6 +10,7 @@
 #include "motion_batch.h"
 #include "shadow_log.h"
 #include "request_log.h"
+#include "worker_tick.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -415,6 +416,7 @@ void *worker_at(const char* root) {
   uint64_t last_shadow_log=0;
   uint64_t last_calibration_log=0;
   uint64_t last_stop_check=0;
+  mx5::runtime::WorkerTick model_tick;
   for (;;) {
     const uint64_t cutoff=clock_ns(0);
     bool stopping=false;
@@ -456,8 +458,8 @@ void *worker_at(const char* root) {
       finish_capture(j,boot_id,cutoff,clock_ns(0));
       return 0; // Even failed finalization cannot reopen this capture.
     }
-    if(shadow && !j.failed && !__sync_fetch_and_add(&audit_fault,0)) {
-        now=clock_ns(0);
+    now=clock_ns(0);
+    if(shadow && !j.failed && !__sync_fetch_and_add(&audit_fault,0) && model_tick.due(now)) {
         if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
         if(now>navigation.reorder_ns())holdout.drain(now-navigation.reorder_ns());
         journal_holdout(j,holdout,now);
@@ -504,6 +506,13 @@ void *worker_at(const char* root) {
       journal_health(j,now,capture&&!j.failed,shadow);
       j.flush();
     }
+    // The stock unconnected Unix-datagram queue is small. Wake on motion
+    // arrival instead of accumulating bursts across an unconditional sleep.
+    // Keep MODEL computation on its 50 ms deadline even during frequent input.
+    // Merely gating it by elapsed time would shift the tick with input cadence.
+    // A failed wait falls back to the bounded sleep, avoiding an error spin.
+    const unsigned wait_ms=shadow?model_tick.wait_ms(clock_ns(0)):50;
+    if(capture && !j.failed && motion.wait_for_input(wait_ms)>=0)continue;
     struct timespec pause = {0, 50000000};
     nanosleep(&pause, 0);
   }

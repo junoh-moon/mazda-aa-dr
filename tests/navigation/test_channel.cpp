@@ -3,8 +3,52 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <climits>
+#include <pthread.h>
+#include <time.h>
 #include <unistd.h>
 using namespace mx5::navigation;
+static uint64_t monotonic_ns() {
+    timespec now;assert(clock_gettime(CLOCK_MONOTONIC,&now)==0);
+    return uint64_t(now.tv_sec)*1000000000ULL+now.tv_nsec;
+}
+struct DelayedInput { MotionSender* sender;RawEvent event; };
+static void* delayed_input(void* context) {
+    DelayedInput* input=static_cast<DelayedInput*>(context);
+    usleep(20000);
+    assert(input->sender->send_event(input->event));return 0;
+}
+static void wait_tests() {
+    MotionReceiver receiver;MotionSender sender;
+    assert(receiver.wait_for_input(0)==-1 && errno==EBADF);
+    char name[80];snprintf(name,sizeof name,"mx5dr.wait.%ld",(long)getpid());
+    assert(receiver.open_channel(name)&&sender.open_channel(name));
+    assert(receiver.wait_for_input(UINT_MAX)==-1 && errno==EINVAL);
+    assert(receiver.wait_for_input(0)==0);
+    const uint64_t idle=monotonic_ns();assert(receiver.wait_for_input(10)==0);
+    assert(monotonic_ns()-idle>=1000000ULL); // A real wait, not a constant stub.
+    DelayedInput input={&sender,RawEvent()};
+    input.event.kind=REVERSE;input.event.epoch=1;input.event.receive_seq=1;
+    input.event.received_ns=1000000000;input.event.reverse=1;
+    uint64_t fastest=UINT64_MAX;
+    for(unsigned trial=0;trial<4;++trial) {
+        input.event.receive_seq=trial+1;
+        pthread_t thread;assert(pthread_create(&thread,0,delayed_input,&input)==0);
+        const uint64_t begin=monotonic_ns();
+        assert(receiver.wait_for_input(1000)==1);
+        const uint64_t elapsed=monotonic_ns()-begin;
+        if(elapsed<fastest)fastest=elapsed;
+        assert(pthread_join(thread,0)==0);
+        assert(receiver.wait_for_input(0)==1); // Readiness leaves the packet queued.
+        RawEvent out;assert(receiver.receive(input.event.received_ns,&out)==CHANNEL_EVENT);
+        assert(out.receive_seq==trial+1&&out.received_ns==input.event.received_ns&&out.reverse==1);
+    }
+    // A fixed 50ms sleep followed by poll(0) must fail. Allow individual
+    // scheduler outliers; this is a regression check, not a real-time promise.
+    assert(fastest<40000000ULL);
+    assert(receiver.wait_for_input(0)==0);
+    puts("motion wait: bounded idle, delayed wake, untouched packet, invalid descriptor/timeout passed");
+}
 static void inspect_tests() {
     RawEvent e=RawEvent(),out; e.kind=REVERSE;e.epoch=9;e.receive_seq=1;
     e.received_ns=1000000000;e.reverse=1;
@@ -74,6 +118,7 @@ int main() {
         assert(false);
     }
     assert(!duplicate.open_channel(name));assert(sender.open_channel(name));
+    wait_tests();
     assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_EMPTY);
     assert(sender.send_event(e));assert(receiver.receive(e.received_ns,&decoded)==CHANNEL_EVENT);
     assert(decoded.receive_seq==1 && decoded.epoch==9);

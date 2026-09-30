@@ -69,7 +69,7 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/navigation-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/vim-parser-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/sha256.cpp src/runtime/config.cpp -ldl -pthread -lrt -o "$build/vim-tap-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/vim-tap-test"
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/navigation/test_channel.cpp src/navigation/channel.cpp -o "$build/motion-channel-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/navigation/test_channel.cpp src/navigation/channel.cpp -pthread -lrt -o "$build/motion-channel-test"
 result=0
 qemu-arm -L "$QEMU_SYSROOT" "$build/motion-channel-test" || result=$?
 [ "$result" -eq 0 ] || [ "$result" -eq 77 ]

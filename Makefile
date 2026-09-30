@@ -97,7 +97,7 @@ test-navigation: $(BUILD)/test_navigation $(BUILD)/test_channel $(BUILD)/test_li
 $(BUILD)/test_navigation: tests/navigation/test_navigation.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 $(BUILD)/test_channel: tests/navigation/test_channel.cpp src/navigation/channel.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $^ -o $@
+	$(CXX) $(CXX_WARN) $^ -pthread -o $@
 
 test-sensors: $(BUILD)/test_vim_source $(BUILD)/test_vim_tap
 	$(BUILD)/test_vim_source
@@ -168,6 +168,7 @@ $(BUILD)/test_shadow_log: tests/runtime/test_shadow_log.cpp src/runtime/shadow_l
 $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: $(NAV_HEADERS)
 $(BUILD)/test_journal $(BUILD)/arm/src/runtime/runtime.o: src/runtime/shadow_log.h
 $(BUILD)/test_journal: src/runtime/request_log.h src/adapter/request_hooks.h
+$(BUILD)/test_journal: src/runtime/worker_tick.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/cold_patch.h src/adapter/request_hooks.h src/runtime/request_observer.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/adapter.h src/runtime/request_trace.h
 $(BUILD)/arm/src/navigation/pipeline.o $(BUILD)/arm/src/navigation/holdout.o $(BUILD)/arm/src/runtime/runtime.o: $(NAV_HEADERS)

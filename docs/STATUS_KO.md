@@ -111,6 +111,15 @@ util에서 사라지는 ServiceUnknown도 로그에 남습니다. host/ARM 전�
 free/resume 20회를 완료했고 전후 제어·위치 조회도 응답했습니다. 이전 timeout은
 재현되지 않았으며 원인 해결로 세지 않습니다. 제품 코드 변경 없이 얻은 추가 근거입니다.
 
+[센서→제품 MODEL 통합 실행](../validation/SHADOW_RUNTIME_2026-09-30.md)에서는
+연속 합성 입력의 실제 VIM/VBS→AA 계산을 확인하고, 센서 datagram의 EAGAIN
+누락을 줄이도록 수신 대기를 개선했습니다. 최종 실행은 raw 916건·정차 보정·
+직진/회전·yaw 단절·재기준점 복구와 독립 수치 대조를 완료했습니다. host/ARM
+전체 검사와 독립 리뷰 네 건도 완료했습니다. 다만 같은 최종 ELF의 다른 실행은
+요청 관측기의 잠금 경합으로 실패했습니다. 이 원인 분리는 남아 있으며, 전체
+통합 안정성·native LOCATION 송신·실차·폰 수용의 완료로 세지 않습니다.
+공개 ZIP은 변경하지 않았습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
