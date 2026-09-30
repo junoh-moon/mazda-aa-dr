@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'session'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -64,6 +64,19 @@ def main():
                  'throw_getter', 'cancel_getter')
         fixture, access = 'request_hooks_arm', 'request_dso_access.h'
         macro, marker = '-DMX5_REQUEST_DSO_TEST', 'PASS ARM request wrappers '
+    elif args.suite == 'session':
+        names = {
+            'PREPARE': '_ZN3mx57adapter21prepare_session_hooksERKNS0_15SessionBindingsE',
+            'HEALTH': '_ZN3mx57adapter19session_hook_healthEv',
+            'ISSUE': '_ZN3mx57adapter18read_issue_sessionEv',
+            'SEND': '_ZN3mx57adapter17read_send_sessionEPKvPNS_7runtime13session_trace8SnapshotEPv',
+            'CREATE': 'mx5_session_create', 'DESTROY': 'mx5_session_destroy',
+        }
+        cases = ('normal', 'failure', 'overlap', 'same_storage', 'closing_create', 'capacity',
+                 'callback_bad', 'readers', 'throw_create', 'throw_destroy', 'throw_status',
+                 'cancel_create', 'cancel_destroy', 'cancel_status')
+        fixture, access = 'session_hooks', 'session_dso_access.h'
+        macro, marker = '-DMX5_SESSION_DSO_TEST', 'PASS session wrappers '
     offsets = {}
     for label, name in names.items():
         rows = [line.split() for line in symbols.splitlines() if line.split()[-1] == name]
@@ -76,8 +89,10 @@ def main():
                     for name in exported), 'Archive runtime symbol leaked into preload exports')
     (build / 'unwind_offsets.h').write_text(''.join(
         '#define TEST_' + label + ' 0x%xu\n' % offset for label, offset in offsets.items()))
-    sources = [repo / 'tests/adapter' / name for name in
-               (fixture + '_test.cpp', access, fixture + '_fixture.S', 'run_unwind_dso.py')]
+    names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
+    if args.suite != 'session':
+        names.append(fixture + '_fixture.S')
+    sources = [repo / 'tests/adapter' / name for name in names]
     sources += sorted(p for p in (repo / 'src').rglob('*') if p.is_file())
     inputs = {str(p.relative_to(repo)): digest(p) for p in sources}
     for source in sources:
@@ -89,9 +104,10 @@ def main():
     command = [args.cross_prefix + 'g++', '-std=c++11', '-O2', '-Wall', '-Wextra', '-Werror',
                '-D_GNU_SOURCE', macro, '-mcpu=cortex-a9', '-mfpu=neon',
                '-mfloat-abi=softfp', '-marm', '-I' + str(build / 'source/src'), '-I' + str(build),
-               str(build / 'source/tests/adapter' / (fixture + '_test.cpp')),
-               str(build / 'source/tests/adapter' / (fixture + '_fixture.S')),
-               '-ldl', '-pthread', '-o', str(executable)]
+               str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
+    if args.suite != 'session':
+        command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
+    command += ['-ldl', '-pthread', '-o', str(executable)]
     subprocess.run(command, check=True)
     environment = dict(os.environ)
     for name in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'QEMU_LD_PREFIX',

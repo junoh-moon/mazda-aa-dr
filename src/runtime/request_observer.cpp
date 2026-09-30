@@ -27,13 +27,14 @@ bool Observer::valid() const {
 }
 uint64_t Observer::now() const { return clock_ ? clock_(clock_user_) : 0; }
 
-Result Observer::request_begin(void* method, Token* out) {
+Result Observer::request_begin(void* method, Token* out, const session_trace::Snapshot& context) {
     const PreserveErrno saved;
     if (out) *out = Token();
     if (!valid()) return BAD_INPUT;
     Issue issue = Issue();
     issue.observed_ns = now();
-    // No current-global session/receiver value is attached to this request.
+    issue.session_context = context;
+    // No ambient value is promoted into a request/receiver ownership claim.
     return ledger_.request_begin(method, issue, out);
 }
 Result Observer::request_end(void* method) { return ledger_.request_end(method); }

@@ -1,6 +1,7 @@
 #include "adapter.h"
 #include "cold_patch.h"
 #include "request_hooks.h"
+#include "session_hooks.h"
 #include <cstring>
 
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -153,7 +154,39 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
     bindings.position_vptr=blm+0xf7140;
     return A::INSTALL_OK;
 }
-struct Setup { const A::InstallOptions* options; uintptr_t send; A::RequestBindings bindings; };
+A::InstallResult session_plan(const A::InstallOptions& in,C::Plan& plan,A::SessionBindings& bindings) {
+    const uintptr_t blm=in.blm_load_bias,api=in.interface_load_bias;
+    const ApiEntry entries[]={
+        {"aap_create_session",0x1740c,{0xe92d4ff0,0xe59f4aa0,0xe59fcaa0,0xe08f4004}},
+        {"aap_destroy_session",0x16e00,{0xe92d40f0,0xe59f452c,0xe59fc52c,0xe08f4004}}
+    };
+    for(unsigned i=0;i<2;++i) {
+        const ApiEntry& e=entries[i];const uintptr_t address=api+e.offset;
+        if(dlsym(in.blm_handle,e.name)!=reinterpret_cast<void*>(address) ||
+           !matches_module(address,api,in.interface_path) ||
+           !segment(api,address,16,PROT_READ|PROT_EXEC))return A::MODULE_MISMATCH;
+        if(std::memcmp(reinterpret_cast<void*>(address),e.words,16))return A::ORIGINAL_BYTES_MISMATCH;
+    }
+    const uint32_t status_bytes[]={0xe92d4810,0xe28db008,0xe24dd034,0xe59f4278};
+    if(!matches_module(blm+0x8b128,blm,in.blm_path) ||
+       !segment(blm,blm+0x8b128,16,PROT_READ|PROT_EXEC))return A::MODULE_MISMATCH;
+    if(std::memcmp(reinterpret_cast<void*>(blm+0x8b128),status_bytes,16))return A::ORIGINAL_BYTES_MISMATCH;
+    const C::Slot slots[]={
+        {blm+0xf7f6c,api+0x16e00,reinterpret_cast<uintptr_t>(&mx5_session_destroy)},
+        {blm+0xf8988,api+0x1740c,reinterpret_cast<uintptr_t>(&mx5_session_create)}
+    };
+    for(unsigned i=0;i<2;++i) {
+        const C::Slot& s=slots[i];
+        if(!segment(blm,s.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
+        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return A::NEXT_CHAIN_MISMATCH;
+        plan.slots[plan.slot_count++]=s; // Destruction is reachable before creation.
+    }
+    bindings.create=reinterpret_cast<A::SessionCreate>(api+0x1740c);
+    bindings.destroy=reinterpret_cast<A::SessionDestroy>(api+0x16e00);
+    bindings.status=reinterpret_cast<A::SessionStatus>(blm+0x8b128);
+    return A::INSTALL_OK;
+}
+struct Setup { const A::InstallOptions* options; uintptr_t send; A::RequestBindings bindings; A::SessionBindings session; };
 int protect(void* p,size_t n,int flags,void*) { return mprotect(p,n,flags); }
 void* allocate(size_t n,void*) {
     void* p=mmap(0,n,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
@@ -171,6 +204,7 @@ bool prepare(void* tramp,void* user) {
         setup.bindings.work_trampoline=static_cast<char*>(tramp)+32;
         setup.bindings.destroy_trampoline=static_cast<char*>(tramp)+48;
         if(!A::prepare_request_hooks(setup.bindings,in.runtime.clock,in.runtime.user))return false;
+        if(!A::prepare_session_hooks(setup.session))return false;
     }
     mx5_position_trampoline=tramp;
     return true;
@@ -210,11 +244,14 @@ InstallResult install_v74(const InstallOptions& in) {
     const C::Entry position={entry,kPrologue,reinterpret_cast<uintptr_t>(&mx5_position_veneer)};
     const C::Slot send={slot_address,expected_next,reinterpret_cast<uintptr_t>(&mx5_send_vehicle_data)};
     plan.entries[0]=position;plan.entry_count=1;plan.slots[0]=send;plan.slot_count=1;
-    Setup setup={&in,expected_next,A::RequestBindings()};
+    Setup setup={&in,expected_next,A::RequestBindings(),A::SessionBindings()};
     if(in.observe_requests) {
-        if(in.runtime.request_reader!=A::read_request_trace)return INVALID_INSTALL_ARGUMENT;
+        if(in.runtime.request_reader!=A::read_request_trace ||
+           in.runtime.session_reader!=A::read_send_session)return INVALID_INSTALL_ARGUMENT;
         const InstallResult check=request_plan(in,plan,setup.bindings);
         if(check!=INSTALL_OK)return check;
+        const InstallResult sessions=session_plan(in,plan,setup.session);
+        if(sessions!=INSTALL_OK)return sessions;
     }
     const long page_size=sysconf(_SC_PAGESIZE);
     if(page_size<=0 || (page_size&(page_size-1)))return MEMORY_PROTECTION_FAILED;

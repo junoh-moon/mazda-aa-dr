@@ -5,7 +5,7 @@ backend. It is not evidence that the package has run on a CMU.
 
 ## Integration
 
-Build `adapter.cpp`, `v74_install.cpp`, `request_hooks.cpp`, and the runtime
+Build `adapter.cpp`, `v74_install.cpp`, `request_hooks.cpp`, `session_hooks.cpp`, and the runtime
 `request_trace.cpp`/`request_observer.cpp`. ARM32 softfp also uses
 `arm_veneer.S` and `request_veneer.S`. The Makefile enables exception cleanup
 for the wrappers and Observer. Link pthread, dl, and the math runtime. C++11 is required;
@@ -21,8 +21,8 @@ The backend refuses a lazy resolver or a different shim in the send GOT slot;
 it does not bypass that shim. It never changes the touch hooks.
 
 Production sets `observe_requests=true`, supplies the existing `blm_handle`,
-and uses `read_request_trace`. The same cold transaction installs four BLM
-entries and five GOT slots across BLM, JCIDBUS and the LDS data client. Their
+and uses `read_request_trace` and `read_send_session`. The same cold transaction
+installs four BLM entries and seven GOT slots across BLM, JCIDBUS and the LDS data client. Their
 whole-file hashes, mappings, entry bytes and original slot targets are checked
 before the lease. BLM worker/vtable symbols are local ELF symbols; they cannot
 be queried with `dlsym`. JCIDBUS code pages remain executable and unchanged.
@@ -38,6 +38,24 @@ without notification. It never owns callback userdata or OEM reference counts.
 POSITION and SEND records carry the same owned trace; health reports observation
 loss and ABI mismatches. These process-local IDs and receipt times do not prove
 provider/receiver/session qualification or producer measurement time.
+
+Session observation wraps the exact create/destroy APIs and the status callback
+in the original 76-byte table. It preserves the other 18 entries, userdata,
+the full SessionInfo pointer, results and errno. Up to 64 immutable contexts live
+until process exit; they are never recycled, so a late old callback cannot become
+a callback for a new session at the same address. Exhaustion or conflicting
+observation disables the observation claim and keeps forwarding the OEM call.
+Readers and callbacks use bounded lock-free atomic operations, with no mutex,
+allocation, I/O or source retry loop. This is not a wall-clock latency guarantee.
+
+The request's `session_context` is the unique live context observed at issue;
+`send_session` separately identifies the actual storage argument at send. Neither
+implies request ownership, a connected phone or acceptance. The older qualified
+session fields remain unknown. Lifecycle overlap, ambiguity and faults remain
+explicit journal results. Raw state is known only after a real callback. Context
+storage is constant-initialized even on GCC 4.9; an early preload call must not
+be erased by later global constructors. See
+[session product verification](../../validation/SESSION_PRODUCT_2026-09-30.md).
 
 The backend's own `configure` call freezes runtime callback pointers. Do not
 configure separately and then call `install_v74`; that is rejected. A separate
@@ -102,7 +120,8 @@ without retrying the original payload.
   Static exception-runtime archive symbols remain hidden in the preload.
 * BLM send relocation is `R_ARM_JUMP_SLOT` at `0xF88BC`; accepted next target is
   interface load bias + `0x1A538`. Both runtime entry prefixes are compared.
-  The exact stock ELF has no GNU_RELRO segment. Only its send GOT slot changes.
+  The exact stock ELF has no GNU_RELRO segment. The lower-only backend changes
+  this send slot; production also installs the request and session slots above.
 * RequestSendPosition -> SendLocation -> OrderSendVehicleData ->
   RaceAap::SendVehicleData -> export is a direct nested call chain. The worker
   queue is before RequestSendPosition, not in OrderSendVehicleData.

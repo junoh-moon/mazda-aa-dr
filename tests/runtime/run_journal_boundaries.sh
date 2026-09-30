@@ -25,7 +25,8 @@ mkdir -p "$build"
     -c tests/runtime/journal_boundaries_api.cpp -o "$build/api.o"
 "$cxx" -std=c++11 -O2 -Wall -Wextra -Werror $arch -Isrc \
     tests/runtime/test_journal_boundaries.cpp "$build/api.o" "$build/core.o" \
-    src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/request_hooks.cpp $veneer \
+    src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/request_hooks.cpp \
+    src/adapter/session_hooks.cpp $veneer \
     src/runtime/request_trace.cpp src/runtime/request_observer.cpp src/runtime/config.cpp \
     src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/core_bridge.cpp \
     src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp \

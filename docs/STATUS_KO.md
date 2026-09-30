@@ -22,6 +22,16 @@
 후속 제품 설치·journal까지 연결했습니다. [제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)과
 [후속 반복 취소 비교](../validation/MANAGER_CANCELLATION_2026-09-30.md)를 함께 따릅니다.
 
+[세션 관측의 제품 연결](../validation/SESSION_PRODUCT_2026-09-30.md)에서는
+생성·파괴·상태 callback을 관측하고 요청 발행 당시 문맥과 실제 send 대상을
+별도로 보존했습니다. 외부 journal 수정 `1884228`을 반영한 최종 제품으로
+원본 LDS 요청 12건·세션 재생성을 실행했고 관측 loss/fault는 0이었습니다.
+원본 상태 callback의 INVALID와 stop 264도 별도 두 주기에서 확인했습니다.
+host/ARM 전체 검사와 stock runtime의 세션 14개 검사를 통과했으며, 초기화
+순서 오류를 고정 GCC 4.9까지 재현·수정했습니다. 이 관측은 요청의 세션
+소유권·정상 폰 연결을 증명하지 않습니다. qualified 필드와 live ASSIST는
+계속 비활성이며, 공개 ZIP은 변경하지 않았습니다.
+
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
 생략 없이 통과했습니다. 원본 커널 VM의 baseline/SHADOW 비교에서 위치 API의

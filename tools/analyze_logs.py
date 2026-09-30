@@ -27,6 +27,7 @@ LIMITATIONS = [
     "Only recorded local byte invariants are checked; no complete vehicle-session proof.",
     "Lower send result is not phone receipt, app adoption, or navigation success.",
     "SMDB/owner/receiver polls do not establish source freshness or exact-request provenance.",
+    "An issue-time unique live session is ambient context, not request ownership or phone acceptance.",
     "SHADOW model diagnostics do not establish DR accuracy, ground truth, or ASSIST readiness.",
     "Yaw/wheel calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
     "Holdout journal structure cannot prove that GPS references were excluded from prediction inputs.",
@@ -63,6 +64,20 @@ def finite_float(value):
 
 def bounded_int(value, low, high):
     return integer(value) and low <= value <= high
+
+
+def session_snapshot(value, basis):
+    if (not isinstance(value, dict) or value.get("basis") != basis or
+            value.get("result") not in ("observed", "unobserved", "no_live_session",
+                                        "transition", "ambiguous", "observation_fault") or
+            any(k not in value for k in ("lifetime", "event", "state"))):
+        return False
+    if value["result"] != "observed":
+        return all(value[k] is None for k in ("lifetime", "event", "state"))
+    return (bounded_int(value["lifetime"], 1, 2**32-1) and
+            ((value["event"] is None and value["state"] is None) or
+             (bounded_int(value["event"], 1, 2**32-1) and
+              bounded_int(value["state"], -2**31, 2**31-1))))
 
 
 def finite_number(value):
@@ -368,6 +383,15 @@ class Auditor:
                     self.issue("request_observer_unavailable", source, "No current request observation health")
                 elif observer["abi_fault"] or observer["exhausted"] or observer["loss_reasons"]:
                     self.issue("request_observer_loss", source, "Request association has incomplete lifetime evidence")
+            if "session_observer" in row:
+                observer = row["session_observer"]
+                if (not isinstance(observer, dict) or not isinstance(observer.get("prepared"), bool) or
+                        not bounded_int(observer.get("capacity"), 1, 2**32-1) or
+                        not bounded_int(observer.get("contexts"), 0, observer["capacity"]) or
+                        not bounded_int(observer.get("faults"), 0, 2**32-1)):
+                    self.issue("session_observer_malformed", source, "Invalid session observation health")
+                elif not observer["prepared"] or observer["faults"]:
+                    self.issue("session_observer_unavailable", source, "Session observation is unavailable or incomplete")
         elif kind == "owner_poll":
             if self.validate(row, source, ("receipt_ns", "pid"), ("owner", "comm"), ("request_provenance",)):
                 self.owners[(row["owner"], row["pid"], row["comm"])] += 1
@@ -757,6 +781,11 @@ class Auditor:
                     (unsigned(t["wire_serial"], 32) and t["wire_serial"] > 0)) and
                  all(text(t.get(k)) for k in ("sender", "error")))
         if valid:
+            if "session_context" in t:
+                valid = session_snapshot(t["session_context"], "unique_live_context")
+                if t["result"] != "observed":
+                    valid = valid and t["session_context"]["result"] == "unobserved"
+        if valid:
             if t["result"] == "observed":
                 valid = all(t[k] > 0 for k in ids) and t["request_epoch"] == t["worker_epoch"]
             else:
@@ -773,12 +802,29 @@ class Auditor:
                 self.request_errors[t["error"]["value"]] += 1
         if t["result"] not in ("observed", "not_observed", "reply_not_observed"):
             self.issue("request_observation_failed", source, t["result"])
+        if ("session_context" in t and
+                t["session_context"]["result"] in ("transition", "ambiguous", "observation_fault")):
+            self.issue("session_observation_unavailable", source, t["session_context"]["result"])
 
     def send(self, row, source):
         if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "type", "length",
                                           "choice", "reason", "result"), ("original_hex", "outgoing_hex")):
             return
         self.request_record(row, source)
+        if "send_session" in row:
+            target = row["send_session"]
+            if not session_snapshot(target, "send_storage"):
+                self.issue("send_session_malformed", source, "Invalid send storage observation")
+            else:
+                request = row.get("request")
+                ambient = request.get("session_context") if isinstance(request, dict) else None
+                if (session_snapshot(ambient, "unique_live_context") and
+                        ambient["result"] == target["result"] == "observed" and
+                        ambient["lifetime"] != target["lifetime"]):
+                    self.issue("session_changed_since_issue", source,
+                               "Send target differs from issue-time ambient context; ownership is unproved")
+                if target["result"] in ("transition", "ambiguous", "observation_fault"):
+                    self.issue("session_observation_unavailable", source, target["result"])
         position = self.positions.get((row["call"], row["generation"]))
         if position and ("request" in position or "request" in row) and position.get("request") != row.get("request"):
             self.issue("request_copy_mismatch", source, "Position/send request metadata differ", True)

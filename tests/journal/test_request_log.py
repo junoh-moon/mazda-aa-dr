@@ -27,11 +27,17 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual((trace['issue_observed_ns'], trace['reply_observed_ns']), (101, 102))
         self.assertEqual(trace['reply_type'], 2)
         self.assertEqual(trace['error']['value'], 'org.freedesktop.DBus.Error.ServiceUnknown')
+        self.assertEqual(trace['session_context'], dict(result='observed', basis='unique_live_context',
+                         lifetime=8, event=2, state=-7))
+        self.assertEqual(s['send_session'], dict(result='observed', basis='send_storage',
+                         lifetime=8, event=2, state=-7))
         for key in ('bus_lifetime', 'session_lifetime', 'session_state', 'wire_serial'):
             self.assertIsNone(trace[key])
         self.assertEqual(failed['request']['result'], 'observation_capacity')
         self.assertEqual(failed['request']['request_id'], 0)
         self.assertIsNone(failed['request']['error']['value'])
+        self.assertEqual(failed['request']['session_context']['result'], 'unobserved')
+        self.assertIsNone(failed['request']['session_context']['lifetime'])
         self.assertEqual(escaped['request']['sender']['value'], 'quote"\\\n\x01\xff')
         self.assertEqual(longest['request']['request_id'], 2**64-1)
         self.assertEqual(longest['request']['session_state'], -2**31)
@@ -52,6 +58,30 @@ class RequestJournal(unittest.TestCase):
             b = audit.Auditor()
             b.consume(dict(p, request=invalid), 'malformed')
             self.assertIn('request_record_malformed', [i['code'] for i in b.issues])
+        for invalid in (None, {}, dict(trace['session_context'], basis='qualified'),
+                        dict(trace['session_context'], lifetime=True),
+                        dict(trace['session_context'], lifetime=0),
+                        dict(trace['session_context'], event=None),
+                        dict(trace['session_context'], result='no_live_session')):
+            b = audit.Auditor()
+            b.consume(dict(p, request=dict(trace, session_context=invalid)), 'malformed-session')
+            self.assertIn('request_record_malformed', [i['code'] for i in b.issues])
+        b = audit.Auditor()
+        b.consume(p, 'position')
+        b.consume(dict(s, send_session=dict(s['send_session'], lifetime=9)), 'changed-session')
+        self.assertIn('session_changed_since_issue', [i['code'] for i in b.issues])
+        b = audit.Auditor()
+        b.consume(dict(s, send_session=dict(s['send_session'], basis='unique_live_context')), 'bad-send')
+        self.assertIn('send_session_malformed', [i['code'] for i in b.issues])
+
+    def test_session_faults_and_ambiguous_observation(self):
+        observer = dict(prepared=True, contexts=2, capacity=64, faults=0)
+        for change in ({'faults': 1}, {'prepared': False}, {'contexts': 65}, {'faults': True}):
+            with self.subTest(change=change):
+                a = audit.Auditor()
+                a.consume(dict(kind='health', mono_ns=103, dropped=0, hook_installed=True,
+                               assist_ready=False, session_observer=dict(observer, **change)), 'test')
+                self.assertTrue(any(i['code'].startswith('session_observer') for i in a.issues))
 
     def test_observer_health_loss_is_not_clean_evidence(self):
         observer = dict(prepared=True, abi_fault=False, result='observed', loss_epoch=1,

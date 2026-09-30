@@ -209,6 +209,8 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     const bool reentrant = tls.send_depth > 1;
     Observation event = Observation();
     event.kind = Observation::SEND; event.original_mode = -1;
+    if(options.session_reader)
+        options.session_reader(session_storage,&event.send_session,options.user);
     event.request_result = runtime::request_trace::NOT_FOUND;
     event.choice = ORIGINAL; event.reason = NO_CONTEXT;
     Context* ctx = context();

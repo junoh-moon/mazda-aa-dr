@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <pthread.h>
+#include "session_trace.h"
 
 namespace mx5 { namespace runtime { namespace request_trace {
 
@@ -60,6 +61,9 @@ struct Issue {
     uint64_t bus_lifetime, session_lifetime, session_event;
     int32_t session_state;
     unsigned known;
+    // Unique live observed AA context at issue, not request ownership. Reserved
+    // session_lifetime/state above stay unknown until that binding is proved.
+    session_trace::Snapshot session_context;
 };
 
 struct Text {

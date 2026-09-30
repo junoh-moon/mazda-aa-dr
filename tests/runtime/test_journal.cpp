@@ -170,6 +170,8 @@ static void request_journal(bool emit) {
   R::Trace& t=o.request_trace;
   t.request.id=1;t.request.epoch=3;t.worker.id=2;t.worker.epoch=3;
   t.issue.observed_ns=101;t.reply.observed_ns=102;t.reply.type_known=true;t.reply.type=2;
+  const A::S::Snapshot session={A::S::OBSERVED,8,2,-7,true};
+  t.issue.session_context=session;o.send_session=session;
   t.reply.sender=R::copy_text(":1.42");t.reply.error_name=R::copy_text("org.freedesktop.DBus.Error.ServiceUnknown");
   char line[2200];
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
@@ -188,6 +190,8 @@ static void request_journal(bool emit) {
   t.issue.observed_ns=t.reply.observed_ns=UINT64_MAX;
   t.issue.bus_lifetime=t.issue.session_lifetime=t.issue.session_event=UINT64_MAX;
   t.issue.known=7;t.issue.session_state=INT32_MIN;
+  t.issue.session_context.lifetime=t.issue.session_context.event=UINT32_MAX;
+  t.issue.session_context.state=INT32_MIN;o.send_session=t.issue.session_context;
   t.reply.wire_serial_known=true;t.reply.wire_serial=UINT32_MAX;
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
   // Exact-size success, one byte short failure, and adjacent bytes untouched.

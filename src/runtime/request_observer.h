@@ -30,7 +30,7 @@ class Observer {
 public:
     Observer(const ReplyApi&, ObservationClock = 0, void* clock_user = 0);
     bool valid() const;
-    Result request_begin(void* method, Token*);
+    Result request_begin(void* method, Token*, const session_trace::Snapshot& = session_trace::Snapshot());
     Result request_end(void* method);
     // Exact worker and position supplied by the verified BLM ABI, before post.
     Result worker_post(void* worker, const void* position, Token*);

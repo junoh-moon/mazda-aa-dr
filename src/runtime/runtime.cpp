@@ -3,6 +3,7 @@
 #endif
 #include "../adapter/adapter.h"
 #include "../adapter/request_hooks.h"
+#include "../adapter/session_hooks.h"
 #include "config.h"
 #include "loader.h"
 #include "boot_id.h"
@@ -91,13 +92,15 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
       (unsigned long long)o.position.utc_seconds,lat,lon,h,v,request);
   } else {
     char a[97]="",b[97]="";
+    char session[200];
+    if(!mx5::runtime::format_session_trace(session,sizeof session,o.send_session,true))return false;
     if(o.has_payload) { hex48(o.original,a);hex48(o.outgoing,b); }
     n=snprintf(line,capacity,
       "{\"kind\":\"send\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,\"mode\":%d,"
       "\"type\":%u,\"length\":%u,\"choice\":%u,\"reason\":%u,\"result\":%d,"
-      "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s}",
+      "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s,\"send_session\":%s}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
-      o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request);
+      o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request,session);
   }
   return n>0 && size_t(n)<capacity;
 }
@@ -269,18 +272,21 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
 
 void journal_health(Journal& j,uint64_t now,bool capture,bool computation) {
   const A::RequestHookHealth h=A::request_hook_health();
+  const A::SessionHealth s=A::session_hook_health();
   char line[1000];
   const int n=snprintf(line,sizeof line,
       "{\"kind\":\"health\",\"mono_ns\":%llu,\"dropped\":%llu,\"hook_installed\":%s,"
       "\"runtime_mode\":%u,\"audit_fault\":%u,\"capture_active\":%s,"
       "\"computation_active\":%s,\"assist_ready\":false,\"request_observer\":{"
       "\"prepared\":%s,\"abi_fault\":%s,\"result\":\"%s\",\"loss_epoch\":%llu,"
-      "\"requests\":%u,\"workers\":%u,\"loss_reasons\":%u,\"exhausted\":%s}}",
+      "\"requests\":%u,\"workers\":%u,\"loss_reasons\":%u,\"exhausted\":%s},"
+      "\"session_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u}}",
       (unsigned long long)now,(unsigned long long)queue.dropped(),hook_installed?"true":"false",
       unsigned(A::mode()),__sync_fetch_and_add(&audit_fault,0),capture?"true":"false",
       computation?"true":"false",h.prepared?"true":"false",h.abi_fault?"true":"false",
       A::R::result_name(h.result),(unsigned long long)h.ledger.loss_epoch,h.ledger.requests,
-      h.ledger.workers,h.ledger.loss_reasons,h.ledger.exhausted?"true":"false");
+      h.ledger.workers,h.ledger.loss_reasons,h.ledger.exhausted?"true":"false",
+      s.prepared?"true":"false",s.contexts,unsigned(A::SESSION_CONTEXT_CAPACITY),s.faults);
   if(n<=0 || size_t(n)>=sizeof line)j.fail();else j.line(line);
 }
 bool stop_requested(const char* root) {
@@ -536,6 +542,7 @@ void bootstrap(void *h) {
     io.observe_requests = true;
     io.blm_handle = h;
     io.runtime.request_reader = A::read_request_trace;
+    io.runtime.session_reader = A::read_send_session;
     A::InstallResult result = A::install_v74(io);
     boot_result = A::install_result_name(result);
     hook_installed = result == A::INSTALL_OK;
