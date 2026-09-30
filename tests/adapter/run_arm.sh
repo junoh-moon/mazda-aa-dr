@@ -41,7 +41,7 @@ done
     src/runtime/request_observer.cpp src/runtime/request_trace.cpp \
     tests/adapter/request_hooks_arm_test.cpp tests/adapter/request_hooks_arm_fixture.S \
     -ldl -o "$build/request-hooks-test"
-for case in normal unrelated failed_submit destroy_queued throw_notify throw_work cancel_notify cancel_work malformed other_worker delayed_callback throw_getter cancel_getter; do
+for case in normal unrelated failed_submit destroy_queued throw_notify throw_work cancel_notify cancel_work malformed other_worker delayed_callback throw_getter cancel_getter session_transition; do
     qemu-arm -L "$sysroot" "$build/request-hooks-test" "$case"
 done
 "${cross}g++" $flags -I src tests/adapter/cold_patch_test.cpp -o "$build/cold-patch-test"

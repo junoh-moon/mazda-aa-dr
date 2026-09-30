@@ -1,5 +1,6 @@
 // Authored targets only; no OEM ELF, object or D-Bus service is executed.
 #include "adapter/request_hooks.h"
+#include "adapter/session_hooks.h"
 #include <assert.h>
 #include <errno.h>
 #include <pthread.h>
@@ -23,10 +24,30 @@ static unsigned submits,notifies,frees,posts,works,destroys,cleanups;
 static uint64_t time_ns=100;
 enum { NORMAL, UNRELATED, FAILED_SUBMIT, DESTROY_QUEUED, THROW_NOTIFY, THROW_WORK,
        CANCEL_NOTIFY, CANCEL_WORK, MALFORMED, OTHER_WORKER, DELAYED_CALLBACK,
-       THROW_GETTER, CANCEL_GETTER };
+       THROW_GETTER, CANCEL_GETTER, SESSION_TRANSITION };
 static unsigned behavior;
 static A::RequestNotify delayed_callback;
 static R::Trace trace;
+static void* session_storage;
+static int session_handle;
+static unsigned session_creates,session_destroys,session_callbacks;
+static void session_status(void* user,void* info) {
+    assert(!user && info);++session_callbacks;
+}
+static int32_t session_create(const char*,void* user,const A::SessionCallbacks* cb,void** storage) {
+    assert(storage==&session_storage && !user);
+    const int32_t state=++session_creates==1?11:22;
+    int32_t info[2]={state,-1};
+    reinterpret_cast<A::SessionStatus>(cb->entry[1])(user,info);
+    *storage=&session_handle;return 0;
+}
+static int32_t session_destroy(void** storage) {
+    assert(storage==&session_storage);++session_destroys;*storage=0;return 0;
+}
+static void open_session() {
+    A::SessionCallbacks cb=A::SessionCallbacks();cb.entry[1]=reinterpret_cast<uintptr_t>(session_status);
+    assert(mx5_session_create("authored.xml",0,&cb,&session_storage)==0);
+}
 static void cancel_now() {
     assert(!pthread_cancel(pthread_self()));pthread_testcancel();assert(false);
 }
@@ -75,6 +96,17 @@ extern "C" void request_test_work_body(void* a,uint32_t b,uint32_t c,uint32_t d)
         assert(!trace.reply.wire_serial_known && !trace.reply.wire_serial);
         assert(!strcmp(trace.reply.sender.bytes,":1.42") && !strcmp(trace.reply.error_name.bytes,"org.example.Error"));
         assert(trace.issue.observed_ns==101 && trace.reply.observed_ns==102 && !trace.issue.known);
+        if(behavior==SESSION_TRANSITION) {
+            // A delayed original notification must retain the issue context;
+            // looking at the current global session here would return 2/22.
+            const A::S::Snapshot old=trace.issue.session_context;
+            A::S::Snapshot target;A::read_send_session(&session_storage,&target,0);
+            assert(old.result==A::S::OBSERVED && old.lifetime==1);
+            assert(old.state_known && old.event==1 && old.state==11);
+            assert(target.result==A::S::OBSERVED && target.lifetime==2);
+            assert(target.state_known && target.event==1 && target.state==22);
+            assert(!trace.issue.session_lifetime && !trace.issue.session_event);
+        }
         R::Trace second;assert(A::read_request_trace(worker+8,&second,0)==R::USED);
     }
     errno=ERANGE;
@@ -96,7 +128,7 @@ static int32_t submit(void* c,void* m,A::RequestNotify cb,void* u,int timeout) {
     else {
         assert(cb && cb!=original_notify);
         A::RequestHookHealth h=A::request_hook_health();assert(h.result==R::OK && h.ledger.requests==1);
-        if(behavior==DELAYED_CALLBACK)delayed_callback=cb;
+        if(behavior==DELAYED_CALLBACK || behavior==SESSION_TRANSITION)delayed_callback=cb;
         else if(behavior!=FAILED_SUBMIT) { cb(c,m,u);assert(errno==ERANGE); }
     }
     errno=EDOM;return -123;
@@ -121,7 +153,7 @@ int main(int argc,char** argv) {
 #endif
     const char* names[]={"normal","unrelated","failed_submit","destroy_queued","throw_notify", "throw_work",
                          "cancel_notify","cancel_work","malformed","other_worker",
-                         "delayed_callback","throw_getter","cancel_getter"};
+                         "delayed_callback","throw_getter","cancel_getter","session_transition"};
     bool known=false;
     for(unsigned i=0;i<sizeof names/sizeof names[0];++i)if(!strcmp(argv[1],names[i])) { behavior=i;known=true; }
     assert(known && !A::request_hook_health().prepared);
@@ -137,6 +169,10 @@ int main(int argc,char** argv) {
     bindings.work_trampoline=reinterpret_cast<void*>(request_test_work);bindings.destroy_trampoline=reinterpret_cast<void*>(request_test_destroy);
     errno=EDOM;assert(A::prepare_request_hooks(bindings,clock_fn,0) && errno==EDOM);
     assert(!A::prepare_request_hooks(bindings,clock_fn,0));no_scope();
+    if(behavior==SESSION_TRANSITION) {
+        const A::SessionBindings sessions={session_create,session_destroy,session_status};
+        assert(A::prepare_session_hooks(sessions));open_session();
+    }
     if(behavior==CANCEL_NOTIFY || behavior==CANCEL_GETTER) {
         pthread_t thread;void* result=0;assert(!pthread_create(&thread,0,cancel_thread,0));
         assert(!pthread_join(thread,&result) && result==PTHREAD_CANCELED && cleanups==1);
@@ -147,7 +183,12 @@ int main(int argc,char** argv) {
         assert(caught==(behavior==THROW_NOTIFY || behavior==THROW_GETTER));
     }
     assert(A::request_hook_health().ledger.requests==(behavior==UNRELATED?0u:1u));
-    if(behavior==DELAYED_CALLBACK) {
+    if(behavior==SESSION_TRANSITION) {
+        assert(mx5_session_destroy(&session_storage)==0 && !session_storage);
+        open_session();assert(A::read_issue_session().lifetime==2);
+        assert(A::request_hook_health().ledger.requests==1);
+    }
+    if(behavior==DELAYED_CALLBACK || behavior==SESSION_TRANSITION) {
         assert(delayed_callback && !notifies && !posts);
         errno=EAGAIN;delayed_callback(&connection,&method,&context);assert(errno==ERANGE);
     }
@@ -174,6 +215,11 @@ int main(int argc,char** argv) {
     if(posts)invoke(mx5_request_destroy_veneer,worker);
     assert(frees==1 && posts<=1 && works<=1 && destroys==posts);
     no_scope();empty();
+    if(behavior==SESSION_TRANSITION) {
+        assert(mx5_session_destroy(&session_storage)==0 && !session_storage);
+        assert(session_creates==2 && session_destroys==2 && session_callbacks==2);
+        assert(!A::session_hook_health().faults);
+    }
     assert(A::request_hook_health().abi_fault==(behavior==MALFORMED));
     printf("PASS ARM request wrappers %s: original calls/args/results/errno and scope cleanup\n",argv[1]);
 }

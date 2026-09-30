@@ -32,6 +32,13 @@ host/ARM 전체 검사와 stock runtime의 세션 14개 검사를 통과했으�
 소유권·정상 폰 연결을 증명하지 않습니다. qualified 필드와 live ASSIST는
 계속 비활성이며, 공개 ZIP은 변경하지 않았습니다.
 
+[후속 실제 세션 전환 검사](../validation/SESSION_TRANSITION_2026-09-30.md)에서는
+원본 manager 정지·세션 파괴 뒤에도 LDS 요청 1건이 남는 것을 확인했습니다.
+새 세션·manager를 시작하고 callback 전달을 재개하자 이전 요청의 LOCATION이
+새 세션으로 송신됐습니다. 제품은 요청 문맥 1과 송신 대상 2를 구분했고 분석기는
+inconclusive를 반환했습니다. 실제 DSO·stock runtime의 새 회귀도 추가했습니다.
+원본 요청의 세션 소유권·정상 폰 수용이나 ASSIST 구현 완료로 세지 않습니다.
+
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
 생략 없이 통과했습니다. 원본 커널 VM의 baseline/SHADOW 비교에서 위치 API의

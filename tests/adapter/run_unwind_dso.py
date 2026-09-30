@@ -58,10 +58,15 @@ def main():
             'SUBMIT': 'mx5_request_submit', 'FREE': 'mx5_request_free', 'FREE_ONLY': 'mx5_request_free_only',
             'POST': 'mx5_request_post_veneer', 'WORK': 'mx5_request_work_veneer',
             'DESTROY': 'mx5_request_destroy_veneer', 'POST_ENTER': 'mx5_request_post_enter',
+            'SESSION_PREPARE': '_ZN3mx57adapter21prepare_session_hooksERKNS0_15SessionBindingsE',
+            'SESSION_ISSUE': '_ZN3mx57adapter18read_issue_sessionEv',
+            'SESSION_SEND': '_ZN3mx57adapter17read_send_sessionEPKvPNS_7runtime13session_trace8SnapshotEPv',
+            'SESSION_HEALTH': '_ZN3mx57adapter19session_hook_healthEv',
+            'SESSION_CREATE': 'mx5_session_create', 'SESSION_DESTROY': 'mx5_session_destroy',
         }
         cases = ('normal', 'unrelated', 'failed_submit', 'destroy_queued', 'throw_notify', 'throw_work',
                  'cancel_notify', 'cancel_work', 'malformed', 'other_worker', 'delayed_callback',
-                 'throw_getter', 'cancel_getter')
+                 'throw_getter', 'cancel_getter', 'session_transition')
         fixture, access = 'request_hooks_arm', 'request_dso_access.h'
         macro, marker = '-DMX5_REQUEST_DSO_TEST', 'PASS ARM request wrappers '
     elif args.suite == 'session':
