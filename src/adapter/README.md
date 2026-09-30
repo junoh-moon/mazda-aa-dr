@@ -48,18 +48,22 @@ observation disables the observation claim and keeps forwarding the OEM call.
 Readers and callbacks use bounded lock-free atomic operations, with no mutex,
 allocation, I/O or source retry loop. This is not a wall-clock latency guarantee.
 
-The request's `session_context` is the unique live context observed at issue;
+The request's `session_context` is the unique context whose create returned zero
+and whose destruction has not been observed at issue;
 `send_session` separately identifies the actual storage argument at send. Neither
-implies request ownership, a connected phone or acceptance. The older qualified
-session fields remain unknown. Lifecycle overlap, ambiguity and faults remain
-explicit journal results. Raw state is known only after a real callback.
-Snapshots include a coherent lifecycle `revision`, incremented even for failed
-calls and late callbacks; it is copied at request issue. This process-local
-number is not qualified request/session ownership. Exhaustion latches an
-observation fault instead of reusing a revision. Context storage is
+validates the current handle, request ownership, a connected phone or acceptance.
+The observer never dereferences the OEM handle storage after the API returns.
+Overlapping create/destroy calls, including distinct storage addresses, make the
+observation incomplete for the process; original calls continue unchanged.
+The older qualified session fields remain unknown. Lifecycle overlap, ambiguity
+and faults remain explicit journal results. Raw state is known only after a real
+callback. Snapshots include a coherent lifecycle `revision`, incremented even
+for failed calls and late callbacks; it is copied at request issue. This
+process-local number is not qualified request/session ownership. Exhaustion
+latches an observation fault instead of reusing a revision. Context storage is
 constant-initialized even on GCC 4.9; an early preload call must not
 be erased by later global constructors. See
-[session product verification](../../validation/SESSION_PRODUCT_2026-09-30.md).
+[independent session product record](https://github.com/junoh-moon/mazda-aa-dr/blob/56af56109f3828e56e175dfaef24881902cefcb1/validation/SESSION_PRODUCT_2026-09-30.md).
 
 Create, destroy and status callbacks revoke the adapter prediction generation
 before the original call and again at completion, including exceptions and

@@ -37,6 +37,35 @@ class RequestJournal(unittest.TestCase):
                 a.consume(dict(p, request=dict(p['request'], route=bad)), 'bad-route')
                 self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
 
+    def test_same_lifetime_callback_history(self):
+        command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+        rows = [json.loads(s) for s in subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()]
+        send = rows[1]
+        for event, state in ((1, -7), (2, 3), (None, None)):
+            with self.subTest(event=event, state=state):
+                a = audit.Auditor()
+                a.consume(dict(send, send_session=dict(send['send_session'], event=event, state=state)), 'contradiction')
+                found = [i for i in a.issues if i['code'] == 'session_state_inconsistent']
+                self.assertEqual(len(found), 1)
+                self.assertEqual(found[0]['severity'], 'violation')
+        # The merged revision check must not hide the independently impossible
+        # callback history. Both diagnostics describe this one send.
+        a = audit.Auditor()
+        a.consume(dict(send, send_session=dict(send['send_session'], event=1, revision=6)), 'changed-and-regressed')
+        self.assertIn('session_changed_since_issue', [i['code'] for i in a.issues])
+        self.assertIn('session_state_inconsistent', [i['code'] for i in a.issues])
+        # A later callback may have any raw state, including the same value.
+        for event, state in ((2, -7), (3, -7), (3, 3)):
+            a = audit.Auditor()
+            a.consume(dict(send, send_session=dict(send['send_session'], event=event, state=state)), 'valid')
+            self.assertFalse(any(i['code'].startswith('session_') for i in a.issues))
+        unknown = dict(send['request']['session_context'], event=None, state=None)
+        for event, state in ((None, None), (1, 0)):
+            a = audit.Auditor()
+            a.consume(dict(send, request=dict(send['request'], session_context=unknown),
+                           send_session=dict(send['send_session'], event=event, state=state)), 'first-status')
+            self.assertFalse(any(i['code'].startswith('session_') for i in a.issues))
+
     def test_production_records_and_bounds(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
         rows = [json.loads(s) for s in subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()]

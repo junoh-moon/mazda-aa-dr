@@ -75,11 +75,14 @@ $(BUILD)/test_session_hooks: $(ADAPTER) src/adapter/adapter.h src/adapter/sessio
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
 $(BUILD)/test_session_early_init: $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h src/runtime/session_trace.h src/runtime/request_trace.h src/adapter/request_hooks.h src/runtime/request_observer.h tests/adapter/session_early_init_test.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
-test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init
+$(BUILD)/test_session_request: tests/adapter/session_request_test.cpp src/adapter/session_hooks.cpp src/adapter/adapter.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/adapter/request_hooks.cpp src/adapter/request_hooks.h src/adapter/session_hooks.h src/adapter/adapter.h src/runtime/request_observer.h src/runtime/request_trace.h src/runtime/session_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h src/adapter/request_hooks.cpp,$^) -pthread -o $@
+test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	$(BUILD)/test_cold_patch
-	@set -e; for case in normal failure overlap same_storage closing_create capacity callback_bad readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight; do $(BUILD)/test_session_hooks $$case; done
+	@set -e; for case in normal failure overlap same_storage closing_create creating_during_destroy null_success output_race late_destroy distinct_storage capacity callback_bad callback_null readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight; do result=0; $(BUILD)/test_session_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 	$(BUILD)/test_session_early_init
+	$(BUILD)/test_session_request
 test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace

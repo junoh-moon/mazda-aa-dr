@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 namespace mx5 { namespace runtime { namespace session_trace {
-// Observation only. A live API handle is not a connected/accepted phone.
+// Observation of create's return 0, not handle validity or a connected phone.
 enum Result { UNOBSERVED = 0, OBSERVED, NONE, TRANSITION, AMBIGUOUS, FAULT };
 struct Snapshot {
     Result result;

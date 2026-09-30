@@ -34,6 +34,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   [세션 계산 경계 검사](../validation/MODEL_SESSION_2026-09-30.md)는 관측 revision을
   사용하는 MODEL 입력 제한입니다. 세션 소유권·물리 센서의 qualification이나
   live ASSIST 구현 완료로 승격하지 않습니다.
+- [x] 외부 세션 경쟁 수정을 기존 revision·MODEL 경계·요청 경로와 통합합니다.
+  [통합본 검증](../validation/SESSION_MERGE_2026-09-30.md)에서 storage race의 수정 전후,
+  최종 host/ARM 전체 검사와 원본 LDS 실행을 확인했습니다. ARM 합성 송신 한 번의
+  실패는 후속 검사에서 재현되지 않았으며 원인은 미분리입니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
   [요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)은 발행 당시 원본
   목적지·경로·인터페이스·메서드명을 응답까지 연결합니다. well-known 서비스
@@ -69,6 +73,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   최종 원본 VM 두 실행(raw 936·855건)은 journal/요청 loss 0과 합성식 대조를
   완료했습니다. 과거 drop의 정확한 원인과 물리 입력 자격은 확정하지 않았습니다.
 - [ ] 실제 요청의 provider/receiver/session 출처를 보존하는 ASSIST 연결을 구현·검사합니다.
+  외부 master의 [세션 관측 수정·실행](../validation/SESSION_CONTEXT_REVIEW_2026-09-30.md)에서
+  issue 당시 문맥과 send 저장소를 연결하고 동시성·판정 결함을 수정했습니다.
+  원본 세션 재생성 뒤 이전 요청 네 건이 새 세션으로 송신되는 경우도 구별했습니다.
+  관측된 API 수명은 요청 소유권이나 폰 수용을 증명하지 않으므로 이 항목은 미완료입니다.
   아래는 조사 순서에 따른 이력입니다. 요청 관측의 제품 설치·journal 연결은
   완료했으며, 최신 결과는 이 항목 마지막의 제품 연결 기록을 따릅니다.
   [원본 위치 객체 ABI](../validation/REQUEST_PROVENANCE_2026-09-30.md)를 실행했으나

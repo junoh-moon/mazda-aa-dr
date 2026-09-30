@@ -59,6 +59,15 @@ MODEL/holdout의 세션 reset과 요청별 qualification이 미구현이었습�
 응답 시점의 최신 정보로 요청을 덮어쓰지 않습니다. 서비스 이름만으로 실제
 제공자나 수신기·세션 소유권을 인증하는 구현은 아직 없으며 ASSIST는 비활성입니다.
 
+[원격 세션 경쟁 수정 통합](../validation/SESSION_MERGE_2026-09-30.md)에서는
+외부 master `20bf583`의 storage 재읽기·중첩 lifecycle 수정을 같은 작업 브랜치에
+반영하고 기존 revision·예측 철회·MODEL reset·요청 경로 복사를 보존했습니다.
+수정 전 ThreadSanitizer의 실제 race와 회귀 6개 실패를 확인했고, 통합 후 host
+297개 파이썬 검사와 C/C++·ARM 전체 검사, 원본 공유 runtime의 세션 28개를
+통과했습니다. 원본 LDS 요청 15건과 별도 상태 callback에서 기록·전달을 확인했습니다.
+ARM 합성 송신 시험 한 번의 실패는 후속 단독·전체 검사에서 재현되지 않았으며
+원인은 미분리입니다. bus lifetime과 qualified 제공자·수신기·세션 연결은 미구현입니다.
+
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
 생략 없이 통과했습니다. 원본 커널 VM의 baseline/SHADOW 비교에서 위치 API의
@@ -209,6 +218,16 @@ consumer/producer 잠금이 겹치면 기록을 버리는 경로를 재현·제�
 직접 실행한 원본 VM 두 번에서도 API 반환 0과 INVALID callback의 차이를
 확인했습니다. 원본 큐·LDS·제품 request hook을 실행하는 시험은 아니며,
 제품 세션 자격 연결과 ASSIST는 여전히 미구현 또는 비활성입니다.
+
+외부 master `20bf583`의 [세션 관측 검토·수정·직접 실행 기록](../validation/SESSION_CONTEXT_REVIEW_2026-09-30.md)에서는
+독립 구현의 issue/send 문맥을 통합하고 storage 재읽기 race·중첩 생성/파괴의
+잘못된 생존 관측·분석기 상태 이력 모순 누락을 재현·수정했습니다.
+네 독립 리뷰와 최종 host/ARM 전체 검사 뒤, 실제 제품으로 원본 callback과
+세션 재생성 이후 지연된 LDS 요청 네 건의 전달을 확인했습니다. 이전 요청의
+문맥과 새 송신 대상을 구분하는 관측이며 session/receiver 자격과 ASSIST 연결은
+미완료입니다. 반복 VM 한 번의 정리 검사 실패는 원인이 미분리이며, 세부 진단을
+추가한 다음 VM의 성공으로 해결됐다고 판단하지 않습니다.
+공개 ZIP은 기존 v0.3.1-shadow.1 그대로입니다.
 
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을

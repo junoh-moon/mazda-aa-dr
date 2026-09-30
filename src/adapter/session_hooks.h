@@ -25,7 +25,9 @@ enum SessionFault {
 bool prepare_session_hooks(const SessionBindings&);
 struct SessionHealth { bool prepared; unsigned contexts, faults; };
 SessionHealth session_hook_health();
-// At issue: a unique live observed context, NOT proof of request ownership.
+// At issue: a unique successful-create context without an observed destroy.
+// Neither handle validity nor request ownership is established. Overlapping
+// lifecycle calls (even for distinct storage) retire the observation claim.
 S::Snapshot read_issue_session();
 // At send: lookup the actual storage argument without retaining/dereferencing it.
 void read_send_session(const void* storage, S::Snapshot*, void*);

@@ -37,6 +37,7 @@ struct ContextPool {
 };
 ContextPool contexts;
 std::atomic<unsigned> prepared(0), used(0), faults(0), mutations(0);
+std::atomic<unsigned> lifecycle_mutations(0);
 std::atomic<uint64_t> version(0);
 A::SessionBindings original=A::SessionBindings();
 bool attempted;
@@ -49,9 +50,14 @@ void ready() { if(!prepared.load(std::memory_order_acquire))__builtin_trap(); }
 void fault(unsigned reason) { faults.fetch_or(reason,std::memory_order_seq_cst); }
 struct Mutation {
     bool complete;
-    Mutation():complete(false) {
+    const bool lifecycle;
+    explicit Mutation(bool is_lifecycle=true):complete(false),lifecycle(is_lifecycle) {
         const PreserveErrno saved;
         mutations.fetch_add(1);
+        // A status callback during create/destroy is expected. Only overlapping
+        // lifecycle calls lose the storage-order claim; all calls still revoke
+        // predictions and participate in the coherent reader boundary.
+        if(lifecycle && lifecycle_mutations.fetch_add(1))fault(A::SESSION_CONTENTION);
         A::invalidate(); // Before the original lifecycle call can change state.
     }
     ~Mutation() {
@@ -60,11 +66,12 @@ struct Mutation {
         // Reject candidates published during the call, including unwind.
         A::invalidate();
         if(version.fetch_add(1)==UINT64_MAX)fault(A::SESSION_REVISION_EXHAUSTED);
+        if(lifecycle)lifecycle_mutations.fetch_sub(1);
         mutations.fetch_sub(1);
     }
 };
 template<unsigned index> void status(void* user,void* full_info) {
-    ready();Mutation mutation;
+    ready();Mutation mutation(false);
     Context& c=contexts[index];
     {
         const PreserveErrno saved;
@@ -169,7 +176,9 @@ extern "C" int32_t mx5_session_create(const char* xml,void* user,const A::Sessio
             unsigned phase=CREATING;
             // A concurrent/reentrant destroy may already have ended this
             // creation. A successful return must never resurrect it.
-            c->phase.compare_exchange_strong(phase,!result && *storage?LIVE:ENDED,
+            // Observe the API result only. Reading *storage here would race
+            // a destroy protected by the OEM's own, inaccessible mutex.
+            c->phase.compare_exchange_strong(phase,!result?LIVE:ENDED,
                                             std::memory_order_seq_cst,std::memory_order_seq_cst);
         }
         mutation.complete=true;

@@ -873,12 +873,19 @@ class Auditor:
                 request = row.get("request")
                 ambient = request.get("session_context") if isinstance(request, dict) else None
                 if (session_snapshot(ambient, "unique_live_context") and
-                        ambient["result"] == target["result"] == "observed" and
-                        (ambient["lifetime"] != target["lifetime"] or
-                         ("revision" in ambient and "revision" in target and
-                          ambient["revision"] != target["revision"]))):
-                    self.issue("session_changed_since_issue", source,
-                               "Send target differs from issue-time ambient context; ownership is unproved")
+                        ambient["result"] == target["result"] == "observed"):
+                    if (ambient["lifetime"] != target["lifetime"] or
+                            ("revision" in ambient and "revision" in target and
+                             ambient["revision"] != target["revision"])):
+                        self.issue("session_changed_since_issue", source,
+                                   "Send target differs from issue-time ambient context; ownership is unproved")
+                    # A revision change does not excuse contradictory callback
+                    # history within the same lifetime. Report both when present.
+                    if (ambient["lifetime"] == target["lifetime"] and ambient["event"] is not None and (
+                            target["event"] is None or target["event"] < ambient["event"] or
+                            (target["event"] == ambient["event"] and target["state"] != ambient["state"]))):
+                        self.issue("session_state_inconsistent", source,
+                                   "Same-lifetime callback history contradicts its issue-time snapshot", True)
                 if target["result"] in ("transition", "ambiguous", "observation_fault"):
                     self.issue("session_observation_unavailable", source, target["result"])
         position = self.positions.get((row["call"], row["generation"]))

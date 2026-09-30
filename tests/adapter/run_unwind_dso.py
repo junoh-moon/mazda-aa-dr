@@ -83,8 +83,8 @@ def main():
             'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
             'VEHICLE_SEND': 'mx5_send_vehicle_data',
         }
-        cases = ('normal', 'failure', 'overlap', 'same_storage', 'closing_create', 'capacity',
-                 'callback_bad', 'readers', 'throw_create', 'throw_destroy', 'throw_status',
+        cases = ('normal', 'failure', 'overlap', 'same_storage', 'closing_create', 'creating_during_destroy', 'null_success', 'output_race', 'late_destroy', 'distinct_storage', 'capacity',
+                 'callback_bad', 'callback_null', 'readers', 'throw_create', 'throw_destroy', 'throw_status',
                  'cancel_create', 'cancel_destroy', 'cancel_status',
                  'prediction_destroy', 'prediction_recreate', 'prediction_create_failure',
                  'prediction_destroy_failure', 'prediction_status', 'prediction_create_inflight',

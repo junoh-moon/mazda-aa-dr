@@ -7,6 +7,7 @@
 #include <atomic>
 #include <pthread.h>
 #include <sched.h>
+#include <unistd.h>
 
 namespace A=mx5::adapter;
 namespace S=mx5::runtime::session_trace;
@@ -19,13 +20,20 @@ static void* users[80];
 static void* handle;
 static unsigned creates, destroys, notifications;
 static int32_t create_result, destroy_result;
-static bool early, throw_create, throw_destroy, throw_status, reenter_destroy;
+static bool early, throw_create, throw_destroy, throw_status, reenter_destroy, reenter_create;
 static void* expected_info;
 static void* expected_user;
+static unsigned char expected_payload[2400];
+static size_t expected_size;
 static std::atomic<unsigned> block_create(0), block_callback(0), block_destroy(0);
 static bool cancel_create, cancel_destroy, cancel_status;
 static bool predict_in_create, predict_in_destroy, predict_in_status;
 static void prediction_attempt(bool replacement,bool publish);
+static bool null_success;
+enum ConcurrentCase { SERIAL, OUTPUT_RACE, LATE_DESTROY, DISTINCT_STORAGE };
+static ConcurrentCase concurrent_case;
+static pthread_mutex_t api_mu=PTHREAD_MUTEX_INITIALIZER;
+static std::atomic<unsigned> create_ready(0),destroy_entered(0),allow_destroy(0);
 // Use the target's pthread ABI. GCC 4.9 std::thread's internal implementation
 // is not compatible with the stock shared C++ runtime (even without our DSO).
 template<class Call> static void* thread_body(void* arg) {
@@ -42,6 +50,7 @@ static void cancellation(std::atomic<unsigned>& flag) {
 static void status(void* user,void* info) {
     assert(errno==EDOM);
     assert(user==expected_user && info==expected_info);
+    assert(!expected_size || !memcmp(info,expected_payload,expected_size));
     ++notifications;
     if(predict_in_status)prediction_attempt(false,true);
     errno=ERANGE;
@@ -57,8 +66,9 @@ static int32_t create(const char* xml,void* user,const A::SessionCallbacks* cb,v
     for(unsigned i=0;i<19;++i)if(i!=1)assert(cb->entry[i]==supplied.entry[i]);
     if(early) {
         int32_t info[2]={-7,-1};expected_info=info;expected_user=user;
+        expected_size=sizeof info;memcpy(expected_payload,info,expected_size);
         reinterpret_cast<A::SessionStatus>(cb->entry[1])(user,info);
-        assert(errno==ERANGE);
+        assert(errno==ERANGE && !memcmp(info,expected_payload,expected_size));
         assert(A::read_issue_session().result==S::TRANSITION);
     }
     if(cancel_create)cancellation(block_create);
@@ -71,7 +81,18 @@ static int32_t create(const char* xml,void* user,const A::SessionCallbacks* cb,v
         errno=EDOM;
         assert(mx5_session_destroy(storage)==destroy_result);
     }
-    if(!create_result)*storage=&handle;
+    if(concurrent_case!=SERIAL)assert(!pthread_mutex_lock(&api_mu));
+    if(!create_result && !null_success)*storage=&handle;
+    if(concurrent_case!=SERIAL) {
+        assert(!pthread_mutex_unlock(&api_mu));
+        create_ready.store(1);
+        if(concurrent_case==OUTPUT_RACE) {
+            while(!destroy_entered.load())sched_yield();
+            // No happens-before edge from destroy's later write to our return.
+            // TSan must detect an added wrapper read, even when it happens later.
+            usleep(20000);
+        }
+    }
     errno=ERANGE;
     return create_result;
 }
@@ -81,7 +102,20 @@ static int32_t destroy(void** storage) {
     assert(A::read_issue_session().result==(A::session_hook_health().faults?S::FAULT:S::TRANSITION));
     if(cancel_destroy)cancellation(block_destroy);
     if(throw_destroy) { errno=ERANGE;throw 31; }
+    if(reenter_create) {
+        assert(mx5_session_create("original.xml",0,&supplied,storage)==create_result);
+        assert(errno==ERANGE);
+    }
+    if(concurrent_case!=SERIAL) {
+        destroy_entered.store(1);
+        if(concurrent_case!=OUTPUT_RACE)while(!allow_destroy.load())sched_yield();
+        assert(!pthread_mutex_lock(&api_mu));
+    }
     if(!destroy_result)*storage=0;
+    if(concurrent_case!=SERIAL) {
+        assert(!pthread_mutex_unlock(&api_mu));
+        if(concurrent_case==OUTPUT_RACE)while(!allow_destroy.load())sched_yield();
+    }
     errno=ERANGE;return destroy_result;
 }
 static void prepare() {
@@ -106,8 +140,9 @@ static void close(void** storage) {
 static void notify(unsigned index,int32_t state,void* user=0) {
     int32_t full[600]={};full[0]=state;full[1]=-1;full[599]=77;
     expected_info=full;expected_user=user;errno=EDOM;
+    expected_size=sizeof full;memcpy(expected_payload,full,expected_size);
     reinterpret_cast<A::SessionStatus>(received[index].entry[1])(user,full);
-    assert(errno==ERANGE && full[599]==77);
+    assert(errno==ERANGE && !memcmp(full,expected_payload,expected_size));
 }
 static void normal() {
     assert(A::read_issue_session().result==S::NONE);
@@ -163,7 +198,50 @@ static void same_storage() {
 }
 static void closing_create() {
     void* storage=0;reenter_destroy=true;open(&storage);
-    assert(A::read_issue_session().result==S::NONE && send(&storage).result==S::NONE);
+    assert(A::read_issue_session().result==S::FAULT && send(&storage).result==S::FAULT);
+    assert(A::session_hook_health().faults==A::SESSION_CONTENTION);
+}
+static void creating_during_destroy() {
+    void* storage=0;open(&storage);reenter_create=true;close(&storage);
+    assert(!storage && creates==2 && destroys==1);
+    assert(A::read_issue_session().result==S::FAULT && send(&storage).result==S::FAULT);
+    assert(A::session_hook_health().faults==A::SESSION_CONTENTION);
+    notify(1,7);assert(notifications==1); // Faults must never suppress forwarding.
+}
+static void successful_create_is_not_handle_validation() {
+    void* storage=0;null_success=true;
+    const S::Snapshot observed=open(&storage);
+    // This authored API returns 0 without providing a handle. The wrapper
+    // records that return; it must not inspect or validate OEM-owned storage.
+    assert(!storage && observed.result==S::OBSERVED && observed.lifetime==1);
+    assert(!observed.state_known && !A::session_hook_health().faults);
+    close(&storage);assert(send(&storage).result==S::NONE);
+}
+static void concurrent_lifecycle(const char* which) {
+    concurrent_case=!strcmp(which,"output_race")?OUTPUT_RACE:
+        (!strcmp(which,"late_destroy")?LATE_DESTROY:DISTINCT_STORAGE);
+    void* storage=0;void* other=0;
+    auto create_call=[&]() {open(&storage);};
+    auto destroy_call=[&]() {
+        while(!create_ready.load())sched_yield();
+        close(&storage);
+    };
+    if(concurrent_case==OUTPUT_RACE) {
+        pthread_t creator=start_thread(create_call),destroyer=start_thread(destroy_call);
+        join_thread(creator);allow_destroy.store(1);join_thread(destroyer);
+        assert(creates==1 && destroys==1);
+    } else {
+        open(&storage);
+        pthread_t destroyer=start_thread(destroy_call);
+        while(!destroy_entered.load())sched_yield();
+        open(concurrent_case==DISTINCT_STORAGE?&other:&storage);
+        allow_destroy.store(1);join_thread(destroyer);
+        assert(creates==2 && destroys==1);
+        if(concurrent_case==DISTINCT_STORAGE)assert(other==&handle);
+    }
+    assert(!storage && A::read_issue_session().result==S::FAULT);
+    assert(send(&storage).result==S::FAULT);
+    assert(A::session_hook_health().faults==A::SESSION_CONTENTION);
 }
 static void capacity() {
     void* storage=0;
@@ -180,6 +258,14 @@ static void callback_bad() {
     notify(0,3,&user);assert(notifications==1);
     assert(A::read_issue_session().result==S::FAULT);
     assert(A::session_hook_health().faults&A::SESSION_CALLBACK);
+}
+static void callback_null() {
+    void* storage=0;open(&storage);
+    expected_info=0;expected_user=0;expected_size=0;errno=EDOM;
+    reinterpret_cast<A::SessionStatus>(received[0].entry[1])(0,0);
+    assert(errno==ERANGE && notifications==1);
+    assert(A::read_issue_session().result==S::FAULT);
+    assert(A::session_hook_health().faults==A::SESSION_CALLBACK);
 }
 static void readers() {
     void* storage=0;int user=7;open(&storage,&user);
@@ -331,18 +417,34 @@ static void prediction_lifecycle(const char* which) {
     close(&storage);assert(!A::session_hook_health().faults);
 }
 int main(int argc,char** argv) {
+    alarm(30);
+    assert(argc==2);
+#if defined(__APPLE__)
+    // Darwin's pthread cancellation does not unwind these C++ scopes. This
+    // Linux-target contract is exercised by the GNU host and ARM DSO suites.
+    if(!strcmp(argv[1],"cancel_create") || !strcmp(argv[1],"cancel_destroy") ||
+            !strcmp(argv[1],"cancel_status")) {
+        puts("SKIP session cancellation: requires Linux C++ forced unwind");
+        return 77;
+    }
+#endif
 #ifdef MX5_SESSION_DSO_TEST
     initialize_session_test_dso();
 #endif
-    assert(argc==2);prepare();
+    prepare();
     const char* c=argv[1];
     if(!strcmp(c,"normal"))normal();
     else if(!strcmp(c,"failure"))failure();
     else if(!strcmp(c,"overlap"))overlap();
     else if(!strcmp(c,"same_storage"))same_storage();
     else if(!strcmp(c,"closing_create"))closing_create();
+    else if(!strcmp(c,"creating_during_destroy"))creating_during_destroy();
+    else if(!strcmp(c,"null_success"))successful_create_is_not_handle_validation();
+    else if(!strcmp(c,"output_race") || !strcmp(c,"late_destroy") ||
+            !strcmp(c,"distinct_storage"))concurrent_lifecycle(c);
     else if(!strcmp(c,"capacity"))capacity();
     else if(!strcmp(c,"callback_bad"))callback_bad();
+    else if(!strcmp(c,"callback_null"))callback_null();
     else if(!strcmp(c,"readers"))readers();
     else if(!strncmp(c,"throw_",6))exceptions(c);
     else if(!strncmp(c,"cancel_",7))cancellations(c);

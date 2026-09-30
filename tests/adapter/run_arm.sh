@@ -52,3 +52,8 @@ qemu-arm -L "$sysroot" "$build/cold-patch-test"
     src/runtime/request_observer.cpp src/runtime/request_trace.cpp \
     tests/adapter/session_early_init_test.cpp -ldl -o "$build/session-early-init-test"
 qemu-arm -L "$sysroot" "$build/session-early-init-test"
+"${cross}g++" $flags -I src tests/adapter/session_request_test.cpp \
+    src/adapter/session_hooks.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S \
+    src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp \
+    -ldl -o "$build/session-request-test"
+qemu-arm -L "$sysroot" "$build/session-request-test"
