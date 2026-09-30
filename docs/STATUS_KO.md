@@ -45,7 +45,13 @@ userspace debugger 없이 64건 동시 대기의 userdata callback, 버스 부�
 원본 AA용 공개 요청 함수까지 실행했습니다. 제공자 종료 후 util callback의 NULL
 error·mode 0, 45초 넘게 대기한 요청의 제공자 재개 후 완료, free/recreate의 주소
 재사용을 확인했습니다. 동일 객체·이름의 재연결은 실패했고 원인은 미분리입니다.
-BLM callback·worker·송신과 실제 요청 출처의 제품 연결은 여전히 남아 있습니다.
+그 시험에서는 BLM callback·worker·송신 경로를 실행하지 않았습니다.
+
+[후속 원본 BLM 큐 실행](../validation/BLM_QUEUE_2026-09-30.md)에서는 원본 LDS
+AA용 API에 원본 BLM callback을 전달하여 실제 큐·위치 worker·RequestSendPosition과
+기존 OBSERVE 후크까지 실행했습니다. 정상 버스 요청/reply 대응과 제공자 종료 후에도
+0값 위치가 전달되는 현상을 확인했습니다. AA 세션이 없어 실제 send는 0건입니다.
+요청 출처의 제품 연결·qualified 자격·폰 수용은 여전히 미구현 또는 미검증입니다.
 
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
