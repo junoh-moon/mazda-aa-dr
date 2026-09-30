@@ -113,6 +113,11 @@ GPS 단절 중 보정 위치가 실제 AA 송신에 선택되고, GPS 복귀 시
   검사했습니다. 두 핀의 실험용 QEMU 모델과 합성 센서 입력 범위입니다.
   보정 위치의 실제 ASSIST 송신·물리 센서·폰 수용은 아래 미완료 항목으로 남습니다.
 - [ ] 실제 요청의 provider/receiver/session 출처를 보존하는 ASSIST 연결을 구현·검사합니다.
+  [원본 AA 선택 시험](../validation/ASSIST_SELECTION_2026-10-01.md)에서 기존 core·adapter를
+  별도 실행 파일에 연결하고 합성 자격으로 계산 위치의 선택·GPS 복귀를 실행했습니다.
+  자격 거부·MODEL 조건의 원본 유지도 확인했습니다. 제품 runtime은 실행하지 않았고
+  기준점·센서·시각·자격은 별도 작성 조건입니다. 물리 입력 자격과 제품 ASSIST 연결의 완료로
+  세지 않으며, 최초 원본 manager 초기화 실패의 원인도 미분리입니다.
   [버스 연결 관측 검토](../validation/BUS_CONNECTION_REVIEW_2026-09-30.md)에서
   실제 발행/응답 연결 수명과 daemon 종료의 단절 관측을 제품에 연결했습니다.
   세 독립 리뷰와 host/ARM 전체 검사 뒤 원본 VM의 LDS 요청 30건, 단절 뒤
