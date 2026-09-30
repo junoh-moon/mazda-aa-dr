@@ -174,6 +174,12 @@ raw 350·441건은 직접 넣은 합성 입력이며 모든 MODEL은 invalid, �
 inconclusive입니다. provider/bus/receiver 자격·실차·폰 검증 및 이전 정리 실패의
 원인은 남아 있으며 공개 ZIP은 변경하지 않았습니다.
 
+[고정 ARM 자원 측정](../validation/ARM_ROUTE_RESOURCES_2026-09-30.md)에서는
+위 제품의 `.bss` 증가 101,408바이트, 스레드별 TLS image 증가 2,112바이트와
+worker local stack frame 359,120바이트를 확인했습니다. 계측 객체 12개는 기존
+제품 객체와 일치하며, ARM의 전체 관측값 큐 1,024개 복사·full 경계도 통과했습니다.
+실제 CMU의 메모리·스택 여유나 callback 시간 상한을 검증한 결과는 아닙니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
