@@ -1,0 +1,153 @@
+--- a/include/hw/gpio/imx_gpio.h
++++ b/include/hw/gpio/imx_gpio.h
+@@ -50,6 +50,8 @@
+     uint32_t dr;
+     uint32_t gdir;
+     uint32_t psr;
++    /* Diagnostic board model only; zero preserves upstream behavior. */
++    uint32_t output_readback_mask;
+     uint64_t icr;
+     uint32_t imr;
+     uint32_t isr;
+--- a/hw/gpio/imx_gpio.c
++++ b/hw/gpio/imx_gpio.c
+@@ -165,7 +165,8 @@
+         break;
+ 
+     case PSR_ADDR:
+-        reg_value = s->psr & ~s->gdir;
++        reg_value = (s->psr & ~s->gdir) |
++                    (s->dr & s->gdir & s->output_readback_mask);
+         break;
+ 
+     case ICR1_ADDR:
+--- a/include/hw/arm/fsl-imx6.h
++++ b/include/hw/arm/fsl-imx6.h
+@@ -49,6 +49,16 @@
+ #define FSL_IMX6_NUM_WDTS 2
+ #define FSL_IMX6_NUM_USB_PHYS 2
+ #define FSL_IMX6_NUM_USBS 4
++
++/* Partial, opt-in no-load readback model for two public i.MX6Q pads.
++ * Other mux/pad functions, electrical loads and interrupts are unimplemented.
++ */
++typedef struct FslIMX6CmuPin {
++    MemoryRegion iomem;
++    IMXGPIOState *gpio;
++    uint32_t bit;
++    uint32_t mux;
++} FslIMX6CmuPin;
+ 
+ struct FslIMX6State {
+     /*< private >*/
+@@ -75,6 +85,9 @@
+     MemoryRegion   ocram;
+     MemoryRegion   ocram_alias;
+     uint32_t       phy_num;
++    bool           experimental_cmu_gpio_readback;
++    FslIMX6CmuPin   cmu_pin[2];
++    Error          *cmu_migration_blocker;
+ };
+ 
+ 
+--- a/hw/arm/fsl-imx6.c
++++ b/hw/arm/fsl-imx6.c
+@@ -29,6 +29,8 @@
+ #include "chardev/char.h"
+ #include "qemu/error-report.h"
+ #include "qemu/module.h"
++#include "migration/blocker.h"
++#include "sysemu/reset.h"
+ 
+ #define IMX6_ESDHC_CAPABILITIES     0x057834b4
+ 
+@@ -100,6 +102,43 @@
+ 
+ 
+     object_initialize_child(obj, "eth", &s->eth, TYPE_IMX_ENET);
++}
++
++static uint64_t cmu_mux_read(void *opaque, hwaddr offset, unsigned size)
++{
++    FslIMX6CmuPin *pin = opaque;
++    return pin->mux;
++}
++
++static void cmu_mux_write(void *opaque, hwaddr offset, uint64_t value,
++                          unsigned size)
++{
++    FslIMX6CmuPin *pin = opaque;
++    /* ALT5 selects GPIO; SION enables the pad's input path for readback. */
++    pin->mux = value & 0x17;
++    pin->gpio->output_readback_mask &= ~pin->bit;
++    if (pin->mux == 0x15) {
++        pin->gpio->output_readback_mask |= pin->bit;
++    }
++}
++
++static const MemoryRegionOps cmu_mux_ops = {
++    .read = cmu_mux_read,
++    .write = cmu_mux_write,
++    .valid.min_access_size = 4,
++    .valid.max_access_size = 4,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++};
++
++static void fsl_imx6_cmu_reset(void *opaque)
++{
++    FslIMX6State *s = FSL_IMX6(opaque);
++    if (s->experimental_cmu_gpio_readback) {
++        int i;
++        for (i = 0; i < 2; i++) {
++            cmu_mux_write(&s->cmu_pin[i], 0, 5, 4);
++        }
++    }
+ }
+ 
+ static void fsl_imx6_realize(DeviceState *dev, Error **errp)
+@@ -443,6 +482,36 @@
+     memory_region_add_subregion(get_system_memory(), FSL_IMX6_OCRAM_ADDR,
+                                 &s->ocram);
+ 
++    if (s->experimental_cmu_gpio_readback) {
++        static const struct {
++            const char *name;
++            hwaddr offset;
++            unsigned bank;
++            unsigned bit;
++        } pins[] = {
++            { "cmu-eim-d31-mux", 0x0d0, 2, 31 },
++            { "cmu-key-row4-mux", 0x21c, 3, 15 },
++        };
++        /* The experimental state has no migration contract. */
++        error_setg(&s->cmu_migration_blocker,
++                   "Experimental CMU GPIO readback cannot migrate");
++        if (migrate_add_blocker(s->cmu_migration_blocker, errp)) {
++            return;
++        }
++        for (i = 0; i < ARRAY_SIZE(pins); i++) {
++            FslIMX6CmuPin *pin = &s->cmu_pin[i];
++            pin->gpio = &s->gpio[pins[i].bank];
++            pin->bit = UINT32_C(1) << pins[i].bit;
++            memory_region_init_io(&pin->iomem, OBJECT(dev), &cmu_mux_ops,
++                                  pin, pins[i].name, 4);
++            memory_region_add_subregion(get_system_memory(),
++                                       FSL_IMX6_IOMUXC_ADDR + pins[i].offset,
++                                       &pin->iomem);
++            cmu_mux_write(pin, 0, 5, 4);
++        }
++        qemu_register_reset(fsl_imx6_cmu_reset, s);
++    }
++
+     /* internal OCRAM (256 KB) is aliased over 1 MB */
+     memory_region_init_alias(&s->ocram_alias, OBJECT(dev), "imx6.ocram_alias",
+                              &s->ocram, 0, FSL_IMX6_OCRAM_ALIAS_SIZE);
+@@ -452,6 +521,8 @@
+ 
+ static Property fsl_imx6_properties[] = {
+     DEFINE_PROP_UINT32("fec-phy-num", FslIMX6State, phy_num, 0),
++    DEFINE_PROP_BOOL("experimental-cmu-gpio-readback", FslIMX6State,
++                     experimental_cmu_gpio_readback, false),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
