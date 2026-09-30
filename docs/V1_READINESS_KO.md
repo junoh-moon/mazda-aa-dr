@@ -45,6 +45,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   생성·파괴와 별도 송신 API의 256/0/256 반환 및 OBSERVE 전달을 확인했습니다.
   send 0은 폰 수용이 아니며, 실제 LDS부터 송신까지의 활성 경로·원본 정리
   오류의 영향·요청 자격의 제품 연결은 여전히 남아 있습니다.
+  [후속 원본 AA manager 시험](../validation/AA_PIPELINE_2026-09-30.md)에서는
+  원본 시작 API의 자동 LDS 요청→큐→위치→실제 send를 실행하고 native
+  OBSERVE/SCRUB 전달을 대조했습니다. 정상 폰 연결 사건·폰 수용, 오류 없는
+  정리와 실제 요청 identity의 제품 연결은 남아 있어 이 항목을 완료하지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
@@ -55,13 +59,13 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
 | --- | --- | --- |
 | 깨끗한 USB에 압축 해제 후 `sh install.sh` | MP3/JS·정적 해시 도구 포함. 실제 ARM BusyBox/libc에서 최종 ZIP 설치·제거·재설치 성공 | 실제 CMU 미디어의 MP3→shell 동작, 실제 저장소의 remount·내구성은 미검증 |
 | 정확한 펌웨어·계정·경로 | 네 원본 identity 유지. `cmu=0`, `service=1001`, 순정 저장소 symlink 반영 | 다른 펌웨어에 일반화하지 않음. 현장 설치 정보와 대조 필요 |
-| OEM 호출 계약·터치 공존 | ARM veneer/encoder 합성 시험. 순정 커널에서 실제 AA 후크와 터치 DSO 동시 로드 | 실제 AA 송신·터치 입력, 수명·동시성·지연 장애의 전 범위 미검증 |
+| OEM 호출 계약·터치 공존 | ARM veneer/encoder 합성 시험. 순정 커널에서 AA 후크와 터치 DSO 동시 로드. 원본 manager의 자동 LDS→native send와 OBSERVE/SCRUB 실행 | 정상 폰 연결 상태의 AA 송신·터치 입력, 수명·동시성·지연 장애의 전 범위 미검증 |
 | 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. 원본 VBS callback과 AA 수신을 합성 입력으로 실행. journal·종료·회수 회귀 | 물리 센서 callback과 주행 전체의 누락·부하·로그 보관량 미검증 |
 | 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음 |
 | 적분 시간·신선도 | receipt와 producer 시각 분리, MODEL이 qualified로 승격되지 않는 검사 | 현재 IPC payload에는 생산자 시각/순번이 없음. 검증된 지연 상한 등 대체 근거도 없음 |
 | 위치 계산·재획득 | 코어·정차 보정·GPS holdout·wheel 보정 합성 시험 | 실제 경로·독립 기준 위치 비교 없음. GPS holdout 차이를 ground truth로 세지 않음 |
 | 요청 출처·ASSIST 실행 | adapter의 출처/epoch 검사와 qualified 파이프라인은 합성 입력으로 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 실제 요청 연계와 자격 입력은 미구현 |
-| 휴대폰·앱 수용 | OEM LOCATION 전달 경로의 정적 근거 | Galaxy S25·동글·네이버 지도에서 위치가 반영되는 실행 증거 없음 |
+| 휴대폰·앱 수용 | OEM LOCATION 경로의 정적 근거와 VM의 실제 native API 호출. 폰 없이도 send=0을 반환함 | Galaxy S25·동글·네이버 지도에서 위치가 반영되는 실행 증거 없음 |
 | 다음 부팅과 장애 복구 | 일회 소비 가드·설치 중단 회귀. 실제 SM에서 명시적 재시작과 지연 SIGKILL 뒤 보드 재부팅 요청 관찰 | 다른 실패 경로와 물리 watchdog·전원 차단·다음 부팅의 복구는 미검증 |
 | 기존 설정 보존 | touch 설정 편집/제거 roundtrip, 무관한 파일을 변경하지 않는 설치기 | 기존 터치와 km/L의 실제 화면·입력 결과 미검증 |
 | 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 다섯 ARM 바이너리, ZIP manifest/source commit. v0.3.1-shadow.1 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |

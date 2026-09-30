@@ -59,6 +59,13 @@ AA용 API에 원본 BLM callback을 전달하여 실제 큐·위치 worker·Requ
 0을 반환하며 서비스에는 미시작 세션의 요청 거절이 기록됐습니다. 위치 요청과
 송신을 연결한 전체 경로는 아니며 원본 정리 오류도 남아 있습니다.
 
+[후속 원본 AA manager 시험](../validation/AA_PIPELINE_2026-09-30.md)에서는
+원본 시작 API가 만든 스레드의 자동 LDS 요청부터 큐·위치 worker·실제 하위
+send까지 연결했습니다. 원본 LDS의 mode 0 응답과 명시한 합성 위치를 구분하여
+캐시 재송신을 재현했고, 기존 OBSERVE/SCRUB의 native 바이트 전달을 검사했습니다.
+정지 뒤 추가 스레드 소멸·큐 종료도 확인했습니다. 정상 폰 연결 사건·폰 수용,
+오류 없는 세션 정리와 요청 identity의 제품 연결은 여전히 남아 있습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
@@ -117,9 +124,9 @@ USB 설치 경로를 수정했다. 기존 `v0.3.0-shadow.1`의 MP3 진입 파일
 
 | 항목 | 현재 근거와 한계 |
 | --- | --- |
-| 차량 위치 → AA | 해당 펌웨어 정적 분석으로 LOCATION 전달 경로 확인. 실제 휴대폰 수용은 미검증 |
+| 차량 위치 → AA | 해당 펌웨어 정적 분석과 원본 manager의 자동 LDS→native send VM 실행. 물리 센서·실제 휴대폰 수용은 미검증 |
 | 순정 DR | NNG의 mode=3 출력과 AA 통과 경로 존재. SD·프로파일·센서·지역 밖 조건에서 활성화되는지는 별도 문제 |
-| mode=0 캐시 | 이전 좌표와 속도·방향이 재송신될 수 있음. 현재 OBSERVE/SCRUB은 순정 timestamp(분석 대상에서 0)를 보존. 미활성 ASSIST encoder의 DERIVED timestamp는 별도 wire-clock 검증 대상 |
+| mode=0 캐시 | 원본 자동 경로 VM에서 이전 좌표·속도·방향의 재송신을 확인. OBSERVE/SCRUB은 native 구조체의 기존 timestamp를 보존. 이후 protocol wire timestamp·미활성 ASSIST의 DERIVED 시각은 별도 검증 대상 |
 | 상위 후크 → send | 해당 바이너리에서 RequestSendPosition → OrderSendVehicleData → 하위 send 동기 호출 근거 확보. LDS callback→worker 큐 경계를 TLS가 넘는다는 뜻 아님 |
 | SMDB yaw | 평균값만 보존되고 원래 count/timestamp 전달이 손실됨. poll 시각으로 생산 시각을 대체할 수 없음 |
 | 센서 보정 | yaw 부호·bias, 속도 품질, 후진·정지·지연 계약 미검증 |
