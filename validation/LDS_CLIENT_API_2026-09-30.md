@@ -5,6 +5,9 @@
 작성한 callback의 결과와 fixture 종료를 검사했습니다. 제품 코드·설치물·
 공개 ZIP은 변경하지 않았으며, ASSIST 연결이나 차량 검증의 완료가 아닙니다.
 
+후속 r4–r6의 연결 종료·지연·AA용 util 실행과 실패는
+[별도 기록](LDS_CLIENT_LIFECYCLE_2026-09-30.md)을 따릅니다.
+
 Claude가 별도로 수행한 [LDS 비동기 내부 관찰](LDS_ASYNC_2026-09-30.md)의
 `88ea87d`와 범위를 보정한 `e5d87c1`을 확인했습니다. 이 기록은 Codex가 직접
 수행한 별도 실행입니다. 아래 시험은 userspace debugger 없이 API와 작성한

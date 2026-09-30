@@ -41,6 +41,12 @@ userspace debugger 없이 64건 동시 대기의 userdata callback, 버스 부�
 실패, 제공자 부재의 실제 ServiceUnknown callback을 확인했습니다. data client를
 직접 호출한 결과이며 제품 BLM의 util 계층·정리 hook·ASSIST 연결 검증은 아닙니다.
 
+[후속 연결·지연·AA용 util 실행](../validation/LDS_CLIENT_LIFECYCLE_2026-09-30.md)에서는
+원본 AA용 공개 요청 함수까지 실행했습니다. 제공자 종료 후 util callback의 NULL
+error·mode 0, 45초 넘게 대기한 요청의 제공자 재개 후 완료, free/recreate의 주소
+재사용을 확인했습니다. 동일 객체·이름의 재연결은 실패했고 원인은 미분리입니다.
+BLM callback·worker·송신과 실제 요청 출처의 제품 연결은 여전히 남아 있습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
