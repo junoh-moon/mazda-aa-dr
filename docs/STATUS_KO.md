@@ -199,6 +199,14 @@ MODEL의 버스 경계 초기화와 provider/receiver 자격은 미완료이고,
 MODEL은 invalid, 일반 분석은 inconclusive입니다. 상세 host/ARM 결과와
 초기 실패는 새 기록을 따릅니다. 기존 MODEL 결과 의미 검사 공백은 별도
 TODO이며 provider/receiver 자격·실차·폰 검증과 공개 ZIP 갱신은 미완료입니다.
+
+[MODEL 결과 의미 검토](../validation/MODEL_RESULT_REVIEW_2026-09-30.md)에서는
+위 분석기 공백을 수정했습니다. 실제 계산기 경계 출력과 세 독립 리뷰,
+host Python 330개 및 C/C++·고정 ARM journal 검사를 완료했습니다.
+기존 host/ARM worker 46개와 원본 VM journal 5개의 전체 분석 보고서는 동일합니다.
+새 원본 VM 실행이나 유효 GPS 검증은 아닙니다. 별도 generation 소진 후 fault의
+유효성 재노출은 독립 재현된 미구현 TODO로 남겼습니다. 외부 Claude 브랜치의
+cb65fd5 병합도 확인했습니다. ASSIST와 공개 ZIP은 변경하지 않았습니다.
 같은 기록에서 클로드의 후속 원본 SM·SYSTEM·USB 관리자 기동 조사도
 별도 커밋으로 확인했습니다. 외부 실행과 직접 실행을 구분합니다.
 

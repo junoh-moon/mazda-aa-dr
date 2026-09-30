@@ -23,6 +23,12 @@ CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT"}
 REASONS = ("PASS", "NO_CONTEXT", "NESTED_CALL", "EXTRA_LOCATION", "BAD_LENGTH",
            "DISABLED", "LOCK_BUSY", "NOT_UNKNOWN", "NOT_READY", "EPOCH_MISMATCH",
            "EXPIRED", "BAD_ENCODING", "BAD_PROVENANCE")
+# get_snapshot/Pipeline::diagnostic return these query results, not step()
+# results such as DUPLICATE. Pipeline status is a separate last-operation value.
+SHADOW_RESULTS = ("OK", "E_CONFIG", "E_NO_SEED", "E_CONTEXT", "E_QUALITY",
+                  "E_TIME", "E_LIMIT", "E_STALE")
+SHADOW_PIPELINES = ("OK", "WAITING", "BAD_INPUT", "LATE", "CLOCK_RESET",
+                    "SOURCE_RESET", "OVERFLOW", "MISSING_SENSOR", "CORE_REJECTED", "NO_ANCHOR")
 LIMITATIONS = [
     "Only recorded local byte invariants are checked; no complete vehicle-session proof.",
     "Lower send result is not phone receipt, app adoption, or navigation success.",
@@ -768,6 +774,8 @@ class Auditor:
         self.session["last_diagnostic_ns"] = max(self.session["last_diagnostic_ns"], row["mono_ns"])
         if not self.wheel_scale_pair(row, source):
             return
+        if not self.shadow_result(row, source):
+            return
         self.shadow_pipelines[row['pipeline']] += 1
         self.shadow_results[row['result']] += 1
         self.shadow_states[str(row['state'])] += 1
@@ -782,14 +790,55 @@ class Auditor:
             if row[counter] > self.session['shadow_' + counter]:
                 self.issue('shadow_' + counter, source, 'Observed model input fault counter increased')
             self.session['shadow_' + counter] = row[counter]
-        for key in ("lat", "lon", "heading_rad", "speed_mps", "error_model_m"):
-            if key not in row or (row[key] is not None and type(row[key]) not in (int, float)):
-                self.issue("partial_record", source, "Invalid SHADOW numeric field: " + key)
         preview = row["location_preview_hex"]
         if (row["preview_encoded"] and (not row['model_valid'] or
                 not re.fullmatch(r"[0-9a-fA-F]{96}", preview))) or (
                 not row["preview_encoded"] and preview != ""):
                 self.issue("invalid_shadow_preview", source, "Preview must match encoded flag and 48-byte shape")
+
+    def shadow_result(self, row, source):
+        """Check producer implications without treating an ACTIVE state as valid."""
+        if row['result'] not in SHADOW_RESULTS or row['pipeline'] not in SHADOW_PIPELINES:
+            self.issue('partial_record', source, 'Unknown MODEL query result or pipeline status')
+            return False
+        numeric = ('lat', 'lon', 'heading_rad', 'speed_mps', 'error_model_m')
+        for key in numeric:
+            # json_number emits finite binary64 numbers or null. In particular,
+            # a Python integer is not automatically representable as a double.
+            if key not in row or (row[key] is not None and not bounded_number(
+                    row[key], -sys.float_info.max, sys.float_info.max)):
+                self.issue('partial_record', source, 'Invalid SHADOW numeric field: ' + key)
+                return False
+        contradiction = row['model_valid'] != (row['result'] == 'OK')
+        if row['result'] in ('E_TIME', 'E_STALE', 'E_LIMIT'):
+            contradiction |= row['state'] != 2 or not row['frontier_ns']
+        if row['result'] == 'E_STALE':
+            contradiction |= row['frontier_ns'] > row['mono_ns']
+        if row['result'] == 'E_CONFIG':
+            contradiction |= row['state'] != 0
+        # All supported core configurations cap query age at 150 ms. E_LIMIT
+        # also follows the stale check; E_STALE may instead be an expired lease.
+        if row['result'] in ('OK', 'E_LIMIT'):
+            contradiction |= not 0 <= row['mono_ns'] - row['frontier_ns'] <= 150000000
+        if row['model_valid']:
+            contradiction |= (row['state'] != 2 or not 0 < row['frontier_ns'] <= row['mono_ns'] or
+                              not row['events'] or not row['intervals'])
+            # Invalid snapshots may retain earlier values, or an error estimate
+            # above the configured limit. These solution bounds apply only to OK.
+            contradiction |= (not bounded_number(row['lat'], -85, 85) or
+                              row['lat'] in (-85, 85) or
+                              not bounded_number(row['lon'], -180, 180) or
+                              not bounded_number(row['heading_rad'], 0, 2*math.pi) or
+                              not bounded_number(row['speed_mps'], 0, sys.float_info.max) or
+                              not bounded_number(row['error_model_m'], 0, 100) or
+                              (row['stopped'] and row['speed_mps'] != 0))
+            # wrap(-tiny) and lon_wrap can round to exactly +2*pi / +180;
+            # both are actual finite producer outputs, not malformed JSON.
+        if contradiction:
+            self.issue('shadow_result_inconsistent', source,
+                       'MODEL validity contradicts its query result, state, time or numeric solution', True)
+            return False
+        return True
 
     def model_diagnostic(self, row, source):
         """Check the shared envelope without hiding qualification violations."""

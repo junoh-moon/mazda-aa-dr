@@ -2,7 +2,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
-from test_motion_logs import shadow
+from test_motion_logs import shadow, valid_shadow
 
 spec = importlib.util.spec_from_file_location('model_session_audit',
         Path(__file__).resolve().parents[2] / 'tools/analyze_logs.py')
@@ -138,13 +138,13 @@ class ModelSessionLog(unittest.TestCase):
     def test_model_frontier_cannot_precede_its_session_or_follow_capture(self):
         # All rows carry matching epoch/revision. Identity alone cannot make
         # an old estimate or a future integration frontier valid evidence.
-        base = shadow()
+        base = valid_shadow()
         base.update(model_valid=True, mono_ns=200, frontier_ns=150,
                     model_session_epoch=1, session_revision=3)
         for changes in ({'frontier_ns': 90}, {'frontier_ns': 0},
                         {'mono_ns': 50, 'frontier_ns': 40}, {'frontier_ns': 300},
-                        {'model_valid': False, 'mono_ns': 50, 'frontier_ns': 0},
-                        {'model_valid': False, 'frontier_ns': 300}):
+                        {'model_valid': False, 'result': 'E_NO_SEED', 'mono_ns': 50, 'frontier_ns': 0},
+                        {'model_valid': False, 'result': 'E_TIME', 'frontier_ns': 300}):
             with self.subTest(changes=changes):
                 a = self.auditor()
                 a.consume(marker(), 'initial')
@@ -153,7 +153,7 @@ class ModelSessionLog(unittest.TestCase):
                 self.assertEqual(len(found), 1)
                 self.assertEqual(found[0]['severity'], 'violation')
         for changes in ({}, {'mono_ns': 100, 'frontier_ns': 100},
-                        {'frontier_ns': 200}, {'model_valid': False, 'frontier_ns': 0}):
+                        {'frontier_ns': 200}, {'model_valid': False, 'result': 'E_NO_SEED', 'frontier_ns': 0}):
             with self.subTest(valid=changes):
                 a = self.auditor()
                 a.consume(marker(), 'initial')
