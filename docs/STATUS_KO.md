@@ -136,6 +136,13 @@ consumer/producer 잠금이 겹치면 기록을 버리는 경로를 재현·제�
 과거 실패의 정확한 busy/full 원인은 미확정이며 물리 센서·폰 검증을 대신하지 않습니다.
 공개 ZIP은 변경하지 않았습니다.
 
+[독립 세션 진단 검토·직접 재실행](../validation/SESSION_DIAGNOSTIC_REVIEW_2026-09-30.md)에서는
+원격 작성 probe·상태 조회 회귀를 검토하여 통합했습니다. NULL 상태·필수 작업
+누락·종료 표식 순서의 판정 오류와 callback 검사의 결손을 고쳤습니다.
+직접 실행한 원본 VM 두 번에서도 API 반환 0과 INVALID callback의 차이를
+확인했습니다. 원본 큐·LDS·제품 request hook을 실행하는 시험은 아니며,
+제품 세션 자격 연결과 ASSIST는 여전히 미구현 또는 비활성입니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

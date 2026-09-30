@@ -47,6 +47,8 @@ $(BUILD)/test_request_observer: src/runtime/request_trace.cpp src/runtime/reques
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_request_handoff: tests/runtime/test_request_handoff.cpp src/runtime/request_trace.cpp src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
+$(BUILD)/test_request_status: tests/runtime/test_request_status.cpp src/runtime/request_trace.cpp src/runtime/request_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
 $(BUILD)/test_journal_queue: tests/runtime/test_journal_queue.cpp src/runtime/journal_queue.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
 $(BUILD)/test_journal: $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/motion_batch.h tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
@@ -68,11 +70,12 @@ $(BUILD)/test_cold_patch: tests/adapter/cold_patch_test.cpp src/adapter/cold_pat
 test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	$(BUILD)/test_cold_patch
-test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
 	$(BUILD)/test_request_observer
 	$(BUILD)/test_request_handoff
+	$(BUILD)/test_request_status
 	$(BUILD)/test_journal_queue
 	$(BUILD)/test_journal
 test-journal-boundaries:
