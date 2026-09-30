@@ -142,6 +142,12 @@ free/resume 20회를 완료했고 전후 제어·위치 조회도 응답했습�
 첫 실행에서 별도 journal 큐 drop 1건으로 MODEL이 중단됐습니다. 같은 이미지의
 후속 성공으로 이를 닫지 않았으며 journal 누락 원인 분리는 다음 작업입니다.
 
+[동시 상태 조회 추가 회귀](../validation/REQUEST_STATUS_POLL_2026-09-30.md)는
+원격 잠금 분리를 반영한 뒤 두 조회 스레드와 2,000개 요청 주기를 검사했습니다.
+host·고정 ARM·원본 libc/C++ runtime에서 통과했고, 수정 전 native/ARM은 같은
+검사에서 손실로 실패했습니다. 전체 host/ARM와 sanitizer도 통과했습니다.
+추가 도구는 제거했으며, 별도 journal 누락·실차·폰 검증은 계속 미완료입니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

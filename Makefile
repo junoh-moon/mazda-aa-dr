@@ -43,6 +43,8 @@ $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUI
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
 $(BUILD)/test_request_trace: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_trace.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_trace.cpp -pthread -o $@
+$(BUILD)/test_request_status: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_status.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
 $(BUILD)/test_request_observer: src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/request_observer.cpp src/runtime/request_observer.h tests/runtime/test_request_observer.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_request_handoff: tests/runtime/test_request_handoff.cpp src/runtime/request_trace.cpp src/runtime/request_trace.h | $(BUILD)
@@ -66,9 +68,10 @@ $(BUILD)/test_cold_patch: tests/adapter/cold_patch_test.cpp src/adapter/cold_pat
 test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	$(BUILD)/test_cold_patch
-test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal test-request-publication
+test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal test-request-publication
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
+	$(BUILD)/test_request_status
 	$(BUILD)/test_request_observer
 	$(BUILD)/test_request_handoff
 	$(BUILD)/test_journal
