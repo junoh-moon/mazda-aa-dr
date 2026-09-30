@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "runtime/request_trace.h"
 
 namespace mx5 { namespace adapter {
 
@@ -48,6 +49,9 @@ struct Observation {
     uint64_t mono_ns;
     PositionInput position;
     Provenance provenance;
+    // Observation only; successful association grants no ASSIST qualification.
+    runtime::request_trace::Result request_result;
+    runtime::request_trace::Trace request_trace;
     bool has_payload;
     uint8_t original[48], outgoing[48];
 };
@@ -58,6 +62,8 @@ typedef void (*ObservationSink)(const Observation*, void* user);
 typedef uint64_t (*MonotonicClock)(void* user);
 typedef bool (*ProvenanceReader)(void* manager, const PositionInput*,
                                  Provenance*, void* user);
+typedef runtime::request_trace::Result (*RequestReader)(const void* oem_position,
+                                  runtime::request_trace::Trace*, void* user);
 struct Options {
     ObservationSink sink;
     MonotonicClock clock;
@@ -65,6 +71,7 @@ struct Options {
     void* user;
     uint64_t max_snapshot_age_ns;
     bool allow_assist; // Explicit verified deployment gate, false by default.
+    RequestReader request_reader; // Optional live raw-pointer association.
 };
 
 // Initialization only: before installation / before OEM producers start.

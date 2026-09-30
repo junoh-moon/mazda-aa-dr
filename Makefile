@@ -42,6 +42,8 @@ $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUI
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
 $(BUILD)/test_request_trace: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_trace.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_trace.cpp -pthread -o $@
+$(BUILD)/test_request_observer: src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/request_observer.cpp src/runtime/request_observer.h tests/runtime/test_request_observer.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_journal: $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/motion_batch.h tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
@@ -57,10 +59,11 @@ test-core: $(BUILD)/test_core $(BUILD)/replay
 	$(BUILD)/test_core
 	$(PYTHON) tests/core/test_replay.py $(BUILD)/replay
 test-adapter: $(BUILD)/test_adapter
-	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend; do $(BUILD)/test_adapter $$case; done
-test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_journal
+	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
+test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_journal
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
+	$(BUILD)/test_request_observer
 	$(BUILD)/test_journal
 test-packaging: $(BUILD)/test_collector
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/packaging -v
@@ -156,6 +159,7 @@ $(BUILD)/test_shadow_log: tests/runtime/test_shadow_log.cpp src/runtime/shadow_l
 
 $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: $(NAV_HEADERS)
 $(BUILD)/test_journal $(BUILD)/arm/src/runtime/runtime.o: src/runtime/shadow_log.h
+$(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/adapter.h src/runtime/request_trace.h
 $(BUILD)/arm/src/navigation/pipeline.o $(BUILD)/arm/src/navigation/holdout.o $(BUILD)/arm/src/runtime/runtime.o: $(NAV_HEADERS)
 
 $(BUILD)/test_gps_wheel: tests/navigation/test_gps_wheel.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o

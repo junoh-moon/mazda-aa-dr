@@ -15,6 +15,16 @@ static VehicleData* original_wrapper;
 static bool expect_original, publish_on_position;
 static Observation last_event;
 static int next_expected_errno = 17;
+namespace R = mx5::runtime::request_trace;
+static const void* expected_position;
+static R::Result trace_result=R::OK;
+static unsigned trace_reads;
+static R::Result request_reader(const void* position, R::Trace* out, void*) {
+    assert(position==expected_position);++trace_reads;
+    *out=R::Trace();out->request.id=43;out->worker.id=51;
+    out->reply.type=2;out->reply.type_known=true;
+    errno=EBUSY;return trace_result;
+}
 static DrSnapshot fixture() {
     DrSnapshot s = DrSnapshot();
     s.source_epoch = 11; s.session_epoch = 12;
@@ -62,6 +72,9 @@ int main(int argc,char** argv) {
     assert(argc==2);
     Options o = Options();o.sink=sink;o.clock=clock_fn;o.provenance=provenance;
     o.allow_assist=true;o.max_snapshot_age_ns=150000000;
+    if (!std::strcmp(argv[1],"request")) {
+        o.request_reader=request_reader;o.provenance=0;o.allow_assist=false;
+    }
     assert(configure(fake_next,o));
     assert(!configure(fake_next,o));
     static uint32_t session_handle=0xabcdef; expected_session=&session_handle;
@@ -118,6 +131,21 @@ int main(int argc,char** argv) {
         s=fixture();s.speed_mps=-1;assert(!encode_location(s,b));
         s=fixture();s.speed_mps=1e20;assert(!encode_location(s,b));
         s=fixture();s.longitude_deg=180;assert(encode_location(s,b));assert(int32_t(get32(b+12))==-1800000000);
+    } else if (!std::strcmp(test,"request")) {
+        expected_position=position;errno=17;
+        assert(!set_mode(ASSIST));
+        position_enter(0,position);assert(errno==17 && trace_reads==1);
+        assert(last_event.request_result==R::OK && last_event.request_trace.request.id==43);
+        assert(!last_event.provenance.exact_request);
+        run_send(data,true);position_leave();
+        assert(last_event.request_trace.request.id==43 && last_event.request_trace.worker.id==51);
+        assert(last_event.request_trace.reply.type==2 && last_event.choice==ORIGINAL);
+        run_send(data,true);
+        assert(last_event.request_result==R::NOT_FOUND && !last_event.request_trace.request.id);
+        trace_result=R::STALE;
+        position_enter(0,position);run_send(data,true);position_leave();
+        assert(last_event.request_result==R::STALE && !last_event.request_trace.request.id);
+        assert(!std::memcmp(sent,payload,48) && trace_reads==2);
     } else if (!std::strcmp(test,"backend")) {
         InstallOptions io = InstallOptions();
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__

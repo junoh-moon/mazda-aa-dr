@@ -20,6 +20,8 @@ struct Context {
     uint32_t sequence, generation, location_count;
     int32_t original_mode;
     Provenance provenance;
+    runtime::request_trace::Result request_result;
+    runtime::request_trace::Trace request_trace;
     bool decoded;
 };
 struct ThreadState { uint32_t depth, send_depth; Context frames[8]; };
@@ -164,6 +166,13 @@ void position_enter(void* manager, const void* input) {
     std::memset(&ctx, 0, sizeof ctx);
     Observation event = Observation();
     event.kind = Observation::POSITION;
+    ctx.request_result = runtime::request_trace::NOT_FOUND;
+    if (options.request_reader)
+        ctx.request_result = options.request_reader(input, &ctx.request_trace, options.user);
+    if (ctx.request_result != runtime::request_trace::OK)
+        ctx.request_trace = runtime::request_trace::Trace();
+    event.request_result = ctx.request_result;
+    event.request_trace = ctx.request_trace;
     ctx.sequence = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     ctx.decoded = decode_position(input, &event.position);
     ctx.original_mode = ctx.decoded ? event.position.mode : -1;
@@ -196,11 +205,13 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     const bool reentrant = tls.send_depth > 1;
     Observation event = Observation();
     event.kind = Observation::SEND; event.original_mode = -1;
+    event.request_result = runtime::request_trace::NOT_FOUND;
     event.choice = ORIGINAL; event.reason = NO_CONTEXT;
     Context* ctx = context();
     if (ctx) {
         event.call_sequence = ctx->sequence; event.original_mode = ctx->original_mode;
         event.prediction_generation = ctx->generation; event.provenance = ctx->provenance;
+        event.request_result = ctx->request_result; event.request_trace = ctx->request_trace;
     }
     uint8_t replacement[48];
     VehicleData local = VehicleData();

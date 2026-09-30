@@ -72,6 +72,13 @@ send까지 연결했습니다. 원본 LDS의 mode 0 응답과 명시한 합성 �
 전체 애플리케이션 정리는 미해결입니다. 500ms 대기와 StopSession 선행 호출도
 이 진단 조건에서 정리 오류를 없애지 못했습니다.
 
+[실제 요청 관측 연결](../validation/REQUEST_LINK_2026-09-30.md)은 새 Observer와
+adapter의 관측 전달을 원본 요청→reply→BLM worker→native send에 연결한
+비공개 fixture입니다. 정상/제공자 부재 응답과 네 요청 동시 대기를 검사했고,
+util에서 사라지는 ServiceUnknown도 보존했습니다. 제품 cold-install·journal
+연결, 실제 취소/예외 경계와 receiver/session·센서 자격은 아직 미구현 또는
+미검증입니다. 생산 runtime의 request reader와 ASSIST는 활성화하지 않았습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

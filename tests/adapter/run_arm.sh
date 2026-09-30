@@ -23,7 +23,7 @@ fi
     src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S \
     tests/adapter/veneer_arm_test.cpp tests/adapter/veneer_arm_fixture.S \
     -ldl -o "$build/veneer-test"
-for test in observe scrub native malformed nested assist epoch reacquire expiry encoder backend; do
+for test in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do
     qemu-arm -L "$sysroot" "$build/adapter-test" "$test"
 done
 qemu-arm -L "$sysroot" "$build/veneer-test"

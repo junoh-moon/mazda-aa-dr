@@ -52,6 +52,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   [후크 없는 원본 정리 비교](../validation/AA_CLEANUP_BASELINE_2026-09-30.md)에서는
   같은 mutex 오류가 제품 후크 없이도 발생함을 확인했습니다. 세션 재생성·task
   복귀의 근거이며 오류 없는 전체 종료나 누수 부재의 증명은 아닙니다.
+  [실제 요청 관측 연결](../validation/REQUEST_LINK_2026-09-30.md)은 원본
+  요청/reply와 worker를 연결하고 위치/send까지 metadata를 보존한 비공개
+  fixture 검사입니다. 제품 cold-install·journal, 실제 취소/예외 경계와
+  receiver/session·센서 자격이 남아 있어 ASSIST 연결 완료로 세지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
