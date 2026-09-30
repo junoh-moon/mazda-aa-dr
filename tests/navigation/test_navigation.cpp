@@ -23,8 +23,8 @@ static adapter::Observation pos(unsigned ms,int mode,unsigned seq) {
     o.position.heading_deg=0; o.position.velocity_kmh=36;
     return o;
 }
-static void init(Pipeline& p) {
-    mx5_dr_context x={1,1,1};
+static void init(Pipeline& p,uint64_t generation=1) {
+    mx5_dr_context x={1,1,generation};
     CHECK(p.init_model(research_model_profile(),mx5_dr_default_config(),x));
 }
 static void feed(Pipeline& p,unsigned ms,unsigned seq,unsigned speed=13600,unsigned yaw=2047) {
@@ -33,8 +33,8 @@ static void feed(Pipeline& p,unsigned ms,unsigned seq,unsigned speed=13600,unsig
     PipelineResult r=p.enqueue_raw(y);
     CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
 }
-static void seeded(Pipeline& p,int direction=0,unsigned speed=13600,unsigned yaw=2047) {
-    init(p); RawEvent r=raw(REVERSE,0,1); r.reverse=direction;
+static void seeded(Pipeline& p,int direction=0,unsigned speed=13600,unsigned yaw=2047,uint64_t generation=1) {
+    init(p,generation); RawEvent r=raw(REVERSE,0,1); r.reverse=direction;
     CHECK(p.enqueue_raw(r)==PIPELINE_OK);
     feed(p,0,1,speed,yaw); CHECK(p.enqueue_position(pos(0,1,1))==PIPELINE_OK);
     r=raw(REVERSE,100,2); r.reverse=direction; CHECK(p.enqueue_raw(r)==PIPELINE_OK);
@@ -306,6 +306,136 @@ static void qualified() {
     CHECK(overlap.enqueue_yaw(evidence(2,2,150),0,2047,1,T(50),T(150))==PIPELINE_BAD_INPUT);
     CHECK(!overlap.diagnostic(T(150)).snapshot.valid);
 }
-int main() { model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
-    rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();
+static void exhausted_model() {
+    Pipeline p;seeded(p,0,13600,2047,UINT64_MAX-1);
+    const Diagnostic before=p.diagnostic(T(300));
+    CHECK(before.snapshot.model_valid);CHECK(before.result==MX5_DR_OK);
+    CHECK(p.context().generation==UINT64_MAX);
+    uint8_t preview[48];CHECK(runtime::encode_model_location_preview(before.snapshot,preview));
+    RawEvent bad=raw(YAW,310,5);bad.count=0;
+    CHECK(p.enqueue_raw(bad)==PIPELINE_BAD_INPUT);
+    const Diagnostic after=p.diagnostic(T(310));
+    std::printf("terminal MODEL: before_valid=%d after_valid=%d result=%s pipeline=%s\n",
+                before.snapshot.model_valid,after.snapshot.model_valid,mx5_dr_result_name(after.result),
+                pipeline_result_name(after.status.result));std::fflush(stdout);
+    CHECK(!after.snapshot.model_valid&&!after.snapshot.valid);
+    CHECK(!runtime::encode_model_location_preview(after.snapshot,preview));
+    CHECK(p.context().generation==UINT64_MAX);
+    CHECK(after.status.resets==before.status.resets+1&&after.status.rejected==before.status.rejected+1);
+    CHECK(!after.status.have_speed&&!after.status.have_yaw&&!after.status.have_reverse);
+    CHECK(p.drain(T(310))==PIPELINE_BAD_INPUT);
+    CHECK(p.enqueue_raw(raw(WHEELS,320,6))==PIPELINE_BAD_INPUT);
+    mx5_dr_context fresh={1,1,1};p.reset(fresh);
+    CHECK(p.context().generation==UINT64_MAX); // reset cannot re-enable a terminal Pipeline.
+    CHECK(!p.restart_model_prediction(fresh));
+    CHECK(!p.diagnostic(T(320)).snapshot.model_valid);
+    seeded(p);CHECK(p.diagnostic(T(300)).snapshot.model_valid); // Explicit init can recover.
+}
+static void seed_qualified(Pipeline& p,uint64_t generation) {
+    mx5_dr_context x={1,1,generation};CHECK(p.init_qualified(mx5_dr_default_config(),x));
+    mx5_dr_anchor a=mx5_dr_anchor();a.context=x;a.anchor_id=a.position_seq=1;
+    a.measured_ns=T(0);a.utc_ns=1700000000000000000ULL;
+    a.latitude_deg=35;a.longitude_deg=135;a.position_error_m=1;
+    a.validated=a.heading_valid=a.calibration_verified=1;a.quality=MX5_DR_VALID;
+    CHECK(p.enqueue_anchor(a,T(0))==PIPELINE_OK);
+    CHECK(p.enqueue_speed(evidence(1,1,0),10)==PIPELINE_OK);
+    CHECK(p.enqueue_reverse(evidence(3,1,0),0)==PIPELINE_OK);
+    CHECK(p.enqueue_yaw(evidence(2,1,100),0,2047,1,T(0),T(100))==PIPELINE_OK);
+    CHECK(p.enqueue_position(pos(10,0,2))==PIPELINE_OK);
+    CHECK(p.drain(T(100))==PIPELINE_OK);
+    CHECK(p.diagnostic(T(100)).snapshot.valid);
+}
+static void qualified_coverage(Pipeline& p) {
+    CHECK(p.enqueue_speed(evidence(1,2,100),10)==PIPELINE_OK);
+    CHECK(p.enqueue_reverse(evidence(3,2,100),0)==PIPELINE_OK);
+    CHECK(p.enqueue_yaw(evidence(2,2,200),0,2047,1,T(100),T(200))==PIPELINE_OK);
+}
+static void exhausted_qualified(unsigned trigger) {
+    Pipeline p;seed_qualified(p,UINT64_MAX-1);
+    CHECK(p.context().generation==UINT64_MAX);
+    const Diagnostic before=p.diagnostic(T(100));
+    runtime::CoreBridgeQualification q=runtime::CoreBridgeQualification();
+    q.expected_context=before.snapshot.context;q.now_mono_ns=T(110);q.max_snapshot_age_ns=150000000;
+    q.limits_verified_until_mono_ns=T(110);q.duration_max_s=60;q.distance_max_m=1500;q.error_max_m=100;
+    q.profile_verified=q.input_quality_verified=true;
+    adapter::DrSnapshot out=adapter::DrSnapshot();
+    CHECK(before.result==MX5_DR_OK&&before.snapshot.valid);
+    // The core can calculate here, but the wire format cannot represent a
+    // generation above UINT32_MAX. This is not an ASSIST-ready baseline.
+    CHECK(p.qualified_snapshot(T(110),q,&out)==runtime::CORE_BRIDGE_OVERFLOW&&!out.ready);
+    if(trigger==0) {
+        CHECK(p.enqueue_yaw(evidence(2,2,110),0,2047,1,T(110),T(110))==PIPELINE_BAD_INPUT);
+    } else {
+        if(trigger==2) qualified_coverage(p); // Reach the position event's control call.
+        // Without coverage, drain first revokes via control(DISABLE). A reset
+        // there must not underflow the queue that drain is about to consume.
+        CHECK(p.enqueue_position(pos(110,3,3))==PIPELINE_OK);
+        const PipelineResult result=p.drain(T(110));
+        std::printf("terminal qualified trigger=%u drain=%s\n",trigger,pipeline_result_name(result));std::fflush(stdout);
+        CHECK(result==PIPELINE_BAD_INPUT);
+    }
+    const Diagnostic after=p.diagnostic(T(110));
+    CHECK(!after.snapshot.valid&&!after.snapshot.model_valid&&after.result!=MX5_DR_OK);
+    CHECK(after.snapshot.state==MX5_DR_UNSEEDED&&after.snapshot.frontier_ns==0);
+    CHECK(!after.status.have_speed&&!after.status.have_yaw&&!after.status.have_reverse);
+    CHECK(after.status.resets==before.status.resets+1&&after.status.rejected==before.status.rejected+1);
+    CHECK(p.qualified_snapshot(T(110),q,&out)==runtime::CORE_BRIDGE_UNQUALIFIED&&!out.ready);
+    CHECK(p.context().generation==UINT64_MAX);
+    CHECK(p.drain(T(120))==PIPELINE_BAD_INPUT);
+    mx5_dr_context fresh={1,1,1};p.reset(fresh);
+    CHECK(p.context().generation==UINT64_MAX);
+    CHECK(p.enqueue_speed(evidence(1,3,120),10)==PIPELINE_BAD_INPUT);
+    CHECK(!p.diagnostic(T(120)).snapshot.valid);
+    seed_qualified(p,1); // Explicit init also restores the independent qualified API.
+}
+static void exhausted_anchor_replacement() {
+    Pipeline p;seed_qualified(p,UINT64_MAX-1);
+    qualified_coverage(p);
+    mx5_dr_anchor a=mx5_dr_anchor();a.context=p.context();a.anchor_id=2;a.position_seq=4;
+    a.measured_ns=T(110);a.utc_ns=1700000000110000000ULL;
+    a.latitude_deg=35;a.longitude_deg=135;a.position_error_m=1;
+    a.validated=a.heading_valid=a.calibration_verified=1;a.quality=MX5_DR_VALID;
+    CHECK(p.enqueue_anchor(a,T(110))==PIPELINE_OK);
+    CHECK(p.drain(T(110))==PIPELINE_BAD_INPUT);
+    const Diagnostic d=p.diagnostic(T(110));
+    CHECK(!d.snapshot.valid&&d.snapshot.state==MX5_DR_UNSEEDED);
+    CHECK(d.status.result==PIPELINE_BAD_INPUT&&d.status.resets==1);
+    CHECK(d.status.core_result==MX5_DR_E_NO_SEED);
+    CHECK(p.context().generation==UINT64_MAX);
+}
+static void exhausted_position_sequence() {
+    Pipeline p;mx5_dr_context x={1,1,1};CHECK(p.init_qualified(mx5_dr_default_config(),x));
+    mx5_dr_anchor a=mx5_dr_anchor();a.context=x;
+    a.anchor_id=a.position_seq=UINT64_MAX;a.measured_ns=T(0);
+    a.utc_ns=1700000000000000000ULL;a.latitude_deg=35;a.longitude_deg=135;
+    a.position_error_m=1;a.validated=a.heading_valid=a.calibration_verified=1;
+    a.quality=MX5_DR_VALID;
+    CHECK(p.enqueue_anchor(a,T(0))==PIPELINE_OK);
+    CHECK(p.drain(T(0))==PIPELINE_OK);
+    CHECK(p.diagnostic(T(0)).snapshot.state==MX5_DR_READY);
+    CHECK(p.enqueue_position(pos(100,3,2))==PIPELINE_OK);
+    CHECK(p.drain(T(100))==PIPELINE_BAD_INPUT);
+    const Diagnostic d=p.diagnostic(T(100));
+    CHECK(d.status.result==PIPELINE_BAD_INPUT&&d.status.resets==1);
+    CHECK(!d.snapshot.valid&&d.snapshot.state==MX5_DR_UNSEEDED&&d.snapshot.frontier_ns==0);
+    CHECK(p.context().generation==2); // A nonterminal fault advances once; it does not wrap.
+    CHECK(p.drain(T(100))==PIPELINE_OK);
+    CHECK(p.status().resets==1);
+    a.context=p.context();a.anchor_id=a.position_seq=1;a.measured_ns=T(200);
+    a.utc_ns+=200000000ULL;
+    CHECK(p.enqueue_anchor(a,T(200))==PIPELINE_OK);
+    CHECK(p.drain(T(200))==PIPELINE_OK);
+    CHECK(p.diagnostic(T(200)).snapshot.state==MX5_DR_READY);
+}
+int main(int argc,char** argv) {
+    if(argc==2&&!std::strcmp(argv[1],"exhausted_model"))exhausted_model();
+    else if(argc==2&&!std::strcmp(argv[1],"exhausted_qualified"))exhausted_qualified(0);
+    else if(argc==2&&!std::strcmp(argv[1],"exhausted_revoke"))exhausted_qualified(1);
+    else if(argc==2&&!std::strcmp(argv[1],"exhausted_position"))exhausted_qualified(2);
+    else if(argc==2&&!std::strcmp(argv[1],"exhausted_anchor"))exhausted_anchor_replacement();
+    else if(argc==2&&!std::strcmp(argv[1],"exhausted_sequence"))exhausted_position_sequence();
+    else { model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
+        rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();exhausted_model();
+        exhausted_qualified(0);exhausted_qualified(1);exhausted_qualified(2);
+        exhausted_anchor_replacement();exhausted_position_sequence(); }
     std::printf("navigation: %u checks passed\n",checks); return 0; }

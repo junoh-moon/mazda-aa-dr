@@ -120,8 +120,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   [생산자 대조·독립 검토](../validation/MODEL_RESULT_REVIEW_2026-09-30.md)에서
   실제 경계 출력, host Python 330개와 C/C++, 고정 ARM journal 범위를 확인했습니다.
   기존 host/ARM/원본 VM 로그 51개의 전체 보고서는 변경되지 않았습니다.
-- [ ] generation 소진 뒤 fault가 기존 MODEL 유효성을 다시 노출하는 별도
-  Pipeline 결함을 수정합니다. 독립 공개 API 재현이 있으며 아직 미구현입니다.
+- [x] generation 소진 뒤 fault가 기존 MODEL 유효성을 다시 노출하고,
+  위치 순번 소진 시 큐 범위를 벗어나는 Pipeline 결함을 수정했습니다.
+  [공개 API 재현·음성 대조·host/ARM 검사](../validation/PIPELINE_EXHAUSTION_2026-09-30.md)를
+  확인했습니다. 극단적 순번의 합성 시험이며 실차 검증은 아닙니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
