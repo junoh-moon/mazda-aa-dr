@@ -66,6 +66,12 @@ send까지 연결했습니다. 원본 LDS의 mode 0 응답과 명시한 합성 �
 정지 뒤 추가 스레드 소멸·큐 종료도 확인했습니다. 정상 폰 연결 사건·폰 수용,
 오류 없는 세션 정리와 요청 identity의 제품 연결은 여전히 남아 있습니다.
 
+[후크 없는 세션 정리 비교](../validation/AA_CLEANUP_BASELINE_2026-09-30.md)에서는
+제품 adapter·preload 없이도 원본 mutex destroy 오류를 재현했습니다. 같은
+프로세스의 세션 재생성과 추가 task 소멸은 확인했지만 오류 원인·영향과 정상
+전체 애플리케이션 정리는 미해결입니다. 500ms 대기와 StopSession 선행 호출도
+이 진단 조건에서 정리 오류를 없애지 못했습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
