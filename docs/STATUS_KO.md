@@ -10,8 +10,8 @@
 위치 정확도, 정상 전체 차량 기동·복구와 폰 수용은 미검증입니다.
 
 아래 조사 이력의 미구현·미검증 범위는 각 기록 시점의 상태입니다. 요청 관측은
-후속 제품 설치·journal까지 연결했으며, 최신 결과와 남은 반복 취소 timeout은
-[제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)을 따릅니다.
+후속 제품 설치·journal까지 연결했습니다. [제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)과
+[후속 반복 취소 비교](../validation/MANAGER_CANCELLATION_2026-09-30.md)를 함께 따릅니다.
 
 [후속 OEM 위치 서비스 실행](../validation/OEM_LOCATION_2026-09-30.md)에서는
 원본 LDS 제공자와 실제 위치 API 응답을 확인했습니다. mode·UTC·좌표는 모두
@@ -104,6 +104,12 @@ util에서 사라지는 ServiceUnknown도 로그에 남습니다. host/ARM 전�
 미분리입니다. 이 실패와 최종 검사의 명시적 제외 범위를 새 기록에 보존했습니다.
 관측 ID는 receiver/session·센서 자격을 만들지 않으며 live ASSIST는 꺼져 있습니다.
 공개 ZIP은 아직 기존 v0.3.1-shadow.1입니다.
+
+[후속 전체 취소·재개 실행](../validation/MANAGER_CANCELLATION_2026-09-30.md)에서는
+동일 제품 ELF로 전체 manager 경로와 취소 12건·지연 응답 4건을 끝까지
+검사했습니다. 별도 후크 유무 비교에서도 manager 실행 후 각각 요청 80건,
+free/resume 20회를 완료했고 전후 제어·위치 조회도 응답했습니다. 이전 timeout은
+재현되지 않았으며 원인 해결로 세지 않습니다. 제품 코드 변경 없이 얻은 추가 근거입니다.
 
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
