@@ -27,6 +27,10 @@ struct Context {
 struct ThreadState { uint32_t depth, send_depth; Context frames[8]; };
 // The shim must be loaded at process startup; no dynamic TLS allocation in hooks.
 static __thread ThreadState tls __attribute__((tls_model("initial-exec")));
+struct SendScope {
+    SendScope() { ++tls.send_depth; }
+    ~SendScope() { --tls.send_depth; }
+};
 static SendFunction next_send = 0;
 static Options options = Options();
 static bool configured = false; // Written before producers start, then immutable.
@@ -201,7 +205,7 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     // An unconfigured hook is never installed by install_v74().
     SendFunction next = next_send;
     if (!next) __builtin_trap();
-    ++tls.send_depth;
+    const SendScope send_scope;
     const bool reentrant = tls.send_depth > 1;
     Observation event = Observation();
     event.kind = Observation::SEND; event.original_mode = -1;
@@ -259,7 +263,6 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     event.result = result;
     if (!event.mono_ns) event.mono_ns = now();
     if (current != OFF && !reentrant) emit(event);
-    --tls.send_depth;
     errno = result_errno;
     return result;
 }
@@ -268,6 +271,25 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
 
 extern "C" void mx5_position_enter(void* m, const void* p) { mx5::adapter::position_enter(m, p); }
 extern "C" void mx5_position_leave() { mx5::adapter::position_leave(); }
+#if defined(__arm__) && !defined(__ARM_PCS_VFP)
+// The ASM caller/invoker carry EHABI unwind records; this C++ frame performs
+// scope cleanup for both C++ exceptions and deferred pthread cancellation.
+// Compile this translation unit with exceptions enabled. Do not catch an
+// OEM exception or convert cancellation into a successful OEM return.
+#if !defined(__EXCEPTIONS)
+#error "ARM adapter requires exception cleanup support"
+#endif
+extern "C" void* mx5_position_trampoline;
+extern "C" void mx5_arm_invoke(uint32_t* registers, void* target);
+extern "C" void mx5_position_call(uint32_t* registers) {
+    struct PositionScope {
+        ~PositionScope() { mx5::adapter::position_leave(); }
+    } scope;
+    mx5::adapter::position_enter(reinterpret_cast<void*>(registers[0]),
+                                 reinterpret_cast<void*>(registers[1]));
+    mx5_arm_invoke(registers, mx5_position_trampoline);
+}
+#endif
 extern "C" int32_t mx5_send_vehicle_data(void* s, mx5::adapter::VehicleData* d) {
     return mx5::adapter::send_vehicle_data(s, d);
 }

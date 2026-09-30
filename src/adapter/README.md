@@ -69,11 +69,16 @@ without retrying the original payload.
 * RequestSendPosition ELF VA `0xC7460`; first two ARM instructions are
   `push {r4, fp, lr}` and `add fp, sp, #8`. Neither relocated instruction is
   PC-relative. The generated trampoline continues at `0xC7468`.
-* The assembly veneer forwards this/input in r0/r1 and preserves r0-r3 around
-  its exit callback, avoiding an invented C++ return declaration. The examined
-  caller has no stack arguments and ignores the return value. Hard-float ABI
-  builds are rejected. Cross-boundary exceptions/unwinding are not supported
-  by this exact assembly binding and must not be introduced by callbacks.
+* The assembly veneer forwards r0-r3 through a register frame and preserves
+  the original result registers across C++ scope cleanup, avoiding an invented
+  return declaration. The examined caller has no stack arguments and ignores
+  the return value. Hard-float ABI builds are rejected. EHABI records and C++
+  cleanup propagate exceptions and deferred pthread cancellation through our
+  position/send frames. Authored ARM and exact production-DSO tests cover this
+  boundary, including a relocated trampoline. This does not repair or prove
+  unwind support in every OEM caller/body. Asynchronous cancellation and
+  longjmp across a live C++ scope are outside this contract.
+  Static exception-runtime archive symbols remain hidden in the preload.
 * BLM send relocation is `R_ARM_JUMP_SLOT` at `0xF88BC`; accepted next target is
   interface load bias + `0x1A538`. Both runtime entry prefixes are compared.
   The exact stock ELF has no GNU_RELRO segment. Only its send GOT slot changes.

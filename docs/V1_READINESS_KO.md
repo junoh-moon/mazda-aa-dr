@@ -56,6 +56,13 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   요청/reply와 worker를 연결하고 위치/send까지 metadata를 보존한 비공개
   fixture 검사입니다. 제품 cold-install·journal, 실제 취소/예외 경계와
   receiver/session·센서 자격이 남아 있어 ASSIST 연결 완료로 세지 않습니다.
+  [실제 요청 종료 시험](../validation/REQUEST_LIFECYCLE_2026-09-30.md)에서는
+  free/disconnect의 취소 12건과 새 연결의 지연 응답 네 건을 검사했습니다.
+  timeout 만료·같은 이름 재연결·userdata 정리·제품 연결은 여전히 남습니다.
+  [adapter 예외 정리 수정](../validation/ADAPTER_UNWIND_2026-09-30.md)에서는
+  기존 ARM 후크의 합성 예외 abort를 고쳤고, 실제 제품 DSO와 원본 공유
+  runtime의 작성 target에서 8개 예외/취소 사례를 통과했습니다. OEM 호출
+  체인 전체와 요청 후크의 예외 경계 완료로 세지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.

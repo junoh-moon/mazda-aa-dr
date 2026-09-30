@@ -79,6 +79,17 @@ util에서 사라지는 ServiceUnknown도 보존했습니다. 제품 cold-instal
 연결, 실제 취소/예외 경계와 receiver/session·센서 자격은 아직 미구현 또는
 미검증입니다. 생산 runtime의 request reader와 ASSIST는 활성화하지 않았습니다.
 
+[후속 실제 요청 종료 시험](../validation/REQUEST_LIFECYCLE_2026-09-30.md)에서는
+연결 free/disconnect에 따른 12건의 실제 method 정리와 관측 슬롯 회수,
+새 연결의 늦은 응답 네 건을 확인했습니다. 같은 이름의 재연결 실패,
+timeout 만료·userdata 누수 여부와 제품 설치/journal 연결은 남아 있습니다.
+
+[ARM 예외 정리 수정](../validation/ADAPTER_UNWIND_2026-09-30.md)에서는 기존
+위치 후크를 통과하는 합성 예외의 abort를 재현·수정했습니다. 실제 배포 DSO와
+원본 libc/C++ runtime VM의 작성 target에서 예외·취소 8개 사례를 통과했습니다.
+OEM 함수 전체의 unwind나 비공개 요청 후크의 모든 예외 경계까지 검증한
+것은 아닙니다. 전체 host/ARM 회귀와 네 독립 코드 리뷰 결과도 기록했습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

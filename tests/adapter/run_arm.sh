@@ -27,3 +27,10 @@ for test in observe scrub native malformed nested assist epoch reacquire expiry 
     qemu-arm -L "$sysroot" "$build/adapter-test" "$test"
 done
 qemu-arm -L "$sysroot" "$build/veneer-test"
+"${cross}g++" $flags -I src \
+    src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S \
+    tests/adapter/veneer_unwind_test.cpp tests/adapter/veneer_unwind_fixture.S \
+    -ldl -o "$build/veneer-unwind-test"
+for case in throw_position throw_send nested_throw cancel_position cancel_send throw_enter cancel_enter nested_send; do
+    qemu-arm -L "$sysroot" "$build/veneer-unwind-test" "$case"
+done

@@ -56,6 +56,9 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/collector-journal-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch tests/runtime/test_loader.cpp -ldl -pthread -o "$build/loader-test"
 qemu-arm -L "$QEMU_SYSROOT" -E "LD_PRELOAD=$preload" "$build/loader-test" "$preload"
 sh tests/adapter/run_arm.sh
+python3 tests/adapter/run_unwind_dso.py --library "$preload" \
+    --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
+    --output-dir "$build/unwind-dso"
 
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp tests/navigation/test_navigation.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S "$build/core.o" -lm -ldl -pthread -o "$build/navigation-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/navigation-test"

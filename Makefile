@@ -112,6 +112,10 @@ test-motion-journal: $(BUILD)/test_motion_batch $(BUILD)/test_shadow_log $(BUILD
 
 $(BUILD)/arm/src/runtime/runtime.o: src/runtime/motion_batch.h
 
+# Only wrappers that surround OEM calls need C++ cleanup/unwind tables.
+# A caller's exception or deferred cancellation must cross the shim intact.
+$(BUILD)/arm/src/adapter/adapter.o: override ARM_CXXFLAGS += -fexceptions
+
 arm: $(BUILD)/libmx5dr-vimtap.so $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $(BUILD)/mx5dr-guard $(BUILD)/mx5dr-sha256
 $(BUILD)/arm/%.o: %.cpp
 	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo 'Set ARM_PREFIX and ARM_SYSROOT'; exit 1; }
@@ -127,7 +131,7 @@ $(BUILD)/arm/%.o: %.S
 	$(ARM_PREFIX)gcc -fPIC $(ARM_FLAGS) $(ARM_DEPFLAGS) -c $< -o $@
 	mv $(@:.o=.d).tmp $(@:.o=.d)
 $(BUILD)/libmx5dr.so: $(ARM_OBJECTS)
-	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr.so -static-libstdc++ -static-libgcc $(ARM_OBJECTS) -ldl -lpthread -lrt -lm -o $@
+	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined,--exclude-libs,ALL -Wl,-soname,libmx5dr.so -static-libstdc++ -static-libgcc $(ARM_OBJECTS) -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector: $(COLLECTOR_OBJECTS)
 	$(ARM_PREFIX)g++ $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -static-libstdc++ -static-libgcc $^ -ldbus-1 -lpthread -lrt -o $@
 clean:
