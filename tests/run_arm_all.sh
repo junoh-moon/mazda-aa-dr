@@ -53,6 +53,8 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/request-status-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-observer-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_request_handoff.cpp -pthread -o "$build/request-handoff-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-handoff-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/packaging/test_oem_session_callbacks.cpp src/runtime/sha256.cpp -ldl -pthread -lrt -o "$build/session-callback-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/session-callback-test"
 MX5DR_PUBLICATION_BUILD="$build/request-publication" sh tests/runtime/run_request_publication.sh
 MX5DR_JOURNAL_BOUNDARY_BUILD="$build/journal-boundaries" sh tests/runtime/run_journal_boundaries.sh
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_journal_queue.cpp -pthread -o "$build/journal-queue-test"

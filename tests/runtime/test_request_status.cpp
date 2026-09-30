@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <sched.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #ifdef NDEBUG
 #error Request status regression requires assertions
@@ -88,4 +89,4 @@ static void health_does_not_lose_events() {
     puts("PASS concurrent health readers preserve every lifecycle event and owned trace");
 }
 
-int main() { health_does_not_lose_events(); return 0; }
+int main() { alarm(60); health_does_not_lose_events(); return 0; }

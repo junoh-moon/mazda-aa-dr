@@ -34,6 +34,7 @@ struct Context {
     StatusCallback next;
     void* userdata;
     void** storage;
+    Callbacks callbacks; // Outlives any callback, even if create retains the table.
 };
 Context contexts[2]; // Immutable after each create begins; never recycled.
 std::atomic<unsigned> next_event(0), creates(0);
@@ -66,17 +67,22 @@ void require(bool ok,const char* step) {
     _exit(91);
 }
 template<unsigned index> void status(void* user,void* info) {
+    const int incoming_errno=errno;
     const Context& context=contexts[index];
     unsigned event=next_event.fetch_add(1)+1;
-    int32_t state=0, detail=0;
+    char state_json[16]="null", detail_json[16]="null";
     if(info) {
+        int32_t state, detail;
         memcpy(&state,info,4);
         memcpy(&detail,static_cast<char*>(info)+4,4);
+        snprintf(state_json,sizeof state_json,"%d",state);
+        snprintf(detail_json,sizeof detail_json,"%d",detail);
     }
     record("{\"kind\":\"status\",\"cycle\":%u,\"event\":%u,\"mono_ns\":%llu,"
-           "\"state\":%d,\"detail\":%d,\"data_nonnull\":%s,\"userdata_unchanged\":%s}",
-           index+1,event,(unsigned long long)now(),state,detail,
+           "\"state\":%s,\"detail\":%s,\"data_nonnull\":%s,\"userdata_unchanged\":%s}",
+           index+1,event,(unsigned long long)now(),state_json,detail_json,
            info?"true":"false",user==context.userdata?"true":"false");
+    errno=incoming_errno;
     context.next(user,info);
     record("{\"kind\":\"status_return\",\"cycle\":%u,\"event\":%u}",index+1,event);
 }
@@ -87,11 +93,11 @@ int32_t create(const char* xml,void* user,const Callbacks* callbacks,void** stor
     Context& context=contexts[index];
     context.next=reinterpret_cast<StatusCallback>(callbacks->entry[1]);
     context.userdata=user;context.storage=storage;
-    Callbacks copy=*callbacks;
-    copy.entry[1]=index?reinterpret_cast<uintptr_t>(&status<1>):reinterpret_cast<uintptr_t>(&status<0>);
+    context.callbacks=*callbacks;
+    context.callbacks.entry[1]=index?reinterpret_cast<uintptr_t>(&status<1>):reinterpret_cast<uintptr_t>(&status<0>);
     record("{\"kind\":\"create_begin\",\"cycle\":%u,\"userdata_null\":%s,\"mono_ns\":%llu}",
            index+1,user?"false":"true",(unsigned long long)now());
-    int32_t result=create_original(xml,user,&copy,storage);
+    int32_t result=create_original(xml,user,&context.callbacks,storage);
     record("{\"kind\":\"create_end\",\"cycle\":%u,\"result\":%d,\"handle_nonnull\":%s,\"mono_ns\":%llu}",
            index+1,result,*storage?"true":"false",(unsigned long long)now());
     return result;

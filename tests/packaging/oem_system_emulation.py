@@ -407,28 +407,46 @@ def session_probe_report(records):
     `complete` describes the two local API cycles only. The original service's
     errors and lack of a physical phone remain separate limitations even then.
     """
+    def int32(value):
+        return type(value) is int and -(1 << 31) <= value < (1 << 31)
+
     failures = []
+    lifecycle = ('create_begin', 'create_end', 'identity', 'send', 'start', 'stop', 'destroy_end')
+    supported = lifecycle + ('scope', 'status', 'status_return', 'complete', 'failure')
+    if any(r.get('kind') not in supported for r in records):
+        failures.append('unknown_record')
     scopes = [r for r in records if r.get('kind') == 'scope']
     ends = [r for r in records if r.get('kind') == 'complete']
-    if len(scopes) != 1 or scopes[0].get('physical_phone') is not False:
+    if (len(scopes) != 1 or scopes[0].get('physical_phone') is not False
+            or scopes[0].get('oem_queue_started') is not False
+            or scopes[0].get('start_input') != 'synthetic_zero_304_bytes'):
         failures.append('missing_scope')
-    if len(ends) != 1 or ends[0].get('cycles') != 2:
+    if len(ends) != 1 or type(ends[0].get('cycles')) is not int or ends[0]['cycles'] != 2:
         failures.append('missing_completion')
     if (not records or records[0].get('kind') != 'scope'
             or records[-1].get('kind') != 'complete'):
         failures.append('record_order')
+    operations = [r for r in records if r.get('kind') in lifecycle]
+    expected = [(cycle, kind) for cycle in (1, 2) for kind in lifecycle]
+    if (any(type(r.get('cycle')) is not int for r in operations)
+            or [(r.get('cycle'), r['kind']) for r in operations] != expected):
+        failures.append('lifecycle_order')
     cycles = []
     for cycle in (1, 2):
-        rows = [r for r in records if r.get('cycle') == cycle]
-        operations = [r for r in rows if r.get('kind') in (
-            'create_begin', 'create_end', 'send', 'destroy_end')]
-        kinds = [r['kind'] for r in operations]
-        ok = kinds == ['create_begin', 'create_end', 'send', 'destroy_end']
+        rows = [r for r in operations if type(r.get('cycle')) is int and r['cycle'] == cycle]
+        ok = [r['kind'] for r in rows] == list(lifecycle)
         if ok:
-            create, send, destroy = operations[1:]
-            ok = (create.get('result') == 0 and create.get('handle_nonnull') is True
-                  and send.get('result') == 0 and destroy.get('result') == 0
-                  and destroy.get('handle_null') is True)
+            begin, create, identity, send, start, stop, destroy = rows
+            ok = (begin.get('userdata_null') is True
+                  and all(int32(r.get('result')) for r in (create, send, start, stop, destroy))
+                  and create['result'] == 0 and create.get('handle_nonnull') is True
+                  and send['result'] == 0 and destroy['result'] == 0
+                  and destroy.get('handle_null') is True
+                  and type(identity.get('same_handle_address_as_previous')) is bool
+                  and type(identity.get('same_storage_as_previous')) is bool)
+            if cycle == 1:
+                ok = (ok and identity.get('same_handle_address_as_previous') is False
+                      and identity.get('same_storage_as_previous') is False)
         cycles.append({'cycle': cycle, 'complete': ok})
     if not all(c['complete'] for c in cycles):
         failures.append('incomplete_cycles')
@@ -441,18 +459,39 @@ def session_probe_report(records):
     if (not valid_keys or len(set(keys)) != len(keys) or sorted(keys) != sorted(return_keys)
             or any(r.get('userdata_unchanged') is not True for r in callbacks)):
         failures.append('callback_forwarding')
-    elif any(records.index(callback) > records.index(returned)
-             for callback in callbacks for returned in returns
-             if (callback['cycle'], callback['event']) == (returned['cycle'], returned['event'])):
-        failures.append('callback_order')
-    if len(ends) == 1 and 'status_callbacks' in ends[0] and ends[0]['status_callbacks'] != len(callbacks):
+    else:
+        starts = {r['cycle']: i for i, r in enumerate(records)
+                  if r.get('kind') == 'create_begin' and type(r.get('cycle')) is int}
+        entered = {(r['cycle'], r['event']): i for i, r in enumerate(records)
+                   if r.get('kind') == 'status'}
+        returned = {(r['cycle'], r['event']): i for i, r in enumerate(records)
+                    if r.get('kind') == 'status_return'}
+        if any(c not in starts or starts[c] >= entered[(c, e)]
+               or entered[(c, e)] >= returned[(c, e)] for c, e in keys):
+            failures.append('callback_order')
+        # The authored probe numbers entries globally, including NULL data.
+        events = {e for _, e in keys}
+        if len(events) != len(callbacks) or (events and max(events) != len(callbacks)):
+            failures.append('callback_sequence')
+    if (len(ends) != 1 or type(ends[0].get('status_callbacks')) is not int
+            or ends[0]['status_callbacks'] != len(callbacks)):
         failures.append('callback_count')
+    if any(type(r.get('data_nonnull')) is not bool
+           or (r['data_nonnull'] and not (int32(r.get('state')) and int32(r.get('detail'))))
+           for r in callbacks):
+        failures.append('callback_payload')
+    # Earlier probes encoded NULL payloads as numeric zero plus data_nonnull=false.
+    # Honor that validity bit instead of turning absent data into INVALID state.
+    states = [r.get('state') if r.get('data_nonnull') is True and int32(r.get('state'))
+              and int32(r.get('detail')) else None for r in callbacks]
     if any(r.get('kind') == 'failure' for r in records):
         failures.append('probe_failure')
     return {'complete': not failures, 'failures': failures, 'cycles': cycles,
             'status_callbacks': len(callbacks),
-            'session_state_observed': bool(callbacks),
-            'states': [r.get('state') for r in callbacks],
+            'session_state_observed': any(state is not None for state in states),
+            'states': states,
+            'start_results': [r.get('result') for r in operations if r['kind'] == 'start'],
+            'stop_results': [r.get('result') for r in operations if r['kind'] == 'stop'],
             'phone_acceptance_verified': False,
             'vehicle_validation': False,
             'scope': 'Authored local API probe; not a normal AA connection or full application shutdown'}
@@ -461,11 +500,13 @@ def session_probe_report(records):
 def check_session(args):
     records = []
     exits = []
+    last_record_line = -1
     malformed = False
     with args.console.open(encoding='utf-8', errors='replace') as stream:
-        for line in stream:
-            if line.startswith('VM_SESSION_PROBE_RC='):
-                exits.append(line.strip().split('=', 1)[1])
+        for line_number, line in enumerate(stream):
+            _, exit_marker, exit_value = line.partition('VM_SESSION_PROBE_RC=')
+            if exit_marker:
+                exits.append((line_number, exit_value.strip()))
             # The original SDK can emit a prefix without a newline on the
             # same console before this complete diagnostic JSON record.
             # Preserve the record; still reject malformed/trailing JSON and
@@ -473,6 +514,7 @@ def check_session(args):
             _, marker, payload = line.partition('MX5_SESSION ')
             if not marker:
                 continue
+            last_record_line = line_number
             try:
                 record = json.loads(payload)
                 if not isinstance(record, dict):
@@ -484,9 +526,12 @@ def check_session(args):
     if malformed:
         report['complete'] = False
         report['failures'].append('malformed_record')
-    if exits != ['0']:
+    if len(exits) != 1 or exits[0][1] != '0':
         report['complete'] = False
         report['failures'].append('probe_exit')
+    elif exits[0][0] <= last_record_line:
+        report['complete'] = False
+        report['failures'].append('probe_exit_order')
     report['console_sha256'] = digest(args.console)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report['complete'] else 2
