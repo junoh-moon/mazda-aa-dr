@@ -81,9 +81,9 @@ $(BUILD)/test_session_early_init: $(ADAPTER) src/adapter/adapter.h src/adapter/s
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
 $(BUILD)/test_session_request: tests/adapter/session_request_test.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/adapter.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/adapter/request_hooks.cpp src/adapter/request_hooks.h src/adapter/session_hooks.h src/adapter/adapter.h src/runtime/request_observer.h src/runtime/request_trace.h src/runtime/session_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/adapter/request_hooks.cpp,$^) -pthread -o $@
-$(BUILD)/test_bus_hooks: tests/adapter/bus_hooks_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.h src/runtime/bus_trace.h | $(BUILD)
+$(BUILD)/test_bus_hooks: tests/adapter/bus_hooks_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.h src/adapter/adapter.h src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
-$(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.h src/runtime/bus_trace.h | $(BUILD)
+$(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.h src/adapter/adapter.h src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 test-adapter: $(BUILD)/test_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
@@ -93,7 +93,7 @@ test-adapter: $(BUILD)/test_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test
 	$(BUILD)/test_session_request
 	$(BUILD)/test_session_request bus_recreated
 	$(BUILD)/test_bus_early_init
-	@set -e; for case in normal position_source signal failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
+	@set -e; for case in normal position_source signal signal_reuse failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed prediction_entry_create prediction_entry_connect prediction_entry_disconnect prediction_entry_free prediction_entry_closed prediction_entry_signal prediction_exit_create prediction_exit_connect prediction_exit_disconnect prediction_exit_free prediction_exit_closed prediction_exit_signal; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace

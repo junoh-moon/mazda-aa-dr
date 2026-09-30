@@ -230,9 +230,12 @@ extern "C" void mx5_bus_free(void* connection) {
     original.free(connection);mutation.complete=true;
 }
 extern "C" int32_t mx5_bus_signal(void* connection,void* message) {
-    ready();bool disconnected;
+    ready();bool disconnected;Context* context;
     {
         const PreserveErrno saved;
+        // Keep the immutable observation slot across foreign classification.
+        // A freed address may have a new owner when that call returns.
+        context=message?lookup(connection):0;
         disconnected=message && original.is_signal(message,"org.freedesktop.DBus.Local","Disconnected");
     }
     if(!disconnected)return original.signal(connection,message);
@@ -240,7 +243,14 @@ extern "C" int32_t mx5_bus_signal(void* connection,void* message) {
     // filter can deliver the close callback. Observe the actual message here;
     // never call that callback ourselves or change the handler's return value.
     Mutation mutation(false);
-    { const PreserveErrno saved;if(Context* c=lookup(connection))c->phase.store(IDLE); }
+    {
+        const PreserveErrno saved;
+        if(context) {
+            unsigned phase=context->phase.load(std::memory_order_acquire);
+            if(phase!=ENDED && !context->phase.compare_exchange_strong(phase,IDLE,
+                    std::memory_order_seq_cst,std::memory_order_seq_cst))fault(A::BUS_CONTENTION);
+        }
+    }
     const int32_t result=original.signal(connection,message);
     mutation.complete=true;return result;
 }

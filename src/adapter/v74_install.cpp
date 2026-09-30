@@ -163,7 +163,8 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
         plan.slots[i]=s;
     }
     plan.slot_count=5;
-    // Install bus cleanup before connect/create, and leave request submit last.
+    // Install bus cleanup before connect/create, then request submit. The
+    // separately prepared session slots are appended by session_plan below.
     // Only GOT data is changed: libjcidbus may already have running callers.
     const C::Slot submit=plan.slots[--plan.slot_count];
     const C::Slot signal={bb+0x34240,bb+0x2098c,reinterpret_cast<uintptr_t>(&mx5_bus_signal)};

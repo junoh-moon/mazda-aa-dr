@@ -14,43 +14,83 @@ spec.loader.exec_module(audit)
 
 
 class RequestJournal(unittest.TestCase):
-    def test_bus_lifetimes_and_health(self):
+    @staticmethod
+    def bus_rows():
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
         p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
         connected = dict(result='connected', object=1, lifetime=7)
-        trace = dict(p['request'], bus_lifetime=7, issue_connection=connected, reply_connection=connected)
+        p = dict(p, mono_ns=20, request=dict(p['request'], bus_lifetime=7,
+                 issue_observed_ns=15, reply_observed_ns=19,
+                 issue_connection=connected, reply_connection=connected))
+        h = dict(kind='health', mono_ns=40, dropped=0, hook_installed=True,
+                 assist_ready=False, bus_observer=dict(prepared=True, contexts=1, capacity=64, faults=0))
+        return p, h
+
+    def test_bus_history_contradictions(self):
+        p, h = self.bus_rows()
+        def pair(obj, lifetime):
+            snapshot = dict(result='connected', object=obj, lifetime=lifetime)
+            return dict(p, call=obj, request=dict(p['request'], bus_lifetime=lifetime,
+                        issue_connection=snapshot, reply_connection=snapshot))
+        cases = [
+            ([p, pair(2, 7)], 'bus_lifetime_owner_changed'),
+            ([p, dict(h, bus_observer=dict(h['bus_observer'], contexts=0))], 'bus_object_outside_contexts'),
+            ([pair(65, 8), dict(h, bus_observer=dict(h['bus_observer'], contexts=64))], 'bus_object_outside_capacity'),
+            ([h, pair(65, 8)], 'bus_object_outside_capacity'),
+            ([dict(h, mono_ns=25, bus_observer=dict(h['bus_observer'], contexts=2)), h], 'bus_context_count_regressed'),
+            ([h, dict(h, mono_ns=70, bus_observer=dict(h['bus_observer'], contexts=2)), pair(2, 8)],
+             'bus_object_outside_contexts'),
+            ([dict(h, bus_observer=dict(h['bus_observer'], contexts=0)),
+              dict(p, request=dict(p['request'], issue_observed_ns=None, reply_observed_ns=None))],
+             'bus_object_outside_contexts'),
+            ([h, dict(h, mono_ns=50, bus_observer=dict(h['bus_observer'], capacity=65))], 'bus_capacity_changed'),
+            ([dict(p, request=dict(p['request'], reply_connection=dict(result='connected', object=1, lifetime=6)))],
+             'bus_lifetime_regressed'),
+        ]
+        for rows, code in cases:
+            with self.subTest(code=code):
+                a = audit.Auditor()
+                for row in rows:
+                    a.consume(row, code)
+                self.assertTrue(any(i['code'] == code and i['severity'] == 'violation' for i in a.issues))
+
+    def test_bus_delayed_snapshots_and_health_clocks(self):
+        p, h = self.bus_rows()
+        for observed, health_time, contradiction in ((15, 40, True), (None, 40, False),
+                                                     (45, 40, False), (40, 40, False)):
+            with self.subTest(observed=observed, health_time=health_time):
+                old = dict(p, mono_ns=50, request=dict(p['request'],
+                           issue_observed_ns=observed, reply_observed_ns=observed))
+                a = audit.Auditor()
+                a.consume(dict(h, mono_ns=health_time, bus_observer=dict(h['bus_observer'], contexts=0)), 'earlier-health')
+                a.consume(old, 'late-row')
+                found = any(i['code'] == 'bus_object_outside_contexts' for i in a.issues)
+                self.assertEqual(found, contradiction)
+        # Both snapshot receipt clocks may run after a newer connection was
+        # observed. Only the issue -> reply order of ONE request is causal.
+        snapshot = dict(result='connected', object=1, lifetime=8)
+        newer = dict(p, call=2, mono_ns=420, request=dict(p['request'], bus_lifetime=8,
+                     issue_observed_ns=300, reply_observed_ns=400,
+                     issue_connection=snapshot, reply_connection=snapshot))
+        old = dict(p, mono_ns=600, request=dict(p['request'], issue_observed_ns=450, reply_observed_ns=460))
         a = audit.Auditor()
-        a.consume(dict(p, request=trace), 'same-bus')
+        for row in (newer, old, dict(h, mono_ns=700)):
+            a.consume(row, 'delayed-snapshot')
         self.assertFalse(any(i['code'].startswith('bus_') for i in a.issues))
-        for snapshot in (dict(connected, object=2, lifetime=8), dict(connected, lifetime=8)):
-            a = audit.Auditor()
-            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), 'changed-bus')
-            self.assertIn('bus_changed_since_issue', [i['code'] for i in a.issues])
-        for result in ('unobserved', 'transition', 'observation_fault', 'disconnected'):
-            snapshot = dict(result=result, object=1 if result == 'disconnected' else None, lifetime=None)
-            a = audit.Auditor()
-            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), result)
-            self.assertIn('bus_observation_unavailable', [i['code'] for i in a.issues])
-        for snapshot in (None, {}, dict(connected, lifetime=0), dict(connected, object=True),
-                         dict(connected, result='unobserved'), dict(connected, lifetime=2**64)):
-            a = audit.Auditor()
-            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), 'malformed')
-            self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
-        for change in ({'bus_lifetime': None}, {'bus_lifetime': 8}):
-            a = audit.Auditor()
-            a.consume(dict(p, request=dict(trace, **change)), 'contradictory-issue')
-            self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
-        old = dict(trace)
-        del old['issue_connection'], old['reply_connection']
+
+    def test_bus_history_resets_at_boot_and_bounds_health_storage(self):
+        p, h = self.bus_rows()
         a = audit.Auditor()
-        a.consume(dict(p, request=old), 'older-schema')
-        self.assertFalse(any(i['code'] in ('request_record_malformed', 'bus_changed_since_issue') for i in a.issues))
-        observer = dict(prepared=True, contexts=2, capacity=64, faults=0)
-        for change in ({'faults': 1}, {'prepared': False}, {'contexts': 65}, {'faults': True}):
-            a = audit.Auditor()
-            a.consume(dict(kind='health', mono_ns=103, dropped=0, hook_installed=True,
-                           assist_ready=False, bus_observer=dict(observer, **change)), 'health')
-            self.assertTrue(any(i['code'].startswith('bus_observer') for i in a.issues))
+        a.consume(p, 'first-boot')
+        a.consume(h, 'first-boot')
+        # The same object/lifetime numbers are independent in the next boot.
+        a.new_session()
+        snapshot = dict(result='connected', object=2, lifetime=7)
+        a.consume(dict(p, request=dict(p['request'], issue_connection=snapshot, reply_connection=snapshot)), 'next-boot')
+        for now in range(40, 1040):
+            a.consume(dict(h, mono_ns=now, bus_observer=dict(h['bus_observer'], contexts=2)), 'next-boot')
+        self.assertFalse(any(i['code'].startswith('bus_') for i in a.issues))
+        self.assertEqual(len(a.bus_health_counts), 1)
 
     def test_same_lifetime_callback_history(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
@@ -119,6 +159,44 @@ class RequestJournal(unittest.TestCase):
             found = [i for i in a.issues if i['code'] == 'session_revision_partial']
             self.assertEqual(len(found), 1)
             self.assertEqual(found[0]['severity'], 'inconclusive')
+
+    def test_bus_lifetimes_and_health(self):
+        command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+        p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
+        connected = dict(result='connected', object=1, lifetime=7)
+        trace = dict(p['request'], bus_lifetime=7, issue_connection=connected, reply_connection=connected)
+        a = audit.Auditor()
+        a.consume(dict(p, request=trace), 'same-bus')
+        self.assertFalse(any(i['code'].startswith('bus_') for i in a.issues))
+        for snapshot in (dict(connected, object=2, lifetime=8), dict(connected, lifetime=8)):
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), 'changed-bus')
+            self.assertIn('bus_changed_since_issue', [i['code'] for i in a.issues])
+        for result in ('unobserved', 'transition', 'observation_fault', 'disconnected'):
+            snapshot = dict(result=result, object=1 if result == 'disconnected' else None, lifetime=None)
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), result)
+            self.assertIn('bus_observation_unavailable', [i['code'] for i in a.issues])
+        for snapshot in (None, {}, dict(connected, lifetime=0), dict(connected, object=True),
+                         dict(connected, result='unobserved'), dict(connected, lifetime=2**64)):
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), 'malformed')
+            self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
+        for change in ({'bus_lifetime': None}, {'bus_lifetime': 8}):
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(trace, **change)), 'contradictory-issue')
+            self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
+        old = dict(trace)
+        del old['issue_connection'], old['reply_connection']
+        a = audit.Auditor()
+        a.consume(dict(p, request=old), 'older-schema')
+        self.assertFalse(any(i['code'] in ('request_record_malformed', 'bus_changed_since_issue') for i in a.issues))
+        observer = dict(prepared=True, contexts=2, capacity=64, faults=0)
+        for change in ({'faults': 1}, {'prepared': False}, {'contexts': 65}, {'faults': True}):
+            a = audit.Auditor()
+            a.consume(dict(kind='health', mono_ns=103, dropped=0, hook_installed=True,
+                           assist_ready=False, bus_observer=dict(observer, **change)), 'health')
+            self.assertTrue(any(i['code'].startswith('bus_observer') for i in a.issues))
 
     def test_route_schema_and_old_records(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))

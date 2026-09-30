@@ -285,6 +285,18 @@ worker local stack frame 359,120바이트를 확인했습니다. 계측 객체 1
 제품 객체와 일치하며, ARM의 전체 관측값 큐 1,024개 복사·full 경계도 통과했습니다.
 실제 CMU의 메모리·스택 여유나 callback 시간 상한을 검증한 결과는 아닙니다.
 
+[버스 연결 관측 검토·직접 실행](../validation/BUS_CONNECTION_REVIEW_2026-09-30.md)에서는
+외부 버스 구현을 통합하고 연결 이력 모순의 거짓 통과, 증분 빌드 의존성과
+설치·후보 철회 회귀 공백을 수정했습니다. 세 독립 리뷰, host Python 306개와
+C/C++·고정 ARM 전체 검사를 통과했습니다. 최종 제품의 원본 VM에서 실제
+LDS 요청 30건의 발행/응답 연결을 보존했고, 실제 daemon 종료 뒤 단절 관측과
+generation 18→20, 원본 close callback 0회·bus fault 0을 직접 확인했습니다.
+raw 423·500건은 합성이며 MODEL은 invalid, 일반 분석은 inconclusive입니다.
+이 외부 검토 시점에는 MODEL의 버스 경계 초기화가 미완료였으며,
+[후속 버스 계산 경계 검사](../validation/MODEL_BUS_2026-09-30.md)에서 구현했습니다.
+provider/receiver 자격과 이전 정리 실패의 원인·실차·폰 검증은 남아 있습니다.
+공개 ZIP은 변경하지 않았습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

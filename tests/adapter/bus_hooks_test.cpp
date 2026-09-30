@@ -1,4 +1,5 @@
 #include "adapter/bus_hooks.h"
+#include "adapter/adapter.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -21,12 +22,19 @@ static unsigned signals;
 static bool disconnected_signal;
 static bool throw_signal;
 static int signal_message;
+static bool block_create,block_closed,block_signal;
+static bool block_predicate;
+static std::atomic<unsigned> predicate_gate(0);
+static void wait_block();
 static int32_t is_signal(void* message,const char* interface_name,const char* member) {
     assert(message==&signal_message && !strcmp(interface_name,"org.freedesktop.DBus.Local") &&
-           !strcmp(member,"Disconnected"));errno=EIO;return disconnected_signal;
+           !strcmp(member,"Disconnected"));
+    if(block_predicate) { predicate_gate.store(1);while(predicate_gate.load()!=2)sched_yield(); }
+    errno=EIO;return disconnected_signal;
 }
 static int32_t signal(void* p,void* message) {
     assert(p==address && message==&signal_message && errno==EDOM);
+    if(block_signal)wait_block();
     ++signals;errno=ERANGE;if(throw_signal)throw 41;return -57;
 }
 static int32_t connect_result=7;
@@ -35,7 +43,7 @@ static bool cancellation;
 static std::atomic<unsigned> blocked(0);
 static int32_t closed(void* p,void* user) {
     assert(p==address && user==expected_user && errno==EDOM);
-    ++closed_calls;errno=ERANGE;
+    ++closed_calls;if(block_closed)wait_block();errno=ERANGE;
     if(throw_closed)throw 41;
     return -73;
 }
@@ -46,6 +54,7 @@ static void wait_block() {
 }
 static void* create(A::BusClosed callback,void* user) {
     assert(errno==EDOM);saved[creates]=callback;closures[creates++]=user;
+    if(block_create)wait_block();
     if(throw_create) { errno=ERANGE;throw 41; }
     errno=ERANGE;return fail_create||!callback?0:address;
 }
@@ -176,6 +185,91 @@ static void position_source() {
     callback(0);assert(A::read_position_bus().connection.object==3);
     assert(!A::bus_hook_health().faults);
 }
+// Authored qualification is injected ONLY into this fixture. The product's
+// live ASSIST gate remains closed. Check actual selection, not just a counter.
+static const uint64_t sample_time=1000000000;
+static unsigned char input[72],payload[48],sent[48];
+static int send_storage;
+static A::Observation last_send;
+static A::VehicleData* input_wrapper;
+static unsigned sends;
+static bool original_wrapper;
+static uint64_t clock_fn(void*) { return sample_time; }
+static bool provenance(void*,const A::PositionInput*,A::Provenance* out,void*) {
+    out->source_epoch=123;out->session_epoch=456;
+    out->exact_request=out->verified_lds=out->legacy_receiver=true;return true;
+}
+static void sink(const A::Observation* event,void*) { if(event->kind==A::Observation::SEND)last_send=*event; }
+static int32_t next_send(void* storage,A::VehicleData* data) {
+    assert(storage==&send_storage && data && data->payload && data->type==1 && data->length==48 && errno==EDOM);
+    ++sends;original_wrapper=data==input_wrapper;memcpy(sent,data->payload,48);errno=EINPROGRESS;return -717;
+}
+static A::DrSnapshot snapshot;
+static void* publish(void*) { assert(A::publish_snapshot(snapshot));return 0; }
+static void publish_candidate() {
+    snapshot=A::DrSnapshot();snapshot.source_epoch=123;snapshot.session_epoch=456;
+    snapshot.prediction_generation=A::generation();snapshot.frontier_mono_ns=sample_time;
+    snapshot.valid_until_mono_ns=sample_time+100000000;snapshot.derived_utc_ns=1700000000000000000ULL;
+    snapshot.latitude_deg=37;snapshot.longitude_deg=127;snapshot.speed_mps=4;snapshot.travel_bearing_deg=45;
+    snapshot.ready=snapshot.profile_verified=snapshot.input_quality_verified=snapshot.limits_ok=true;
+    pthread_t worker;assert(!pthread_create(&worker,0,publish,0));assert(!pthread_join(worker,0));
+}
+static void send_candidate(bool replacement) {
+    A::VehicleData data={1,payload,48};input_wrapper=&data;const unsigned before=sends;
+    errno=EDOM;assert(A::send_vehicle_data(&send_storage,&data)==-717 && errno==EINPROGRESS && sends==before+1);
+    assert(last_send.choice==(replacement?A::DR_REPLACEMENT:A::ORIGINAL));
+    assert(original_wrapper==!replacement);
+    if(!replacement)assert(!memcmp(sent,payload,48) && last_send.reason==A::EPOCH_MISMATCH);
+    for(unsigned i=0;i<48;++i)assert(payload[i]==i+1);
+}
+static void* boundary_call(void* opaque) {
+    const char* operation=static_cast<const char*>(opaque);
+    if(!strcmp(operation,"create"))open();
+    else if(!strcmp(operation,"connect"))attach();
+    else if(!strcmp(operation,"disconnect"))end(false);
+    else if(!strcmp(operation,"free"))end(true);
+    else if(!strcmp(operation,"closed"))callback(0);
+    else { assert(!strcmp(operation,"signal"));errno=EDOM;
+           assert(mx5_bus_signal(address,&signal_message)==-57 && errno==ERANGE); }
+    return 0;
+}
+static void prediction_boundary(const char* name) {
+    const bool entry=!strncmp(name,"entry_",6);
+    assert(entry || !strncmp(name,"exit_",5));const char* operation=name+(entry?6:5);
+    A::Options options=A::Options();options.allow_assist=true;options.clock=clock_fn;
+    options.provenance=provenance;options.sink=sink;options.max_snapshot_age_ns=150000000;
+    assert(A::configure(next_send,options) && A::set_mode(A::ASSIST));
+    for(unsigned i=0;i<48;++i)payload[i]=i+1;
+    if(strcmp(operation,"create")) { open();attach(); }
+    disconnected_signal=true;
+    A::position_enter(0,input);publish_candidate();send_candidate(true);A::position_leave();
+    if(entry)A::position_enter(0,input); // Preserve the pre-boundary POSITION generation.
+    block_create=!strcmp(operation,"create");block_closed=!strcmp(operation,"closed");block_signal=!strcmp(operation,"signal");
+    blocked.store(1);pthread_t thread;
+    assert(!pthread_create(&thread,0,boundary_call,const_cast<char*>(operation)));
+    while(blocked.load()!=2)sched_yield();
+    assert(read().result==B::TRANSITION);
+    if(entry) { send_candidate(false);A::position_leave(); }
+    else { A::position_enter(0,input);publish_candidate();A::position_leave(); }
+    blocked.store(3);assert(!pthread_join(thread,0));
+    A::position_enter(0,input);send_candidate(false);A::position_leave();
+    A::position_enter(0,input);publish_candidate();send_candidate(true);A::position_leave();
+    assert(!A::bus_hook_health().faults);
+}
+static void signal_reused_address() {
+    // Authored observer race: this is not evidence that concurrent OEM
+    // free/dispatch is supported. A message classification cannot switch slots.
+    open();attach();const B::Snapshot old=read();
+    disconnected_signal=block_predicate=true;pthread_t thread;
+    assert(!pthread_create(&thread,0,boundary_call,const_cast<char*>("signal")));
+    while(predicate_gate.load()!=1)sched_yield();
+    end(true);open();attach();const B::Snapshot before=read();
+    assert(before.result==B::CONNECTED && before.object!=old.object);
+    predicate_gate.store(2);assert(!pthread_join(thread,0));
+    const B::Snapshot after=read();
+    assert(after.result==B::CONNECTED && after.object==before.object && after.lifetime==before.lifetime);
+    assert(creates==2 && connects==2 && frees==1 && signals==1 && !A::bus_hook_health().faults);
+}
 int main(int argc,char** argv) {
     assert(argc==2);alarm(20);
 #ifdef MX5_BUS_DSO_TEST
@@ -186,7 +280,8 @@ int main(int argc,char** argv) {
 #endif
     const A::BusBindings b={create,connect,disconnect,free_connection,signal,is_signal};assert(A::prepare_bus_hooks(b));
     const char* c=argv[1];
-    if(!strcmp(c,"normal"))normal();
+    if(!strncmp(c,"prediction_",11))prediction_boundary(c+11);
+    else if(!strcmp(c,"normal"))normal();
     else if(!strcmp(c,"position_source"))position_source();
     else if(!strcmp(c,"signal")) {
         open();attach();const B::Snapshot before=read();
@@ -201,6 +296,7 @@ int main(int argc,char** argv) {
         catch(int n) { assert(n==41 && errno==ERANGE); }
         assert(signals==3 && read().result==B::FAULT && (A::bus_hook_health().faults&A::BUS_UNWIND));
     }
+    else if(!strcmp(c,"signal_reuse"))signal_reused_address();
     else if(!strcmp(c,"failure"))failures();
     else if(!strcmp(c,"early_close")) { open();early_close=true;attach();assert(read().result==B::DISCONNECTED && !A::bus_hook_health().faults); }
     else if(!strcmp(c,"unobserved")) { attach();assert(read().result==B::UNOBSERVED);end(false);end(true);assert(!A::bus_hook_health().faults); }

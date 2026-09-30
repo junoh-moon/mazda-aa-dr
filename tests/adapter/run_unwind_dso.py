@@ -100,10 +100,20 @@ def main():
             'READ_POSITION': '_ZN3mx57adapter17read_position_busEv',
             'CREATE': 'mx5_bus_create', 'CONNECT': 'mx5_bus_connect',
             'DISCONNECT': 'mx5_bus_disconnect', 'FREE': 'mx5_bus_free', 'SIGNAL': 'mx5_bus_signal',
+            'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
+            'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+            'GENERATION': '_ZN3mx57adapter10generationEv',
+            'PUBLISH': '_ZN3mx57adapter16publish_snapshotERKNS0_10DrSnapshotE',
+            'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
+            'VEHICLE_SEND': 'mx5_send_vehicle_data',
         }
-        cases = ('normal', 'position_source', 'signal', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
+        cases = ('normal', 'position_source', 'signal', 'signal_reuse', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
                  'capacity', 'collision', 'bad_callback', 'throw_create', 'throw_connect',
-                 'throw_disconnect', 'throw_free', 'throw_closed')
+                 'throw_disconnect', 'throw_free', 'throw_closed',
+                 'prediction_entry_create', 'prediction_entry_connect', 'prediction_entry_disconnect',
+                 'prediction_entry_free', 'prediction_entry_closed', 'prediction_entry_signal',
+                 'prediction_exit_create', 'prediction_exit_connect', 'prediction_exit_disconnect',
+                 'prediction_exit_free', 'prediction_exit_closed', 'prediction_exit_signal')
         fixture, access = 'bus_hooks', 'bus_dso_access.h'
         macro, marker = '-DMX5_BUS_DSO_TEST', 'PASS bus connection '
     offsets = {}

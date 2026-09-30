@@ -231,6 +231,11 @@ class Auditor:
                             holdout_window=None, capture_end_ns=None, model_session=None, model_bus=None)
         self.sessions.append(self.session)
         self.positions = {}
+        self.bus_lifetimes = {}
+        self.bus_objects = {}
+        self.bus_health_counts = {}
+        self.bus_capacity = None
+        self.bus_contexts_max = 0
 
     def validate(self, row, source, ints=(), strings=(), bools=()):
         bad = [k for k in ints if not integer(row.get(k))]
@@ -421,8 +426,10 @@ class Auditor:
                         not bounded_int(observer.get("contexts"), 0, observer["capacity"]) or
                         not bounded_int(observer.get("faults"), 0, 2**32-1)):
                     self.issue("bus_observer_malformed", source, "Invalid bus observation health")
-                elif not observer["prepared"] or observer["faults"]:
-                    self.issue("bus_observer_unavailable", source, "Bus observation is unavailable or incomplete")
+                else:
+                    self.bus_health_record(observer, row["mono_ns"], source)
+                    if not observer["prepared"] or observer["faults"]:
+                        self.issue("bus_observer_unavailable", source, "Bus observation is unavailable or incomplete")
         elif kind == "owner_poll":
             if self.validate(row, source, ("receipt_ns", "pid"), ("owner", "comm"), ("request_provenance",)):
                 self.owners[(row["owner"], row["pid"], row["comm"])] += 1
@@ -900,6 +907,50 @@ class Auditor:
                 self.holdout_completed += 1
             s["holdout_window"] = None
 
+    def bus_health_record(self, observer, now, source):
+        capacity, contexts = observer["capacity"], observer["contexts"]
+        if self.bus_capacity is not None and capacity != self.bus_capacity:
+            self.issue("bus_capacity_changed", source, "Fixed callback capacity changed within one boot", True)
+        self.bus_capacity = capacity
+        # Health rows are written by one worker. Contexts are reserved forever,
+        # even after failed creation/free; neither the counter nor capacity can
+        # shrink. A previously emitted request already proves object existence.
+        if contexts < self.bus_contexts_max:
+            self.issue("bus_context_count_regressed", source, "Reserved context count decreased", True)
+        self.bus_contexts_max = max(self.bus_contexts_max, contexts)
+        if any(obj > contexts for obj in self.bus_objects):
+            self.issue("bus_object_outside_contexts", source, "Observed object exceeds later reserved context count", True)
+        if any(obj > capacity for obj in self.bus_objects):
+            self.issue("bus_object_outside_capacity", source, "Observed object exceeds fixed callback capacity", True)
+        # Store one timestamp per distinct count, not every 1 Hz health row.
+        self.bus_health_counts[contexts] = max(self.bus_health_counts.get(contexts, -1), now)
+
+    def bus_connection_record(self, snapshot, observed, row_ns, source):
+        obj, lifetime = snapshot["object"], snapshot["lifetime"]
+        if obj is None:
+            return
+        if lifetime is not None:
+            owner = self.bus_lifetimes.setdefault(lifetime, obj)
+            if owner != obj:
+                self.issue("bus_lifetime_owner_changed", source, "One global connect lifetime belongs to two objects", True)
+        # The clock is sampled AFTER the snapshot. It gives an upper bound on
+        # object creation, never an ordering of snapshots across requests. An
+        # old snapshot can be timestamped or drained after a newer connection.
+        bounds = [n for n in (observed, row_ns) if integer(n) and n > 0]
+        upper_bound = min(bounds) if bounds else None
+        previous = self.bus_objects.get(obj)
+        if previous is not None:
+            upper_bound = min(previous, upper_bound) if upper_bound is not None else previous
+        self.bus_objects[obj] = upper_bound
+        if self.bus_capacity is not None and obj > self.bus_capacity:
+            self.issue("bus_object_outside_capacity", source, "Observed object exceeds fixed callback capacity", True)
+        # A later timestamp covers the earlier snapshot; equality cannot order
+        # clock calls. Unknown clocks must not turn an earlier health row into
+        # proof that an object created afterwards is impossible.
+        if upper_bound is not None and any(count < obj and now > upper_bound
+                                           for count, now in self.bus_health_counts.items()):
+            self.issue("bus_object_outside_contexts", source, "Reserved context count cannot cover an earlier object", True)
+
     def request_record(self, row, source, count=False):
         # Older journals predate request observation. Presence opts into this
         # schema; absence never proves a qualified request or receiver.
@@ -973,10 +1024,14 @@ class Auditor:
 
         if t["result"] == "observed" and "issue_connection" in t:
             issue, reply = t["issue_connection"], t["reply_connection"]
+            self.bus_connection_record(issue, t["issue_observed_ns"], row.get("mono_ns"), source)
+            self.bus_connection_record(reply, t["reply_observed_ns"], row.get("mono_ns"), source)
             if issue["result"] != "connected" or reply["result"] != "connected":
                 self.issue("bus_observation_unavailable", source, "Issue/reply connection continuity is unknown")
             elif issue != reply:
                 self.issue("bus_changed_since_issue", source, "Reply connection differs from the issue-time connection")
+                if issue["object"] == reply["object"] and reply["lifetime"] < issue["lifetime"]:
+                    self.issue("bus_lifetime_regressed", source, "Same request's reply precedes its issue connection lifetime", True)
 
     def send(self, row, source):
         if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "type", "length",
