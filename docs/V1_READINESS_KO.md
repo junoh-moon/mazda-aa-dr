@@ -30,7 +30,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
 - [x] 관측된 세션 경계에서 adapter의 이전/전환 중 송신 후보를 철회합니다.
   [후속 수정](../validation/SESSION_PREDICTION_LIFETIME_2026-09-30.md)의 새 회귀 8개,
   제품 DSO·stock runtime 세션 22개와 원본 lifecycle의 generation 변경을 확인했습니다.
-- [ ] MODEL/holdout의 세션 reset·새 기준점 요구와 늦은 이전 요청 처리를 구현·검사합니다.
+- [x] MODEL/holdout의 세션 reset·새 기준점 요구와 늦은 이전 요청 처리를 구현·검사합니다.
+  [세션 계산 경계 검사](../validation/MODEL_SESSION_2026-09-30.md)는 관측 revision을
+  사용하는 MODEL 입력 제한입니다. 세션 소유권·물리 센서의 qualification이나
+  live ASSIST 구현 완료로 승격하지 않습니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
 - [x] 외부 journal 큐 수정을 통합하고 동일 제품의 원본 실행에서 관측 loss 0을 확인합니다.
   과거 drop의 정확한 호출 조합·원인을 확정한 것으로 세지 않습니다.

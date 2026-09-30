@@ -59,7 +59,7 @@ struct Mutation {
         if(!complete)fault(A::SESSION_UNWIND);
         // Reject candidates published during the call, including unwind.
         A::invalidate();
-        version.fetch_add(1);
+        if(version.fetch_add(1)==UINT64_MAX)fault(A::SESSION_REVISION_EXHAUSTED);
         mutations.fetch_sub(1);
     }
 };
@@ -136,6 +136,7 @@ S::Snapshot snapshot(const void* storage,bool ambient) {
     // are seq_cst so a completed overlapping mutation cannot evade both checks.
     if(mutations.load() || version.load()!=before)return unavailable(S::TRANSITION);
     if(faults.load())return unavailable(S::FAULT);
+    out.revision=before;
     return out;
 }
 }

@@ -115,17 +115,21 @@ static void normal() {
     S::Snapshot first=open(&storage);
     assert(first.result==S::OBSERVED && first.lifetime==1 && first.event==1);
     assert(first.state_known && first.state==-7 && !users[0]);
+    assert(first.revision==2); // Early status callback plus create completion.
     assert(retained[0]!=&supplied && retained[0]->entry[1]==received[0].entry[1]);
     assert(send(&storage).lifetime==first.lifetime);
     assert(send(&handle).result==S::NONE && send(0).result==S::NONE);
     notify(0,0);assert(A::read_issue_session().state==0);
     assert(A::read_issue_session().event==2);
+    assert(A::read_issue_session().revision==3 && send(&storage).revision==3);
     close(&storage);assert(!storage && A::read_issue_session().result==S::NONE);
+    assert(A::read_issue_session().revision==4);
     early=false;S::Snapshot second=open(&storage);
     assert(second.result==S::OBSERVED && second.lifetime==2 && !second.state_known);
     assert(received[0].entry[1]!=received[1].entry[1]);
     notify(0,99); // Old NULL-userdata callback cannot acquire the new lifetime.
     assert(!A::read_issue_session().state_known && send(&storage).lifetime==2);
+    assert(A::read_issue_session().revision==6); // Includes the late old callback.
     notify(1,3);assert(send(&storage).state==3 && send(&storage).event==1);
     close(&storage);assert(destroys==2 && creates==2 && notifications==4);
     assert(!A::session_hook_health().faults);

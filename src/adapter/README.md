@@ -52,8 +52,12 @@ The request's `session_context` is the unique live context observed at issue;
 `send_session` separately identifies the actual storage argument at send. Neither
 implies request ownership, a connected phone or acceptance. The older qualified
 session fields remain unknown. Lifecycle overlap, ambiguity and faults remain
-explicit journal results. Raw state is known only after a real callback. Context
-storage is constant-initialized even on GCC 4.9; an early preload call must not
+explicit journal results. Raw state is known only after a real callback.
+Snapshots include a coherent lifecycle `revision`, incremented even for failed
+calls and late callbacks; it is copied at request issue. This process-local
+number is not qualified request/session ownership. Exhaustion latches an
+observation fault instead of reusing a revision. Context storage is
+constant-initialized even on GCC 4.9; an early preload call must not
 be erased by later global constructors. See
 [session product verification](../../validation/SESSION_PRODUCT_2026-09-30.md).
 
@@ -94,9 +98,16 @@ verified. The application supplies a `ProvenanceReader` for the exact original
 request, not a poll of the most recent owner. Its epochs must follow source and
 AA lifecycle changes; call `invalidate` at each such change and on sensor loss.
 The v74 session hooks now perform the observed lifecycle revocations above.
-The worker still owns source revocation, correct request qualification and
-fresh calculation after each boundary. Live MODEL/holdout reset across AA
-sessions is not implemented by these adapter generation changes.
+The worker separately resets MODEL/holdout prediction, calibration, and queued
+inputs when the coherent observed session boundary changes. A transition,
+missing/ambiguous session, or observation fault suspends MODEL input; raw
+capture continues. Old request revisions cannot seed either calculator after
+a reset, and raw receipts before the worker's boundary check are excluded.
+Recovery requires fresh post-boundary motion coverage and a new GPS anchor
+pair. Ordinary GPS/GAP changes do not alter this session fence, so normal
+tunnel prediction continues. These are negative MODEL guards: qualified
+request provenance, sensor timing and phone acceptance remain unimplemented
+or unverified, and live ASSIST remains disabled.
 
 The worker receives the POSITION event and can publish an owned normalized
 `DrSnapshot` tagged with the current generation after processing that control

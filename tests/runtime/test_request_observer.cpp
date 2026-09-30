@@ -241,16 +241,16 @@ static void session_context_copy() {
     namespace S=mx5::runtime::session_trace;
     R::Observer o(api());Reply r={1,0,17,":1.7",0};Method m={&r};
     R::Token q,t;int w=0,p=0;
-    S::Snapshot ambient={S::OBSERVED,41,5,-7,true};
+    S::Snapshot ambient={S::OBSERVED,41,5,-7,true,8};
     assert(o.request_begin(&m,&q,ambient)==R::OK);
-    ambient.lifetime=42;ambient.event=6;ambient.state=3;
+    ambient.lifetime=42;ambient.event=6;ambient.state=3;ambient.revision=9;
     { R::ReplyScope scope(o,&m);assert(o.worker_post(&w,&p,&t)==R::OK); }
     assert(o.request_end(&m)==R::OK);
     { R::WorkerScope scope(o,&w);R::Trace trace;
       assert(o.position_take(&p,&trace)==R::OK);
       const S::Snapshot& copy=trace.issue.session_context;
       assert(copy.result==S::OBSERVED && copy.lifetime==41 && copy.event==5);
-      assert(copy.state_known && copy.state==-7);
+      assert(copy.state_known && copy.state==-7 && copy.revision==8);
       assert(!trace.issue.known && !trace.issue.session_lifetime); }
     empty(o);puts("PASS observer retains issue-time ambient session without ownership promotion");
 }

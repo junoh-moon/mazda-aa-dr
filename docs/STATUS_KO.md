@@ -43,8 +43,15 @@ inconclusive를 반환했습니다. 실제 DSO·stock runtime의 새 회귀도 �
 추가했습니다. 생성·파괴·상태 callback 전후에 이전 후보와 전환 중 발행된 후보를
 무효화하고, 전환 중에는 ASSIST 선택이 원본을 전달합니다. 이전 제품에서 실패한
 회귀 8개를 수정 후 통과했으며, 최종 제품 DSO·원본 공유 runtime의 세션 22개와
-원본 LDS/AA 실행에서 실제 generation 변경을 확인했습니다. MODEL/holdout의
-세션 reset과 요청별 qualification은 여전히 미구현이며 live ASSIST는 꺼져 있습니다.
+원본 LDS/AA 실행에서 실제 generation 변경을 확인했습니다. 이 기록 시점에는
+MODEL/holdout의 세션 reset과 요청별 qualification이 미구현이었습니다.
+
+[MODEL/holdout 세션 경계 처리](../validation/MODEL_SESSION_2026-09-30.md)를
+후속 구현했습니다. 생성·파괴·상태 callback의 관측 revision이 바뀌면 계산·보정과
+대기 입력을 초기화합니다. 이전 요청과 관측 불가 입력은 계산에서 제외하고 원본
+기록은 보존하며, 새 센서 입력과 GPS 기준점 이후에만 MODEL 계산을 재개합니다.
+일반적인 GPS→GAP 전환은 이 세션 reset을 일으키지 않습니다. 요청의 세션 소유권,
+물리 센서·폰 수용을 입증한 것은 아니며 live ASSIST는 계속 비활성입니다.
 
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를

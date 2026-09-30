@@ -86,7 +86,7 @@ struct FakeReceiver {
 static void receive_turn_tests(const char* root,const std::string& logs) {
   config.max_log_bytes=65536;
   const mx5_dr_context context={1,1,1};
-  for(unsigned mode=0;mode<3;++mode) {
+  for(unsigned mode=0;mode<4;++mode) {
     arm_test_mode();
     N::Pipeline navigation;N::GpsHoldout holdout;
     assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
@@ -94,10 +94,10 @@ static void receive_turn_tests(const char* root,const std::string& logs) {
     if(mode==1)audit_fault=1;
     {
       Journal j(root);mx5::runtime::MotionBatch batch;FakeReceiver receiver(3,true);
-      drain_motion(j,batch,receiver,navigation,holdout,mode!=2);j.flush();
+      drain_motion(j,batch,receiver,navigation,holdout,mode!=2,mode==3?UINT64_MAX:0);j.flush();
       assert(!j.failed && batch.empty() && receiver.calls==3);
       assert(navigation.status().events==(mode==0?2:0));
-      assert(navigation.context().generation==(mode==0?2:1));
+      assert(navigation.context().generation==(mode==0||mode==3?2:1));
     }
     std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
     unsigned batches=0,rejected=0,resets=0;
@@ -170,7 +170,7 @@ static void request_journal(bool emit) {
   R::Trace& t=o.request_trace;
   t.request.id=1;t.request.epoch=3;t.worker.id=2;t.worker.epoch=3;
   t.issue.observed_ns=101;t.reply.observed_ns=102;t.reply.type_known=true;t.reply.type=2;
-  const A::S::Snapshot session={A::S::OBSERVED,8,2,-7,true};
+  const A::S::Snapshot session={A::S::OBSERVED,8,2,-7,true,5};
   t.issue.session_context=session;o.send_session=session;
   t.reply.sender=R::copy_text(":1.42");t.reply.error_name=R::copy_text("org.freedesktop.DBus.Error.ServiceUnknown");
   char line[2200];
@@ -191,6 +191,7 @@ static void request_journal(bool emit) {
   t.issue.bus_lifetime=t.issue.session_lifetime=t.issue.session_event=UINT64_MAX;
   t.issue.known=7;t.issue.session_state=INT32_MIN;
   t.issue.session_context.lifetime=t.issue.session_context.event=UINT32_MAX;
+  t.issue.session_context.revision=UINT64_MAX;
   t.issue.session_context.state=INT32_MIN;o.send_session=t.issue.session_context;
   t.reply.wire_serial_known=true;t.reply.wire_serial=UINT32_MAX;
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);

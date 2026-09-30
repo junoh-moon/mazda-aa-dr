@@ -72,6 +72,12 @@ def session_snapshot(value, basis):
                                         "transition", "ambiguous", "observation_fault") or
             any(k not in value for k in ("lifetime", "event", "state"))):
         return False
+    if "revision" in value:
+        if value["result"] in ("observed", "no_live_session", "ambiguous"):
+            if not bounded_int(value["revision"], 1 if value["result"] == "observed" else 0, 2**64-1):
+                return False
+        elif value["revision"] is not None:
+            return False
     if value["result"] != "observed":
         return all(value[k] is None for k in ("lifetime", "event", "state"))
     return (bounded_int(value["lifetime"], 1, 2**32-1) and
@@ -206,7 +212,7 @@ class Auditor:
                             dropped_max=0, health_records=0, motion_epoch=None,
                             motion_seq=0, motion_ns=0, last_diagnostic_ns=-1,
                             shadow_resets=0, shadow_rejected=0, shadow_pipeline=None,
-                            holdout_window=None, capture_end_ns=None)
+                            holdout_window=None, capture_end_ns=None, model_session=None)
         self.sessions.append(self.session)
         self.positions = {}
 
@@ -430,6 +436,8 @@ class Auditor:
                 self.motion(event, source)
         elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled"):
             self.shadow(row, source)
+        elif kind in ("shadow_session", "shadow_position_rejected"):
+            self.model_session(row, source)
         elif kind == "shadow_calibration":
             self.calibration(row, source)
         elif kind == "shadow_holdout":
@@ -512,6 +520,37 @@ class Auditor:
         s["motion_seq"] = max(s["motion_seq"], row["receive_seq"])
         s["motion_ns"] = max(s["motion_ns"], row["received_ns"])
 
+    def model_session(self, row, source):
+        if not self.model_diagnostic(row, source):
+            return
+        if row["kind"] == "shadow_position_rejected":
+            if (not all(bounded_int(row.get(k), 0, high) for k, high in
+                    (("call", 2**32-1), ("generation", 2**32-1), ("session_revision", 2**64-1))) or
+                    row.get("reason") not in ("session_unavailable", "request_unobserved",
+                                             "session_changed_since_issue", "request_time_order")):
+                self.issue("model_session_malformed", source, "Invalid rejected MODEL position")
+                return
+            self.issue("shadow_position_rejected", source, row["reason"])
+            return
+        previous = self.session["model_session"]
+        observed = row.get("session")
+        if (not session_snapshot(observed, "unique_live_context") or "revision" not in observed or
+                type(row.get("reset")) is not bool or type(row.get("input_available")) is not bool or
+                row["input_available"] != (observed["result"] == "observed") or
+                not bounded_int(row.get("model_session_epoch"), 1, 2**64-1) or
+                not bounded_int(row.get("raw_since_ns"), 1, row["mono_ns"]) or
+                (previous is None and (row["reset"] or row["model_session_epoch"] != 1)) or
+                (previous is not None and (not row["reset"] or
+                    row["model_session_epoch"] != previous["model_session_epoch"] + 1 or
+                    row["raw_since_ns"] < previous["raw_since_ns"]))):
+            self.issue("model_session_malformed", source, "Invalid MODEL lifecycle boundary")
+            return
+        self.session["model_session"] = row
+        if row["reset"]:
+            self.issue("shadow_session_reset", source, observed["result"])
+        elif not row["input_available"]:
+            self.issue("session_observation_unavailable", source, observed["result"])
+
     def shadow(self, row, source):
         if not self.validate(row, source, bools=("assist_ready",)):
             return
@@ -535,6 +574,15 @@ class Auditor:
                 elif not row["capture_active"]:
                     self.issue("motion_capture_inactive", source, "Raw receiver did not start")
             return
+        boundary = self.session["model_session"]
+        if boundary is not None or "model_session_epoch" in row or "session_revision" in row:
+            if (boundary is None or
+                    not bounded_int(row.get("model_session_epoch"), 1, 2**64-1) or
+                    not bounded_int(row.get("session_revision"), 0, 2**64-1) or
+                    row["model_session_epoch"] != boundary["model_session_epoch"] or
+                    row["session_revision"] != (boundary["session"]["revision"] or 0) or
+                    (row.get("model_valid") is True and not boundary["input_available"])):
+                self.issue("shadow_session_mismatch", source, "MODEL snapshot does not match its observed boundary")
         if not self.validate(row, source,
                 ints=("mono_ns", "state", "uncertainties", "events", "intervals", "resets", "rejected", "frontier_ns"),
                 strings=("result", "pipeline", "location_preview_hex"),
@@ -820,7 +868,9 @@ class Auditor:
                 ambient = request.get("session_context") if isinstance(request, dict) else None
                 if (session_snapshot(ambient, "unique_live_context") and
                         ambient["result"] == target["result"] == "observed" and
-                        ambient["lifetime"] != target["lifetime"]):
+                        (ambient["lifetime"] != target["lifetime"] or
+                         ("revision" in ambient and "revision" in target and
+                          ambient["revision"] != target["revision"]))):
                     self.issue("session_changed_since_issue", source,
                                "Send target differs from issue-time ambient context; ownership is unproved")
                 if target["result"] in ("transition", "ambiguous", "observation_fault"):

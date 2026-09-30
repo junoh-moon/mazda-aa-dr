@@ -54,6 +54,8 @@ inline bool format_session_trace(char* out,size_t cap,const session_trace::Snaps
     j.add("{\"result\":\"");j.add(session_trace::result_name(s.result));
     j.add("\",\"basis\":\"");j.add(send?"send_storage":"unique_live_context");j.add("\"");
     j.number("lifetime",s.lifetime,observed);
+    j.number("revision",s.revision,observed || s.result==session_trace::NONE ||
+             s.result==session_trace::AMBIGUOUS);
     j.number("event",s.event,observed && s.state_known);
     j.signed_number("state",s.state,observed && s.state_known);j.add("}");
     return j.ok();

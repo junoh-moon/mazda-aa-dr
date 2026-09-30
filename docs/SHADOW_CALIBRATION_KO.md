@@ -67,6 +67,17 @@ python3 tools/analyze_logs.py exported-logs.tar.gz --json
 
 ## 검증과 다음 증거
 
+2026-09-30부터 제품 worker는 관측된 AA 세션의 lifecycle revision이 바뀌면
+보정 후보·적용값과 두 계산기의 대기 입력을 초기화합니다. holdout은
+`session_reset`으로 중단하며 새 센서 입력과 GPS 기준점 쌍을 요구합니다.
+관측 세션 부재·중복·전환·오류, 이전 revision의 요청, 요청 관측·시각 관계가
+불명확한 위치는 계산에서 제외하고 원본 자료와 제외 사유는 계속 기록합니다.
+`shadow_session`은 이 경계와 원시 입력의 수신 시각 하한을,
+`shadow_position_rejected`는 위치 입력의 제외 사유를 나타냅니다.
+일반 GPS→GAP 전환은 세션 reset이 아니므로 터널 MODEL 적분을 유지합니다.
+이 제한은 qualification이 아닙니다. [새 검사 기록](../validation/MODEL_SESSION_2026-09-30.md)을
+기존 합성 보정 검사와 구분하십시오.
+
 고정 영점과 보정 영점의 직진·회전 비교, 가짜 정차·한 바퀴 움직임·잡음·단절 거부, 계산 중 영점 고정, GPS 재획득, 참조 GPS를 바꿔도 DR 예측이 같다는 격리 시험, 시각 정렬과 중단 경로를 검사한다. 실행 결과는 [검증 기록](../validation/SHADOW_CALIBRATION_2026-09-29.md)에 별도로 적는다.
 
 실차에서 남은 것은 원본 센서 주기·지연·후진 신호 가용성, 실제 영점 변화와 보정 임계값, 위치 차이의 크기, CMU 계산 비용과 기존 AA/touch 공존이다. live ASSIST의 센서·provenance·복구·폰 수용 조건은 그대로 남는다. `allow_assist=false`와 MODEL 출력을 거부하는 bridge를 유지한다.

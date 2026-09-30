@@ -28,9 +28,9 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual(trace['reply_type'], 2)
         self.assertEqual(trace['error']['value'], 'org.freedesktop.DBus.Error.ServiceUnknown')
         self.assertEqual(trace['session_context'], dict(result='observed', basis='unique_live_context',
-                         lifetime=8, event=2, state=-7))
+                         lifetime=8, event=2, state=-7, revision=5))
         self.assertEqual(s['send_session'], dict(result='observed', basis='send_storage',
-                         lifetime=8, event=2, state=-7))
+                         lifetime=8, event=2, state=-7, revision=5))
         for key in ('bus_lifetime', 'session_lifetime', 'session_state', 'wire_serial'):
             self.assertIsNone(trace[key])
         self.assertEqual(failed['request']['result'], 'observation_capacity')
@@ -41,6 +41,7 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual(escaped['request']['sender']['value'], 'quote"\\\n\x01\xff')
         self.assertEqual(longest['request']['request_id'], 2**64-1)
         self.assertEqual(longest['request']['session_state'], -2**31)
+        self.assertEqual(longest['request']['session_context']['revision'], 2**64-1)
         self.assertFalse(longest['request']['sender']['complete'])
         self.assertEqual(longest['request']['sender']['value'], '\x01'*63)
         a = audit.Auditor()

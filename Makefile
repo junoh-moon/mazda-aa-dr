@@ -43,6 +43,8 @@ $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUI
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
 $(BUILD)/test_request_trace: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_trace.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_trace.cpp -pthread -o $@
+$(BUILD)/test_model_session: tests/runtime/test_model_session.cpp src/runtime/model_session.h src/runtime/session_trace.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $< -o $@
 $(BUILD)/test_request_status: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_status.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
 $(BUILD)/test_request_observer: src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/request_observer.cpp src/runtime/request_observer.h tests/runtime/test_request_observer.cpp | $(BUILD)
@@ -53,6 +55,8 @@ $(BUILD)/test_journal_queue: tests/runtime/test_journal_queue.cpp src/runtime/jo
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
 $(BUILD)/test_journal: $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/motion_batch.h tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
+$(BUILD)/test_worker_session: $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_worker_session.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_worker_session.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $^ $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
 $(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
@@ -76,7 +80,7 @@ test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch $(BUILD)/test_sessi
 	$(BUILD)/test_cold_patch
 	@set -e; for case in normal failure overlap same_storage closing_create capacity callback_bad readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight; do $(BUILD)/test_session_hooks $$case; done
 	$(BUILD)/test_session_early_init
-test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
 	$(BUILD)/test_request_status
@@ -84,6 +88,8 @@ test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_re
 	$(BUILD)/test_request_handoff
 	$(BUILD)/test_journal_queue
 	$(BUILD)/test_journal
+	$(BUILD)/test_model_session
+	@set -e; for case in destroy recreate status failed_create ambiguous inflight; do $(BUILD)/test_worker_session $$case; done
 test-journal-boundaries:
 	@result=0; MX5DR_JOURNAL_BOUNDARY_BUILD=$(BUILD)/journal-boundaries CXX="$(CXX)" CC="$(CC)" sh tests/runtime/run_journal_boundaries.sh || result=$$?; [ "$$result" -eq 0 ] || [ "$$result" -eq 77 ]
 test-request-publication:
