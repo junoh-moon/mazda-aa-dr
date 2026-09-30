@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include "session_trace.h"
+#include "bus_trace.h"
 
 namespace mx5 { namespace runtime { namespace request_trace {
 
@@ -68,8 +69,9 @@ struct Route {
     Text destination, path, interface_name, member;
 };
 struct Issue {
-    // Optional facts supplied by a future hook. Leave known clear until the
-    // corresponding original lifetime/status boundary has actually been seen.
+    // bus_lifetime records the process-local successful connect epoch below.
+    // Qualified request/session ownership is still unknown, not inferred from
+    // a connection object, a service name or the ambient AA session.
     uint64_t observed_ns;
     uint64_t bus_lifetime, session_lifetime, session_event;
     int32_t session_state;
@@ -77,12 +79,14 @@ struct Issue {
     // Unique live observed AA context at issue, not request ownership. Reserved
     // session_lifetime/state above stay unknown until that binding is proved.
     session_trace::Snapshot session_context;
+    bus_trace::Snapshot connection;
     // Original method's routing fields, copied BEFORE async submission.
     // A well-known destination is not the provider identity or bus lifetime.
     Route route;
 };
 
 struct Reply {
+    bus_trace::Snapshot connection;
     uint64_t observed_ns;
     int32_t type;
     uint32_t wire_serial;

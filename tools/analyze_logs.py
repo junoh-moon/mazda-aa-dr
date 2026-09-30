@@ -27,6 +27,7 @@ LIMITATIONS = [
     "Only recorded local byte invariants are checked; no complete vehicle-session proof.",
     "Lower send result is not phone receipt, app adoption, or navigation success.",
     "SMDB/owner/receiver polls do not establish source freshness or exact-request provenance.",
+    "Connection lifetimes are process-local observed API boundaries, not daemon GUIDs or provider qualification.",
     "An issue-time unique live session is ambient context, not request ownership or phone acceptance.",
     "SHADOW model diagnostics do not establish DR accuracy, ground truth, or ASSIST readiness.",
     "Yaw/wheel calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
@@ -64,6 +65,18 @@ def finite_float(value):
 
 def bounded_int(value, low, high):
     return integer(value) and low <= value <= high
+
+
+def bus_snapshot(value):
+    if (not isinstance(value, dict) or value.get("result") not in
+            ("connected", "disconnected", "unobserved", "transition", "observation_fault") or
+            any(k not in value for k in ("object", "lifetime"))):
+        return False
+    if value["result"] in ("connected", "disconnected"):
+        return (bounded_int(value["object"], 1, 2**32-1) and
+                (bounded_int(value["lifetime"], 1, 2**64-1) if value["result"] == "connected"
+                 else value["lifetime"] is None))
+    return value["object"] is None and value["lifetime"] is None
 
 
 def session_snapshot(value, basis):
@@ -398,6 +411,15 @@ class Auditor:
                     self.issue("session_observer_malformed", source, "Invalid session observation health")
                 elif not observer["prepared"] or observer["faults"]:
                     self.issue("session_observer_unavailable", source, "Session observation is unavailable or incomplete")
+            if "bus_observer" in row:
+                observer = row["bus_observer"]
+                if (not isinstance(observer, dict) or not isinstance(observer.get("prepared"), bool) or
+                        not bounded_int(observer.get("capacity"), 1, 2**32-1) or
+                        not bounded_int(observer.get("contexts"), 0, observer["capacity"]) or
+                        not bounded_int(observer.get("faults"), 0, 2**32-1)):
+                    self.issue("bus_observer_malformed", source, "Invalid bus observation health")
+                elif not observer["prepared"] or observer["faults"]:
+                    self.issue("bus_observer_unavailable", source, "Bus observation is unavailable or incomplete")
         elif kind == "owner_poll":
             if self.validate(row, source, ("receipt_ns", "pid"), ("owner", "comm"), ("request_provenance",)):
                 self.owners[(row["owner"], row["pid"], row["comm"])] += 1
@@ -839,6 +861,13 @@ class Auditor:
                 valid = session_snapshot(t["session_context"], "unique_live_context")
                 if t["result"] != "observed":
                     valid = valid and t["session_context"]["result"] == "unobserved"
+        connection_fields = ("issue_connection", "reply_connection")
+        if valid and any(k in t for k in connection_fields):
+            valid = all(bus_snapshot(t.get(k)) for k in connection_fields)
+            if valid:
+                valid = t["bus_lifetime"] == t["issue_connection"]["lifetime"]
+                if t["result"] != "observed":
+                    valid = valid and all(t[k]["result"] == "unobserved" for k in connection_fields)
         if valid:
             if t["result"] == "observed":
                 valid = all(t[k] > 0 for k in ids) and t["request_epoch"] == t["worker_epoch"]
@@ -859,6 +888,13 @@ class Auditor:
         if ("session_context" in t and
                 t["session_context"]["result"] in ("transition", "ambiguous", "observation_fault")):
             self.issue("session_observation_unavailable", source, t["session_context"]["result"])
+
+        if t["result"] == "observed" and "issue_connection" in t:
+            issue, reply = t["issue_connection"], t["reply_connection"]
+            if issue["result"] != "connected" or reply["result"] != "connected":
+                self.issue("bus_observation_unavailable", source, "Issue/reply connection continuity is unknown")
+            elif issue != reply:
+                self.issue("bus_changed_since_issue", source, "Reply connection differs from the issue-time connection")
 
     def send(self, row, source):
         if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "type", "length",

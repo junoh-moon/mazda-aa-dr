@@ -5,7 +5,8 @@ backend. It is not evidence that the package has run on a CMU.
 
 ## Integration
 
-Build `adapter.cpp`, `v74_install.cpp`, `request_hooks.cpp`, `session_hooks.cpp`, and the runtime
+Build `adapter.cpp`, `v74_install.cpp`, `request_hooks.cpp`, `session_hooks.cpp`,
+`bus_hooks.cpp`, and the runtime
 `request_trace.cpp`/`request_observer.cpp`. ARM32 softfp also uses
 `arm_veneer.S` and `request_veneer.S`. The Makefile enables exception cleanup
 for the wrappers and Observer. Link pthread, dl, and the math runtime. C++11 is required;
@@ -22,7 +23,7 @@ it does not bypass that shim. It never changes the touch hooks.
 
 Production sets `observe_requests=true`, supplies the existing `blm_handle`,
 and uses `read_request_trace` and `read_send_session`. The same cold transaction
-installs four BLM entries and seven GOT slots across BLM, JCIDBUS and the LDS data client. Their
+installs four BLM entries and sixteen GOT slots across BLM, JCIDBUS and the LDS data client. Their
 whole-file hashes, mappings, entry bytes and original slot targets are checked
 before the lease. BLM worker/vtable symbols are local ELF symbols; they cannot
 be queried with `dlsym`. JCIDBUS code pages remain executable and unchanged.
@@ -38,6 +39,26 @@ without notification. It never owns callback userdata or OEM reference counts.
 POSITION and SEND records carry the same owned trace; health reports observation
 loss and ABI mismatches. These process-local IDs and receipt times do not prove
 provider/receiver/session qualification or producer measurement time.
+
+Connection observation wraps the pinned JCIDBUS create/connect/disconnect/free
+APIs, the original close callback, and the signal handler. The stock general
+signal filter consumes `org.freedesktop.DBus.Local.Disconnected` before its
+later close filter can run. Observe that actual signal before forwarding the
+unchanged handler; never synthesize the missing close callback. The message
+predicate's original libdbus hash, address and entry bytes are also guarded.
+A nonzero connect result starts a new
+process-local lifetime; zero is failure. Disconnect, close notification and
+free retire that observation. Connection pointers are opaque comparison keys,
+never dereferenced. The 64 immutable callback contexts are never reused, so a
+late callback after free cannot close a new object at the same address.
+Concurrent lifecycle calls, exhaustion or unwind make observation incomplete;
+forwarding, original arguments, callback return and errno are preserved.
+The original free's nested disconnect is an expected boundary, not a conflict.
+Preexisting objects stay unobserved. Issue and reply snapshots are copied
+separately into the request trace and journal, and changed/unavailable lifetimes
+make the offline audit inconclusive. These IDs are neither bus daemon GUIDs nor
+provider identity. Bus boundaries revoke adapter candidates before/after the
+original; MODEL/holdout bus reset and provider qualification remain TODO.
 
 Session observation wraps the exact create/destroy APIs and the status callback
 in the original 76-byte table. It preserves the other 18 entries, userdata,

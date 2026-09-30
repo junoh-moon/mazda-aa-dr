@@ -12,7 +12,7 @@ struct Entry { uintptr_t address; const uint8_t* bytes; uintptr_t replacement; }
 struct Slot { uintptr_t address, expected, replacement; };
 struct Plan {
     Entry entries[4]; unsigned entry_count;
-    Slot slots[7]; unsigned slot_count;
+    Slot slots[16]; unsigned slot_count;
 };
 struct Ops {
     void* user;
@@ -24,7 +24,7 @@ struct Ops {
 };
 
 inline InstallResult apply(const Plan& plan, size_t page_size, const Ops& ops) {
-    if(!plan.entry_count || plan.entry_count>4 || !plan.slot_count || plan.slot_count>7 ||
+    if(!plan.entry_count || plan.entry_count>4 || !plan.slot_count || plan.slot_count>16 ||
        page_size<64 || (page_size&(page_size-1)))return INVALID_INSTALL_ARGUMENT;
     uintptr_t pages[4]; unsigned page_count=0, writable=0;
     for(unsigned i=0;i<plan.entry_count;++i) {

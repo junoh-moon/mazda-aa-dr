@@ -14,6 +14,44 @@ spec.loader.exec_module(audit)
 
 
 class RequestJournal(unittest.TestCase):
+    def test_bus_lifetimes_and_health(self):
+        command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+        p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
+        connected = dict(result='connected', object=1, lifetime=7)
+        trace = dict(p['request'], bus_lifetime=7, issue_connection=connected, reply_connection=connected)
+        a = audit.Auditor()
+        a.consume(dict(p, request=trace), 'same-bus')
+        self.assertFalse(any(i['code'].startswith('bus_') for i in a.issues))
+        for snapshot in (dict(connected, object=2, lifetime=8), dict(connected, lifetime=8)):
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), 'changed-bus')
+            self.assertIn('bus_changed_since_issue', [i['code'] for i in a.issues])
+        for result in ('unobserved', 'transition', 'observation_fault', 'disconnected'):
+            snapshot = dict(result=result, object=1 if result == 'disconnected' else None, lifetime=None)
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), result)
+            self.assertIn('bus_observation_unavailable', [i['code'] for i in a.issues])
+        for snapshot in (None, {}, dict(connected, lifetime=0), dict(connected, object=True),
+                         dict(connected, result='unobserved'), dict(connected, lifetime=2**64)):
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(trace, reply_connection=snapshot)), 'malformed')
+            self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
+        for change in ({'bus_lifetime': None}, {'bus_lifetime': 8}):
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(trace, **change)), 'contradictory-issue')
+            self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
+        old = dict(trace)
+        del old['issue_connection'], old['reply_connection']
+        a = audit.Auditor()
+        a.consume(dict(p, request=old), 'older-schema')
+        self.assertFalse(any(i['code'] in ('request_record_malformed', 'bus_changed_since_issue') for i in a.issues))
+        observer = dict(prepared=True, contexts=2, capacity=64, faults=0)
+        for change in ({'faults': 1}, {'prepared': False}, {'contexts': 65}, {'faults': True}):
+            a = audit.Auditor()
+            a.consume(dict(kind='health', mono_ns=103, dropped=0, hook_installed=True,
+                           assist_ready=False, bus_observer=dict(observer, **change)), 'health')
+            self.assertTrue(any(i['code'].startswith('bus_observer') for i in a.issues))
+
     def test_route_schema_and_old_records(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
         p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
@@ -77,6 +115,8 @@ class RequestJournal(unittest.TestCase):
         self.assertTrue(trace['association_only'])
         self.assertEqual((trace['request_id'], trace['worker_id']), (1, 2))
         self.assertEqual((trace['issue_observed_ns'], trace['reply_observed_ns']), (101, 102))
+        self.assertEqual(trace['issue_connection'], dict(result='unobserved', object=None, lifetime=None))
+        self.assertEqual(trace['reply_connection'], trace['issue_connection'])
         self.assertEqual(trace['reply_type'], 2)
         self.assertEqual(trace['error']['value'], 'org.freedesktop.DBus.Error.ServiceUnknown')
         self.assertEqual(trace['route'], {k: dict(value=v, complete=True) for k, v in
@@ -95,6 +135,8 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual(failed['request']['session_context']['result'], 'unobserved')
         self.assertIsNone(failed['request']['session_context']['lifetime'])
         self.assertEqual(escaped['request']['sender']['value'], 'quote"\\\n\x01\xff')
+        self.assertEqual(longest['request']['issue_connection'], dict(result='connected', object=2**32-1, lifetime=2**64-1))
+        self.assertEqual(longest['request']['reply_connection'], longest['request']['issue_connection'])
         self.assertEqual(longest['request']['request_id'], 2**64-1)
         self.assertEqual(longest['request']['session_state'], -2**31)
         self.assertEqual(longest['request']['session_context']['revision'], 2**64-1)

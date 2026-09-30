@@ -212,6 +212,8 @@ static void request_journal(bool emit) {
   t.request.id=t.request.epoch=t.worker.id=t.worker.epoch=UINT64_MAX;
   t.issue.observed_ns=t.reply.observed_ns=UINT64_MAX;
   t.issue.bus_lifetime=t.issue.session_lifetime=t.issue.session_event=UINT64_MAX;
+  t.issue.connection={mx5::runtime::bus_trace::CONNECTED,UINT32_MAX,UINT64_MAX};
+  t.reply.connection=t.issue.connection;
   t.issue.known=7;t.issue.session_state=INT32_MIN;
   t.issue.session_context.lifetime=t.issue.session_context.event=UINT32_MAX;
   t.issue.session_context.revision=UINT64_MAX;

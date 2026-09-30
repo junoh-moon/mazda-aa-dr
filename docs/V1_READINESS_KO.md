@@ -38,6 +38,11 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   [통합본 검증](../validation/SESSION_MERGE_2026-09-30.md)에서 storage race의 수정 전후,
   최종 host/ARM 전체 검사와 원본 LDS 실행을 확인했습니다. ARM 합성 송신 한 번의
   실패는 후속 검사에서 재현되지 않았으며 원인은 미분리입니다.
+- [x] 실제 JCIDBUS 연결의 API/signal 경계와 요청 발행/응답의 로컬 수명을 기록합니다.
+  [버스 관측 검사](../validation/BUS_CONNECTION_2026-09-30.md)에서 원본 LDS 요청
+  17건과 daemon 종료를 검사했습니다. close callback만으로 놓친 실제 단절을
+  signal 관측으로 보강했습니다. daemon/provider 신원, MODEL의 버스 경계
+  reset과 qualified 요청 연결은 여전히 미완료입니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
   [요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)은 발행 당시 원본
   목적지·경로·인터페이스·메서드명을 응답까지 연결합니다. well-known 서비스

@@ -68,6 +68,15 @@ MODEL/holdout의 세션 reset과 요청별 qualification이 미구현이었습�
 ARM 합성 송신 시험 한 번의 실패는 후속 단독·전체 검사에서 재현되지 않았으며
 원인은 미분리입니다. bus lifetime과 qualified 제공자·수신기·세션 연결은 미구현입니다.
 
+[실제 버스 연결 수명 관측](../validation/BUS_CONNECTION_2026-09-30.md)을
+후속 구현했습니다. 원본 생성·접속·해제와 실제 단절 신호를 관측하고 요청
+발행/응답의 연결을 각각 보존합니다. 원본 close callback 앞에서 단절 신호가
+소비되는 경로를 두 VM 실패로 확인하고 signal 관측을 보강했습니다. 최종
+원본 LDS 요청 17건과 daemon 종료를 실행했습니다. 생성부터 관측한 연결의
+로컬 식별자이며 daemon/provider 신원이나 요청의 세션 소유권이 아닙니다.
+MODEL의 버스 경계 reset과 qualified 연결은 TODO이고 ASSIST는 비활성입니다.
+외부 master `e79ca52`의 추가 MODEL 보강은 다음 통합 대상으로 확인했습니다.
+
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
 생략 없이 통과했습니다. 원본 커널 VM의 baseline/SHADOW 비교에서 위치 API의

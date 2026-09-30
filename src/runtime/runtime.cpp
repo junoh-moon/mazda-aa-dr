@@ -11,6 +11,7 @@
 #include "motion_batch.h"
 #include "shadow_log.h"
 #include "request_log.h"
+#include "../adapter/bus_hooks.h"
 #include "worker_tick.h"
 #include "journal_queue.h"
 #include "model_session.h"
@@ -277,6 +278,7 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
 void journal_health(Journal& j,uint64_t now,bool capture,bool computation) {
   const A::RequestHookHealth h=A::request_hook_health();
   const A::SessionHealth s=A::session_hook_health();
+  const A::BusHealth b=A::bus_hook_health();
   char line[1000];
   const int n=snprintf(line,sizeof line,
       "{\"kind\":\"health\",\"mono_ns\":%llu,\"dropped\":%llu,\"hook_installed\":%s,"
@@ -284,13 +286,15 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation) {
       "\"computation_active\":%s,\"assist_ready\":false,\"request_observer\":{"
       "\"prepared\":%s,\"abi_fault\":%s,\"result\":\"%s\",\"loss_epoch\":%llu,"
       "\"requests\":%u,\"workers\":%u,\"loss_reasons\":%u,\"exhausted\":%s},"
-      "\"session_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u}}",
+      "\"session_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u},"
+      "\"bus_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u}}",
       (unsigned long long)now,(unsigned long long)queue.dropped(),hook_installed?"true":"false",
       unsigned(A::mode()),__sync_fetch_and_add(&audit_fault,0),capture?"true":"false",
       computation?"true":"false",h.prepared?"true":"false",h.abi_fault?"true":"false",
       A::R::result_name(h.result),(unsigned long long)h.ledger.loss_epoch,h.ledger.requests,
       h.ledger.workers,h.ledger.loss_reasons,h.ledger.exhausted?"true":"false",
-      s.prepared?"true":"false",s.contexts,unsigned(A::SESSION_CONTEXT_CAPACITY),s.faults);
+      s.prepared?"true":"false",s.contexts,unsigned(A::SESSION_CONTEXT_CAPACITY),s.faults,
+      b.prepared?"true":"false",b.contexts,unsigned(A::BUS_CONTEXT_CAPACITY),b.faults);
   if(n<=0 || size_t(n)>=sizeof line)j.fail();else j.line(line);
 }
 bool stop_requested(const char* root) {

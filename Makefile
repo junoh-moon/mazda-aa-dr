@@ -8,7 +8,7 @@ C_WARN = -std=c99 -O2 -Wall -Wextra -Werror -pedantic
 CXX_WARN = -std=c++11 -O2 -Wall -Wextra -Werror -Isrc
 CORE = src/core/dr_core.c
 REQUEST = src/adapter/request_hooks.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp
-ADAPTER = src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/session_hooks.cpp $(REQUEST)
+ADAPTER = src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $(REQUEST)
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
 NAV_HEADERS = src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
@@ -75,14 +75,21 @@ $(BUILD)/test_session_hooks: $(ADAPTER) src/adapter/adapter.h src/adapter/sessio
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
 $(BUILD)/test_session_early_init: $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h src/runtime/session_trace.h src/runtime/request_trace.h src/adapter/request_hooks.h src/runtime/request_observer.h tests/adapter/session_early_init_test.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
-$(BUILD)/test_session_request: tests/adapter/session_request_test.cpp src/adapter/session_hooks.cpp src/adapter/adapter.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/adapter/request_hooks.cpp src/adapter/request_hooks.h src/adapter/session_hooks.h src/adapter/adapter.h src/runtime/request_observer.h src/runtime/request_trace.h src/runtime/session_trace.h | $(BUILD)
+$(BUILD)/test_session_request: tests/adapter/session_request_test.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/adapter.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/adapter/request_hooks.cpp src/adapter/request_hooks.h src/adapter/session_hooks.h src/adapter/adapter.h src/runtime/request_observer.h src/runtime/request_trace.h src/runtime/session_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/adapter/request_hooks.cpp,$^) -pthread -o $@
-test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request
+$(BUILD)/test_bus_hooks: tests/adapter/bus_hooks_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.h src/runtime/bus_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
+$(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.h src/runtime/bus_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
+test-adapter: $(BUILD)/test_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	$(BUILD)/test_cold_patch
 	@set -e; for case in normal failure overlap same_storage closing_create creating_during_destroy null_success output_race late_destroy distinct_storage capacity callback_bad callback_null readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight; do result=0; $(BUILD)/test_session_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 	$(BUILD)/test_session_early_init
 	$(BUILD)/test_session_request
+	$(BUILD)/test_session_request bus_recreated
+	$(BUILD)/test_bus_early_init
+	@set -e; for case in normal signal failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
@@ -146,7 +153,7 @@ $(BUILD)/arm/src/runtime/runtime.o: src/runtime/motion_batch.h
 
 # Only wrappers that surround OEM calls need C++ cleanup/unwind tables.
 # A caller's exception or deferred cancellation must cross the shim intact.
-$(BUILD)/arm/src/adapter/adapter.o $(BUILD)/arm/src/adapter/request_hooks.o $(BUILD)/arm/src/adapter/session_hooks.o $(BUILD)/arm/src/runtime/request_observer.o: override ARM_CXXFLAGS += -fexceptions
+$(BUILD)/arm/src/adapter/adapter.o $(BUILD)/arm/src/adapter/request_hooks.o $(BUILD)/arm/src/adapter/bus_hooks.o $(BUILD)/arm/src/adapter/session_hooks.o $(BUILD)/arm/src/runtime/request_observer.o: override ARM_CXXFLAGS += -fexceptions
 
 arm: $(BUILD)/libmx5dr-vimtap.so $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $(BUILD)/mx5dr-guard $(BUILD)/mx5dr-sha256
 $(BUILD)/arm/%.o: %.cpp
@@ -216,3 +223,6 @@ ifneq ($(strip $(ARM_MISSING_DEPS)),)
 $(ARM_MISSING_DEPS): FORCE_ARM_DEPS
 FORCE_ARM_DEPS:
 endif
+
+# Bus snapshots are carried by every request and observation value.
+$(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log $(BUILD)/test_worker_session $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_model_session $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request: src/adapter/bus_hooks.h src/runtime/bus_trace.h
