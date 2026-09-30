@@ -143,6 +143,16 @@ consumer/producer 잠금이 겹치면 기록을 버리는 경로를 재현·제�
 확인했습니다. 원본 큐·LDS·제품 request hook을 실행하는 시험은 아니며,
 제품 세션 자격 연결과 ASSIST는 여전히 미구현 또는 비활성입니다.
 
+[세션 관측 검토·수정·직접 실행](../validation/SESSION_CONTEXT_REVIEW_2026-09-30.md)에서는
+독립 구현의 issue/send 문맥을 통합하고 storage 재읽기 race·중첩 생성/파괴의
+잘못된 생존 관측·분석기 상태 이력 모순 누락을 재현·수정했습니다.
+네 독립 리뷰와 최종 host/ARM 전체 검사 뒤, 실제 제품으로 원본 callback과
+세션 재생성 이후 지연된 LDS 요청 네 건의 전달을 확인했습니다. 이전 요청의
+문맥과 새 송신 대상을 구분하는 관측이며 session/receiver 자격과 ASSIST 연결은
+미완료입니다. 반복 VM 한 번의 정리 검사 실패는 원인이 미분리이며, 세부 진단을
+추가한 다음 VM의 성공으로 해결됐다고 판단하지 않습니다.
+공개 ZIP은 기존 v0.3.1-shadow.1 그대로입니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

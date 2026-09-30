@@ -1,0 +1,86 @@
+// Authored-only integration: include request wrapper to access its authored
+// Observer for queue dispatch; no OEM object, binary or original API is used.
+#include "../../src/adapter/request_hooks.cpp"
+#include "adapter/adapter.h"
+#include <assert.h>
+#include <stdio.h>
+#include <unistd.h>
+namespace S=mx5::runtime::session_trace;
+static A::SessionCallbacks callbacks[2];
+static int handles[2], session_creates;
+static int method, worker, connection, notify_context, reply_value;
+alignas(8) static unsigned char position[72];
+static A::RequestNotify queued_notify;
+static A::Observation position_event, send_event;
+static unsigned positions, sends;
+static int32_t session_create(const char*,void*,const A::SessionCallbacks* cb,void** out) {
+    assert(session_creates<2);callbacks[session_creates]=*cb;
+    *out=&handles[session_creates++];return 0;
+}
+static int32_t session_destroy(void** out) { *out=0;return 0; }
+static void session_status(void*,void*) {}
+static void status_for(unsigned i,int32_t state) {
+    int32_t info[2]={state,0};
+    reinterpret_cast<A::SessionStatus>(callbacks[i].entry[1])(0,info);
+}
+static void* get_reply(void*) { return &reply_value; }
+static int get_type(void*) { return 2; }
+static const char* get_sender(void*) { return ":1.7"; }
+static const char* get_error(void*) { return 0; }
+static int get_serial(void*,uint32_t* out) { *out=7;return 0; }
+static void original_notify(void*,void*,void*) {
+    R::Token t;assert(observer->worker_post(&worker,position,&t)==R::OK);
+}
+static int32_t original_submit(void*,void*,A::RequestNotify callback,void*,int) {
+    queued_notify=callback;return 42;
+}
+static int32_t original_free(void*) { return 13; }
+static void trampoline() {}
+static uint64_t clock_value(void*) { return 100; }
+static void sink_copy(const A::Observation* e,void*) {
+    if(e->kind==A::Observation::POSITION) { position_event=*e;++positions; }
+    else { send_event=*e;++sends; }
+}
+static int32_t original_send(void*,A::VehicleData*) { return 29; }
+int main() {
+    alarm(15);
+    A::SessionBindings sb={session_create,session_destroy,session_status};
+    assert(A::prepare_session_hooks(sb));
+    A::SessionCallbacks cb=A::SessionCallbacks();cb.entry[1]=reinterpret_cast<uintptr_t>(&session_status);
+    void* storage=0;
+    assert(mx5_session_create("authored",0,&cb,&storage)==0);status_for(0,-7);
+    A::RequestBindings rb=A::RequestBindings();
+    rb.reply={get_reply,get_type,get_sender,get_error,get_serial};rb.submit=original_submit;
+    rb.notify=original_notify;rb.free_method=rb.free_method_only=original_free;rb.position_vptr=1;
+    rb.post_trampoline=rb.work_trampoline=rb.destroy_trampoline=reinterpret_cast<void*>(&trampoline);
+    assert(A::prepare_request_hooks(rb,clock_value,0));
+    A::Options options=A::Options();options.sink=sink_copy;options.clock=clock_value;
+    options.request_reader=A::read_request_trace;options.session_reader=A::read_send_session;
+    assert(A::configure(original_send,options));assert(A::set_mode(A::OBSERVE));
+    assert(mx5_request_submit(&connection,&method,original_notify,&notify_context,-1)==42);
+    status_for(0,99);
+    assert(mx5_session_destroy(&storage)==0);
+    assert(mx5_session_create("authored",0,&cb,&storage)==0);status_for(1,3);
+    queued_notify(&connection,&method,&notify_context);
+    assert(mx5_request_free(&method)==13);
+    {
+        R::WorkerScope scope(*observer,&worker);
+        A::position_enter(0,position);
+        unsigned char payload[48]={};A::VehicleData data={1,payload,sizeof payload};
+        assert(A::send_vehicle_data(&storage,&data)==29);
+        A::position_leave();
+    }
+    assert(positions==1 && sends==1);
+    assert(position_event.request_result==R::OK && send_event.request_result==R::OK);
+    const S::Snapshot& old=position_event.request_trace.issue.session_context;
+    const S::Snapshot& carried=send_event.request_trace.issue.session_context;
+    const S::Snapshot& actual=send_event.send_session;
+    assert(old.result==S::OBSERVED && old.lifetime==1 && old.event==1 && old.state==-7 && old.state_known);
+    assert(carried.result==old.result && carried.lifetime==old.lifetime && carried.event==old.event && carried.state==old.state && carried.state_known);
+    assert(actual.result==S::OBSERVED && actual.lifetime==2 && actual.event==1 && actual.state==3 && actual.state_known);
+    assert(!send_event.request_trace.issue.known && !send_event.request_trace.issue.session_lifetime);
+    assert(!send_event.provenance.exact_request);
+    assert(!A::request_hook_health().ledger.requests && !A::request_hook_health().ledger.workers);
+    assert(!A::session_hook_health().faults);
+    puts("PASS actual submit hook retains issue lifetime 1/event 1/state -7 across status change, destroy/recreate, reply, owned worker, free and send to lifetime 2/event 1/state 3");
+}

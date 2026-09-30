@@ -21,10 +21,28 @@ static RequestHookHealth dso_health() {
 static R::Result dso_read(const void* p,R::Trace* t,void* u) {
     return reinterpret_cast<R::Result(*)(const void*,R::Trace*,void*)>(request_dso_base+TEST_READ)(p,t,u);
 }
+static bool dso_session_prepare(const SessionBindings& b) {
+    return reinterpret_cast<bool(*)(const SessionBindings&)>(request_dso_base+TEST_SESSION_PREPARE)(b);
+}
+static S::Snapshot dso_session_issue() {
+    return reinterpret_cast<S::Snapshot(*)()>(request_dso_base+TEST_SESSION_ISSUE)();
+}
+static void dso_session_send(const void* p,S::Snapshot* s,void* u) {
+    reinterpret_cast<void(*)(const void*,S::Snapshot*,void*)>(request_dso_base+TEST_SESSION_SEND)(p,s,u);
+}
+static SessionHealth dso_session_health() {
+    return reinterpret_cast<SessionHealth(*)()>(request_dso_base+TEST_SESSION_HEALTH)();
+}
 } }
 #define prepare_request_hooks dso_prepare
 #define request_hook_health dso_health
 #define read_request_trace dso_read
+#define prepare_session_hooks dso_session_prepare
+#define read_issue_session dso_session_issue
+#define read_send_session dso_session_send
+#define session_hook_health dso_session_health
+#define mx5_session_create (reinterpret_cast<A::SessionCreate>(request_dso_base+TEST_SESSION_CREATE))
+#define mx5_session_destroy (reinterpret_cast<A::SessionDestroy>(request_dso_base+TEST_SESSION_DESTROY))
 #define mx5_request_submit (reinterpret_cast<A::RequestSubmit>(request_dso_base+TEST_SUBMIT))
 #define mx5_request_free (reinterpret_cast<A::RequestFree>(request_dso_base+TEST_FREE))
 #define mx5_request_free_only (reinterpret_cast<A::RequestFree>(request_dso_base+TEST_FREE_ONLY))

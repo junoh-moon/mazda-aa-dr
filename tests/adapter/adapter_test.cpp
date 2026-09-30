@@ -19,6 +19,11 @@ namespace R = mx5::runtime::request_trace;
 static const void* expected_position;
 static R::Result trace_result=R::OK;
 static unsigned trace_reads;
+static unsigned session_reads;
+static void session_reader(const void* storage,mx5::runtime::session_trace::Snapshot* out,void*) {
+    assert(storage==expected_session);++session_reads;errno=EIO;
+    const mx5::runtime::session_trace::Snapshot s={mx5::runtime::session_trace::OBSERVED,77,9,-2,true};*out=s;
+}
 static R::Result request_reader(const void* position, R::Trace* out, void*) {
     assert(position==expected_position);++trace_reads;
     *out=R::Trace();out->request.id=43;out->worker.id=51;
@@ -73,7 +78,7 @@ int main(int argc,char** argv) {
     Options o = Options();o.sink=sink;o.clock=clock_fn;o.provenance=provenance;
     o.allow_assist=true;o.max_snapshot_age_ns=150000000;
     if (!std::strcmp(argv[1],"request")) {
-        o.request_reader=request_reader;o.provenance=0;o.allow_assist=false;
+        o.request_reader=request_reader;o.provenance=0;o.allow_assist=false;o.session_reader=session_reader;
     }
     assert(configure(fake_next,o));
     assert(!configure(fake_next,o));
@@ -140,6 +145,9 @@ int main(int argc,char** argv) {
         run_send(data,true);position_leave();
         assert(last_event.request_trace.request.id==43 && last_event.request_trace.worker.id==51);
         assert(last_event.request_trace.reply.type==2 && last_event.choice==ORIGINAL);
+        assert(session_reads==1 && last_event.send_session.lifetime==77);
+        assert(last_event.send_session.state_known && last_event.send_session.state==-2);
+        assert(!last_event.request_trace.issue.session_lifetime);
         run_send(data,true);
         assert(last_event.request_result==R::NOT_FOUND && !last_event.request_trace.request.id);
         trace_result=R::STALE;
