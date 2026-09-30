@@ -123,6 +123,10 @@ GPS 단절 중 보정 위치가 실제 AA 송신에 선택되고, GPS 복귀 시
   최종 제품의 원본 VM에서 LDS 응답 42건, 세션을 유지한 복수 연결·해제와
   raw 보존을 확인했습니다. 유효 원본 GPS나 qualified 입력·폰 수용은 아니므로
   이 상위 항목은 미완료입니다. 외부 SM·SYSTEM·USB 기동 조사도 따로 추적합니다.
+  외부 master의 [원본 커널 GPIO 진단](../validation/LDS_GPIO_VM_2026-10-01.md)은
+  별도 VM의 USB 출력 latch 1과 PSR/sysfs 0을 보고합니다. 그 진단에는 LDS의
+  유효 NMEA·GetPosition 실행이 없으며 실제 하드웨어·receiver 자격은 미검증입니다.
+  이 작업 브랜치의 후속 파서 실행은 위 GPIO·제품 통합 기록에서 구분합니다.
   [세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서
   이전 세션의 기준점·학습 보정·대기 입력 잔류를 제거하고 원시 입력을 보존했습니다.
   원본 VM의 두 조건에서 각각 지연 요청 네 건을 새 MODEL에서 제외했고, 재시작

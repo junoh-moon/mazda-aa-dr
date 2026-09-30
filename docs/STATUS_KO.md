@@ -366,6 +366,12 @@ ASan/UBSan으로 재현·수정했습니다. root의 전체 host 330개 Python �
 고정 ARM 전체 검사는 통과했습니다. 순정 VM·차량·폰 실행이나 공개 ZIP 갱신은
 이번 결과에 포함되지 않습니다.
 
+외부 master `9fce0aa`의 [원본 커널 GPIO 진단](../validation/LDS_GPIO_VM_2026-10-01.md)은
+별도 격리 VM의 출력 latch 1·방향 1·PSR/sysfs 0을 보고합니다. 원본 LDS가
+OTG 전원 `1` 되읽기를 기다리는 정적 조건도 구분했습니다. 이 외부 기록의
+VM에는 LDS 서비스가 없으며, 해당 기록을 이 작업 세션의 직접 실행으로 세지
+않습니다. 실제 LDS 파서의 후속 실행은 위 GPIO·제품 통합 검증 기록을 따릅니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
