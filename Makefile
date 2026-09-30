@@ -43,7 +43,7 @@ $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUI
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
 $(BUILD)/test_request_trace: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_trace.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_trace.cpp -pthread -o $@
-$(BUILD)/test_model_session: tests/runtime/test_model_session.cpp src/runtime/model_session.h src/runtime/session_trace.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
+$(BUILD)/test_model_session: tests/runtime/test_model_session.cpp src/runtime/model_bus.h src/runtime/model_session.h src/runtime/session_trace.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
 $(BUILD)/test_request_status: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_status.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
@@ -93,7 +93,7 @@ test-adapter: $(BUILD)/test_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test
 	$(BUILD)/test_session_request
 	$(BUILD)/test_session_request bus_recreated
 	$(BUILD)/test_bus_early_init
-	@set -e; for case in normal signal failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
+	@set -e; for case in normal position_source signal failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
@@ -104,8 +104,9 @@ test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_re
 	$(BUILD)/test_journal
 	$(BUILD)/test_model_session
 	$(BUILD)/test_model_session_reset
+	$(BUILD)/test_model_session_reset bus
 	$(BUILD)/test_model_session_input
-	@set -e; for case in destroy recreate status failed_create ambiguous inflight; do $(BUILD)/test_worker_session $$case; done
+	@set -e; for case in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do $(BUILD)/test_worker_session $$case; done
 test-journal-boundaries:
 	@result=0; MX5DR_JOURNAL_BOUNDARY_BUILD=$(BUILD)/journal-boundaries CXX="$(CXX)" CC="$(CC)" sh tests/runtime/run_journal_boundaries.sh || result=$$?; [ "$$result" -eq 0 ] || [ "$$result" -eq 77 ]
 test-request-publication:
@@ -232,3 +233,6 @@ endif
 
 # Bus snapshots are carried by every request and observation value.
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log $(BUILD)/test_worker_session $(BUILD)/test_request_trace $(BUILD)/test_request_status $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_journal_queue $(BUILD)/test_model_session $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input: src/adapter/bus_hooks.h src/runtime/bus_trace.h
+
+$(BUILD)/test_worker_session $(BUILD)/test_model_session_reset: tests/runtime/model_bus_fixture.h src/runtime/model_bus.h
+$(BUILD)/test_journal $(BUILD)/test_model_session_input: src/runtime/model_bus.h

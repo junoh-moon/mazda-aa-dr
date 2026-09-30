@@ -75,6 +75,8 @@ int main(int argc,char** argv) {
     options.request_reader=A::read_request_trace;options.session_reader=A::read_send_session;
     assert(A::configure(original_send,options));assert(A::set_mode(A::OBSERVE));
     assert(mx5_request_submit(&connection,&method,original_notify,&notify_context,-1)==42);
+    assert(A::read_position_bus().connection.result==mx5::runtime::bus_trace::CONNECTED);
+    assert(A::read_position_bus().connection.object==1 && A::read_position_bus().connection.lifetime==1);
     status_for(0,99);
     assert(mx5_session_destroy(&storage)==0);
     assert(mx5_session_create("authored",0,&cb,&storage)==0);status_for(1,3);
@@ -84,6 +86,7 @@ int main(int argc,char** argv) {
         assert(mx5_bus_connect(&connection,"authored",0,0)==1);
     }
     queued_notify(&connection,&method,&notify_context);
+    if(argc==2)assert(A::read_position_bus().connection.result==mx5::runtime::bus_trace::NONE);
     assert(mx5_request_free(&method)==13);
     {
         R::WorkerScope scope(*observer,&worker);

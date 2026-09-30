@@ -15,6 +15,7 @@
 #include "worker_tick.h"
 #include "journal_queue.h"
 #include "model_session.h"
+#include "model_bus.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -248,7 +249,7 @@ void journal_model_motion_excluded(Journal& j,const N::RawEvent& raw,
 template<class Receiver>
 void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
                   N::Pipeline& navigation,N::GpsHoldout& holdout,bool compute,
-                  uint64_t model_since_ns=0) {
+                  uint64_t model_since_ns=0,bool bus_boundary=false) {
   for(unsigned i=0;i<256 && !j.failed;++i) {
     N::RawEvent raw=N::RawEvent();
     N::ReceiveDiagnostic d=N::ReceiveDiagnostic();
@@ -288,7 +289,9 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
       if(enabled && (raw.received_ns<model_since_ns || old_transport)) {
         journal_motion(j,batch,raw);flush_motion(j,batch);
         journal_model_motion_excluded(j,raw,model_since_ns,
-            raw.received_ns<model_since_ns?"receipt_before_session":"transport_before_session");
+            raw.received_ns<model_since_ns?
+                (bus_boundary?"receipt_before_bus":"receipt_before_session"):
+                (bus_boundary?"transport_before_bus":"transport_before_session"));
         continue;
       }
       if(enabled) {
@@ -413,15 +416,48 @@ void sync_model_session(Journal& j,mx5::runtime::ModelSession& session,
       (unsigned long long)session.since_ns(),observed);
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
 }
+void sync_model_bus(Journal& j,mx5::runtime::ModelBus& bus,
+                    N::Pipeline& navigation,N::GpsHoldout& holdout) {
+  const mx5::runtime::bus_trace::Boundary current=A::read_position_bus();
+  const uint64_t now=clock_ns(0);
+  const mx5::runtime::ModelBus::Update update=bus.update(current,now);
+  if(update==mx5::runtime::ModelBus::SAME)return;
+  const bool reset=update==mx5::runtime::ModelBus::CHANGED;
+  if(reset) {
+    mx5_dr_context c=navigation.context();
+    if(bus.exhausted() || c.source_epoch==UINT64_MAX || c.generation==UINT64_MAX) {
+      disable_mutation();return;
+    }
+    ++c.source_epoch;++c.generation;
+    navigation.reset(c);holdout.reset(c,N::HOLDOUT_BUS_RESET);
+    journal_holdout(j,holdout,now);
+  }
+  char observed[128],line[600];
+  if(!mx5::runtime::format_bus_trace(observed,sizeof observed,current.connection)) { j.fail();return; }
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"shadow_bus\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"reset\":%s,\"input_available\":%s,"
+      "\"model_bus_epoch\":%llu,\"bus_revision\":%llu,\"raw_since_ns\":%llu,\"connection\":%s}",
+      (unsigned long long)now,reset?"true":"false",bus.available()?"true":"false",
+      (unsigned long long)bus.epoch(),(unsigned long long)current.revision,
+      (unsigned long long)bus.since_ns(),observed);
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+void sync_model_boundaries(Journal& j,mx5::runtime::ModelSession& session,
+                           mx5::runtime::ModelBus& bus,N::Pipeline& nav,N::GpsHoldout& hold) {
+  sync_model_session(j,session,nav,hold);sync_model_bus(j,bus,nav,hold);
+}
 void rejected_model_position(Journal& j,const A::Observation& o,const char* reason,
-                             const mx5::runtime::ModelSession& session) {
+                             const mx5::runtime::ModelSession& session,
+                             const mx5::runtime::ModelBus& bus) {
   char line[500];
   const int n=snprintf(line,sizeof line,
       "{\"kind\":\"shadow_position_rejected\",\"mono_ns\":%llu,\"domain\":\"model\","
       "\"assist_ready\":false,\"call\":%u,\"generation\":%u,\"reason\":\"%s\","
-      "\"session_revision\":%llu}",
+      "\"session_revision\":%llu,\"model_bus_epoch\":%llu,\"bus_revision\":%llu}",
       (unsigned long long)clock_ns(0),o.call_sequence,o.prediction_generation,reason,
-      (unsigned long long)session.current().revision);
+      (unsigned long long)session.current().revision,(unsigned long long)bus.epoch(),
+      (unsigned long long)bus.current().revision);
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
 }
 
@@ -454,6 +490,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
   N::GpsHoldout holdout;
   N::MotionReceiver motion;
   mx5::runtime::ModelSession model_session;
+  mx5::runtime::ModelBus model_bus;
   const N::ModelProfile model=N::research_model_profile();
   mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
   const bool capture=config.mode==4 && motion.open_channel(motion_channel);
@@ -503,7 +540,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
         shadow=false;
       }
     }
-    if(shadow)sync_model_session(j,model_session,navigation,holdout);
+    if(shadow)sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
     A::Observation o;
     unsigned drained = 0;
     while (drained++ < 256 && pop(&o)) {
@@ -511,9 +548,10 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
       j.line(line);
       if (o.kind == A::Observation::POSITION) {
         if(shadow && !__sync_fetch_and_add(&audit_fault,0)) {
-          sync_model_session(j,model_session,navigation,holdout);
+          sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
           const char* reason=model_session.reject(o);
-          if(reason)rejected_model_position(j,o,reason,model_session);
+          if(!reason)reason=model_bus.reject(o);
+          if(reason)rejected_model_position(j,o,reason,model_session,model_bus);
           else { navigation.enqueue_position(o);holdout.enqueue_position(o); }
         }
       }
@@ -526,21 +564,23 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
           j.line("{\"kind\":\"shadow_disabled\",\"reason\":\"audit_fault\",\"assist_ready\":false}");
           shadow=false; // Permanent for this worker, even if a fault flag changes.
     }
-    if(shadow)sync_model_session(j,model_session,navigation,holdout);
+    if(shadow)sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
+    const bool bus_boundary=model_bus.since_ns()>model_session.since_ns();
     if(capture && !j.failed)drain_motion(j,motion_batch,motion,navigation,holdout,
-        shadow && model_session.available(),model_session.since_ns());
+        shadow && model_session.available() && model_bus.available(),
+        bus_boundary?model_bus.since_ns():model_session.since_ns(),bus_boundary);
     if(stopping) {
       if(drain_capture_tail(j))finish_capture(j,boot_id,cutoff,clock_ns(0));
       return 0; // Even failed finalization cannot reopen this capture.
     }
     now=clock_ns(0);
     if(shadow && !j.failed && !__sync_fetch_and_add(&audit_fault,0) && model_tick.due(now)) {
-        sync_model_session(j,model_session,navigation,holdout);
+        sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
         if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
         if(now>navigation.reorder_ns())holdout.drain(now-navigation.reorder_ns());
         // A lifecycle can complete while this worker computes. A coherent
         // recheck clears queued predictions before its next diagnostic snapshot.
-        sync_model_session(j,model_session,navigation,holdout);
+        sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
         now=clock_ns(0);
         journal_holdout(j,holdout,now);
         if(now>=last_calibration_log && now-last_calibration_log>=1000000000ULL) {
@@ -563,6 +603,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
           snprintf(line,sizeof line,
               "{\"kind\":\"shadow\",\"mono_ns\":%llu,\"domain\":\"model\","
               "\"model_session_epoch\":%llu,\"session_revision\":%llu,"
+              "\"model_bus_epoch\":%llu,\"bus_revision\":%llu,"
               "\"model_valid\":%s,\"assist_ready\":false,\"state\":%u,"
               "\"result\":\"%s\",\"pipeline\":\"%s\",\"uncertainties\":%u,"
               "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
@@ -572,6 +613,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
               "\"wheel_scale_version\":%llu,\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
               (unsigned long long)now,(unsigned long long)navigation.context().session_epoch,
               (unsigned long long)model_session.current().revision,
+              (unsigned long long)model_bus.epoch(),(unsigned long long)model_bus.current().revision,
               d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),
               mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
               (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
@@ -586,7 +628,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
     }
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;
-      journal_health(j,now,capture&&!j.failed,shadow && model_session.available());
+      journal_health(j,now,capture&&!j.failed,shadow && model_session.available() && model_bus.available());
       j.flush();
     }
     // The stock unconnected Unix-datagram queue is small. Wake on motion

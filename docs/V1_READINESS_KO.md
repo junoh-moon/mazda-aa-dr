@@ -41,12 +41,16 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
 - [x] 실제 JCIDBUS 연결의 API/signal 경계와 요청 발행/응답의 로컬 수명을 기록합니다.
   [버스 관측 검사](../validation/BUS_CONNECTION_2026-09-30.md)에서 원본 LDS 요청
   17건과 daemon 종료를 검사했습니다. close callback만으로 놓친 실제 단절을
-  signal 관측으로 보강했습니다. daemon/provider 신원, MODEL의 버스 경계
-  reset과 qualified 요청 연결은 여전히 미완료입니다.
+  signal 관측으로 보강했습니다. 이 기록 당시 MODEL 버스 reset은 미완료였으며
+  아래 후속 작업에서 연결했습니다. daemon/provider 신원과 qualified 요청 연결은 남습니다.
 - [x] 외부 MODEL 시각·파서 보강을 버스 관측과 같은 브랜치에 통합합니다.
   [통합 검사](../validation/OBSERVATION_SYNC_2026-09-30.md)는 이전 transport 입력과
   상태 이력·문자열 오류를 재현하고 통합 제품의 원본 LDS·버스 경계를 검사합니다.
   계산에서 제외한 입력의 원시 기록을 보존하며 ASSIST 자격은 채우지 않습니다.
+- [x] 실제 LDS 버스의 관측 경계에서 MODEL/holdout을 초기화하고 이전 입력을 제외합니다.
+  [버스 계산 경계 검사](../validation/MODEL_BUS_2026-09-30.md)에 수정 전 실패,
+  작성한 학습·새 기준점 회귀와 원본 LDS/버스 해제 실행을 구분하여 기록합니다.
+  생성·접속부터 관측한 로컬 수명이며 qualified 요청 자격을 부여하지 않습니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
   [요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)은 발행 당시 원본
   목적지·경로·인터페이스·메서드명을 응답까지 연결합니다. well-known 서비스

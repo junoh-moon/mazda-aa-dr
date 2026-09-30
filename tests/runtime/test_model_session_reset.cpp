@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include "model_bus_fixture.h"
 namespace S=mx5::runtime::session_trace;
 static int handle;
 static const A::SessionCallbacks* wrapped;
@@ -36,12 +37,14 @@ static void feed_holdout(N::GpsHoldout& h,unsigned ms,unsigned wheel=13600,unsig
         assert(r==N::PIPELINE_OK||r==N::PIPELINE_WAITING);
     }
 }
-static void calibration_reset(Journal& j) {
+static void calibration_reset(Journal& j,bool bus_case) {
     N::Pipeline nav;N::GpsHoldout hold;mx5_dr_context c={1,1,1};
     assert(nav.init_model(N::research_model_profile(),mx5_dr_default_config(),c,true,true));
     assert(hold.init_model(N::research_model_profile(),mx5_dr_default_config(),c));
     mx5::runtime::ModelSession session;
     sync_model_session(j,session,nav,hold);assert(session.available());
+    mx5::runtime::ModelBus bus;
+    sync_model_bus(j,bus,nav,hold);assert(bus.available());
     for(unsigned ms=0;ms<=3400;ms+=100) {
         feed(nav,ms,10000);assert(nav.drain(T(ms)-nav.reorder_ns())==N::PIPELINE_OK);
     }
@@ -74,9 +77,15 @@ static void calibration_reset(Journal& j) {
     puts("pre-reset holdout BEGIN used learned zero=2067 and scale=1.03 after a completed first window and cooldown training");
     assert(hold.enqueue_position(fix(48000,1.03))==N::PIPELINE_OK);
     const uint64_t epoch=nav.context().session_epoch;
-    int32_t info[2]={0,0};reinterpret_cast<A::SessionStatus>(wrapped->entry[1])(0,info);
-    sync_model_session(j,session,nav,hold);
-    assert(nav.context().session_epoch==epoch+1);
+    if(bus_case) {
+        mx5_bus_disconnect(&bus_fixture::handles[0]);
+        sync_model_bus(j,bus,nav,hold);
+        assert(!bus.available() && nav.context().source_epoch==2 && nav.context().session_epoch==epoch);
+    } else {
+        int32_t info[2]={0,0};reinterpret_cast<A::SessionStatus>(wrapped->entry[1])(0,info);
+        sync_model_session(j,session,nav,hold);
+        assert(nav.context().session_epoch==epoch+1);
+    }
     assert(nav.calibration().active_zero==2047&&!nav.calibration().calibration_version&&!nav.calibration().candidate_ready);
     assert(nav.wheel_calibration().active_scale==1&&!nav.wheel_calibration().calibration_version&&!nav.wheel_calibration().candidate_ready);
     assert(hold.phase()==N::HOLDOUT_WARMUP);
@@ -104,10 +113,11 @@ static void calibration_reset(Journal& j) {
         }
     }
     assert(recovered_holdout);
-    puts("session reset: both pipelines' learned calibrations cleared; queued holdout removed; fresh holdout recovered with nominal values");
+    printf("%s reset: both pipelines' learned calibrations cleared; queued holdout removed; fresh holdout recovered with nominal values\n",bus_case?"bus":"session");
 
 }
-int main() {
+int main(int argc,char** argv) {
+    assert(argc==1 || (argc==2 && !strcmp(argv[1],"bus")));
     alarm(20);
     A::Options options=A::Options();assert(A::configure(send_fixture,options));
     const A::SessionBindings bindings={create_fixture,destroy_fixture,status_fixture};
@@ -115,10 +125,11 @@ int main() {
     A::SessionCallbacks callbacks=A::SessionCallbacks();
     callbacks.entry[1]=reinterpret_cast<uintptr_t>(status_fixture);
     void* storage=0;assert(!mx5_session_create("authored",0,&callbacks,&storage));
+    bus_fixture::prepare();
     char root[]="/tmp/mx5dr-model-reset-XXXXXX";assert(mkdtemp(root));
     const std::string logs=std::string(root)+"/logs";assert(!mkdir(logs.c_str(),0700));
     config.max_log_bytes=8388608;
-    { Journal j(root);calibration_reset(j);j.flush();assert(!j.failed); }
+    { Journal j(root);calibration_reset(j,argc==2);j.flush();assert(!j.failed); }
     assert(!mx5_session_destroy(&storage) && !A::session_hook_health().faults);
     assert(!unlink((logs+"/trace.0.jsonl").c_str()));
     assert(!rmdir(logs.c_str()) && !rmdir(root));

@@ -81,6 +81,14 @@ MODEL의 버스 경계 reset과 qualified 연결은 TODO이고 ASSIST는 비활�
 통합 제품으로 원본 LDS 요청 12건과 세션 전환·실제 버스 단절을 확인했습니다.
 미관측 자격을 채우거나 ASSIST를 활성화한 변경은 아닙니다.
 
+[MODEL의 버스 경계 처리](../validation/MODEL_BUS_2026-09-30.md)를 후속 구현했습니다.
+실제 LDS submit에 사용된 연결을 관측하고 단절·새 수명·관측 불가·여러 연결의
+경계에서 두 계산기의 기준점·보정·대기 입력을 초기화합니다. 이전 요청과 경계
+이전 센서 입력은 계산에서 제외하며 원시 기록은 보존합니다. 원본 LDS 요청
+17건을 실행했고 AA 세션을 유지한 실제 버스 해제에서 MODEL reset과 단절 중
+원시 입력 78건을 확인했습니다. 이는 provider/receiver/session qualification이나
+유효한 원본 GPS·폰 수용의 증명이 아닙니다. live ASSIST는 계속 비활성입니다.
+
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
 생략 없이 통과했습니다. 원본 커널 VM의 baseline/SHADOW 비교에서 위치 API의

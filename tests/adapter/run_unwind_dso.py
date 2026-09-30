@@ -96,10 +96,12 @@ def main():
             'PREPARE': '_ZN3mx57adapter17prepare_bus_hooksERKNS0_11BusBindingsE',
             'HEALTH': '_ZN3mx57adapter15bus_hook_healthEv',
             'READ': '_ZN3mx57adapter19read_bus_connectionEPKv',
+            'OBSERVE_POSITION': '_ZN3mx57adapter20observe_position_busEPKv',
+            'READ_POSITION': '_ZN3mx57adapter17read_position_busEv',
             'CREATE': 'mx5_bus_create', 'CONNECT': 'mx5_bus_connect',
             'DISCONNECT': 'mx5_bus_disconnect', 'FREE': 'mx5_bus_free', 'SIGNAL': 'mx5_bus_signal',
         }
-        cases = ('normal', 'signal', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
+        cases = ('normal', 'position_source', 'signal', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
                  'capacity', 'collision', 'bad_callback', 'throw_create', 'throw_connect',
                  'throw_disconnect', 'throw_free', 'throw_closed')
         fixture, access = 'bus_hooks', 'bus_dso_access.h'

@@ -67,9 +67,10 @@ def bounded_int(value, low, high):
     return integer(value) and low <= value <= high
 
 
-def bus_snapshot(value):
+def bus_snapshot(value, source=False):
     if (not isinstance(value, dict) or value.get("result") not in
-            ("connected", "disconnected", "unobserved", "transition", "observation_fault") or
+            (("connected", "unobserved", "transition", "observation_fault", "no_live_connection", "ambiguous")
+             if source else ("connected", "disconnected", "unobserved", "transition", "observation_fault")) or
             any(k not in value for k in ("object", "lifetime"))):
         return False
     if value["result"] in ("connected", "disconnected"):
@@ -227,7 +228,7 @@ class Auditor:
                             dropped_max=0, health_records=0, motion_epoch=None,
                             motion_seq=0, motion_ns=0, last_diagnostic_ns=-1,
                             shadow_resets=0, shadow_rejected=0, shadow_pipeline=None,
-                            holdout_window=None, capture_end_ns=None, model_session=None)
+                            holdout_window=None, capture_end_ns=None, model_session=None, model_bus=None)
         self.sessions.append(self.session)
         self.positions = {}
 
@@ -460,6 +461,8 @@ class Auditor:
                 self.motion(event, source)
         elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled"):
             self.shadow(row, source)
+        elif kind == "shadow_bus":
+            self.model_bus(row, source)
         elif kind in ("shadow_session", "shadow_position_rejected", "shadow_motion_excluded"):
             self.model_session(row, source)
         elif kind == "shadow_calibration":
@@ -544,6 +547,31 @@ class Auditor:
         s["motion_seq"] = max(s["motion_seq"], row["receive_seq"])
         s["motion_ns"] = max(s["motion_ns"], row["received_ns"])
 
+    def model_bus(self, row, source):
+        if not self.model_diagnostic(row, source):
+            return
+        observed = row.get('connection')
+        previous = self.session['model_bus']
+        if (not bus_snapshot(observed, source=True) or
+                type(row.get('reset')) is not bool or type(row.get('input_available')) is not bool or
+                row['input_available'] != (observed['result'] == 'connected') or
+                not bounded_int(row.get('model_bus_epoch'), 1, 2**64-1) or
+                not bounded_int(row.get('bus_revision'), 1 if row['input_available'] else 0, 2**64-1) or
+                (observed['result'] in ('transition', 'observation_fault') and row['bus_revision'] != 0) or
+                not bounded_int(row.get('raw_since_ns'), 1, row['mono_ns']) or
+                row['raw_since_ns'] != row['mono_ns'] or
+                (previous is None and (row['reset'] or row['model_bus_epoch'] != 1)) or
+                (previous is not None and (not row['reset'] or
+                    row['model_bus_epoch'] != previous['model_bus_epoch'] + 1 or
+                    row['raw_since_ns'] < previous['raw_since_ns']))):
+            self.issue('model_bus_malformed', source, 'Invalid MODEL bus boundary')
+            return
+        self.session['model_bus'] = row
+        if row['reset']:
+            self.issue('shadow_bus_reset', source, observed['result'])
+        elif not row['input_available']:
+            self.issue('bus_observation_unavailable', source, observed['result'])
+
     def model_session(self, row, source):
         if not self.model_diagnostic(row, source):
             return
@@ -552,16 +580,17 @@ class Auditor:
                     (('raw_since_ns', row['mono_ns']), ('sensor', 3), ('epoch', 2**64-1),
                      ('receive_seq', 2**64-1), ('received_ns', row['mono_ns']))) or
                     not bounded_int(row.get('source_mono_ms'), -2**63, 2**63-1) or
-                    row.get('reason') not in ('receipt_before_session', 'transport_before_session')):
+                    row.get('reason') not in ('receipt_before_session', 'transport_before_session',
+                                              'receipt_before_bus', 'transport_before_bus')):
                 self.issue('model_session_malformed', source, 'Invalid excluded MODEL motion')
                 return
-            boundary = self.session['model_session']
+            boundary = self.session['model_bus' if row['reason'].endswith('_bus') else 'model_session']
             transport = row['source_mono_ms'] * 1000000
             if (boundary is None or row['raw_since_ns'] != boundary['raw_since_ns'] or
                     not boundary['input_available'] or
-                    (row['reason'] == 'receipt_before_session' and
+                    (row['reason'].startswith('receipt_before_') and
                      row['received_ns'] >= row['raw_since_ns']) or
-                    (row['reason'] == 'transport_before_session' and not
+                    (row['reason'].startswith('transport_before_') and not
                      (row['received_ns'] >= row['raw_since_ns'] and
                       0 < transport < row['raw_since_ns']))):
                 self.issue('model_session_malformed', source, 'Motion exclusion contradicts its boundary')
@@ -572,9 +601,19 @@ class Auditor:
             if (not all(bounded_int(row.get(k), 0, high) for k, high in
                     (("call", 2**32-1), ("generation", 2**32-1), ("session_revision", 2**64-1))) or
                     row.get("reason") not in ("session_unavailable", "request_unobserved",
-                                             "session_changed_since_issue", "request_time_order")):
+                                             "session_changed_since_issue", "request_time_order",
+                                             "bus_unavailable", "request_bus_unobserved",
+                                             "bus_changed_since_issue", "request_before_bus_boundary")):
                 self.issue("model_session_malformed", source, "Invalid rejected MODEL position")
                 return
+            if ('bus' in row['reason'] or 'model_bus_epoch' in row or 'bus_revision' in row):
+                boundary = self.session['model_bus']
+                if (boundary is None or not bounded_int(row.get('model_bus_epoch'), 1, 2**64-1) or
+                        not bounded_int(row.get('bus_revision'), 0, 2**64-1) or
+                        row['model_bus_epoch'] != boundary['model_bus_epoch'] or
+                        row['bus_revision'] != boundary['bus_revision'] or row['mono_ns'] < boundary['mono_ns']):
+                    self.issue('model_bus_malformed', source, 'Rejected position has inconsistent bus boundary')
+                    return
             self.issue("shadow_position_rejected", source, row["reason"])
             return
         previous = self.session["model_session"]
@@ -629,6 +668,14 @@ class Auditor:
                     row["session_revision"] != (boundary["session"]["revision"] or 0) or
                     (row.get("model_valid") is True and not boundary["input_available"])):
                 self.issue("shadow_session_mismatch", source, "MODEL snapshot does not match its observed boundary")
+        bus = self.session['model_bus']
+        if bus is not None or 'model_bus_epoch' in row or 'bus_revision' in row:
+            if (bus is None or not bounded_int(row.get('model_bus_epoch'), 1, 2**64-1) or
+                    not bounded_int(row.get('bus_revision'), 0, 2**64-1) or
+                    row['model_bus_epoch'] != bus['model_bus_epoch'] or
+                    row['bus_revision'] != bus['bus_revision'] or
+                    (row.get('model_valid') is True and not bus['input_available'])):
+                self.issue('shadow_bus_mismatch', source, 'MODEL snapshot does not match its bus boundary')
         if not self.validate(row, source,
                 ints=("mono_ns", "state", "uncertainties", "events", "intervals", "resets", "rejected", "frontier_ns"),
                 strings=("result", "pipeline", "location_preview_hex"),
@@ -645,6 +692,11 @@ class Auditor:
                 (row['model_valid'] and row['frontier_ns'] < boundary['raw_since_ns'])):
             self.issue('shadow_session_time_inconsistent', source,
                        'MODEL time contradicts its observed session boundary or capture time', True)
+        if bus is not None and (
+                row['mono_ns'] < bus['mono_ns'] or row['frontier_ns'] > row['mono_ns'] or
+                (row['model_valid'] and row['frontier_ns'] < bus['raw_since_ns'])):
+            self.issue('shadow_bus_time_inconsistent', source,
+                       'MODEL time contradicts its observed bus boundary or capture time', True)
         self.session["last_diagnostic_ns"] = max(self.session["last_diagnostic_ns"], row["mono_ns"])
         if not self.wheel_scale_pair(row, source):
             return

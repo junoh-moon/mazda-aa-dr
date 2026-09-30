@@ -20,10 +20,18 @@ static BusHealth dso_bus_health() {
 static B::Snapshot dso_bus_read(const void* p) {
     return reinterpret_cast<B::Snapshot(*)(const void*)>(bus_dso_base+TEST_READ)(p);
 }
+static void dso_bus_observe_position(const void* p) {
+    reinterpret_cast<void(*)(const void*)>(bus_dso_base+TEST_OBSERVE_POSITION)(p);
+}
+static B::Boundary dso_bus_read_position() {
+    return reinterpret_cast<B::Boundary(*)()>(bus_dso_base+TEST_READ_POSITION)();
+}
 } }
 #define prepare_bus_hooks dso_bus_prepare
 #define bus_hook_health dso_bus_health
 #define read_bus_connection dso_bus_read
+#define observe_position_bus dso_bus_observe_position
+#define read_position_bus dso_bus_read_position
 #define mx5_bus_create (reinterpret_cast<A::BusCreate>(bus_dso_base+TEST_CREATE))
 #define mx5_bus_connect (reinterpret_cast<A::BusConnect>(bus_dso_base+TEST_CONNECT))
 #define mx5_bus_disconnect (reinterpret_cast<A::BusEnd>(bus_dso_base+TEST_DISCONNECT))

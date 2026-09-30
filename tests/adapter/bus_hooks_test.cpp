@@ -120,13 +120,23 @@ static void cancel() {
 static std::atomic<unsigned> reads(0);
 static std::atomic<bool> reading(true);
 static void* reader(void*) {
-    uint64_t last=0;
+    uint64_t last=0,last_source=0;
     while(reading.load()) {
         const B::Snapshot s=read();
         if(s.result==B::CONNECTED) {
             assert(s.object==1 && s.lifetime && s.lifetime>=last);last=s.lifetime;
         } else if(s.result==B::DISCONNECTED)assert(s.object==1 && !s.lifetime);
         else assert(s.result==B::TRANSITION && !s.object && !s.lifetime);
+        const B::Boundary source=A::read_position_bus();
+        if(source.connection.result==B::CONNECTED) {
+            assert(source.revision && source.connection.object==1 &&
+                   source.connection.lifetime && source.connection.lifetime>=last_source);
+            last_source=source.connection.lifetime;
+        } else {
+            assert(source.connection.result==B::UNOBSERVED || source.connection.result==B::NONE ||
+                   source.connection.result==B::TRANSITION);
+            assert(!source.connection.object && !source.connection.lifetime);
+        }
         reads.fetch_add(1);
     }
     return 0;
@@ -135,11 +145,36 @@ static void concurrent_readers() {
     open();pthread_t threads[2];
     for(unsigned i=0;i<2;++i)assert(!pthread_create(&threads[i],0,reader,0));
     while(reads.load()<1000)sched_yield();
-    for(unsigned i=0;i<200;++i) { attach();callback(0);end(false); }
+    for(unsigned i=0;i<200;++i) { attach();A::observe_position_bus(address);callback(0);end(false); }
     reading.store(false);
     for(unsigned i=0;i<2;++i)assert(!pthread_join(threads[i],0));
     assert(read().result==B::DISCONNECTED && !A::bus_hook_health().faults);
     assert(connects==200 && disconnects==200 && closed_calls==200);
+}
+static void position_source() {
+    assert(A::read_position_bus().connection.result==B::UNOBSERVED);
+    open();attach();assert(A::read_position_bus().connection.result==B::UNOBSERVED);
+    errno=E2BIG;A::observe_position_bus(address);assert(errno==E2BIG);
+    const B::Boundary first=A::read_position_bus();
+    assert(first.connection.result==B::CONNECTED && first.connection.object==1 && first.connection.lifetime==1);
+    assert(first.revision==3); // create, connect, first observed LDS submission
+    A::observe_position_bus(address);assert(A::read_position_bus().revision==first.revision);
+    callback(0);assert(A::read_position_bus().connection.result==B::NONE);
+    attach();assert(A::read_position_bus().connection.result==B::NONE); // new lifetime needs submission
+    A::observe_position_bus(address);
+    const B::Boundary second=A::read_position_bus();
+    assert(second.connection.object==1 && second.connection.lifetime==2 && second.revision>first.revision);
+    // An unmarked HMI/other bus is not mistaken for the LDS source.
+    void* primary=address;address=reinterpret_cast<void*>(0x2230);open();attach();
+    assert(A::read_position_bus().connection.object==1);
+    A::observe_position_bus(address);assert(A::read_position_bus().connection.result==B::AMBIGUOUS);
+    end(true);assert(A::read_position_bus().connection.object==1);
+    address=primary;end(true);assert(A::read_position_bus().connection.result==B::NONE);
+    open();attach();assert(A::read_position_bus().connection.result==B::NONE);
+    A::observe_position_bus(address);const B::Boundary reused=A::read_position_bus();
+    assert(reused.connection.object==3 && reused.connection.lifetime==4);
+    callback(0);assert(A::read_position_bus().connection.object==3);
+    assert(!A::bus_hook_health().faults);
 }
 int main(int argc,char** argv) {
     assert(argc==2);alarm(20);
@@ -152,6 +187,7 @@ int main(int argc,char** argv) {
     const A::BusBindings b={create,connect,disconnect,free_connection,signal,is_signal};assert(A::prepare_bus_hooks(b));
     const char* c=argv[1];
     if(!strcmp(c,"normal"))normal();
+    else if(!strcmp(c,"position_source"))position_source();
     else if(!strcmp(c,"signal")) {
         open();attach();const B::Snapshot before=read();
         errno=EDOM;assert(mx5_bus_signal(address,&signal_message)==-57 && errno==ERANGE);

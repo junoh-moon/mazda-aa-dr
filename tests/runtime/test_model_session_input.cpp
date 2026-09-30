@@ -20,12 +20,12 @@ static N::RawEvent wheel(unsigned received_ms,int64_t source_ms,uint64_t sequenc
     for(unsigned i=0;i<4;++i)r.raw[i]=10000;
     return r;
 }
-static void check(Journal& journal,const char* label,EventReceiver receiver,uint64_t events,uint64_t resets) {
+static void check(Journal& journal,const char* label,EventReceiver receiver,uint64_t events,uint64_t resets,bool bus=false) {
     N::Pipeline nav;N::GpsHoldout hold;const mx5_dr_context c={1,1,1};
     assert(nav.init_model(N::research_model_profile(),mx5_dr_default_config(),c,true,true));
     assert(hold.init_model(N::research_model_profile(),mx5_dr_default_config(),c));
     mx5::runtime::MotionBatch batch;
-    drain_motion(journal,batch,receiver,nav,hold,true,T(1000));
+    drain_motion(journal,batch,receiver,nav,hold,true,T(1000),bus);
     printf("%s: events=%llu resets=%llu rejected=%llu result=%s\n",label,
            (unsigned long long)nav.status().events,(unsigned long long)nav.status().resets,
            (unsigned long long)nav.status().rejected,N::pipeline_result_name(nav.status().result));fflush(stdout);
@@ -62,11 +62,14 @@ int main() {
     old_clock.rows.push_back(wheel(1200,int64_t(T(950)/1000000ULL),2));
     old_clock.rows.push_back(wheel(1300,0,3));
     check(journal,"excluded_old_transport_does_not_change_new_clock",old_clock,2,0);
+    EventReceiver bus_old;
+    bus_old.rows.push_back(wheel(900,0));bus_old.rows.push_back(wheel(1100,1950,2));
+    check(journal,"bus_boundary_excludes_old_receipt_and_transport",bus_old,0,0,true);
     journal.flush();assert(!journal.failed);
     }
     std::ifstream input(std::string(logs)+"/trace.0.jsonl");
-    // Independent, literal wire expectations include every field of all 13 inputs.
-    // In particular, the three excluded inputs must survive exactly in input order.
+    // Independent, literal wire expectations include every field of all 15 inputs.
+    // In particular, the five excluded inputs must survive exactly in input order.
     const char* raw_expected[]={
         "[1,1,1900000000,1900,10000,10000,10000,10000,1,0]",
         "[1,1,2100000000,1950,10000,10000,10000,10000,1,0]",
@@ -80,10 +83,12 @@ int main() {
         "[1,2,2200000000,2150,10000,10000,10000,10000,1,0]",
         "[1,1,2100000000,0,10000,10000,10000,10000,1,0]",
         "[1,2,2200000000,1950,10000,10000,10000,10000,1,0]",
-        "[1,3,2300000000,0,10000,10000,10000,10000,1,0]"
+        "[1,3,2300000000,0,10000,10000,10000,10000,1,0]",
+        "[1,1,1900000000,0,10000,10000,10000,10000,1,0]",
+        "[1,2,2100000000,1950,10000,10000,10000,10000,1,0]"
     };
     const size_t expected_count=sizeof raw_expected/sizeof raw_expected[0];
-    std::string line;unsigned excluded=0,receipt=0,transport=0;size_t raw_rows=0;
+    std::string line;unsigned excluded=0,receipt=0,transport=0,bus_receipt=0,bus_transport=0;size_t raw_rows=0;
     while(std::getline(input,line)) {
         if(line.find("\"kind\":\"motion_batch\"")!=std::string::npos) {
             assert(line.find("\"schema\":1,")!=std::string::npos);
@@ -102,8 +107,10 @@ int main() {
         ++excluded;
         if(line.find("receipt_before_session")!=std::string::npos)++receipt;
         if(line.find("transport_before_session")!=std::string::npos)++transport;
+        if(line.find("receipt_before_bus")!=std::string::npos)++bus_receipt;
+        if(line.find("transport_before_bus")!=std::string::npos)++bus_transport;
     }
-    assert(excluded==3 && receipt==1 && transport==2);
+    assert(excluded==5 && receipt==1 && transport==2 && bus_receipt==1 && bus_transport==1);
     assert(raw_rows==expected_count);
     input.close();assert(!unlink((std::string(logs)+"/trace.0.jsonl").c_str()));
     assert(!rmdir(logs) && !rmdir(root));
