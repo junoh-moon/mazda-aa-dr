@@ -31,7 +31,13 @@ class TrialStatusTests(unittest.TestCase):
         self.trace = [dict(kind='boot', boot_id=BOOT, mono_ns=1000000000, mode=4),
                       dict(kind='shadow_boot', active=True, capture_active=True),
                       dict(kind='health', mono_ns=99000000000, hook_installed=True,
-                           audit_fault=0, dropped=0, capture_active=True),
+                           audit_fault=0, dropped=0, capture_active=True, computation_active=True),
+                      dict(kind='position', mono_ns=99000000000, mode=1),
+                      dict(kind='shadow_calibration', mono_ns=99000000000,
+                           gps_anchor_gate='WAITING'),
+                      dict(kind='shadow', mono_ns=99000000000, domain='model',
+                           assist_ready=False, model_valid=False, events=4, intervals=0,
+                           result='WAITING', pipeline='WAITING'),
                       dict(kind='motion_batch', schema=1, epoch=1, events=[
                           [sensor, sensor, 99000000000, 90000, 0, 0, 0, 0, 1, 0]
                           for sensor in (1, 2, 3)])]
@@ -62,6 +68,71 @@ class TrialStatusTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn('does not approve driving or ASSIST', r.stdout)
         self.assertIn('reverse_received_recently=observed receipt_only_not_direction_quality', r.stdout)
+
+    def test_capture_without_computation_is_reported_as_incomplete(self):
+        self.trace[1]['active'] = False
+        self.trace[2]['computation_active'] = False
+        rows = [row for row in self.trace if row['kind'] != 'shadow']
+        r = self.run_status(trace=rows)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('capture_active=observed', r.stdout)
+        self.assertIn('computation_active=unavailable', r.stdout)
+        self.assertIn('shadow_inputs_processed=unavailable', r.stdout)
+
+    def test_live_worker_does_not_prove_it_processed_inputs(self):
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        row['events'] = 0
+        r = self.run_status()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('shadow_inputs_processed=unavailable', r.stdout)
+
+    def test_parked_wait_for_anchor_is_explicit_without_requiring_a_solution(self):
+        r = self.run_status()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn('shadow_inputs_processed=observed', r.stdout)
+        self.assertIn('model_solution=not_observed', r.stdout)
+        self.assertIn('pipeline=WAITING', r.stdout)
+        self.assertIn('gps_anchor_gate=WAITING', r.stdout)
+        self.assertIn('Startup evidence only', r.stdout)
+
+    def test_latest_solution_state_replaces_a_previous_valid_result(self):
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        good = dict(row, mono_ns=98000000000, model_valid=True, result='OK', pipeline='OK')
+        self.trace.insert(self.trace.index(row), good)
+        r = self.run_status()
+        self.assertIn('model_solution=not_observed', r.stdout)
+        row.update(model_valid=True, result='OK', pipeline='OK')
+        self.assertIn('model_solution=observed', self.run_status().stdout)
+
+    def test_missing_stale_future_or_malformed_model_diagnostic_is_not_progress(self):
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        for change in ({'mono_ns': 1000000000}, {'mono_ns': 101000000000},
+                       {'events': -1}, {'events': '4'}, {'domain': 'qualified'}):
+            rows = [dict(item, **change) if item is row else item for item in self.trace]
+            self.assertNotEqual(self.run_status(trace=rows).returncode, 0, change)
+        self.assertNotEqual(self.run_status(trace=[item for item in self.trace if item is not row]).returncode, 0)
+
+    def test_position_and_rejection_reasons_are_visible(self):
+        rows = [row for row in self.trace if row['kind'] != 'position']
+        rows.append(dict(kind='shadow_position_rejected', mono_ns=99000000000,
+                         reason='request_session_unavailable'))
+        rows.append(dict(kind='shadow_input_reset', mono_ns=99000000000,
+                         reason='stale_receipt'))
+        r = self.run_status(trace=rows)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('oem_position_recent=unavailable', r.stdout)
+        self.assertIn('position_rejection=request_session_unavailable', r.stdout)
+        self.assertIn('motion_rejection=stale_receipt', r.stdout)
+
+    def test_rejected_raw_is_still_capture_evidence(self):
+        self.trace[-1]['events'] = self.trace[-1]['events'][:2]
+        self.trace.append(dict(kind='motion_rejected', authenticated_decoded=True,
+                               sensor=3, checked_ns=99000000000, received_ns=1000000000,
+                               reason='stale_receipt'))
+        r = self.run_status()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn('reverse_received_recently=observed receipt_only_not_direction_quality', r.stdout)
+        self.assertIn('rejected_raw_seen=true', r.stdout)
 
     def test_old_boot_and_missing_boot_do_not_use_fresh_looking_rows(self):
         self.trace[0]['boot_id'] = OLD
@@ -139,7 +210,9 @@ class TrialStatusTests(unittest.TestCase):
             now = time.monotonic_ns() - 100000000
             self.trace[0]['boot_id'] = actual_boot.strip()
             self.trace[0]['mono_ns'] = now - 1000000000
-            self.trace[2]['mono_ns'] = now
+            for row in self.trace[2:]:
+                if 'mono_ns' in row:
+                    row['mono_ns'] = now
             for row in self.trace[-1]['events']:
                 row[2] = now
             self.write('trace.0.jsonl', self.trace)

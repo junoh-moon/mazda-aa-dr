@@ -13,8 +13,12 @@ function field(key, s, p) {
 # never sensor qualification/core freshness. The 30-second age limit is unchanged.
 function not_future(ns) {return ns ~ /^[0-9]+$/ && ns+0>0 && ns+0<=now*1e9+10000000}
 function fresh(ns) {return not_future(ns) && now-ns/1e9<=30}
+function unsigned_field(key) {return $0 ~ ("\"" key "\":[0-9]+[,}]")}
 function reset_runtime() {
     health=""; hooks=""; dropped=""; audit=""; capture=""; mode=""
+    computation=""; position=""; position_mode=""; shadow=""; processed=""
+    solution=""; pipeline=""; result=""; anchor=""; rejected_raw=0
+    position_rejection="none_observed"; motion_rejection="none_observed"
     for (i=1;i<=3;i++) sensor[i]=""
 }
 function report(name, ok, detail) {
@@ -43,6 +47,33 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
             health=field("mono_ns"); hooks=field("hook_installed")
             dropped=field("dropped"); audit=field("audit_fault")
             if (field("capture_active")!="") capture=field("capture_active")
+            computation=field("computation_active")
+        }
+        if (kind=="shadow_disabled") computation="false"
+        if (kind=="position") {position=field("mono_ns"); position_mode=field("mode")}
+        if (kind=="shadow") {
+            # A worker heartbeat is insufficient: require its actual MODEL
+            # diagnostic and a nonzero processed-input counter. An unusable
+            # latest record must not resurrect an earlier usable solution.
+            shadow=""; solution=""; processed=""; pipeline=""; result=""
+            if (field("domain")=="model" && field("assist_ready")=="false" &&
+                field("model_valid") ~ /^(true|false)$/ && unsigned_field("events") &&
+                field("result") ~ /^[A-Z_]+$/ && field("pipeline") ~ /^[A-Z_]+$/) {
+                shadow=field("mono_ns"); processed=field("events")
+                solution=field("model_valid"); pipeline=field("pipeline"); result=field("result")
+            }
+        }
+        if (fresh(field("mono_ns"))) {
+            if (kind=="shadow_calibration") anchor=field("gps_anchor_gate")
+            if (kind=="shadow_position_rejected") position_rejection=field("reason")
+            if (kind=="shadow_input_reset") motion_rejection=field("reason")
+        }
+        # Rejected, decoded input is useful measurement evidence too. Its
+        # checked time proves receipt, never sensor freshness or suitability.
+        if (kind=="motion_rejected" && field("authenticated_decoded")=="true" &&
+            field("sensor") ~ /^[123]$/ && fresh(field("checked_ns")) &&
+            field("checked_ns")+0>=runtime_boot+0) {
+            sensor[field("sensor")]=field("checked_ns"); rejected_raw=1
         }
         if (kind=="motion_batch" && field("schema")=="1") {
             rows=$0
@@ -71,7 +102,17 @@ END {
     report("reverse_received_recently",runtime && fresh(sensor[3]),"receipt_only_not_direction_quality")
     report("audit_clean",runtime && fresh(health) && audit=="0" && dropped=="0", "audit_fault=" audit " dropped=" dropped)
     report("collector_poll_recent",collector && !stopped && fresh(poll),"polling_does_not_prove_sensor_validity")
-    if (bad) print "Collection evidence incomplete. Keep/export existing logs; missing/rotated boot markers cannot be reconstructed by this check."
-    else print "Current collection evidence observed; navigation accuracy, recovery and phone acceptance remain unverified."
+    report("oem_position_recent",runtime && fresh(position),"mode=" position_mode)
+    report("computation_active",runtime && fresh(health) && computation=="true","")
+    report("shadow_inputs_processed",runtime && fresh(shadow) && computation=="true" &&
+        processed+0>0,"events=" processed " pipeline=" pipeline " result=" result)
+    # A parked startup can legitimately await movement/GPS anchors. Expose
+    # that separately instead of requiring a moving solution to start capture.
+    usable=runtime && fresh(health) && computation=="true" && fresh(shadow) &&
+        solution=="true" && result=="OK" && pipeline=="OK" && audit=="0" && dropped=="0"
+    print "model_solution=" (usable ? "observed" : "not_observed") " domain=model assist_ready=false"
+    print "gps_anchor_gate=" anchor " position_rejection=" position_rejection " motion_rejection=" motion_rejection " rejected_raw_seen=" (rejected_raw ? "true" : "false")
+    if (bad) print "Startup or collection evidence incomplete. Keep/export existing logs; missing/rotated boot markers cannot be reconstructed by this check."
+    else print "Startup evidence only. Check model_solution and recorded reasons; this is not a completed navigation trial."
     exit bad
 }
