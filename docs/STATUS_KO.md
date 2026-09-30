@@ -127,6 +127,15 @@ free/resume 20회를 완료했고 전후 제어·위치 조회도 응답했습�
 첫 실행에서 별도 journal 큐 drop 1건으로 MODEL이 중단됐습니다. 같은 이미지의
 후속 성공으로 이를 닫지 않았으며 journal 누락 원인 분리는 다음 작업입니다.
 
+[Journal 큐 후속 수정](../validation/JOURNAL_QUEUE_2026-09-30.md)에서는 빈 큐에서도
+consumer/producer 잠금이 겹치면 기록을 버리는 경로를 재현·제거했습니다.
+미완성 입력이 남은 종료와 전역 초기화도 보강했습니다. 네 독립 리뷰에서 발견한
+고정 ARM compiler의 64비트 load 후행 장벽 문제까지 수정·재검증했습니다.
+최종 host/ARM 전체 검사와 실제 제품의 원본 VM 두 실행
+(raw 936·855건, journal/요청 loss 0)을 완료했습니다.
+과거 실패의 정확한 busy/full 원인은 미확정이며 물리 센서·폰 검증을 대신하지 않습니다.
+공개 ZIP은 변경하지 않았습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
