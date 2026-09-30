@@ -67,6 +67,10 @@ GPS 단절 중 보정 위치가 실제 AA 송신에 선택되고, GPS 복귀 시
   두 실패, 수정 후 host/ARM 전체 검사와 원본 LDS 요청 17건을 확인했습니다.
   이 항목은 관측·계산 경계의 회귀 검사이며 실제 ASSIST 적용 완료가 아닙니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
+  [LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
+  위치·진단 캐시의 별도 갱신과 공통 snapshot 식별자의 부재를 확인했습니다.
+  진단 polling으로 자격을 채우지 않으며 생산자→snapshot→응답 연결은 미구현입니다.
+  정적 조사만 수행했으며 상위 자격·ASSIST 항목의 완료로 세지 않습니다.
   [요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)은 발행 당시 원본
   목적지·경로·인터페이스·메서드명을 응답까지 연결합니다. well-known 서비스
   이름은 실제 제공자 인증이 아니므로 이 상위 자격 항목은 미완료입니다.

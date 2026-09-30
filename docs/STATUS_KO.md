@@ -22,6 +22,13 @@
 후속 제품 설치·journal까지 연결했습니다. [제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)과
 [후속 반복 취소 비교](../validation/MANAGER_CANCELLATION_2026-09-30.md)를 함께 따릅니다.
 
+[LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
+`GetUbloxDiag`도 특정 위치 응답의 출처 증거로 바로 사용할 수 없음을 확인했습니다.
+원본은 위치·진단 캐시를 별도 잠금으로 순차 갱신하고, 센서 상태도 다른 메시지에서
+갱신합니다. 정적 분석이며 실행 중 경쟁 상황을 재현한 결과는 아닙니다.
+생산자→snapshot→응답의 제품 연결은 미구현이고 live ASSIST는 비활성입니다.
+이번 제품 코드 변경·새 VM 실행은 없으며 추가한 분석 도구는 제거했습니다.
+
 [VIP 생산자 조사와 누적값 거부](../validation/VIP_ACCUMULATOR_2026-10-01.md)에서
 제공 업데이트의 원본 MCU 명령어 일부를 작성한 RAM·입력으로 해석 실행했습니다.
 요레이트 합계·개수의 넘침과 제출 실패 반환 뒤의 초기화를 확인했고, 넘친 합계를
