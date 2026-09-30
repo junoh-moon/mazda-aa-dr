@@ -17,12 +17,14 @@ import re
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 
 GUEST_INIT = Path(__file__).with_name('oem_guest_init.sh')
+SESSION_INIT = Path(__file__).with_name('oem_session_guest_init.sh')
 CMU_ENTRY = 0x10010000
 CMU_MACHINE_ID = 3837
 
@@ -43,6 +45,19 @@ def require(condition, message):
 def regular_input(path, label):
     require(path.is_file(), label + ' must be an existing file')
     return path.resolve()
+
+
+def arm_probe_input(path):
+    """Header guard for an authored pinned-toolchain executable, not a signature."""
+    path = regular_input(path, 'Session probe')
+    with path.open('rb') as stream:
+        header = stream.read(52)
+    require(len(header) == 52 and header[:7] == b'\x7fELF\x01\x01\x01'
+            and struct.unpack_from('<HHI', header, 16) == (2, 40, 1)
+            and struct.unpack_from('<I', header, 36)[0] == 0x05000002
+            and struct.unpack_from('<H', header, 40)[0] == 52,
+            'Session probe requires a pinned ARM32 little-endian softfp executable')
+    return path
 
 
 def unused_outputs(*paths):
@@ -166,7 +181,8 @@ def build(args):
             'build requires UID 0 inside an isolated Linux container')
     require(shutil.which('tar') and shutil.which('cpio'), 'GNU tar and cpio are required')
     source = regular_input(args.rootfs_tar, 'Rootfs tar')
-    init = regular_input(GUEST_INIT, 'Diagnostic guest init')
+    session_probe = arm_probe_input(args.session_probe) if args.session_probe else None
+    init = regular_input(SESSION_INIT if session_probe else GUEST_INIT, 'Diagnostic guest init')
     touch = regular_input(args.touch, 'Touch library') if args.touch else None
     bundle = args.bundle.resolve()
     output = args.output.absolute()
@@ -178,6 +194,7 @@ def build(args):
         'publishable': False,
         'inputs': {'rootfs_tar_sha256': digest(source), 'bundle': identities,
                    'diagnostic_init_sha256': digest(init),
+                   'session_probe_sha256': digest(session_probe) if session_probe else None,
                    'touch_sha256': digest(touch) if touch else None},
         'account_model': 'OEM names and UID/GID only; credential fields replaced with x',
         'modifications': ['/init diagnostic harness', '/config-mfg/passwd sanitized identities',
@@ -222,6 +239,12 @@ def build(args):
             shutil.copytree(bundle, validation / 'usb')
             require(bundle_identities(validation / 'usb') == identities,
                     'Bundle changed while copying')
+            if session_probe:
+                shutil.copyfile(session_probe, validation / 'session-probe')
+                (validation / 'session-probe').chmod(0o755)
+                require(digest(validation / 'session-probe') == metadata['inputs']['session_probe_sha256'],
+                        'Session probe changed while copying')
+                metadata['modifications'].append('/validation/session-probe authored diagnostic')
             if touch:
                 shutil.copy2(touch, validation / 'touch.so')
                 require(digest(validation / 'touch.so') == metadata['inputs']['touch_sha256'],
@@ -376,6 +399,97 @@ def console_markers(path):
                                 'TRACE_WRAPPER_RC=')):
                 markers.append({'line': number, 'text': line})
     return markers
+
+
+def session_probe_report(records):
+    """Validate the authored session probe, never receiver/phone qualification.
+
+    `complete` describes the two local API cycles only. The original service's
+    errors and lack of a physical phone remain separate limitations even then.
+    """
+    failures = []
+    scopes = [r for r in records if r.get('kind') == 'scope']
+    ends = [r for r in records if r.get('kind') == 'complete']
+    if len(scopes) != 1 or scopes[0].get('physical_phone') is not False:
+        failures.append('missing_scope')
+    if len(ends) != 1 or ends[0].get('cycles') != 2:
+        failures.append('missing_completion')
+    if (not records or records[0].get('kind') != 'scope'
+            or records[-1].get('kind') != 'complete'):
+        failures.append('record_order')
+    cycles = []
+    for cycle in (1, 2):
+        rows = [r for r in records if r.get('cycle') == cycle]
+        operations = [r for r in rows if r.get('kind') in (
+            'create_begin', 'create_end', 'send', 'destroy_end')]
+        kinds = [r['kind'] for r in operations]
+        ok = kinds == ['create_begin', 'create_end', 'send', 'destroy_end']
+        if ok:
+            create, send, destroy = operations[1:]
+            ok = (create.get('result') == 0 and create.get('handle_nonnull') is True
+                  and send.get('result') == 0 and destroy.get('result') == 0
+                  and destroy.get('handle_null') is True)
+        cycles.append({'cycle': cycle, 'complete': ok})
+    if not all(c['complete'] for c in cycles):
+        failures.append('incomplete_cycles')
+    callbacks = [r for r in records if r.get('kind') == 'status']
+    returns = [r for r in records if r.get('kind') == 'status_return']
+    keys = [(r.get('cycle'), r.get('event')) for r in callbacks]
+    return_keys = [(r.get('cycle'), r.get('event')) for r in returns]
+    valid_keys = all(type(c) is int and c in (1, 2) and type(e) is int and e > 0
+                     for c, e in keys + return_keys)
+    if (not valid_keys or len(set(keys)) != len(keys) or sorted(keys) != sorted(return_keys)
+            or any(r.get('userdata_unchanged') is not True for r in callbacks)):
+        failures.append('callback_forwarding')
+    elif any(records.index(callback) > records.index(returned)
+             for callback in callbacks for returned in returns
+             if (callback['cycle'], callback['event']) == (returned['cycle'], returned['event'])):
+        failures.append('callback_order')
+    if len(ends) == 1 and 'status_callbacks' in ends[0] and ends[0]['status_callbacks'] != len(callbacks):
+        failures.append('callback_count')
+    if any(r.get('kind') == 'failure' for r in records):
+        failures.append('probe_failure')
+    return {'complete': not failures, 'failures': failures, 'cycles': cycles,
+            'status_callbacks': len(callbacks),
+            'session_state_observed': bool(callbacks),
+            'states': [r.get('state') for r in callbacks],
+            'phone_acceptance_verified': False,
+            'vehicle_validation': False,
+            'scope': 'Authored local API probe; not a normal AA connection or full application shutdown'}
+
+
+def check_session(args):
+    records = []
+    exits = []
+    malformed = False
+    with args.console.open(encoding='utf-8', errors='replace') as stream:
+        for line in stream:
+            if line.startswith('VM_SESSION_PROBE_RC='):
+                exits.append(line.strip().split('=', 1)[1])
+            # The original SDK can emit a prefix without a newline on the
+            # same console before this complete diagnostic JSON record.
+            # Preserve the record; still reject malformed/trailing JSON and
+            # never reconstruct characters interleaved inside its body.
+            _, marker, payload = line.partition('MX5_SESSION ')
+            if not marker:
+                continue
+            try:
+                record = json.loads(payload)
+                if not isinstance(record, dict):
+                    raise ValueError('Expected an object')
+                records.append(record)
+            except ValueError:
+                malformed = True
+    report = session_probe_report(records)
+    if malformed:
+        report['complete'] = False
+        report['failures'].append('malformed_record')
+    if exits != ['0']:
+        report['complete'] = False
+        report['failures'].append('probe_exit')
+    report['console_sha256'] = digest(args.console)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report['complete'] else 2
 
 
 def initrd_provenance(initrd, actual_digest):
@@ -545,6 +659,8 @@ def main():
     build_parser.add_argument('--bundle', type=Path, required=True, help='Extracted flat USB bundle directory')
     build_parser.add_argument('--output', type=Path, required=True, help='New .cpio.gz file; adds .json sidecar')
     build_parser.add_argument('--touch', type=Path, help='Optional private existing AA touch ARM library')
+    build_parser.add_argument('--session-probe', type=Path,
+                              help='Authored pinned ARM session probe; selects its diagnostic init')
     build_parser.set_defaults(action=build)
     run_parser = commands.add_parser('run', help='Run isolated QEMU and record console plus provenance')
     run_parser.add_argument('--kernel', type=Path, required=True)
@@ -552,13 +668,16 @@ def main():
     run_parser.add_argument('--output', type=Path, required=True, help='New log prefix; adds .log and .json')
     run_parser.add_argument('--board', choices=('virt', 'cmu'), required=True)
     run_parser.add_argument('--mode', choices=('baseline', 'shadow'), default='baseline')
-    run_parser.add_argument('--phase', choices=('services', 'standalone', 'location', 'location-sm', 'initprobe', 'retry'), default='services')
+    run_parser.add_argument('--phase', choices=('services', 'standalone', 'location', 'location-sm', 'initprobe', 'retry', 'session'), default='services')
     run_parser.add_argument('--seconds', type=positive_seconds, default=120)
     run_parser.add_argument('--kernel-arg', type=single_kernel_argument, action='append', default=[],
                             help='Append one explicit kernel argument after defaults; repeat as needed')
     run_parser.add_argument('--original-init', action='store_true',
                             help='Request OEM PID 1: built image uses /sbin/init; external CMU uses kernel default')
     run_parser.set_defaults(action=run)
+    session_parser = commands.add_parser('check-session', help='Check the authored OEM session probe console')
+    session_parser.add_argument('--console', type=Path, required=True)
+    session_parser.set_defaults(action=check_session)
     args = parser.parse_args()
     try:
         return args.action(args)

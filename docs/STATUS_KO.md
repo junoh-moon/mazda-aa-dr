@@ -13,6 +13,14 @@
 후속 제품 설치·journal까지 연결했습니다. [제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)과
 [후속 반복 취소 비교](../validation/MANAGER_CANCELLATION_2026-09-30.md)를 함께 따릅니다.
 
+[새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
+동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
+생략 없이 통과했습니다. 원본 커널 VM의 baseline/SHADOW 비교에서 위치 API의
+0값 응답, 제품 후크·SHADOW 초기화와 collector UID 1001을 확인했습니다.
+센서·AA LOCATION 표본이 없어 분석은 inconclusive이며, 기존 전용 manager
+취소·재연결 fixture를 재실행한 결과는 아닙니다. 추가 도구는 전용 컨테이너에만
+설치했고 컨테이너·도구체인·임시 작업 폴더를 모두 제거했습니다.
+
 [후속 OEM 위치 서비스 실행](../validation/OEM_LOCATION_2026-09-30.md)에서는
 원본 LDS 제공자와 실제 위치 API 응답을 확인했습니다. mode·UTC·좌표는 모두
 0이며 READ_NOT_READY 상태입니다. 후속 실제 SM 부분 그래프에서는 LDS의 SM
@@ -104,6 +112,13 @@ util에서 사라지는 ServiceUnknown도 로그에 남습니다. host/ARM 전�
 미분리입니다. 이 실패와 최종 검사의 명시적 제외 범위를 새 기록에 보존했습니다.
 관측 ID는 receiver/session·센서 자격을 만들지 않으며 live ASSIST는 꺼져 있습니다.
 공개 ZIP은 아직 기존 v0.3.1-shadow.1입니다.
+
+[후속 세션 상태 콜백 실행](../validation/SESSION_EVENTS_2026-09-30.md)에서는
+원본 생성·송신·시작의 반환 0 뒤에 실제 INVALID/-1 callback과 stop 264를
+두 VM에서 각각 두 번 확인했습니다. 생성별 callback 문맥을 보존하는 재현
+도구와 판정기를 저장소에 추가했고, 원격 `ccfb255` 반영 후에도 Python 281개와 C/C++ 검사를
+통과했습니다. 합성 0값 시작 인자를 쓴 별도 진단이며 제품 요청별 세션 자격,
+정상 폰 연결·수용과 ASSIST 활성화 완료는 아닙니다. 추가 도구는 제거했습니다.
 
 [후속 전체 취소·재개 실행](../validation/MANAGER_CANCELLATION_2026-09-30.md)에서는
 동일 제품 ELF로 전체 manager 경로와 취소 12건·지연 응답 4건을 끝까지
