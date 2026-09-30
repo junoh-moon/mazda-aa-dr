@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iterator>
 #include <vector>
+#include <new>
 
 static int32_t unused_next(void *, A::VehicleData *) { return 0; }
 struct CadenceResult { unsigned late,holdout_late;uint64_t resets;std::vector<unsigned> drains; };
@@ -63,7 +64,8 @@ static void cadence_tests() {
 }
 static void arm_test_mode() {
   audit_fault = 0;
-  capture_stopped = 0;
+  // Test-only reset, with no concurrent queue users.
+  queue.~ObservationQueue();new(&queue) ObservationQueue;
   assert(A::set_mode(A::SCRUB_STALE));
 }
 struct FakeReceiver {
@@ -125,18 +127,19 @@ static void stop_tests(const char* root,const std::string& logs) {
   {
     std::ifstream before((logs+"/trace.0.jsonl").c_str());
     const std::string saved((std::istreambuf_iterator<char>(before)),std::istreambuf_iterator<char>());
-    arm_test_mode();assert(worker_at(root)==0 && capture_stopped==1);
+    arm_test_mode();assert(worker_at(root)==0 && queue.closed());
     std::ifstream after((logs+"/trace.0.jsonl").c_str());
     const std::string retained((std::istreambuf_iterator<char>(after)),std::istreambuf_iterator<char>());
     assert(saved==retained && access(ack.c_str(),F_OK)!=0);
   }
-  arm_test_mode();qhead=qtail=qsize=0;dropped=0;
+  arm_test_mode();
   A::Observation event=A::Observation();sink(&event,0);
   freeze_capture();sink(&event,0);
-  assert(qsize==1 && dropped==0 && A::mode()==A::OBSERVE);
-  assert(!pthread_mutex_lock(&queue_mu));sink(&event,0);pthread_mutex_unlock(&queue_mu);
-  assert(dropped==0 && qsize==1);
+  assert(!queue.drained() && !queue.dropped() && A::mode()==A::OBSERVE);
+  sink(&event,0);
+  assert(!queue.dropped() && !queue.drained());
   assert(pop(&event) && !pop(&event));
+  assert(queue.drained());
   {
     Journal j(root);j.line("{\"kind\":\"fixture\",\"mono_ns\":9}");
     assert(finish_capture(j,boot,10,11));
@@ -310,21 +313,21 @@ int main(int argc,char** argv) {
     assert(overlong.failed && A::mode() == A::OBSERVE);
   }
   arm_test_mode();
-  qhead = qtail = qsize = 0;
-  dropped = 0;
   A::Observation event = A::Observation();
-  for (unsigned i = 0; i < 257; ++i)
+  for (unsigned i = 0; i < 257; ++i) {
+    event.call_sequence=i;
     sink(&event, 0);
-  assert(qsize == 256 && dropped == 1 && A::mode() == A::OBSERVE);
+  }
+  assert(queue.dropped() == 1 && queue.lost() && A::mode() == A::OBSERVE);
   A::Observation read = A::Observation();
-  for (unsigned i = 0; i < 256; ++i)
-    assert(pop(&read));
+  for (unsigned i = 0; i < 256; ++i) {
+    assert(pop(&read) && read.call_sequence==i);
+  }
   assert(!pop(&read));
   arm_test_mode();
-  assert(!pthread_mutex_lock(&queue_mu));
   sink(&event, 0);
-  assert(!pthread_mutex_unlock(&queue_mu));
-  assert(dropped == 2 && A::mode() == A::OBSERVE);
+  assert(!queue.dropped() && A::mode() == A::SCRUB_STALE);
+  assert(pop(&read));
   receive_turn_tests(tmp,logs);
   stop_tests(tmp,logs);
   for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());

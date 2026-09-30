@@ -11,6 +11,7 @@
 #include "shadow_log.h"
 #include "request_log.h"
 #include "worker_tick.h"
+#include "journal_queue.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -30,12 +31,9 @@ namespace {
 namespace A = mx5::adapter;
 namespace N = mx5::navigation;
 const char *const ROOT = "/data_persist/mx5-aa-dr";
-A::Observation queue[256];
-unsigned qhead = 0, qtail = 0, qsize = 0;
-pthread_mutex_t queue_mu = PTHREAD_MUTEX_INITIALIZER;
-volatile uint32_t dropped = 0;
+typedef mx5::runtime::JournalQueue<A::Observation,256> ObservationQueue;
+ObservationQueue queue;
 volatile uint32_t audit_fault = 0;
-volatile uint32_t capture_stopped = 0;
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
@@ -50,44 +48,13 @@ uint64_t clock_ns(void *) {
   return uint64_t(t.tv_sec) * 1000000000ULL + t.tv_nsec;
 }
 void sink(const A::Observation *o, void *) {
-  if (__sync_fetch_and_add(&capture_stopped, 0)) return;
-  if (pthread_mutex_trylock(&queue_mu)) {
-    if (__sync_fetch_and_add(&capture_stopped, 0)) return;
-    __sync_fetch_and_add(&dropped, 1);
-    disable_mutation();
-    return;
-  }
-  if (__sync_fetch_and_add(&capture_stopped, 0)) {
-    pthread_mutex_unlock(&queue_mu);
-    return;
-  }
-  if (qsize == 256) {
-    __sync_fetch_and_add(&dropped, 1);
-    disable_mutation();
-  } else {
-    queue[qtail] = *o;
-    qtail = (qtail + 1) % 256;
-    ++qsize;
-  }
-  pthread_mutex_unlock(&queue_mu);
+  if (queue.push(*o) == ObservationQueue::FULL) disable_mutation();
 }
 void freeze_capture() {
-  pthread_mutex_lock(&queue_mu);
-  __sync_lock_test_and_set(&capture_stopped, 1);
-  pthread_mutex_unlock(&queue_mu);
+  queue.close();
   A::set_mode(A::OBSERVE);
 }
-bool pop(A::Observation *out) {
-  pthread_mutex_lock(&queue_mu);
-  bool ok = qsize != 0;
-  if (ok) {
-    *out = queue[qhead];
-    qhead = (qhead + 1) % 256;
-    --qsize;
-  }
-  pthread_mutex_unlock(&queue_mu);
-  return ok;
-}
+bool pop(A::Observation *out) { return queue.pop(out); }
 
 // No live provenance or sensor freshness is fabricated from polling. SCRUB
 // uses only the original request mode; custom DR remains a separate gate.
@@ -304,12 +271,12 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation) {
   const A::RequestHookHealth h=A::request_hook_health();
   char line[1000];
   const int n=snprintf(line,sizeof line,
-      "{\"kind\":\"health\",\"mono_ns\":%llu,\"dropped\":%u,\"hook_installed\":%s,"
+      "{\"kind\":\"health\",\"mono_ns\":%llu,\"dropped\":%llu,\"hook_installed\":%s,"
       "\"runtime_mode\":%u,\"audit_fault\":%u,\"capture_active\":%s,"
       "\"computation_active\":%s,\"assist_ready\":false,\"request_observer\":{"
       "\"prepared\":%s,\"abi_fault\":%s,\"result\":\"%s\",\"loss_epoch\":%llu,"
       "\"requests\":%u,\"workers\":%u,\"loss_reasons\":%u,\"exhausted\":%s}}",
-      (unsigned long long)now,__sync_fetch_and_add(&dropped,0),hook_installed?"true":"false",
+      (unsigned long long)now,(unsigned long long)queue.dropped(),hook_installed?"true":"false",
       unsigned(A::mode()),__sync_fetch_and_add(&audit_fault,0),capture?"true":"false",
       computation?"true":"false",h.prepared?"true":"false",h.abi_fault?"true":"false",
       A::R::result_name(h.result),(unsigned long long)h.ledger.loss_epoch,h.ledger.requests,
@@ -321,10 +288,33 @@ bool stop_requested(const char* root) {
   struct stat st;
   return lstat(path,&st)==0 && S_ISDIR(st.st_mode);
 }
+// A close prevents new reservations but a preempted producer may still own
+// an unpublished one. Only this worker waits, with a finite retry budget.
+// At most 256 accepted observations remain after close. A stuck producer
+// leaves the capture incomplete; absence of a ready head is not completion.
+bool drain_capture_tail(Journal& j) {
+  if(!queue.closed()) { j.fail();return false; }
+  for(unsigned attempt=0;attempt<100;++attempt) {
+    A::Observation o;
+    for(unsigned n=0;n<256 && pop(&o);++n) {
+      char line[2200];
+      if(format_observation(line,sizeof line,o))j.line(line);else j.fail();
+    }
+    if(queue.drained())return true;
+    const struct timespec pause={0,1000000};
+    nanosleep(&pause,0);
+  }
+  j.line("{\"kind\":\"capture_incomplete\",\"reason\":\"observation_pending\",\"assist_ready\":false}");
+  j.fail();j.flush();
+  return false;
+}
 // Only after input is frozen and the bounded final drain has completed.
 // No acknowledgement can precede durable terminal records.
 bool finish_capture(Journal& j,const char* boot_id,uint64_t cutoff,uint64_t now) {
-  if(!cutoff || now<cutoff) { j.fail();return false; }
+  if(!cutoff || now<cutoff || !queue.drained()) { j.fail();return false; }
+  // A producer may have returned its failed reservation before the sink's
+  // disable_mutation call. The closed+drained acquire covers its sticky loss.
+  if(queue.lost())disable_mutation();
   char line[400];
   snprintf(line,sizeof line,
       "{\"kind\":\"capture_end\",\"schema\":1,\"mono_ns\":%llu,\"boot_id\":\"%s\","
@@ -455,7 +445,7 @@ void *worker_at(const char* root) {
     }
     if(capture && !j.failed)drain_motion(j,motion_batch,motion,navigation,holdout,shadow);
     if(stopping) {
-      finish_capture(j,boot_id,cutoff,clock_ns(0));
+      if(drain_capture_tail(j))finish_capture(j,boot_id,cutoff,clock_ns(0));
       return 0; // Even failed finalization cannot reopen this capture.
     }
     now=clock_ns(0);

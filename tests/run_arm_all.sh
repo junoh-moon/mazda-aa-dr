@@ -54,6 +54,9 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/request-observer-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_request_handoff.cpp -pthread -o "$build/request-handoff-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-handoff-test"
 MX5DR_PUBLICATION_BUILD="$build/request-publication" sh tests/runtime/run_request_publication.sh
+MX5DR_JOURNAL_BOUNDARY_BUILD="$build/journal-boundaries" sh tests/runtime/run_journal_boundaries.sh
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_journal_queue.cpp -pthread -o "$build/journal-queue-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/journal-queue-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch $dbus tests/collector/test_journal.cpp src/runtime/config.cpp -ldbus-1 -pthread -lrt -o "$build/collector-journal-test"
