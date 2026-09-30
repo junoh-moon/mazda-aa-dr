@@ -8,10 +8,16 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 namespace mx5 { namespace navigation {
 namespace {
+uint64_t checked_time() {
+    timespec now;
+    if(clock_gettime(CLOCK_MONOTONIC,&now) || now.tv_sec<0)return 0;
+    return uint64_t(now.tv_sec)*1000000000ULL+now.tv_nsec;
+}
 void put(unsigned char* p,uint64_t v,size_t n) {
     for(size_t i=0;i<n;++i) p[i]=static_cast<unsigned char>(v>>(8*i));
 }
@@ -117,11 +123,12 @@ int MotionReceiver::wait_for_input(unsigned timeout_ms) const {
     if(waiting.revents&POLLIN)return 1;
     errno=(waiting.revents&POLLNVAL)?EBADF:EIO;return -1;
 }
-ReceiveResult MotionReceiver::receive(uint64_t now,RawEvent* out,ReceiveDiagnostic* diagnostic) {
-    if(diagnostic) { *diagnostic=ReceiveDiagnostic();diagnostic->checked_ns=now; }
+ReceiveResult MotionReceiver::receive(RawEvent* out,ReceiveDiagnostic* diagnostic) {
+    if(diagnostic)*diagnostic=ReceiveDiagnostic();
     if(out)*out=RawEvent();
     if(!out || fd_<0) {
-        if(diagnostic) { diagnostic->reason=RECEIVE_SYSCALL;diagnostic->syscall_errno=EBADF; }
+        if(diagnostic) { diagnostic->reason=RECEIVE_SYSCALL;diagnostic->syscall_errno=EBADF;
+                        diagnostic->checked_ns=checked_time(); }
         return CHANNEL_FAULT;
     }
     unsigned char bytes[MOTION_RECORD_SIZE];
@@ -131,9 +138,12 @@ ReceiveResult MotionReceiver::receive(uint64_t now,RawEvent* out,ReceiveDiagnost
     msg.msg_iov=&iov;msg.msg_iovlen=1;msg.msg_control=ancillary.bytes;
     msg.msg_controllen=sizeof(ancillary.bytes);
     ssize_t n=recvmsg(fd_,&msg,MSG_DONTWAIT);
-    if(n<0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR))return CHANNEL_EMPTY;
+    const int receive_errno=errno;
+    if(n<0 && (receive_errno==EAGAIN || receive_errno==EWOULDBLOCK || receive_errno==EINTR))return CHANNEL_EMPTY;
+    const uint64_t now=checked_time();
     if(n<0) {
-        if(diagnostic) { diagnostic->reason=RECEIVE_SYSCALL;diagnostic->syscall_errno=errno; }
+        if(diagnostic) { diagnostic->reason=RECEIVE_SYSCALL;diagnostic->syscall_errno=receive_errno;
+                        diagnostic->checked_ns=now; }
         return CHANNEL_FAULT;
     }
     bool credentials=false;ucred credential;memset(&credential,0,sizeof(credential));

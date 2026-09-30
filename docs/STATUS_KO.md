@@ -190,6 +190,18 @@ raw 423·500건은 합성이며 MODEL은 invalid, 일반 분석은 inconclusive�
 MODEL의 버스 경계 초기화와 provider/receiver 자격은 미완료이고, 이전 정리
 실패의 원인·실차·폰 검증도 남아 있습니다. 공개 ZIP은 변경하지 않았습니다.
 
+[후속 MODEL 버스 경계 검토](../validation/MODEL_BUS_REVIEW_2026-09-30.md)에서는
+연결 변경 때 기준점·학습값·대기 입력을 초기화하는 외부 변경을 통합했습니다.
+세 독립 리뷰와 직접 재현으로 동시 출처 표시 누락·분석기 모순 허용을 수정했고,
+정상 datagram을 미래 시각으로 거부하던 실제 ARM 수신 순서 결함도 고쳤습니다.
+최종 제품의 원본 VM에서 LDS 응답 42건과 AA 세션을 유지한 복수 연결·해제를
+검사했습니다. 합성 raw 437·549·480건을 보존했으며 원본 GPS는 모두 mode 0,
+MODEL은 invalid, 일반 분석은 inconclusive입니다. 상세 host/ARM 결과와
+초기 실패는 새 기록을 따릅니다. 기존 MODEL 결과 의미 검사 공백은 별도
+TODO이며 provider/receiver 자격·실차·폰 검증과 공개 ZIP 갱신은 미완료입니다.
+같은 기록에서 클로드의 후속 원본 SM·SYSTEM·USB 관리자 기동 조사도
+별도 커밋으로 확인했습니다. 외부 실행과 직접 실행을 구분합니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

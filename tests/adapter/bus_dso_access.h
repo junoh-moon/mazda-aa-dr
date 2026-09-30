@@ -41,6 +41,12 @@ static void dso_bus_position_leave() {
 static int32_t dso_bus_send_vehicle_data(void* storage,VehicleData* data) {
     return reinterpret_cast<SendFunction>(bus_dso_base+TEST_VEHICLE_SEND)(storage,data);
 }
+static void dso_bus_observe_position(const void* p) {
+    reinterpret_cast<void(*)(const void*)>(bus_dso_base+TEST_OBSERVE_POSITION)(p);
+}
+static B::Boundary dso_bus_read_position() {
+    return reinterpret_cast<B::Boundary(*)()>(bus_dso_base+TEST_READ_POSITION)();
+}
 } }
 #define prepare_bus_hooks dso_bus_prepare
 #define bus_hook_health dso_bus_health
@@ -52,6 +58,8 @@ static int32_t dso_bus_send_vehicle_data(void* storage,VehicleData* data) {
 #define position_enter dso_bus_position_enter
 #define position_leave dso_bus_position_leave
 #define send_vehicle_data dso_bus_send_vehicle_data
+#define observe_position_bus dso_bus_observe_position
+#define read_position_bus dso_bus_read_position
 #define mx5_bus_create (reinterpret_cast<A::BusCreate>(bus_dso_base+TEST_CREATE))
 #define mx5_bus_connect (reinterpret_cast<A::BusConnect>(bus_dso_base+TEST_CONNECT))
 #define mx5_bus_disconnect (reinterpret_cast<A::BusEnd>(bus_dso_base+TEST_DISCONNECT))

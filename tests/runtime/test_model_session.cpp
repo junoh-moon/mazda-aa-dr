@@ -1,9 +1,11 @@
 #include "runtime/model_session.h"
+#include "runtime/model_bus.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
 namespace R=mx5::runtime;
 namespace S=R::session_trace;
+namespace B=R::bus_trace;
 static mx5::adapter::Observation position(S::Snapshot session) {
     mx5::adapter::Observation o=mx5::adapter::Observation();
     o.kind=mx5::adapter::Observation::POSITION;o.mono_ns=120;
@@ -12,7 +14,43 @@ static mx5::adapter::Observation position(S::Snapshot session) {
     o.request_trace.issue.observed_ns=100;o.request_trace.reply.observed_ns=110;
     o.request_trace.issue.session_context=session;return o;
 }
+static void bus_gate() {
+    R::ModelBus gate;const B::Boundary b={{B::CONNECTED,2,7},20};
+    assert(!gate.available() && gate.update(b,90)==R::ModelBus::INITIAL && gate.available());
+    mx5::adapter::Observation o=mx5::adapter::Observation();
+    o.request_trace.issue.connection=o.request_trace.reply.connection=b.connection;
+    o.request_trace.issue.known=R::request_trace::ISSUE_BUS_LIFETIME;
+    o.request_trace.issue.bus_lifetime=7;o.request_trace.issue.observed_ns=100;
+    for(unsigned mode=0;mode<4;++mode) {
+        o.position.mode=mode;assert(!gate.reject(o));
+        assert(gate.update(b,200)==R::ModelBus::SAME && gate.epoch()==1 && gate.since_ns()==90);
+    }
+    for(unsigned invalid=0;invalid<7;++invalid) {
+        mx5::adapter::Observation bad=o;
+        if(invalid==0)bad.request_result=R::request_trace::BUSY;
+        if(invalid==1)bad.request_trace.issue.known=0;
+        if(invalid==2)bad.request_trace.issue.bus_lifetime=8;
+        if(invalid==3)bad.request_trace.issue.connection.object=3;
+        if(invalid==4)bad.request_trace.reply.connection.lifetime=8;
+        if(invalid==5)bad.request_trace.reply.connection.result=B::DISCONNECTED;
+        if(invalid==6)bad.request_trace.issue.observed_ns=89;
+        assert(!strcmp(gate.reject(bad),invalid<3?"request_bus_unobserved":
+                       invalid<6?"bus_changed_since_issue":"request_before_bus_boundary"));
+    }
+    B::Boundary changed=b;++changed.revision;
+    assert(gate.update(changed,150)==R::ModelBus::CHANGED && gate.epoch()==2);
+    assert(!strcmp(gate.reject(o),"request_before_bus_boundary"));
+    o.request_trace.issue.observed_ns=150;assert(!gate.reject(o));
+    const B::Result absent[]={B::UNOBSERVED,B::NONE,B::AMBIGUOUS,B::TRANSITION,B::FAULT};
+    for(unsigned i=0;i<sizeof absent/sizeof absent[0];++i) {
+        B::Boundary lost=B::Boundary();lost.connection.result=absent[i];
+        assert(gate.update(lost,200+i)==R::ModelBus::CHANGED && !gate.available());
+        assert(!strcmp(gate.reject(o),"bus_unavailable"));
+    }
+    puts("MODEL bus fence: issue/reply lifetime, boundary time, ambiguity, faults and GPS/GAP independence passed");
+}
 int main() {
+    bus_gate();
     R::ModelSession gate;
     const S::Snapshot s={S::OBSERVED,1,0,0,false,1};
     assert(!gate.available());assert(gate.update(s,90)==R::ModelSession::INITIAL);

@@ -73,8 +73,9 @@ struct FakeReceiver {
   bool gap;
   N::MotionCursor cursor;
   FakeReceiver(unsigned n,bool missing=false):calls(0),limit(n),gap(missing) {}
-  N::ReceiveResult receive(uint64_t now,N::RawEvent* out,N::ReceiveDiagnostic* d) {
+  N::ReceiveResult receive(N::RawEvent* out,N::ReceiveDiagnostic* d) {
     if(calls==limit)return N::CHANNEL_EMPTY;
+    const uint64_t now=clock_ns(0);
     N::RawEvent e=N::RawEvent();e.kind=N::WHEELS;e.epoch=1;
     ++calls;e.receive_seq=calls+(gap && calls>1?1:0);e.received_ns=now;
     for(unsigned i=0;i<4;++i)e.raw[i]=10000;

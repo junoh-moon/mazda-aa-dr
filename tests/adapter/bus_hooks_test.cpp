@@ -129,13 +129,23 @@ static void cancel() {
 static std::atomic<unsigned> reads(0);
 static std::atomic<bool> reading(true);
 static void* reader(void*) {
-    uint64_t last=0;
+    uint64_t last=0,last_source=0;
     while(reading.load()) {
         const B::Snapshot s=read();
         if(s.result==B::CONNECTED) {
             assert(s.object==1 && s.lifetime && s.lifetime>=last);last=s.lifetime;
         } else if(s.result==B::DISCONNECTED)assert(s.object==1 && !s.lifetime);
         else assert(s.result==B::TRANSITION && !s.object && !s.lifetime);
+        const B::Boundary source=A::read_position_bus();
+        if(source.connection.result==B::CONNECTED) {
+            assert(source.revision && source.connection.object==1 &&
+                   source.connection.lifetime && source.connection.lifetime>=last_source);
+            last_source=source.connection.lifetime;
+        } else {
+            assert(source.connection.result==B::UNOBSERVED || source.connection.result==B::NONE ||
+                   source.connection.result==B::TRANSITION);
+            assert(!source.connection.object && !source.connection.lifetime);
+        }
         reads.fetch_add(1);
     }
     return 0;
@@ -144,7 +154,7 @@ static void concurrent_readers() {
     open();pthread_t threads[2];
     for(unsigned i=0;i<2;++i)assert(!pthread_create(&threads[i],0,reader,0));
     while(reads.load()<1000)sched_yield();
-    for(unsigned i=0;i<200;++i) { attach();callback(0);end(false); }
+    for(unsigned i=0;i<200;++i) { attach();A::observe_position_bus(address);callback(0);end(false); }
     reading.store(false);
     for(unsigned i=0;i<2;++i)assert(!pthread_join(threads[i],0));
     assert(read().result==B::DISCONNECTED && !A::bus_hook_health().faults);
@@ -235,6 +245,75 @@ static void signal_reused_address() {
     assert(after.result==B::CONNECTED && after.object==before.object && after.lifetime==before.lifetime);
     assert(creates==2 && connects==2 && frees==1 && signals==1 && !A::bus_hook_health().faults);
 }
+// No lifecycle is concurrent here: two already ACTIVE observed connections
+// each submit their first source mark for the current connect lifetime.
+static std::atomic<unsigned> source_round(0),source_done(0);
+static std::atomic<bool> source_stop(false);
+static void* mark_source(void* connection) {
+    for(unsigned round=1;;++round) {
+        while(source_round.load()<round)sched_yield();
+        if(source_stop.load())return 0;
+        errno=E2BIG;A::observe_position_bus(connection);assert(errno==E2BIG);
+        source_done.fetch_add(1);
+    }
+}
+static void position_sources_concurrent() {
+    const unsigned rounds=20000;
+    void* const first=address;open();attach();
+    void* const second=reinterpret_cast<void*>(0x2230);address=second;open();
+    // A different connection's blocked original connect cannot erase the
+    // stable first connection's source mark. This catches the global reader
+    // guard deterministically before the two-marker scheduling stress below.
+    blocked.store(1);pthread_t connecting_thread;
+    assert(!pthread_create(&connecting_thread,0,connecting,0));
+    while(blocked.load()!=2)sched_yield();
+    errno=E2BIG;A::observe_position_bus(first);assert(errno==E2BIG);
+    assert(A::read_position_bus().connection.result==B::TRANSITION);
+    blocked.store(3);assert(!pthread_join(connecting_thread,0));blocked.store(0);
+    const B::Boundary only=A::read_position_bus();
+    assert(only.connection.result==B::CONNECTED && only.connection.object==1 && only.connection.lifetime==1);
+    pthread_t markers[2];
+    assert(!pthread_create(&markers[0],0,mark_source,first));
+    assert(!pthread_create(&markers[1],0,mark_source,second));
+    for(unsigned round=1;round<=rounds;++round) {
+        address=first;end(false);attach();const B::Snapshot one=read();
+        address=second;end(false);attach();const B::Snapshot two=read();
+        assert(one.result==B::CONNECTED && two.result==B::CONNECTED && one.object!=two.object);
+        source_done.store(0);source_round.store(round);
+        while(source_done.load()!=2)sched_yield();
+        const B::Boundary both=A::read_position_bus();
+        assert(both.connection.result==B::AMBIGUOUS && !both.connection.object && !both.connection.lifetime);
+        assert(!A::bus_hook_health().faults);
+    }
+    source_stop.store(true);source_round.store(rounds+1);
+    assert(!pthread_join(markers[0],0));assert(!pthread_join(markers[1],0));
+    assert(creates==2 && connects==2*rounds+2 && disconnects==2*rounds);
+}
+static void position_source() {
+    assert(A::read_position_bus().connection.result==B::UNOBSERVED);
+    open();attach();assert(A::read_position_bus().connection.result==B::UNOBSERVED);
+    errno=E2BIG;A::observe_position_bus(address);assert(errno==E2BIG);
+    const B::Boundary first=A::read_position_bus();
+    assert(first.connection.result==B::CONNECTED && first.connection.object==1 && first.connection.lifetime==1);
+    assert(first.revision==3); // create, connect, first observed LDS submission
+    A::observe_position_bus(address);assert(A::read_position_bus().revision==first.revision);
+    callback(0);assert(A::read_position_bus().connection.result==B::NONE);
+    attach();assert(A::read_position_bus().connection.result==B::NONE); // new lifetime needs submission
+    A::observe_position_bus(address);
+    const B::Boundary second=A::read_position_bus();
+    assert(second.connection.object==1 && second.connection.lifetime==2 && second.revision>first.revision);
+    // An unmarked HMI/other bus is not mistaken for the LDS source.
+    void* primary=address;address=reinterpret_cast<void*>(0x2230);open();attach();
+    assert(A::read_position_bus().connection.object==1);
+    A::observe_position_bus(address);assert(A::read_position_bus().connection.result==B::AMBIGUOUS);
+    end(true);assert(A::read_position_bus().connection.object==1);
+    address=primary;end(true);assert(A::read_position_bus().connection.result==B::NONE);
+    open();attach();assert(A::read_position_bus().connection.result==B::NONE);
+    A::observe_position_bus(address);const B::Boundary reused=A::read_position_bus();
+    assert(reused.connection.object==3 && reused.connection.lifetime==4);
+    callback(0);assert(A::read_position_bus().connection.object==3);
+    assert(!A::bus_hook_health().faults);
+}
 int main(int argc,char** argv) {
     assert(argc==2);alarm(20);
 #ifdef MX5_BUS_DSO_TEST
@@ -247,6 +326,8 @@ int main(int argc,char** argv) {
     const char* c=argv[1];
     if(!strncmp(c,"prediction_",11))prediction_boundary(c+11);
     else if(!strcmp(c,"normal"))normal();
+    else if(!strcmp(c,"position_source"))position_source();
+    else if(!strcmp(c,"position_sources_concurrent"))position_sources_concurrent();
     else if(!strcmp(c,"signal")) {
         open();attach();const B::Snapshot before=read();
         errno=EDOM;assert(mx5_bus_signal(address,&signal_message)==-57 && errno==ERANGE);

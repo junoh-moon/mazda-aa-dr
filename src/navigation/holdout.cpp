@@ -220,7 +220,7 @@ const char* holdout_event_name(HoldoutEvent e) {
 }
 const char* holdout_reason_name(HoldoutReason r) {
     static const char* const n[]={"none","complete","bad_gps","gps_timeout","real_gap","native",
-        "source_fault","audit_reset","reference_overflow","output_overflow","time_order","prediction_invalid","capture_stop","session_reset"};
+        "source_fault","audit_reset","reference_overflow","output_overflow","time_order","prediction_invalid","capture_stop","session_reset","bus_reset"};
     return unsigned(r)<sizeof n/sizeof n[0]?n[r]:"unknown";
 }
 } }

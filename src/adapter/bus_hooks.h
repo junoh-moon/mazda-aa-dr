@@ -19,6 +19,8 @@ enum BusFault { BUS_CAPACITY=1, BUS_CONTENTION=2, BUS_CALLBACK=4, BUS_UNWIND=8,
 struct BusHealth { bool prepared; unsigned contexts,faults; };
 bool prepare_bus_hooks(const BusBindings&);
 runtime::bus_trace::Snapshot read_bus_connection(const void*);
+void observe_position_bus(const void*);
+runtime::bus_trace::Boundary read_position_bus();
 BusHealth bus_hook_health();
 } }
 extern "C" void* mx5_bus_create(mx5::adapter::BusClosed,void*);

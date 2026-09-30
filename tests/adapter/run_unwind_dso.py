@@ -96,6 +96,8 @@ def main():
             'PREPARE': '_ZN3mx57adapter17prepare_bus_hooksERKNS0_11BusBindingsE',
             'HEALTH': '_ZN3mx57adapter15bus_hook_healthEv',
             'READ': '_ZN3mx57adapter19read_bus_connectionEPKv',
+            'OBSERVE_POSITION': '_ZN3mx57adapter20observe_position_busEPKv',
+            'READ_POSITION': '_ZN3mx57adapter17read_position_busEv',
             'CREATE': 'mx5_bus_create', 'CONNECT': 'mx5_bus_connect',
             'DISCONNECT': 'mx5_bus_disconnect', 'FREE': 'mx5_bus_free', 'SIGNAL': 'mx5_bus_signal',
             'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
@@ -105,7 +107,7 @@ def main():
             'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
             'VEHICLE_SEND': 'mx5_send_vehicle_data',
         }
-        cases = ('normal', 'signal', 'signal_reuse', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
+        cases = ('normal', 'position_source', 'position_sources_concurrent', 'signal', 'signal_reuse', 'failure', 'early_close', 'unobserved', 'overlap', 'cancel', 'readers',
                  'capacity', 'collision', 'bad_callback', 'throw_create', 'throw_connect',
                  'throw_disconnect', 'throw_free', 'throw_closed',
                  'prediction_entry_create', 'prediction_entry_connect', 'prediction_entry_disconnect',

@@ -80,6 +80,7 @@ extern "C" int32_t mx5_request_submit(void* connection, void* method,
     ready();
     if(callback!=original.notify)
         return original.submit(connection,method,callback,context,timeout);
+    A::observe_position_bus(connection);
     R::Token token;
     observer->request_begin(method,&token,A::read_issue_session(),A::read_bus_connection(connection));
     // Register before submission; another thread can notify before it returns.

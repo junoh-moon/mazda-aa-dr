@@ -16,9 +16,10 @@ struct Context {
     std::atomic<unsigned> phase;
     std::atomic<uintptr_t> address;
     std::atomic<uint64_t> lifetime;
+    std::atomic<uint64_t> source_lifetime;
     A::BusClosed next;
     void* user;
-    constexpr Context():phase(UNUSED),address(0),lifetime(0),next(0),user(0) {}
+    constexpr Context():phase(UNUSED),address(0),lifetime(0),source_lifetime(0),next(0),user(0) {}
 };
 // Keep the containing object constant-initialized, including on GCC 4.9.
 struct Pool {
@@ -107,6 +108,9 @@ Context* reserve(A::BusClosed next,void* user,A::BusClosed* wrapper) {
     *wrapper=callback(i,MakeIndices<A::BUS_CONTEXT_CAPACITY>::Type());return &c;
 }
 B::Snapshot unavailable(B::Result result) { B::Snapshot out=B::Snapshot();out.result=result;return out; }
+B::Boundary boundary_unavailable(B::Result result) {
+    B::Boundary out=B::Boundary();out.connection=unavailable(result);return out;
+}
 }
 namespace mx5 { namespace adapter {
 bool prepare_bus_hooks(const BusBindings& b) {
@@ -134,6 +138,50 @@ B::Snapshot read_bus_connection(const void* connection) {
     if(mutations.load() || version.load()!=before)return unavailable(B::TRANSITION);
     if(faults.load())return unavailable(B::FAULT);
     return out;
+}
+void observe_position_bus(const void* connection) {
+    const PreserveErrno saved;
+    if(!prepared.load(std::memory_order_acquire) || faults.load())return;
+    // Pin the never-reused slot. Another source marker is not a lifecycle
+    // boundary and must not make this completed submission disappear.
+    Context* const c=lookup(connection);
+    if(!c || c->phase.load()!=ACTIVE)return;
+    const uint64_t lifetime=c->lifetime.load();
+    uint64_t source=c->source_lifetime.load();
+    if(!lifetime || source>=lifetime)return;
+    Mutation mutation(false);
+    if(c->phase.load()==ACTIVE && c->lifetime.load()==lifetime &&
+       c->address.load()==reinterpret_cast<uintptr_t>(connection)) {
+        // A delayed older-lifetime marker cannot overwrite a newer marker.
+        // With strong CAS each failure raises source; this is lock-free,
+        // not a constant-time or wait-free bound.
+        while(source<lifetime && !c->source_lifetime.compare_exchange_strong(
+                source,lifetime,std::memory_order_seq_cst,std::memory_order_seq_cst)) {}
+    }
+    mutation.complete=true;
+}
+B::Boundary read_position_bus() {
+    const PreserveErrno saved;
+    if(!prepared.load(std::memory_order_acquire))return boundary_unavailable(B::UNOBSERVED);
+    if(faults.load())return boundary_unavailable(B::FAULT);
+    const uint64_t before=version.load();
+    if(mutations.load())return boundary_unavailable(B::TRANSITION);
+    B::Boundary out=boundary_unavailable(B::UNOBSERVED);
+    bool seen=false;unsigned active=0;
+    for(unsigned i=0,n=used.load();i<n;++i) {
+        Context& c=contexts[i];const uint64_t source=c.source_lifetime.load();
+        if(!source)continue;
+        seen=true;
+        if(c.phase.load()==ACTIVE && c.lifetime.load()==source) {
+            ++active;out.connection.result=B::CONNECTED;
+            out.connection.object=i+1;out.connection.lifetime=source;
+        }
+    }
+    if(active>1)out=boundary_unavailable(B::AMBIGUOUS);
+    else if(!active && seen)out=boundary_unavailable(B::NONE);
+    if(mutations.load() || version.load()!=before)return boundary_unavailable(B::TRANSITION);
+    if(faults.load())return boundary_unavailable(B::FAULT);
+    out.revision=before;return out;
 }
 } }
 extern "C" void* mx5_bus_create(A::BusClosed next,void* user) {
