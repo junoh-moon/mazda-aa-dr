@@ -120,6 +120,46 @@ static void rejection() {
     CHECK(bounded.enqueue_position(pos(200,1,999))==PIPELINE_OVERFLOW);
     CHECK(bounded.status().resets>0);
 }
+static void raw_yaw_accumulator_rejection(unsigned scenario) {
+    // Authored inputs exercised against the original VIP accumulator:
+    // 17 * 4093 wraps to 4045; 33 * 2047 wraps to 2015. Dividing either
+    // wrapped sum by count invents a small, apparently valid raw mean.
+    const unsigned sums[]={4045,2015,4079,2047,2047,65504};
+    const unsigned counts[]={17,33,17,256,65535,32};
+    CHECK(scenario<sizeof sums/sizeof sums[0]);
+    for(unsigned transport=0;transport<2;++transport) {
+        Pipeline p;seeded(p);
+        CHECK(p.diagnostic(T(300)).snapshot.model_valid);
+        const uint64_t generation=p.context().generation;
+        RawEvent r=raw(YAW,400,5);r.raw[0]=uint16_t(sums[scenario]);
+        r.count=uint16_t(counts[scenario]);
+        if(!transport)r.source_mono_ms=0;
+        CHECK(p.enqueue_raw(r)==PIPELINE_BAD_INPUT);
+        CHECK(r.raw[0]==sums[scenario]&&r.count==counts[scenario]);
+        CHECK(p.context().generation==generation+1);
+        const Diagnostic d=p.diagnostic(T(400));
+        CHECK(!d.snapshot.model_valid&&!d.snapshot.valid);
+        CHECK(d.snapshot.state==MX5_DR_UNSEEDED);
+        CHECK(!d.status.have_yaw&&!d.status.have_speed&&!d.status.have_reverse);
+        RawEvent next=raw(YAW,500,6);
+        CHECK(p.enqueue_raw(next)==PIPELINE_WAITING);
+        CHECK(!p.diagnostic(T(500)).snapshot.model_valid); // New anchor required.
+    }
+}
+static void raw_yaw_accumulator_boundaries() {
+    // A count above 16 is not by itself ambiguous: sum+65536 must still
+    // fit count independent 12-bit samples. Preserve the boundary above it.
+    const unsigned sums[]={2047,4094,32752,4080,65505};
+    const unsigned counts[]={1,2,16,17,32};
+    for(unsigned i=0;i<sizeof sums/sizeof sums[0];++i) {
+        Pipeline p;init(p);
+        RawEvent r=raw(YAW,0,1);r.raw[0]=uint16_t(sums[i]);r.count=uint16_t(counts[i]);
+        CHECK(p.enqueue_raw(r)==PIPELINE_WAITING);
+        r.receive_seq=2;r.received_ns=T(100);r.source_mono_ms=int64_t(T(100)/1000000);
+        CHECK(p.enqueue_raw(r)==PIPELINE_OK);
+        CHECK(p.status().resets==0);
+    }
+}
 static void receipt_worker_and_reacquisition() {
     Pipeline p; init(p);
     for(unsigned ms=0;ms<=800;ms+=50) {
@@ -434,7 +474,11 @@ int main(int argc,char** argv) {
     else if(argc==2&&!std::strcmp(argv[1],"exhausted_position"))exhausted_qualified(2);
     else if(argc==2&&!std::strcmp(argv[1],"exhausted_anchor"))exhausted_anchor_replacement();
     else if(argc==2&&!std::strcmp(argv[1],"exhausted_sequence"))exhausted_position_sequence();
+    else if(argc==2&&!std::strncmp(argv[1],"yaw_accumulator_",16))
+        raw_yaw_accumulator_rejection(unsigned(std::atoi(argv[1]+16)));
     else { model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
+        for(unsigned i=0;i<6;++i)raw_yaw_accumulator_rejection(i);
+        raw_yaw_accumulator_boundaries();
         rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();exhausted_model();
         exhausted_qualified(0);exhausted_qualified(1);exhausted_qualified(2);
         exhausted_anchor_replacement();exhausted_position_sequence(); }
