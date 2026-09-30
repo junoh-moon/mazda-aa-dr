@@ -10,6 +10,10 @@ struct Snapshot {
     uint32_t lifetime, event; // Process-local; zero is unknown, never reused.
     int32_t state;           // Raw first word of the actual status callback.
     bool state_known;
+    // Coherent completed lifecycle revision, including failed calls and late
+    // callbacks. Only OBSERVED/NONE/AMBIGUOUS snapshots carry it. Observation
+    // at issue is still NOT proof that this session owns the request.
+    uint64_t revision;
 };
 inline const char* result_name(Result r) {
     switch(r) {

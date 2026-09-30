@@ -43,6 +43,8 @@ $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUI
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
 $(BUILD)/test_request_trace: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_trace.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_trace.cpp -pthread -o $@
+$(BUILD)/test_model_session: tests/runtime/test_model_session.cpp src/runtime/model_session.h src/runtime/session_trace.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $< -o $@
 $(BUILD)/test_request_observer: src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/request_observer.cpp src/runtime/request_observer.h tests/runtime/test_request_observer.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_request_handoff: tests/runtime/test_request_handoff.cpp src/runtime/request_trace.cpp src/runtime/request_trace.h | $(BUILD)
@@ -53,6 +55,12 @@ $(BUILD)/test_journal_queue: tests/runtime/test_journal_queue.cpp src/runtime/jo
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
 $(BUILD)/test_journal: $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/motion_batch.h tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
+$(BUILD)/test_worker_session: $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_worker_session.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_worker_session.cpp -ldl -lpthread -lrt -lm -o $@
+$(BUILD)/test_model_session_reset: $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_reset.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
+$(BUILD)/test_model_session_input: $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_input.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $^ $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
 $(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
@@ -67,19 +75,19 @@ test-core: $(BUILD)/test_core $(BUILD)/replay
 	$(PYTHON) tests/core/test_replay.py $(BUILD)/replay
 $(BUILD)/test_cold_patch: tests/adapter/cold_patch_test.cpp src/adapter/cold_patch.h src/adapter/adapter.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
-$(BUILD)/test_session_hooks: src/adapter/session_hooks.cpp src/adapter/session_hooks.h src/runtime/session_trace.h tests/adapter/session_hooks_test.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
-$(BUILD)/test_session_early_init: src/adapter/session_hooks.cpp src/adapter/session_hooks.h src/runtime/session_trace.h tests/adapter/session_early_init_test.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
+$(BUILD)/test_session_hooks: $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h src/runtime/session_trace.h src/runtime/request_trace.h src/adapter/request_hooks.h src/runtime/request_observer.h tests/adapter/session_hooks_test.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
+$(BUILD)/test_session_early_init: $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h src/runtime/session_trace.h src/runtime/request_trace.h src/adapter/request_hooks.h src/runtime/request_observer.h tests/adapter/session_early_init_test.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -o $@
 $(BUILD)/test_session_request: tests/adapter/session_request_test.cpp src/adapter/session_hooks.cpp src/adapter/adapter.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/adapter/request_hooks.cpp src/adapter/request_hooks.h src/adapter/session_hooks.h src/adapter/adapter.h src/runtime/request_observer.h src/runtime/request_trace.h src/runtime/session_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/adapter/request_hooks.cpp,$^) -pthread -o $@
 test-adapter: $(BUILD)/test_adapter $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	$(BUILD)/test_cold_patch
-	@set -e; for case in normal failure overlap same_storage closing_create creating_during_destroy null_success output_race late_destroy distinct_storage capacity callback_bad callback_null readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status; do result=0; $(BUILD)/test_session_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
+	@set -e; for case in normal failure overlap same_storage closing_create creating_during_destroy null_success output_race late_destroy distinct_storage capacity callback_bad callback_null readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight prediction_cached_inflight; do result=0; $(BUILD)/test_session_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 	$(BUILD)/test_session_early_init
 	$(BUILD)/test_session_request
-test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
 	$(BUILD)/test_runtime
 	$(BUILD)/test_request_trace
 	$(BUILD)/test_request_observer
@@ -87,6 +95,10 @@ test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_re
 	$(BUILD)/test_request_status
 	$(BUILD)/test_journal_queue
 	$(BUILD)/test_journal
+	$(BUILD)/test_model_session
+	$(BUILD)/test_model_session_reset
+	$(BUILD)/test_model_session_input
+	@set -e; for case in destroy recreate status failed_create ambiguous inflight; do $(BUILD)/test_worker_session $$case; done
 test-journal-boundaries:
 	@result=0; MX5DR_JOURNAL_BOUNDARY_BUILD=$(BUILD)/journal-boundaries CXX="$(CXX)" CC="$(CC)" sh tests/runtime/run_journal_boundaries.sh || result=$$?; [ "$$result" -eq 0 ] || [ "$$result" -eq 77 ]
 test-request-publication:

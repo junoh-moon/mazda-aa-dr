@@ -49,6 +49,8 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/runtime-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-trace-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/request_trace.cpp src/runtime/request_observer.cpp tests/runtime/test_request_observer.cpp -pthread -o "$build/request-observer-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-observer-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_model_session.cpp -o "$build/model-session-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/model-session-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_request_handoff.cpp -pthread -o "$build/request-handoff-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-handoff-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o "$build/request-status-test"
@@ -61,6 +63,14 @@ MX5DR_JOURNAL_BOUNDARY_BUILD="$build/journal-boundaries" sh tests/runtime/run_jo
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-queue-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_worker_session.cpp -ldl -pthread -lrt -lm -o "$build/worker-session-test"
+for scenario in destroy recreate status failed_create ambiguous inflight; do
+    qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
+done
+for fixture in reset input; do
+    "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" "tests/runtime/test_model_session_$fixture.cpp" -ldl -pthread -lrt -lm -o "$build/model-session-$fixture-test"
+    qemu-arm -L "$QEMU_SYSROOT" "$build/model-session-$fixture-test"
+done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch $dbus tests/collector/test_journal.cpp src/runtime/config.cpp -ldbus-1 -pthread -lrt -o "$build/collector-journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/collector-journal-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch tests/runtime/test_loader.cpp -ldl -pthread -o "$build/loader-test"

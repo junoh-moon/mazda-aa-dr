@@ -71,10 +71,16 @@ void emit(const Observation& event) {
 Context* context() {
     return tls.depth && tls.depth <= 8 ? &tls.frames[tls.depth - 1] : 0;
 }
-Reason choose_dr(Context& ctx, uint64_t time, uint8_t bytes[48]) {
+Reason choose_dr(Context& ctx, uint64_t time,
+                 const runtime::session_trace::Snapshot& session, uint8_t bytes[48]) {
     if (!options.allow_assist || !options.clock || !ctx.provenance.exact_request ||
         !ctx.provenance.verified_lds || !ctx.provenance.legacy_receiver)
         return BAD_PROVENANCE;
+    // Negative lifecycle guard only: an observed handle grants no provenance.
+    // A candidate published inside a lifecycle call must not become selectable
+    // just because it carries the newly revoked generation.
+    if (options.session_reader && session.result != runtime::session_trace::OBSERVED)
+        return EPOCH_MISMATCH;
     if (pthread_mutex_trylock(&snapshot_mutex) != 0) return LOCK_BUSY;
     const DrSnapshot s = candidate;
     pthread_mutex_unlock(&snapshot_mutex);
@@ -250,7 +256,7 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
                 event.choice = SCRUBBED; event.reason = PASS;
             } else {
                 event.mono_ns = now();
-                event.reason = choose_dr(*ctx, event.mono_ns, replacement);
+                event.reason = choose_dr(*ctx, event.mono_ns, event.send_session, replacement);
                 if (event.reason == PASS) event.choice = DR_REPLACEMENT;
             }
             if (event.choice != ORIGINAL) {

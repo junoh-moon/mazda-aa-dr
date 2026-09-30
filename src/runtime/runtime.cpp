@@ -13,6 +13,7 @@
 #include "request_log.h"
 #include "worker_tick.h"
 #include "journal_queue.h"
+#include "model_session.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -227,11 +228,26 @@ bool format_motion_rejected(char* line,size_t capacity,const N::ReceiveDiagnosti
   return d.authenticated_decoded && n>0 && size_t(n)<capacity;
 }
 
+void journal_model_motion_excluded(Journal& j,const N::RawEvent& raw,
+                                  uint64_t since,const char* reason) {
+  char line[600];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"shadow_motion_excluded\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"reason\":\"%s\",\"raw_since_ns\":%llu,"
+      "\"sensor\":%u,\"epoch\":%llu,\"receive_seq\":%llu,"
+      "\"received_ns\":%llu,\"source_mono_ms\":%lld}",
+      (unsigned long long)clock_ns(0),reason,(unsigned long long)since,unsigned(raw.kind),
+      (unsigned long long)raw.epoch,(unsigned long long)raw.receive_seq,
+      (unsigned long long)raw.received_ns,(long long)raw.source_mono_ms);
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+
 // One bounded worker receive turn. Capture survives model/AA audit failure;
 // rejected input is separate evidence and can never enter either estimator.
 template<class Receiver>
 void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
-                  N::Pipeline& navigation,N::GpsHoldout& holdout,bool compute) {
+                  N::Pipeline& navigation,N::GpsHoldout& holdout,bool compute,
+                  uint64_t model_since_ns=0) {
   for(unsigned i=0;i<256 && !j.failed;++i) {
     N::RawEvent raw=N::RawEvent();
     N::ReceiveDiagnostic d=N::ReceiveDiagnostic();
@@ -262,7 +278,21 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
           d.syscall_errno,enabled?"true":"false");
       j.line(line);
     } else {
-      if(enabled) { navigation.enqueue_raw(raw);holdout.enqueue_raw(raw); }
+      // The existing MODEL pipeline uses a positive transport timestamp as
+      // event time. A later receipt cannot make a pre-boundary event new.
+      // Leave negative/overflow/future timestamps on the Pipeline fault path.
+      const bool old_transport=raw.source_mono_ms>0 &&
+          uint64_t(raw.source_mono_ms)<=UINT64_MAX/1000000ULL &&
+          uint64_t(raw.source_mono_ms)*1000000ULL<model_since_ns;
+      if(enabled && (raw.received_ns<model_since_ns || old_transport)) {
+        journal_motion(j,batch,raw);flush_motion(j,batch);
+        journal_model_motion_excluded(j,raw,model_since_ns,
+            raw.received_ns<model_since_ns?"receipt_before_session":"transport_before_session");
+        continue;
+      }
+      if(enabled) {
+        navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);
+      }
       journal_motion(j,batch,raw);
     }
   }
@@ -352,7 +382,46 @@ bool finish_capture(Journal& j,const char* boot_id,uint64_t cutoff,uint64_t now)
   return ok;
 }
 
-void *worker_at(const char* root) {
+void sync_model_session(Journal& j,mx5::runtime::ModelSession& session,
+                       N::Pipeline& navigation,N::GpsHoldout& holdout) {
+  const A::S::Snapshot current=A::read_issue_session();
+  const uint64_t now=clock_ns(0);
+  const mx5::runtime::ModelSession::Update update=session.update(current,now);
+  if(update==mx5::runtime::ModelSession::SAME)return;
+  const bool reset=update==mx5::runtime::ModelSession::CHANGED;
+  if(reset) {
+    mx5_dr_context c=navigation.context();
+    if(c.session_epoch==UINT64_MAX || c.generation==UINT64_MAX) {
+      disable_mutation();return;
+    }
+    ++c.session_epoch;++c.generation;
+    navigation.reset(c);holdout.reset(c,N::HOLDOUT_SESSION_RESET);
+    journal_holdout(j,holdout,now);
+  }
+  char observed[200],line[700];
+  if(!mx5::runtime::format_session_trace(observed,sizeof observed,current,false)) { j.fail();return; }
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"shadow_session\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"reset\":%s,\"input_available\":%s,"
+      "\"model_session_epoch\":%llu,\"raw_since_ns\":%llu,\"session\":%s}",
+      (unsigned long long)now,reset?"true":"false",session.available()?"true":"false",
+      (unsigned long long)navigation.context().session_epoch,
+      (unsigned long long)session.since_ns(),observed);
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+void rejected_model_position(Journal& j,const A::Observation& o,const char* reason,
+                             const mx5::runtime::ModelSession& session) {
+  char line[500];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"shadow_position_rejected\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"call\":%u,\"generation\":%u,\"reason\":\"%s\","
+      "\"session_revision\":%llu}",
+      (unsigned long long)clock_ns(0),o.call_sequence,o.prediction_generation,reason,
+      (unsigned long long)session.current().revision);
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+
+void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
   // An explicit stop survives same-boot service restarts. Do not rotate or
   // append even a boot record after an acknowledged capture was closed.
   if(stop_requested(root)) { freeze_capture();return 0; }
@@ -380,9 +449,10 @@ void *worker_at(const char* root) {
   N::Pipeline navigation;
   N::GpsHoldout holdout;
   N::MotionReceiver motion;
+  mx5::runtime::ModelSession model_session;
   const N::ModelProfile model=N::research_model_profile();
   mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
-  const bool capture=config.mode==4 && motion.open_channel();
+  const bool capture=config.mode==4 && motion.open_channel(motion_channel);
   bool shadow=capture && hook_installed &&
       navigation.init_model(model,mx5_dr_default_config(),nav_context,true,true) &&
       holdout.init_model(model,mx5_dr_default_config(),nav_context);
@@ -429,17 +499,20 @@ void *worker_at(const char* root) {
         shadow=false;
       }
     }
+    if(shadow)sync_model_session(j,model_session,navigation,holdout);
     A::Observation o;
     unsigned drained = 0;
     while (drained++ < 256 && pop(&o)) {
-      if (o.kind == A::Observation::POSITION) {
-        if(shadow && !__sync_fetch_and_add(&audit_fault,0)) {
-          navigation.enqueue_position(o);
-          holdout.enqueue_position(o);
-        }
-      }
       if(!format_observation(line,sizeof line,o)) { j.fail();continue; }
       j.line(line);
+      if (o.kind == A::Observation::POSITION) {
+        if(shadow && !__sync_fetch_and_add(&audit_fault,0)) {
+          sync_model_session(j,model_session,navigation,holdout);
+          const char* reason=model_session.reject(o);
+          if(reason)rejected_model_position(j,o,reason,model_session);
+          else { navigation.enqueue_position(o);holdout.enqueue_position(o); }
+        }
+      }
     }
     uint64_t now = clock_ns(0);
     if(shadow && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
@@ -449,15 +522,22 @@ void *worker_at(const char* root) {
           j.line("{\"kind\":\"shadow_disabled\",\"reason\":\"audit_fault\",\"assist_ready\":false}");
           shadow=false; // Permanent for this worker, even if a fault flag changes.
     }
-    if(capture && !j.failed)drain_motion(j,motion_batch,motion,navigation,holdout,shadow);
+    if(shadow)sync_model_session(j,model_session,navigation,holdout);
+    if(capture && !j.failed)drain_motion(j,motion_batch,motion,navigation,holdout,
+        shadow && model_session.available(),model_session.since_ns());
     if(stopping) {
       if(drain_capture_tail(j))finish_capture(j,boot_id,cutoff,clock_ns(0));
       return 0; // Even failed finalization cannot reopen this capture.
     }
     now=clock_ns(0);
     if(shadow && !j.failed && !__sync_fetch_and_add(&audit_fault,0) && model_tick.due(now)) {
+        sync_model_session(j,model_session,navigation,holdout);
         if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
         if(now>navigation.reorder_ns())holdout.drain(now-navigation.reorder_ns());
+        // A lifecycle can complete while this worker computes. A coherent
+        // recheck clears queued predictions before its next diagnostic snapshot.
+        sync_model_session(j,model_session,navigation,holdout);
+        now=clock_ns(0);
         journal_holdout(j,holdout,now);
         if(now>=last_calibration_log && now-last_calibration_log>=1000000000ULL) {
           last_calibration_log=now;
@@ -478,6 +558,7 @@ void *worker_at(const char* root) {
           if(encoded)hex48(bytes,preview);
           snprintf(line,sizeof line,
               "{\"kind\":\"shadow\",\"mono_ns\":%llu,\"domain\":\"model\","
+              "\"model_session_epoch\":%llu,\"session_revision\":%llu,"
               "\"model_valid\":%s,\"assist_ready\":false,\"state\":%u,"
               "\"result\":\"%s\",\"pipeline\":\"%s\",\"uncertainties\":%u,"
               "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
@@ -485,7 +566,9 @@ void *worker_at(const char* root) {
               "\"speed_mps\":%s,\"error_model_m\":%s,\"stopped\":%s,"
               "\"yaw_zero\":%.17g,\"calibration_version\":%llu,\"wheel_scale\":%.17g,"
               "\"wheel_scale_version\":%llu,\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
-              (unsigned long long)now,d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),
+              (unsigned long long)now,(unsigned long long)navigation.context().session_epoch,
+              (unsigned long long)model_session.current().revision,
+              d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),
               mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
               (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
               (unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
@@ -499,7 +582,7 @@ void *worker_at(const char* root) {
     }
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;
-      journal_health(j,now,capture&&!j.failed,shadow);
+      journal_health(j,now,capture&&!j.failed,shadow && model_session.available());
       j.flush();
     }
     // The stock unconnected Unix-datagram queue is small. Wake on motion

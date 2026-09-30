@@ -55,11 +55,28 @@ validates the current handle, request ownership, a connected phone or acceptance
 The observer never dereferences the OEM handle storage after the API returns.
 Overlapping create/destroy calls, including distinct storage addresses, make the
 observation incomplete for the process; original calls continue unchanged.
+Create, destroy and the full status callback each revoke prediction candidates
+on entry and exit, including failure or unwind. Callbacks nested inside create
+participate in the transition without being mistaken for overlapping storage
+lifecycles. A coherent completed `revision` counts these boundaries, including
+failed creates and late callbacks that leave the surviving context unchanged.
+The optional send-session reader is a negative selection condition; an OBSERVED
+result never supplies missing provenance. Entry revocation also protects a send
+that copied OBSERVED just before another thread entered a lifecycle call.
 The older qualified session fields remain unknown. Lifecycle overlap, ambiguity and faults remain
 explicit journal results. Raw state is known only after a real callback. Context
 storage is constant-initialized even on GCC 4.9; an early preload call must not
 be erased by later global constructors. See
 [independent session product record](https://github.com/junoh-moon/mazda-aa-dr/blob/56af56109f3828e56e175dfaef24881902cefcb1/validation/SESSION_PRODUCT_2026-09-30.md).
+
+The MODEL worker resets both prediction and holdout state, learned/applied
+calibration and pending inputs at observed session boundaries. It rejects old
+request revisions and waits for new sensor inputs and GPS anchors. Sensor receipt
+time and the existing MODEL transport-time interpretation must both be at or
+after the observed boundary; exclusions retain their raw records and reasons.
+Negative/overflow/future transport times and current clock-domain changes still
+follow the existing pipeline fault path. These are MODEL bookkeeping rules,
+not producer-time qualification or evidence of a connected phone.
 
 The backend's own `configure` call freezes runtime callback pointers. Do not
 configure separately and then call `install_v74`; that is rejected. A separate

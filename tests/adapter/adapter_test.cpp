@@ -22,7 +22,7 @@ static unsigned trace_reads;
 static unsigned session_reads;
 static void session_reader(const void* storage,mx5::runtime::session_trace::Snapshot* out,void*) {
     assert(storage==expected_session);++session_reads;errno=EIO;
-    const mx5::runtime::session_trace::Snapshot s={mx5::runtime::session_trace::OBSERVED,77,9,-2,true};*out=s;
+    const mx5::runtime::session_trace::Snapshot s={mx5::runtime::session_trace::OBSERVED,77,9,-2,true,100};*out=s;
 }
 static R::Result request_reader(const void* position, R::Trace* out, void*) {
     assert(position==expected_position);++trace_reads;

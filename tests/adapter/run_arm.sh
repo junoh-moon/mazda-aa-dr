@@ -46,8 +46,11 @@ for case in normal unrelated failed_submit destroy_queued throw_notify throw_wor
 done
 "${cross}g++" $flags -I src tests/adapter/cold_patch_test.cpp -o "$build/cold-patch-test"
 qemu-arm -L "$sysroot" "$build/cold-patch-test"
-"${cross}g++" $flags -I src src/adapter/session_hooks.cpp \
-    tests/adapter/session_early_init_test.cpp -o "$build/session-early-init-test"
+"${cross}g++" $flags -I src \
+    src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S \
+    src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S \
+    src/runtime/request_observer.cpp src/runtime/request_trace.cpp \
+    tests/adapter/session_early_init_test.cpp -ldl -o "$build/session-early-init-test"
 qemu-arm -L "$sysroot" "$build/session-early-init-test"
 "${cross}g++" $flags -I src tests/adapter/session_request_test.cpp \
     src/adapter/session_hooks.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S \

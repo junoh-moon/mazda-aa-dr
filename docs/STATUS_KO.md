@@ -153,6 +153,17 @@ consumer/producer 잠금이 겹치면 기록을 버리는 경로를 재현·제�
 추가한 다음 VM의 성공으로 해결됐다고 판단하지 않습니다.
 공개 ZIP은 기존 v0.3.1-shadow.1 그대로입니다.
 
+[세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서는
+독립 변경을 통합하고 오래된 MODEL 계산의 재생성 후 잔류를 재현·수정했습니다.
+세션별 기준점·학습 보정값·대기 입력을 초기화하고 제외한 센서 원본과 사유를
+보존합니다. 세 독립 리뷰, host 300개 Python 및 C/C++·고정 ARM 전체 검사를
+완료했습니다. 최종 제품의 원본 VM에서 두 조건 각각 지연 LDS 요청 네 건의
+계산 제외와 순정 송신 보존, 합성 raw 336·587건 보존을 직접 확인했습니다.
+모든 MODEL은 invalid이며 일반 분석 결과는 inconclusive입니다. bus/provider/
+receiver 자격과 유효한 원본 GPS·실차·폰 검증은 남습니다. 앞선 반복 VM 정리
+실패의 원인도 미분리입니다. 새 외부 route 조사 커밋은 다음 검토 대상으로
+기록했으며 현재 공개 ZIP은 바꾸지 않았습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

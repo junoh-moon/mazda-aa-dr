@@ -17,7 +17,8 @@ struct SessionBindings {
 enum { SESSION_CONTEXT_CAPACITY = 64 };
 enum SessionFault {
     SESSION_CAPACITY = 1, SESSION_CONTENTION = 2, SESSION_CALLBACK = 4,
-    SESSION_UNWIND = 8, SESSION_EVENT_EXHAUSTED = 16, SESSION_UNTRACKED = 32
+    SESSION_UNWIND = 8, SESSION_EVENT_EXHAUSTED = 16, SESSION_UNTRACKED = 32,
+    SESSION_REVISION_EXHAUSTED = 64
 };
 // One cold initialization. All callback contexts/tables live until process exit.
 // They are never recycled: a late callback must still call its original target.
