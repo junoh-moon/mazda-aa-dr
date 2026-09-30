@@ -73,9 +73,12 @@ bool Pipeline::restart_model_prediction(mx5_dr_context x) {
 }
 PipelineResult Pipeline::fault(PipelineResult r) {
     mx5_dr_context x=context();
-    if (x.generation!=UINT64_MAX) ++x.generation;
-    else { configured_=false; core_.estimate.valid=0; core_.estimate.model_valid=0; }
+    const bool exhausted=x.generation==UINT64_MAX;
+    if (!exhausted) ++x.generation;
     if (configured_) reset(x);
+    // Clearing estimate flags alone is insufficient: a later snapshot query
+    // recomputes validity from the still-seeded core. Reset before disabling.
+    if (exhausted) configured_=false;
     ++status_.resets; ++status_.rejected; status_.result=r;
     return r;
 }
@@ -281,7 +284,11 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     const int mode=o.position.mode;
     if (mode==3) {
         gps_wheel_.unavailable(); have_fix_=false;
-        if (position_mode_!=3) control(MX5_DR_NATIVE_POSITION);
+        if (position_mode_!=3) {
+            const uint64_t faults=status_.resets;
+            const PipelineResult r=control(MX5_DR_NATIVE_POSITION);
+            if (status_.resets!=faults) return r;
+        }
         position_mode_=3; return PIPELINE_OK;
     }
     if (mode==0) {
@@ -307,7 +314,10 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
         }
     }
     if (position_mode_==0||position_mode_==3) {
-        control(MX5_DR_GPS_RETURN); have_fix_=false; gps_wheel_.unavailable();
+        const uint64_t faults=status_.resets;
+        const PipelineResult r=control(MX5_DR_GPS_RETURN);
+        if (status_.resets!=faults) return r;
+        have_fix_=false; gps_wheel_.unavailable();
     }
     position_mode_=mode;
     if (!model_) return PIPELINE_OK;
@@ -357,6 +367,7 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
             return PIPELINE_NO_ANCHOR;
         }
     }
+    if (position_seq_==UINT64_MAX) return fault(PIPELINE_BAD_INPUT);
     mx5_dr_anchor a=mx5_dr_anchor(); a.context=context(); a.anchor_id=++position_seq_;
     a.position_seq=position_seq_; a.measured_ns=o.mono_ns;
     a.utc_ns=o.position.utc_seconds*1000000000ULL;
@@ -420,7 +431,9 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
     if (watermark<watermark_) return fault(PIPELINE_CLOCK_RESET);
     while (size_ && queue_[0].time<=watermark) {
         Event e=queue_[0];
+        const uint64_t faults=status_.resets;
         PipelineResult r=advance(e.time);
+        if (status_.resets!=faults) return status_.result;
         // A READY stationary observation may await its closed mean window
         // within the original sensor-age deadline. Pending GPS already hides
         // diagnostics. Other GPS/anchor revocation must drain past missing
@@ -437,7 +450,11 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
                         revoke=true;
                 }
             }
-            if (revoke) { control(MX5_DR_DISABLE); have_fix_=false; }
+            if (revoke) {
+                control(MX5_DR_DISABLE);
+                if (status_.resets!=faults) return status_.result;
+                have_fix_=false;
+            }
             else {
                 if (core_.seeded&&watermark>core_.estimate.frontier_ns&&
                     watermark-core_.estimate.frontier_ns>core_.config.sample_age_max_ns)
@@ -467,7 +484,9 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
                 mx5_dr_result cr=mx5_dr_control(&core_,MX5_DR_GPS_RETURN,e.anchor.context,
                     e.anchor.position_seq?e.anchor.position_seq-1:0);
                 if (cr!=MX5_DR_OK) {
-                    control(MX5_DR_DISABLE); status_.core_result=cr;
+                    control(MX5_DR_DISABLE);
+                    if (status_.resets!=faults) return status_.result;
+                    status_.core_result=cr;
                     status_.result=PIPELINE_CORE_REJECTED; return status_.result;
                 }
                 position_seq_=e.anchor.position_seq-1;
@@ -478,7 +497,10 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
                 status_.result=PIPELINE_CORE_REJECTED; return status_.result;
             }
             break;
-        case POSITION_EVENT: apply_position(e.observation); break;
+        case POSITION_EVENT:
+            apply_position(e.observation);
+            if (status_.resets!=faults) return status_.result;
+            break;
         }
     }
     uint64_t through=watermark;

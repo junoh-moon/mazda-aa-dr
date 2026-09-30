@@ -352,6 +352,12 @@ cb65fd5 병합도 확인했습니다. ASSIST와 공개 ZIP은 변경하지 않�
 같은 기록에서 클로드의 후속 원본 SM·SYSTEM·USB 관리자 기동 조사도
 별도 커밋으로 확인했습니다. 외부 실행과 직접 실행을 구분합니다.
 
+[Pipeline 순번 소진 수정](../validation/PIPELINE_EXHAUSTION_2026-09-30.md)에서는
+앞서 남긴 MODEL 유효성 재노출과 추가로 발견한 큐 범위 위반을 공개 API와
+ASan/UBSan으로 재현·수정했습니다. root의 전체 host 330개 Python 및 C/C++,
+고정 ARM 전체 검사는 통과했습니다. 순정 VM·차량·폰 실행이나 공개 ZIP 갱신은
+이번 결과에 포함되지 않습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
