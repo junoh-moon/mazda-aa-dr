@@ -12,7 +12,14 @@ struct Reply {
     const char* sender;
     const char* error;
 };
-struct Method { Reply* reply; };
+struct Method {
+    Reply* reply;
+    const char* destination;
+    const char* path;
+    const char* interface_name;
+    const char* member;
+    Method(Reply* r) : reply(r), destination(0), path(0), interface_name(0), member(0) {}
+};
 static void* reply(void* p) { errno=EIO; return static_cast<Method*>(p)->reply; }
 static int type(void* p) { errno=EIO; return static_cast<Reply*>(p)->type; }
 static const char* sender(void* p) { errno=EIO; return static_cast<Reply*>(p)->sender; }
@@ -23,6 +30,49 @@ static int serial(void* p, uint32_t* out) {
 static uint64_t clock_fn(void* p) { errno=EIO; return *static_cast<uint64_t*>(p); }
 static R::ReplyApi api() {
     R::ReplyApi a={reply,type,sender,error,serial}; return a;
+}
+static const char* destination(void* p) { errno=EIO;return static_cast<Method*>(p)->destination; }
+static const char* path(void* p) { errno=EIO;return static_cast<Method*>(p)->path; }
+static const char* interface_name(void* p) { errno=EIO;return static_cast<Method*>(p)->interface_name; }
+static const char* member(void* p) { errno=EIO;return static_cast<Method*>(p)->member; }
+static void route_at_issue() {
+    const R::MethodApi getters={destination,path,interface_name,member};
+    R::Observer o(api(),0,0,getters);
+    Reply r={1,0,0,":1.9",0};Method m[2]={&r,&r};
+    char target[]="com.jci.lds.data", object[]="/com/jci/lds/data", name[]="GetPosition";
+    char interface[]="org.example.RouteInterface"; // All four getters must be distinguishable.
+    char long_name[100];memset(long_name,'x',sizeof long_name);long_name[99]=0;
+    m[0].destination=target;m[0].path=object;m[0].interface_name=interface;m[0].member=name;
+    m[1].member=long_name;
+    R::Token q[2],work;int w[2]={},p[2]={};
+    errno=EDOM;
+    for(unsigned i=0;i<2;++i)assert(o.request_begin(&m[i],&q[i])==R::OK && errno==EDOM);
+    // Destroy/mutate borrowed fields before either reply. Also change the live
+    // method's pointer: late getter reads would silently associate a new route.
+    memset(target,'z',sizeof target-1);memset(object,'z',sizeof object-1);
+    memset(interface,'z',sizeof interface-1);
+    memset(name,'z',sizeof name-1);memset(long_name,'z',sizeof long_name-1);
+    m[0].member="DifferentMethod";
+    for(int i=1;i>=0;--i) {
+        { R::ReplyScope reply(o,&m[i]);assert(o.worker_post(&w[i],&p[i],&work)==R::OK); }
+        assert(o.request_end(&m[i])==R::OK);
+        R::WorkerScope worker(o,&w[i]);R::Trace trace;
+        assert(o.position_take(&p[i],&trace)==R::OK && trace.request.id==q[i].id);
+        const R::Route& route=trace.issue.route;
+        if(i==0) {
+            assert(route.destination.known && route.destination.complete);
+            assert(!strcmp(route.destination.bytes,"com.jci.lds.data"));
+            assert(!strcmp(route.path.bytes,"/com/jci/lds/data"));
+            assert(!strcmp(route.interface_name.bytes,"org.example.RouteInterface"));
+            assert(!strcmp(route.member.bytes,"GetPosition"));
+        } else {
+            assert(!route.destination.known && !route.path.known && !route.interface_name.known);
+            assert(route.member.known && !route.member.complete && strlen(route.member.bytes)==63);
+            for(unsigned j=0;j<63;++j)assert(route.member.bytes[j]=='x');
+        }
+        assert(!trace.issue.known && !trace.reply.wire_serial_known && errno==EDOM);
+    }
+    puts("PASS observer routes are copied at issue across reverse reply order");
 }
 static void empty(R::Observer& o) {
     R::Status s; assert(o.status(&s)==R::OK);
@@ -254,4 +304,4 @@ static void session_context_copy() {
       assert(!trace.issue.known && !trace.issue.session_lifetime); }
     empty(o);puts("PASS observer retains issue-time ambient session without ownership promotion");
 }
-int main() { metadata();nested();lifetime();cross_thread();invalid();overlapping_replies();failed_scope_construction();session_context_copy(); }
+int main() { metadata();nested();lifetime();cross_thread();invalid();overlapping_replies();failed_scope_construction();session_context_copy();route_at_issue(); }

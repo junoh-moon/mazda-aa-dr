@@ -845,6 +845,7 @@ class Auditor:
             return (isinstance(value, dict) and "value" in value and isinstance(value.get("complete"), bool) and
                     ((value.get("value") is None and not value["complete"]) or
                      (isinstance(value.get("value"), str) and len(value["value"]) <= 64 and
+                      all(0 < ord(c) <= 255 for c in value["value"]) and
                       (not value["complete"] or len(value["value"]) < 64))))
         valid = (isinstance(t, dict) and t.get("association_only") is True and
                  isinstance(t.get("result"), str) and t["result"] in results and
@@ -857,6 +858,12 @@ class Auditor:
                  "wire_serial" in t and (t["wire_serial"] is None or
                     (unsigned(t["wire_serial"], 32) and t["wire_serial"] > 0)) and
                  all(text(t.get(k)) for k in ("sender", "error")))
+        if valid and "route" in t:
+            route = t["route"]
+            fields = ("destination", "path", "interface", "member")
+            valid = isinstance(route, dict) and all(text(route.get(k)) for k in fields)
+            if valid and t["result"] != "observed":
+                valid = all(route[k]["value"] is None for k in fields)
         if valid:
             if "session_context" in t:
                 valid = session_snapshot(t["session_context"], "unique_live_context")

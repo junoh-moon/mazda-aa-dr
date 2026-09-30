@@ -27,6 +27,10 @@ static void* get_reply(void*) { return &reply_value; }
 static int get_type(void*) { return 2; }
 static const char* get_sender(void*) { return ":1.7"; }
 static const char* get_error(void*) { return 0; }
+static const char* get_destination(void*) { return "com.jci.lds.data"; }
+static const char* get_path(void*) { return "/com/jci/lds/data"; }
+static const char* get_interface(void*) { return "org.example.RouteInterface"; }
+static const char* get_member(void*) { return "GetPosition"; }
 static int get_serial(void*,uint32_t* out) { *out=7;return 0; }
 static void original_notify(void*,void*,void*) {
     R::Token t;assert(observer->worker_post(&worker,position,&t)==R::OK);
@@ -51,6 +55,7 @@ int main() {
     assert(mx5_session_create("authored",0,&cb,&storage)==0);status_for(0,-7);
     A::RequestBindings rb=A::RequestBindings();
     rb.reply={get_reply,get_type,get_sender,get_error,get_serial};rb.submit=original_submit;
+    rb.method={get_destination,get_path,get_interface,get_member};
     rb.notify=original_notify;rb.free_method=rb.free_method_only=original_free;rb.position_vptr=1;
     rb.post_trampoline=rb.work_trampoline=rb.destroy_trampoline=reinterpret_cast<void*>(&trampoline);
     assert(A::prepare_request_hooks(rb,clock_value,0));
@@ -78,6 +83,16 @@ int main() {
     assert(old.result==S::OBSERVED && old.lifetime==1 && old.event==1 && old.state==-7 && old.state_known);
     assert(carried.result==old.result && carried.lifetime==old.lifetime && carried.event==old.event && carried.state==old.state && carried.state_known);
     assert(actual.result==S::OBSERVED && actual.lifetime==2 && actual.event==1 && actual.state==3 && actual.state_known);
+    assert(old.revision==2 && carried.revision==old.revision && actual.revision==6);
+    const R::Route& route=send_event.request_trace.issue.route;
+    assert(route.destination.known && route.destination.complete &&
+           !strcmp(route.destination.bytes,"com.jci.lds.data"));
+    assert(route.path.known && route.path.complete &&
+           !strcmp(route.path.bytes,"/com/jci/lds/data"));
+    assert(route.interface_name.known && route.interface_name.complete &&
+           !strcmp(route.interface_name.bytes,"org.example.RouteInterface"));
+    assert(route.member.known && route.member.complete && !strcmp(route.member.bytes,"GetPosition"));
+    assert(!memcmp(&route,&position_event.request_trace.issue.route,sizeof route));
     assert(!send_event.request_trace.issue.known && !send_event.request_trace.issue.session_lifetime);
     assert(!send_event.provenance.exact_request);
     assert(!A::request_hook_health().ledger.requests && !A::request_hook_health().ledger.workers);

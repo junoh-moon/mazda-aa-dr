@@ -39,6 +39,13 @@ POSITION and SEND records carry the same owned trace; health reports observation
 loss and ABI mismatches. These process-local IDs and receipt times do not prove
 provider/receiver/session qualification or producer measurement time.
 
+Before the original asynchronous submit, the observer copies the method's
+destination, object path, interface and member through four verified JCIDBUS
+getters. Each field owns up to 63 bytes; missing values remain unknown and
+truncated values remain incomplete. POSITION/SEND and final capture draining
+retain that issue-time route. A well-known destination is not an authenticated
+provider or bus lifetime, and these fields do not enable ASSIST.
+
 Session observation wraps the exact create/destroy APIs and the status callback
 in the original 76-byte table. It preserves the other 18 entries, userdata,
 the full SessionInfo pointer, results and errno. Up to 64 immutable contexts live

@@ -471,10 +471,17 @@ static void metadata_unknown_and_errors() {
     malformed.type = 99; // Explicitly unknown, so this dirty value must not survive.
     malformed.wire_serial_known = true;
     malformed.wire_serial = 57;
+    unseen.route.destination=malformed.sender;
+    unseen.route.path=malformed.error_name;
+    unseen.route.path.known=false; // Stale bytes are not a known routing field.
     assert(ledger.request_begin(&method, unseen, &token) == rt::OK);
     assert(ledger.reply_enter(&method, malformed, &token) == rt::OK);
     post(ledger, &worker, &position, token);
     const rt::Trace normalized = take(ledger, &worker, &position);
+    assert(normalized.issue.route.destination.known && !normalized.issue.route.destination.complete);
+    assert(normalized.issue.route.destination.bytes[63]==0);
+    assert(!normalized.issue.route.path.known && !normalized.issue.route.path.complete &&
+           !normalized.issue.route.path.bytes[0]);
     assert(normalized.reply.sender.known && !normalized.reply.sender.complete);
     assert(normalized.reply.error_name.known && !normalized.reply.error_name.complete);
     assert(normalized.reply.sender.bytes[63] == 0 && normalized.reply.error_name.bytes[63] == 0);

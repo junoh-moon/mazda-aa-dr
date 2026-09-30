@@ -163,6 +163,55 @@ static void stop_tests(const char* root,const std::string& logs) {
   }
   assert(rmdir(request.c_str())==0);
 }
+static A::Observation long_route_event() {
+  A::Observation event=A::Observation();event.kind=A::Observation::SEND;
+  event.request_result=A::R::OK;
+  A::R::Text text=A::R::Text();text.known=true;
+  memset(text.bytes,1,sizeof text.bytes-1);
+  A::R::Trace& t=event.request_trace;
+  t.issue.route.destination=t.issue.route.path=t.issue.route.interface_name=t.issue.route.member=text;
+  t.reply.sender=t.reply.error_name=text;
+  return event;
+}
+static void route_capture_tail(const char* root,const std::string& logs) {
+  arm_test_mode();
+  const A::Observation event=long_route_event();
+  char expected[mx5::runtime::OBSERVATION_JSON_CAPACITY];
+  assert(format_observation(expected,sizeof expected,event) && strlen(expected)>2200);
+  sink(&event,0);freeze_capture();
+  {
+    Journal j(root);assert(drain_capture_tail(j));j.flush();
+    assert(!j.failed && queue.drained());
+  }
+  std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
+  assert(std::getline(f,line) && line==expected);
+  assert(!std::getline(f,line));
+}
+static void* route_worker(void* root) { return worker_at(static_cast<const char*>(root)); }
+static void route_general_worker(const char* root,const std::string& logs) {
+  assert(!unlink((logs+"/trace.0.jsonl").c_str()) || errno==ENOENT);
+  arm_test_mode();config.mode=1;config.max_log_bytes=65536;
+  const A::Observation event=long_route_event();
+  char expected[mx5::runtime::OBSERVATION_JSON_CAPACITY];
+  assert(format_observation(expected,sizeof expected,event) && strlen(expected)>2200);
+  sink(&event,0);
+  pthread_t thread;assert(!pthread_create(&thread,0,route_worker,const_cast<char*>(root)));
+  bool found=false;
+  for(unsigned attempt=0;attempt<150&&!found;++attempt) {
+    usleep(20000);
+    std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
+    while(std::getline(f,line))if(line==expected)found=true;
+  }
+  // Require a persisted full row before requesting stop, so the final-tail
+  // buffer cannot conceal a regression in the ordinary worker's buffer.
+  assert(found && !__sync_fetch_and_add(&audit_fault,0));
+  assert(!mkdir((logs+"/capture.stop").c_str(),0700));
+  assert(!pthread_join(thread,0) && queue.drained() && !audit_fault);
+  assert(access((logs+"/capture.done").c_str(),F_OK)==0);
+  assert(!unlink((logs+"/capture.done").c_str()));
+  assert(!rmdir((logs+"/capture.stop").c_str()));
+  puts("Long route: ordinary worker and capture tail retain the entire row");
+}
 static void request_journal(bool emit) {
   namespace R=mx5::runtime::request_trace;
   A::Observation o=A::Observation();o.kind=A::Observation::POSITION;o.call_sequence=17;
@@ -173,7 +222,11 @@ static void request_journal(bool emit) {
   const A::S::Snapshot session={A::S::OBSERVED,8,2,-7,true,12};
   t.issue.session_context=session;o.send_session=session;
   t.reply.sender=R::copy_text(":1.42");t.reply.error_name=R::copy_text("org.freedesktop.DBus.Error.ServiceUnknown");
-  char line[2200];
+  t.issue.route.destination=R::copy_text("com.jci.lds.data");
+  t.issue.route.path=R::copy_text("/com/jci/lds/data");
+  t.issue.route.interface_name=R::copy_text("com.jci.lds.data");
+  t.issue.route.member=R::copy_text("GetPosition");
+  char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
   o.kind=A::Observation::SEND;o.type=1;o.length=48;o.has_payload=true;
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
@@ -186,6 +239,7 @@ static void request_journal(bool emit) {
   // Worst bounded names and integers still fit the actual worker buffer.
   memset(t.reply.sender.bytes,1,sizeof t.reply.sender.bytes);t.reply.sender.bytes[63]=0;
   t.reply.sender.complete=false;t.reply.error_name=t.reply.sender;
+  t.issue.route.destination=t.issue.route.path=t.issue.route.interface_name=t.issue.route.member=t.reply.sender;
   t.request.id=t.request.epoch=t.worker.id=t.worker.epoch=UINT64_MAX;
   t.issue.observed_ns=t.reply.observed_ns=UINT64_MAX;
   t.issue.bus_lifetime=t.issue.session_lifetime=t.issue.session_event=UINT64_MAX;
@@ -196,9 +250,9 @@ static void request_journal(bool emit) {
   t.reply.wire_serial_known=true;t.reply.wire_serial=UINT32_MAX;
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
   // Exact-size success, one byte short failure, and adjacent bytes untouched.
-  char request[1800];assert(mx5::runtime::format_request_trace(request,sizeof request,R::OK,t));
+  char request[mx5::runtime::REQUEST_JSON_CAPACITY];assert(mx5::runtime::format_request_trace(request,sizeof request,R::OK,t));
   const size_t required=strlen(request)+1;
-  char bounds[1802];memset(bounds,0x5a,sizeof bounds);
+  char bounds[mx5::runtime::REQUEST_JSON_CAPACITY+2];memset(bounds,0x5a,sizeof bounds);
   assert(mx5::runtime::format_request_trace(bounds+1,required,R::OK,t));
   assert(bounds[0]==0x5a && bounds[required+1]==0x5a);
   memset(bounds,0x5a,sizeof bounds);
@@ -334,7 +388,9 @@ int main(int argc,char** argv) {
   assert(!queue.dropped() && A::mode() == A::SCRUB_STALE);
   assert(pop(&read));
   receive_turn_tests(tmp,logs);
+  route_capture_tail(tmp,logs);
   stop_tests(tmp,logs);
+  route_general_worker(tmp,logs);
   for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
   rmdir(logs.c_str());
   rmdir(tmp);

@@ -61,6 +61,10 @@ static int type(void* r) {
 static const char* sender(void* r) { assert(r==&context);errno=EIO;return ":1.42"; }
 static const char* error(void* r) { assert(r==&context);errno=EIO;return "org.example.Error"; }
 static int serial(void* r,uint32_t* v) { assert(r==&context);*v=77;errno=EIO;return -1; }
+static const char* destination(void* m) { assert(m==&method);errno=EIO;return "com.jci.lds.data"; }
+static const char* path(void* m) { assert(m==&method);errno=EIO;return "/com/jci/lds/data"; }
+static const char* interface_name(void* m) { assert(m==&method);errno=EIO;return "org.example.RouteInterface"; }
+static const char* member(void* m) { assert(m==&method);errno=EIO;return "GetPosition"; }
 static uint64_t clock_fn(void*) { errno=EIO;return ++time_ns; }
 static void empty() {
     A::RequestHookHealth h=A::request_hook_health();
@@ -96,6 +100,10 @@ extern "C" void request_test_work_body(void* a,uint32_t b,uint32_t c,uint32_t d)
         assert(!trace.reply.wire_serial_known && !trace.reply.wire_serial);
         assert(!strcmp(trace.reply.sender.bytes,":1.42") && !strcmp(trace.reply.error_name.bytes,"org.example.Error"));
         assert(trace.issue.observed_ns==101 && trace.reply.observed_ns==102 && !trace.issue.known);
+        assert(trace.issue.route.destination.complete && !strcmp(trace.issue.route.destination.bytes,"com.jci.lds.data"));
+        assert(trace.issue.route.path.complete && !strcmp(trace.issue.route.path.bytes,"/com/jci/lds/data"));
+        assert(trace.issue.route.interface_name.complete && !strcmp(trace.issue.route.interface_name.bytes,"org.example.RouteInterface"));
+        assert(trace.issue.route.member.complete && !strcmp(trace.issue.route.member.bytes,"GetPosition"));
         if(behavior==SESSION_TRANSITION) {
             // A delayed original notification must retain the issue context;
             // looking at the current global session here would return 2/22.
@@ -164,10 +172,20 @@ int main(int argc,char** argv) {
     shared[0]=reinterpret_cast<uint32_t>(worker);shared[1]=0xdead1234;
     A::RequestBindings bindings=A::RequestBindings();
     R::ReplyApi api={reply,type,sender,error,serial};bindings.reply=api;
+    const R::MethodApi method_api={destination,path,interface_name,member};bindings.method=method_api;
     bindings.submit=submit;bindings.notify=original_notify;bindings.free_method=bindings.free_method_only=free_method;
     bindings.position_vptr=vptr;bindings.post_trampoline=reinterpret_cast<void*>(request_test_post);
     bindings.work_trampoline=reinterpret_cast<void*>(request_test_work);bindings.destroy_trampoline=reinterpret_cast<void*>(request_test_destroy);
-    errno=EDOM;assert(A::prepare_request_hooks(bindings,clock_fn,0) && errno==EDOM);
+    for(unsigned field=0;field<4;++field) {
+        A::RequestBindings missing=bindings;
+        if(field==0)missing.method.get_destination=0;
+        if(field==1)missing.method.get_path=0;
+        if(field==2)missing.method.get_interface=0;
+        if(field==3)missing.method.get_name=0;
+        errno=EDOM;assert(!A::prepare_request_hooks(missing,clock_fn,0) && errno==EDOM);
+        assert(!A::request_hook_health().prepared);
+    }
+    assert(A::prepare_request_hooks(bindings,clock_fn,0) && errno==EDOM);
     assert(!A::prepare_request_hooks(bindings,clock_fn,0));no_scope();
     if(behavior==SESSION_TRANSITION) {
         const A::SessionBindings sessions={session_create,session_destroy,session_status};

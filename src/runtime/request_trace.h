@@ -54,6 +54,19 @@ enum IssueKnown {
     ISSUE_BUS_LIFETIME = 1, ISSUE_SESSION_LIFETIME = 2,
     ISSUE_SESSION_STATE = 4
 };
+struct Text {
+    enum { CAPACITY = 64 };
+    char bytes[CAPACITY];
+    bool known, complete;
+};
+// Copies a borrowed NUL-terminated field while it is alive. NULL is unknown;
+// a long field keeps a diagnostic prefix with complete=false. A prefix must
+// not be used as sender/error/route identity. No borrowed string is retained.
+Text copy_text(const char* text);
+
+struct Route {
+    Text destination, path, interface_name, member;
+};
 struct Issue {
     // Optional facts supplied by a future hook. Leave known clear until the
     // corresponding original lifetime/status boundary has actually been seen.
@@ -64,17 +77,10 @@ struct Issue {
     // Unique live observed AA context at issue, not request ownership. Reserved
     // session_lifetime/state above stay unknown until that binding is proved.
     session_trace::Snapshot session_context;
+    // Original method's routing fields, copied BEFORE async submission.
+    // A well-known destination is not the provider identity or bus lifetime.
+    Route route;
 };
-
-struct Text {
-    enum { CAPACITY = 64 };
-    char bytes[CAPACITY];
-    bool known, complete;
-};
-// Copies a borrowed NUL-terminated field while it is alive. NULL is unknown;
-// a long field keeps a diagnostic prefix with complete=false. A prefix must
-// not be used as sender/error identity. No borrowed string is retained.
-Text copy_text(const char* text);
 
 struct Reply {
     uint64_t observed_ns;

@@ -13,6 +13,7 @@ typedef int32_t (*RequestFree)(void* method);
 // Context and OEM ownership are unchanged by every forwarding wrapper.
 struct RequestBindings {
     R::ReplyApi reply;
+    R::MethodApi method;
     RequestSubmit submit;
     RequestNotify notify;
     RequestFree free_method, free_method_only;

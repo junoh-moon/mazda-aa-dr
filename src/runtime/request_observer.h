@@ -15,6 +15,12 @@ struct ReplyApi {
     const char* (*get_error)(void* reply);
     int (*get_reply_serial)(void* reply, uint32_t* serial); // 0 success.
 };
+struct MethodApi {
+    const char* (*get_destination)(void* method);
+    const char* (*get_path)(void* method);
+    const char* (*get_interface)(void* method);
+    const char* (*get_name)(void* method);
+};
 typedef uint64_t (*ObservationClock)(void*);
 
 class ReplyScope;
@@ -28,7 +34,10 @@ class WorkerScope;
 // As with Ledger, initialize before producers and outlive every live scope.
 class Observer {
 public:
-    Observer(const ReplyApi&, ObservationClock = 0, void* clock_user = 0);
+    // Standalone observers may omit route getters; production installation
+    // requires all four verified functions. Omitted fields stay unknown.
+    Observer(const ReplyApi&, ObservationClock = 0, void* clock_user = 0,
+             const MethodApi& = MethodApi());
     bool valid() const;
     Result request_begin(void* method, Token*, const session_trace::Snapshot& = session_trace::Snapshot());
     Result request_end(void* method);
@@ -43,6 +52,7 @@ private:
     Observer(const Observer&) = delete;
     Observer& operator=(const Observer&) = delete;
     ReplyApi api_;
+    MethodApi method_api_;
     ObservationClock clock_;
     void* clock_user_;
     Ledger ledger_;

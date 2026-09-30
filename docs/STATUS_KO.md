@@ -164,6 +164,16 @@ receiver 자격과 유효한 원본 GPS·실차·폰 검증은 남습니다. 앞
 실패의 원인도 미분리입니다. 새 외부 route 조사 커밋은 다음 검토 대상으로
 기록했으며 현재 공개 ZIP은 바꾸지 않았습니다.
 
+[요청 경로 복사·저장 검토](../validation/REQUEST_ROUTE_REVIEW_2026-09-30.md)에서는
+외부 route 변경을 통합하고 비동기 submit 전의 네 문자열을 journal까지 보존합니다.
+세 독립 리뷰에서 파서의 불가능한 문자열 허용과 getter 혼선·일반 worker 버퍼의
+회귀 공백을 재현·수정했습니다. host 301개 Python 및 C/C++·고정 ARM 전체 검사와
+후속 변경 대상 검사를 완료했습니다. 최종 제품의 원본 VM에서 실제 요청 30건의
+route, 세션 교체 뒤 지연 응답의 이전 문맥과 MODEL 제외를 직접 확인했습니다.
+raw 350·441건은 직접 넣은 합성 입력이며 모든 MODEL은 invalid, 일반 분석은
+inconclusive입니다. provider/bus/receiver 자격·실차·폰 검증 및 이전 정리 실패의
+원인은 남아 있으며 공개 ZIP은 변경하지 않았습니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는

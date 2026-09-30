@@ -84,6 +84,10 @@ const ApiEntry kBusApi[]={
     {"JCIDBUS_reply_get_sender",0x10c10,{0xe52db004,0xe28db000,0xe24dd00c,0xe50b0008}},
     {"JCIDBUS_reply_get_error",0x10528,{0xe52db004,0xe28db000,0xe24dd00c,0xe50b0008}},
     {"JCIDBUS_reply_get_msg_serial",0x1041c,{0xe92d4800,0xe28db004,0xe24dd010,0xe50b0010}},
+    {"JCIDBUS_method_get_destination",0x19ed4,{0xe52db004,0xe28db000,0xe24dd00c,0xe50b0008}},
+    {"JCIDBUS_method_get_path",0x19e98,{0xe52db004,0xe28db000,0xe24dd00c,0xe50b0008}},
+    {"JCIDBUS_method_get_interface",0x19e20,{0xe52db004,0xe28db000,0xe24dd00c,0xe50b0008}},
+    {"JCIDBUS_method_get_name",0x19e5c,{0xe52db004,0xe28db000,0xe24dd00c,0xe50b0008}},
     {"JCIDBUS_method_send_async_with_notify",0x1a09c,{0xe92d4800,0xe28db004,0xe24dd038,0xe50b0020}},
     {"JCIDBUS_method_free",0x19494,{0xe92d4800,0xe28db004,0xe24dd010,0xe50b0010}},
     {"JCIDBUS_free_method_only",0x195e8,{0xe92d4800,0xe28db004,0xe24dd010,0xe50b0010}}
@@ -147,6 +151,10 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
     bindings.reply.get_sender=reinterpret_cast<decltype(bindings.reply.get_sender)>(bb+0x10c10);
     bindings.reply.get_error=reinterpret_cast<decltype(bindings.reply.get_error)>(bb+0x10528);
     bindings.reply.get_reply_serial=reinterpret_cast<decltype(bindings.reply.get_reply_serial)>(bb+0x1041c);
+    bindings.method.get_destination=reinterpret_cast<decltype(bindings.method.get_destination)>(bb+0x19ed4);
+    bindings.method.get_path=reinterpret_cast<decltype(bindings.method.get_path)>(bb+0x19e98);
+    bindings.method.get_interface=reinterpret_cast<decltype(bindings.method.get_interface)>(bb+0x19e20);
+    bindings.method.get_name=reinterpret_cast<decltype(bindings.method.get_name)>(bb+0x19e5c);
     bindings.submit=reinterpret_cast<A::RequestSubmit>(bb+0x1a09c);
     bindings.notify=reinterpret_cast<A::RequestNotify>(db+0x2228);
     bindings.free_method=reinterpret_cast<A::RequestFree>(bb+0x19494);

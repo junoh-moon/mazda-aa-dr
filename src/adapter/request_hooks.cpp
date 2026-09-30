@@ -41,11 +41,13 @@ bool prepare_request_hooks(const RequestBindings& bindings, R::ObservationClock 
     const PreserveErrno saved;
     if(attempted || !bindings.submit || !bindings.notify || !bindings.free_method ||
        !bindings.free_method_only || !bindings.position_vptr ||
+       !bindings.method.get_destination || !bindings.method.get_path ||
+       !bindings.method.get_interface || !bindings.method.get_name ||
        !bindings.post_trampoline || !bindings.work_trampoline || !bindings.destroy_trampoline)
         return false;
     attempted=true;
     alignas(R::Observer) static unsigned char storage[sizeof(R::Observer)];
-    observer=new(storage) R::Observer(bindings.reply, clock, user);
+    observer=new(storage) R::Observer(bindings.reply, clock, user, bindings.method);
     R::Status status;
     if(!observer->valid() || observer->status(&status)!=R::OK) return false;
     original=bindings;
