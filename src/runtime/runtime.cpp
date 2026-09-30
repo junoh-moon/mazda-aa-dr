@@ -79,7 +79,7 @@ void json_number(double x, char out[48]) {
     strcpy(out, "null");
 }
 bool format_observation(char* line,size_t capacity,const A::Observation& o) {
-  char request[1800];
+  char request[mx5::runtime::REQUEST_JSON_CAPACITY];
   if(!mx5::runtime::format_request_trace(request,sizeof request,o.request_result,o.request_trace))return false;
   int n;
   if(o.kind==A::Observation::POSITION) {
@@ -307,7 +307,7 @@ bool drain_capture_tail(Journal& j) {
   for(unsigned attempt=0;attempt<100;++attempt) {
     A::Observation o;
     for(unsigned n=0;n<256 && pop(&o);++n) {
-      char line[2200];
+      char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
       if(format_observation(line,sizeof line,o))j.line(line);else j.fail();
     }
     if(queue.drained())return true;
@@ -407,7 +407,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
   uselocale(numeric_locale);
   Journal j(root);
   mx5::runtime::MotionBatch motion_batch;
-  char line[2200];
+  char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
   char boot_id[37];
   mx5::runtime::read_boot_id(boot_id);
   snprintf(line, sizeof line,

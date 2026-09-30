@@ -14,6 +14,29 @@ spec.loader.exec_module(audit)
 
 
 class RequestJournal(unittest.TestCase):
+    def test_route_schema_and_old_records(self):
+        command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+        p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
+        route = {key: dict(value=value, complete=True) for key, value in
+                 zip(('destination', 'path', 'interface', 'member'),
+                     ('com.jci.lds.data', '/com/jci/lds/data', 'com.jci.lds.data', 'GetPosition'))}
+        for value in (route, {k: dict(value=None, complete=False) for k in route}):
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(p['request'], route=value)), 'route')
+            self.assertNotIn('request_record_malformed', [i['code'] for i in a.issues])
+        old = dict(p['request'])
+        old.pop('route', None)
+        a = audit.Auditor()
+        a.consume(dict(p, request=old), 'old')
+        self.assertNotIn('request_record_malformed', [i['code'] for i in a.issues])
+        for bad in (None, {}, dict(route, member='GetPosition'),
+                    dict(route, path=dict(value=None, complete=True)),
+                    dict(route, destination=dict(value='x' * 64, complete=True))):
+            with self.subTest(route=bad):
+                a = audit.Auditor()
+                a.consume(dict(p, request=dict(p['request'], route=bad)), 'bad-route')
+                self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
+
     def test_production_records_and_bounds(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
         rows = [json.loads(s) for s in subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()]
@@ -27,6 +50,9 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual((trace['issue_observed_ns'], trace['reply_observed_ns']), (101, 102))
         self.assertEqual(trace['reply_type'], 2)
         self.assertEqual(trace['error']['value'], 'org.freedesktop.DBus.Error.ServiceUnknown')
+        self.assertEqual(trace['route'], {k: dict(value=v, complete=True) for k, v in
+                         zip(('destination', 'path', 'interface', 'member'),
+                             ('com.jci.lds.data', '/com/jci/lds/data', 'com.jci.lds.data', 'GetPosition'))})
         self.assertEqual(trace['session_context'], dict(result='observed', basis='unique_live_context',
                          lifetime=8, event=2, state=-7, revision=5))
         self.assertEqual(s['send_session'], dict(result='observed', basis='send_storage',
@@ -36,6 +62,7 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual(failed['request']['result'], 'observation_capacity')
         self.assertEqual(failed['request']['request_id'], 0)
         self.assertIsNone(failed['request']['error']['value'])
+        self.assertTrue(all(v == dict(value=None, complete=False) for v in failed['request']['route'].values()))
         self.assertEqual(failed['request']['session_context']['result'], 'unobserved')
         self.assertIsNone(failed['request']['session_context']['lifetime'])
         self.assertEqual(escaped['request']['sender']['value'], 'quote"\\\n\x01\xff')
@@ -44,6 +71,7 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual(longest['request']['session_context']['revision'], 2**64-1)
         self.assertFalse(longest['request']['sender']['complete'])
         self.assertEqual(longest['request']['sender']['value'], '\x01'*63)
+        self.assertTrue(all(v == dict(value='\x01'*63, complete=False) for v in longest['request']['route'].values()))
         a = audit.Auditor()
         a.consume(p, 'position')
         a.consume(s, 'send')
@@ -59,6 +87,9 @@ class RequestJournal(unittest.TestCase):
             b = audit.Auditor()
             b.consume(dict(p, request=invalid), 'malformed')
             self.assertIn('request_record_malformed', [i['code'] for i in b.issues])
+        b = audit.Auditor()
+        b.consume(dict(failed, request=dict(failed['request'], route=trace['route'])), 'stale-route')
+        self.assertIn('request_record_malformed', [i['code'] for i in b.issues])
         for invalid in (None, {}, dict(trace['session_context'], basis='qualified'),
                         dict(trace['session_context'], lifetime=True),
                         dict(trace['session_context'], lifetime=0),

@@ -17,6 +17,14 @@ struct PreserveErrno {
     ~PreserveErrno() { errno = saved; }
 };
 bool same(Token a, Token b) { return a.id == b.id && a.epoch == b.epoch; }
+void normalize_text(Text& text) {
+    // Only read the fixed owned value; a prefix cannot claim full identity.
+    if (!text.known) text = Text();
+    else if (!memchr(text.bytes, 0, sizeof text.bytes)) {
+        text.bytes[Text::CAPACITY - 1] = 0;
+        text.complete = false;
+    }
+}
 Issue copy_issue(const Issue& input) {
     Issue result = input;
     result.known &= ISSUE_BUS_LIFETIME | ISSUE_SESSION_LIFETIME | ISSUE_SESSION_STATE;
@@ -26,23 +34,15 @@ Issue copy_issue(const Issue& input) {
         result.session_event = 0;
         result.session_state = 0;
     }
+    normalize_text(result.route.destination);normalize_text(result.route.path);
+    normalize_text(result.route.interface_name);normalize_text(result.route.member);
     return result;
 }
 Reply copy_reply(const Reply& input) {
     Reply result = input;
     if (!result.type_known) result.type = 0;
     if (!result.wire_serial_known) result.wire_serial = 0;
-    // Do not let a malformed caller-provided Text claim an unterminated field
-    // is complete. This reads only our fixed owned value, never OEM storage.
-    Text* texts[] = {&result.sender, &result.error_name};
-    for (unsigned i = 0; i != 2; ++i) {
-        Text& text = *texts[i];
-        if (!text.known) text = Text();
-        else if (!memchr(text.bytes, 0, sizeof text.bytes)) {
-            text.bytes[Text::CAPACITY - 1] = 0;
-            text.complete = false;
-        }
-    }
+    normalize_text(result.sender);normalize_text(result.error_name);
     return result;
 }
 }

@@ -18,8 +18,8 @@ struct ReplyConstruction {
 };
 }
 
-Observer::Observer(const ReplyApi& api, ObservationClock clock, void* user)
-    : api_(api), clock_(clock), clock_user_(user) {}
+Observer::Observer(const ReplyApi& api, ObservationClock clock, void* user, const MethodApi& method_api)
+    : api_(api), method_api_(method_api), clock_(clock), clock_user_(user) {}
 
 bool Observer::valid() const {
     return api_.get_reply && api_.get_type && api_.get_sender && api_.get_error
@@ -30,10 +30,14 @@ uint64_t Observer::now() const { return clock_ ? clock_(clock_user_) : 0; }
 Result Observer::request_begin(void* method, Token* out, const session_trace::Snapshot& context) {
     const PreserveErrno saved;
     if (out) *out = Token();
-    if (!valid()) return BAD_INPUT;
+    if (!valid() || !method || !out) return BAD_INPUT;
     Issue issue = Issue();
     issue.observed_ns = now();
     issue.session_context = context;
+    if(method_api_.get_destination)issue.route.destination=copy_text(method_api_.get_destination(method));
+    if(method_api_.get_path)issue.route.path=copy_text(method_api_.get_path(method));
+    if(method_api_.get_interface)issue.route.interface_name=copy_text(method_api_.get_interface(method));
+    if(method_api_.get_name)issue.route.member=copy_text(method_api_.get_name(method));
     // No ambient value is promoted into a request/receiver ownership claim.
     return ledger_.request_begin(method, issue, out);
 }

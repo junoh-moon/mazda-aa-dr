@@ -5,6 +5,7 @@
 #include <cstring>
 
 namespace mx5 { namespace runtime {
+enum { REQUEST_JSON_CAPACITY = 4096, OBSERVATION_JSON_CAPACITY = 5120 };
 namespace request_log_detail {
 class Json {
     char* out_;size_t cap_,used_;bool ok_;
@@ -25,8 +26,9 @@ public:
         add(",\"");add(name);add("\":");
         char text[32];::snprintf(text,sizeof text,"%d",value);add(known?text:"null");
     }
-    void text(const char* name,const request_trace::Text& t) {
-        add(",\"");add(name);add("\":{\"value\":");
+    void text(const char* name,const request_trace::Text& t,bool first=false) {
+        if(!first)add(",");
+        add("\"");add(name);add("\":{\"value\":");
         bool terminated=false;
         if(!t.known)add("null");
         else {
@@ -80,6 +82,10 @@ inline bool format_request_trace(char* out,size_t cap,request_trace::Result resu
     char session[200];
     if(!format_session_trace(session,sizeof session,t.issue.session_context,false))return false;
     j.add(",\"session_context\":");j.add(session);
+    j.add(",\"route\":{");
+    j.text("destination",t.issue.route.destination,true);
+    j.text("path",t.issue.route.path);j.text("interface",t.issue.route.interface_name);
+    j.text("member",t.issue.route.member);j.add("}");
     j.signed_number("reply_type",t.reply.type,t.reply.type_known);
     j.number("wire_serial",t.reply.wire_serial,t.reply.wire_serial_known);
     j.text("sender",t.reply.sender);j.text("error",t.reply.error_name);j.add("}");

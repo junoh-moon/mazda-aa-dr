@@ -53,6 +53,12 @@ MODEL/holdout의 세션 reset과 요청별 qualification이 미구현이었습�
 일반적인 GPS→GAP 전환은 이 세션 reset을 일으키지 않습니다. 요청의 세션 소유권,
 물리 센서·폰 수용을 입증한 것은 아니며 live ASSIST는 계속 비활성입니다.
 
+[요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)을 추가했습니다.
+실제 비동기 전송 전에 목적지·객체 경로·인터페이스·메서드명을 복사하여
+응답과 POSITION/SEND 기록까지 전달합니다. 문자열 부재·잘림을 구분하며,
+응답 시점의 최신 정보로 요청을 덮어쓰지 않습니다. 서비스 이름만으로 실제
+제공자나 수신기·세션 소유권을 인증하는 구현은 아직 없으며 ASSIST는 비활성입니다.
+
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
 생략 없이 통과했습니다. 원본 커널 VM의 baseline/SHADOW 비교에서 위치 API의
