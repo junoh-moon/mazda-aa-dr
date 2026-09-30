@@ -17,8 +17,12 @@ namespace mx5 { namespace runtime { namespace request_trace {
 struct RequestTraceTestAccess {
     static void lock(Ledger& ledger) { assert(!pthread_mutex_lock(&ledger.mutex_)); }
     static void unlock(Ledger& ledger) { assert(!pthread_mutex_unlock(&ledger.mutex_)); }
+    static void lock_worker(Ledger& ledger) { assert(!pthread_mutex_lock(&ledger.worker_mutex_)); }
+    static void unlock_worker(Ledger& ledger) { assert(!pthread_mutex_unlock(&ledger.worker_mutex_)); }
     static void next_id(Ledger& ledger, uint64_t value) { ledger.next_id_ = value; }
-    static void epoch(Ledger& ledger, uint64_t value) { ledger.epoch_ = value; }
+    static void epoch(Ledger& ledger, uint64_t value) {
+        ledger.epoch_ = value; ledger.published_epoch_.store(value);
+    }
 };
 } } }
 
@@ -294,17 +298,18 @@ static void busy_cleanup_and_reuse() {
     const rt::Status before = status(ledger);
     rt::RequestTraceTestAccess::lock(ledger);
     rt::Status unavailable;
-    assert(ledger.status(&unavailable) == rt::BUSY); // Read-only status is not a lost event.
+    assert(ledger.status(&unavailable) == rt::OK); // Status never takes either table lock.
+    assert(unavailable.requests == 1 && unavailable.workers == 1 && !unavailable.loss_reasons);
     rt::RequestTraceTestAccess::unlock(ledger);
     assert(status(ledger).loss_epoch == before.loss_epoch);
 
-    rt::RequestTraceTestAccess::lock(ledger);
+    rt::RequestTraceTestAccess::lock_worker(ledger);
     BusyJob job = {&ledger, &worker, true, rt::OK};
     pthread_t thread;
     assert(!pthread_create(&thread, 0, destroy_busy, &job));
     assert(!pthread_join(thread, 0)); // Completes while mutex stays held: no blocking/spin.
     assert(job.result == rt::BUSY);
-    rt::RequestTraceTestAccess::unlock(ledger);
+    rt::RequestTraceTestAccess::unlock_worker(ledger);
     const rt::Status lost = status(ledger);
     assert(lost.loss_epoch > before.loss_epoch && lost.workers == 1 && lost.requests == 1);
     assert(lost.loss_reasons & rt::LOSS_CONTENTION);
@@ -352,18 +357,29 @@ static void busy_cleanup_and_reuse() {
     post(ledger, &worker, &position, ready(ledger, &method, 7));
     assert(ledger.worker_enter(&worker, &context) == rt::OK);
     assert(ledger.position_take(&context, &position, 0) == rt::BAD_INPUT);
-    // A valid output is required before consuming the active scope. It remains
-    // active above, but a real busy attempt below consumes it permanently.
+    // This is an owned scope: a request-table lock cannot obstruct its consume.
     rt::RequestTraceTestAccess::lock(ledger);
     trace.request.id = trace.worker.id = 123;
     errno = EDOM;
-    assert(ledger.position_take(&context, &position, &trace) == rt::BUSY);
+    assert(ledger.position_take(&context, &position, &trace) == rt::OK);
     assert(errno == EDOM);
-    empty(trace);
+    assert(trace.request.id && trace.worker.id && trace.issue.session_event == 7);
     rt::RequestTraceTestAccess::unlock(ledger);
     assert(ledger.position_take(&context, &position, &trace) == rt::USED);
     empty(trace);
     assert(status(ledger).requests == 1);
+    assert(ledger.request_end(&method) == rt::OK);
+
+    post(ledger, &worker, &position, ready(ledger, &method, 8));
+    assert(ledger.worker_enter(&worker, &context) == rt::OK);
+    rt::RequestTraceTestAccess::lock(ledger);
+    assert(!pthread_create(&thread, 0, destroy_busy, &job));
+    assert(!pthread_join(thread, 0) && job.result == rt::BUSY);
+    assert(ledger.position_take(&context, &position, &trace) == rt::STALE);
+    empty(trace);
+    rt::RequestTraceTestAccess::unlock(ledger);
+    assert(ledger.position_take(&context, &position, &trace) == rt::USED);
+    empty(trace);
     assert(ledger.request_end(&method) == rt::OK);
     puts("PASS missed destructor/end under real thread contention cannot revive reused pointers");
 }
