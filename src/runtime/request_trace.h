@@ -18,9 +18,12 @@ namespace mx5 { namespace runtime { namespace request_trace {
 // owned or modified here. Addresses are opaque comparison keys, never read.
 //
 // Initialize before producers; destroy only after they have stopped. Each API
-// attempts the mutex at most once, performs fixed-capacity work, preserves errno and
+// attempts each required table mutex at most once, performs fixed-capacity work,
+// preserves errno and
 // neither allocates, takes a blocking lock, sleeps, calls OEM code nor performs
-// I/O. Lock-free atomic primitives are NOT a wait-free or wall-time guarantee.
+// I/O. worker_post visits the two tables sequentially, never holding both
+// mutexes. position_take/status use bounded atomic reads without either mutex.
+// Lock-free atomic primitives are NOT a wait-free or wall-time guarantee.
 // Pointer APIs must
 // run inline in the verified object's live call/destruction boundary, not in
 // a later address-only notification. A generation cannot prove that boundary.
@@ -99,6 +102,8 @@ private:
 };
 
 struct Status {
+    // Includes an already-effective pending invalidation even before the next
+    // request writer commits it. No token in that next epoch exists yet.
     uint64_t loss_epoch;
     unsigned requests, workers, loss_reasons;
     bool exhausted;
@@ -138,8 +143,9 @@ public:
     Result position_take(WorkerContext*, const void* raw_position, Trace* out);
     void worker_leave(WorkerContext*);
 
-    // Worker-side diagnostics. Failure to read status does not lose a lifetime
-    // event; unlike the event APIs, a busy status read does not invalidate.
+    // Worker-side diagnostics never acquire a table mutex or invalidate an
+    // event. Counts/reasons come from one atomic word; epoch/pending are checked
+    // twice. A changing snapshot is unavailable, not retried in this call.
     // BUSY/STALE return a zero Status, not a cached or partially current report.
     Result status(Status* out);
 
@@ -157,21 +163,37 @@ private:
         uintptr_t worker, position;
         Trace trace;
     };
-    pthread_mutex_t mutex_;
-    // Only this lock-free 32-bit value is touched without mutex_. A missed
-    // event makes all old tokens unusable at the next API entry. The holder
-    // also checks it before returning OK. Epoch and ID arithmetic stays under
-    // the mutex; no 64-bit atomic or source-level CAS retry loop is required.
+    pthread_mutex_t mutex_, worker_mutex_;
+    // Request writers alone allocate IDs and advance epoch_. A pending loss
+    // already invalidates old tokens. Publish the new epoch BEFORE clearing
+    // pending: no new-epoch token can be issued during that handoff.
     std::atomic<unsigned> pending_loss_;
+    std::atomic<uint64_t> published_epoch_;
+    // Atomic counts share one word, so status cannot combine counts from
+    // different instants. Other bits publish reasons/exhaustion/update state.
+    enum {
+        COUNT_MASK = 127, WORKER_SHIFT = 7, REASON_SHIFT = 14,
+        REASON_MASK = 31, EXHAUSTED_BIT = 1 << 19, UPDATING_BIT = 1 << 20
+    };
+    static_assert(unsigned(REQUEST_CAPACITY) <= unsigned(COUNT_MASK) &&
+                  unsigned(WORKER_CAPACITY) <= unsigned(COUNT_MASK),
+                  "Request trace counts must fit their atomic snapshot fields");
+    static_assert((LOSS_CONTENTION | LOSS_CAPACITY | LOSS_COLLISION |
+                   LOSS_ID_EXHAUSTED | LOSS_EPOCH_EXHAUSTED) <= REASON_MASK,
+                  "Request trace loss reasons must fit their snapshot field");
+    std::atomic<unsigned> published_state_;
     uint64_t epoch_, next_id_;
     unsigned loss_reasons_;
-    bool initialized_, exhausted_;
+    bool request_initialized_, worker_initialized_, initialized_, exhausted_;
     RequestSlot requests_[REQUEST_CAPACITY];
     WorkerSlot workers_[WORKER_CAPACITY];
 
-    Result enter(bool cleanup = false, bool mark_busy_loss = true);
+    Result enter(bool cleanup = false);
     Result leave(Result);
-    void lose(unsigned reason);
+    Result enter_worker();
+    Result leave_worker(Result, uint64_t expected_epoch = 0);
+    Result check_epoch(uint64_t) const;
+    void lose(unsigned reason, bool exhaust = false, bool consume_pending = false);
     uint64_t allocate_id();
     RequestSlot* request_at(uintptr_t method);
     RequestSlot* request_for(Token);
