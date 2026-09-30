@@ -263,7 +263,121 @@ static void request_journal(bool emit) {
   assert(!bounds[1] && bounds[0]==0x5a && bounds[required]==0x5a);
   assert(!mx5::runtime::format_request_trace(0,0,R::OK,t));
 }
+// Authored producer controls for the Python result auditor. Pipeline rows use
+// actual status counters; direct core rows have a different kind and must not
+// be mistaken for complete runtime worker diagnostics.
+namespace model_result_cases {
+static uint64_t time_at(unsigned ms) { return 1000000000ULL+uint64_t(ms)*1000000ULL; }
+static N::RawEvent raw(N::SensorKind kind,unsigned ms,unsigned seq,unsigned value=13600) {
+  N::RawEvent r=N::RawEvent();r.kind=kind;r.epoch=1;r.receive_seq=seq;
+  r.received_ns=time_at(ms);r.source_mono_ms=int64_t(r.received_ns/1000000);r.count=1;
+  for(unsigned i=0;i<4;++i)r.raw[i]=uint16_t(kind==N::YAW?2047:value);
+  return r;
+}
+static A::Observation position(unsigned ms,int mode,unsigned seq) {
+  A::Observation o=A::Observation();o.kind=A::Observation::POSITION;
+  o.call_sequence=seq;o.mono_ns=time_at(ms);o.original_mode=mode;o.position.mode=mode;
+  o.position.utc_seconds=1700000000;o.position.latitude_deg=35;o.position.longitude_deg=135;
+  o.position.velocity_kmh=36;return o;
+}
+static void init(N::Pipeline& p) {
+  const mx5_dr_context c={1,1,1};
+  assert(p.init_model(N::research_model_profile(),mx5_dr_default_config(),c));
+}
+static void feed(N::Pipeline& p,unsigned ms,unsigned seq,unsigned wheels=13600) {
+  assert(p.enqueue_raw(raw(N::WHEELS,ms,seq,wheels))==N::PIPELINE_OK);
+  const N::PipelineResult r=p.enqueue_raw(raw(N::YAW,ms,seq));
+  assert(r==N::PIPELINE_OK||r==N::PIPELINE_WAITING);
+}
+static void seeded(N::Pipeline& p,unsigned wheels=13600) {
+  init(p);
+  for(unsigned ms=0;ms<=200;ms+=100) {
+    const unsigned seq=ms/100+1;
+    assert(p.enqueue_raw(raw(N::REVERSE,ms,seq))==N::PIPELINE_OK);feed(p,ms,seq,wheels);
+    if(ms<200)assert(p.enqueue_position(position(ms,1,seq))==N::PIPELINE_OK);
+    if(ms==100)assert(p.enqueue_position(position(110,0,3))==N::PIPELINE_OK);
+  }
+  feed(p,300,4,wheels);assert(p.drain(time_at(200))==N::PIPELINE_OK);
+}
+static void emit(const char* label,uint64_t now,const N::Diagnostic& d,bool core_only=false) {
+  char lat[48],lon[48],heading[48],speed[48],error[48],preview[97]="";
+  json_number(d.snapshot.latitude_deg,lat);json_number(d.snapshot.longitude_deg,lon);
+  json_number(d.snapshot.body_heading_rad,heading);json_number(d.snapshot.speed_mps,speed);
+  json_number(d.snapshot.error_budget_m,error);uint8_t bytes[48];
+  const bool encoded=mx5::runtime::encode_model_location_preview(d.snapshot,bytes);
+  if(encoded)hex48(bytes,preview);
+  printf("{\"case\":\"%s\",\"kind\":\"%s\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"model_valid\":%s,\"state\":%u,\"result\":\"%s\",\"pipeline\":\"%s\","
+      "\"uncertainties\":%u,\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
+      "\"frontier_ns\":%llu,\"lat\":%s,\"lon\":%s,\"heading_rad\":%s,\"speed_mps\":%s,"
+      "\"error_model_m\":%s,\"stopped\":%s,\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}\n",
+      label,core_only?"test_core_snapshot":"shadow",(unsigned long long)now,
+      d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),mx5_dr_result_name(d.result),
+      N::pipeline_result_name(d.status.result),d.status.uncertainties,(unsigned long long)d.status.events,
+      (unsigned long long)d.status.intervals,(unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
+      (unsigned long long)d.snapshot.frontier_ns,lat,lon,heading,speed,error,d.snapshot.stopped?"true":"false",
+      encoded?"true":"false",preview);
+}
+static mx5_dr_core core(double lon,double heading,double error=0,mx5_dr_config cfg=mx5_dr_default_config()) {
+  mx5_dr_core c;mx5_dr_context context={1,1,1};
+  assert(mx5_dr_init_model(&c,&cfg,context)==MX5_DR_OK);
+  mx5_dr_anchor a=mx5_dr_anchor();a.context=context;a.anchor_id=a.position_seq=1;a.measured_ns=time_at(0);
+  a.utc_ns=1700000000000000000ULL;a.longitude_deg=lon;a.body_heading_rad=heading;
+  a.position_error_m=error;a.quality=MX5_DR_MODEL;assert(mx5_dr_seed(&c,&a)==MX5_DR_OK);
+  context.generation=2;assert(mx5_dr_control(&c,MX5_DR_GAP,context,2)==MX5_DR_OK);return c;
+}
+static void step(mx5_dr_core& c,uint64_t dt,double speed,double yaw) {
+  mx5_dr_interval i=mx5_dr_interval();i.context=c.estimate.context;i.interval_seq=1;i.start_ns=c.estimate.frontier_ns;
+  i.end_ns=i.start_ns+dt;i.received_ns=i.end_ns;i.speed_mps=speed;i.yaw_rad_s=yaw;i.raw_yaw=2047;i.yaw_count=1;
+  mx5_dr_evidence* inputs[]={&i.speed,&i.yaw,&i.reverse};
+  for(unsigned n=0;n<3;++n) {
+    inputs[n]->source_id=n+1;inputs[n]->source_epoch=1;inputs[n]->producer_seq=1;
+    inputs[n]->measured_ns=inputs[n]->received_ns=i.start_ns;inputs[n]->lease_until_ns=i.start_ns+250000000;
+    inputs[n]->quality=MX5_DR_MODEL;inputs[n]->freshness=MX5_DR_MODEL_TIME;
+  }
+  assert(mx5_dr_step(&c,&i)==MX5_DR_OK);
+}
+static void emit_core(const char* label,const mx5_dr_core& c,uint64_t now) {
+  N::Diagnostic d=N::Diagnostic();
+  d.result=mx5_dr_get_model_snapshot(&c,now,c.estimate.context,&d.snapshot);emit(label,now,d,true);
+}
+static int run() {
+  N::Pipeline p;init(p);emit("unseeded",time_at(0),p.diagnostic(time_at(0)));
+  seeded(p);emit("active_valid",time_at(300),p.diagnostic(time_at(300)));
+  emit("active_stale",time_at(500),p.diagnostic(time_at(500)));
+  emit("active_time_error",time_at(199),p.diagnostic(time_at(199)));
+  assert(p.enqueue_raw(raw(N::REVERSE,350,4))==N::PIPELINE_OK);
+  assert(p.drain(time_at(350))==N::PIPELINE_WAITING);
+  assert(p.diagnostic(time_at(350)).snapshot.model_valid);
+  emit("active_valid_waiting",time_at(350),p.diagnostic(time_at(350)));
+  seeded(p);assert(p.enqueue_position(position(310,1,4))==N::PIPELINE_OK);
+  emit("active_queued_gps",time_at(310),p.diagnostic(time_at(310)));
+  seeded(p);assert(p.enqueue_position(position(310,3,4))==N::PIPELINE_OK);
+  emit("active_queued_native",time_at(310),p.diagnostic(time_at(310)));
+  p.drain(time_at(310));emit("native",time_at(310),p.diagnostic(time_at(310)));
+  seeded(p,10000);emit("active_near_zero_not_stopped",time_at(300),p.diagnostic(time_at(300)));
+  for(unsigned ms=400;ms<=2100;ms+=100) {
+    assert(p.enqueue_raw(raw(N::REVERSE,ms,ms/100+1))==N::PIPELINE_OK);feed(p,ms,ms/100+1,10000);
+    assert(p.drain(time_at(ms-100))==N::PIPELINE_OK);
+  }
+  emit("active_stopped",time_at(2100),p.diagnostic(time_at(2100)));
+  mx5_dr_core c=core(0,0);step(c,100000000,0,0);emit_core("zero_not_stopped",c,c.estimate.frontier_ns);
+  c=core(0,0);step(c,1,1,-1e-7);emit_core("heading_2pi",c,c.estimate.frontier_ns);
+  c=core(-180,3*3.14159265358979323846/2);step(c,1,3,0);emit_core("longitude_180",c,c.estimate.frontier_ns);
+  c=core(0,0,99);step(c,100000000,10,0);emit_core("error_limit",c,c.estimate.frontier_ns+150000000);
+  mx5_dr_config cfg=mx5_dr_default_config();cfg.duration_max_s=.2;
+  c=core(0,0,0,cfg);step(c,100000000,1,0);emit_core("duration_limit",c,c.estimate.frontier_ns+150000000);
+  // Keep the 250 ms sensor lease live across both queries, so only query age
+  // distinguishes the inclusive 150 ms boundary from one nanosecond beyond it.
+  c=core(0,0);step(c,50000000,1,0);emit_core("exact_age_limit",c,c.estimate.frontier_ns+150000000);
+  emit_core("over_age_limit",c,c.estimate.frontier_ns+150000001);
+  cfg=mx5_dr_default_config();cfg.physical_speed_max_mps=200;
+  c=core(0,0,0,cfg);step(c,100000000,101,0);emit_core("custom_speed",c,c.estimate.frontier_ns);
+  return 0;
+}
+}
 int main(int argc,char** argv) {
+  if(argc==2 && !strcmp(argv[1],"--emit-model-results"))return model_result_cases::run();
   const bool emit_requests=argc==2 && !strcmp(argv[1],"--emit-requests");
   request_journal(emit_requests);
   if(emit_requests)return 0;

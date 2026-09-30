@@ -45,6 +45,15 @@ def shadow():
                 error_model_m=None, stopped=False, preview_encoded=False, location_preview_hex='')
 
 
+def valid_shadow(**changes):
+    row = shadow()
+    row.update(mono_ns=200, frontier_ns=150, state=2, result='OK', pipeline='OK',
+               model_valid=True, events=6, intervals=1, lat=35, lon=129,
+               heading_rad=0, speed_mps=10, error_model_m=5)
+    row.update(changes)
+    return row
+
+
 def consume(rows):
     a = audit.Auditor()
     a.consume(boot(), 'boot')

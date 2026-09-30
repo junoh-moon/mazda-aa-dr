@@ -1,7 +1,7 @@
 """Bus boundaries must constrain MODEL diagnostics without granting qualification."""
 import unittest
 from test_model_session_log import audit, marker as session_marker
-from test_motion_logs import shadow
+from test_motion_logs import shadow, valid_shadow
 from test_calibration_logs import holdout
 import test_request_log as request_fixtures
 
@@ -52,14 +52,14 @@ class ModelBusLog(unittest.TestCase):
             revision = 4 if result == 'no_live_connection' else 6 if result == 'ambiguous' else 0
             a.consume(marker(bus_revision=revision, input_available=False,
                              connection=dict(result=result, object=None, lifetime=None)), 'unavailable')
-            row = shadow()
+            row = valid_shadow()
             row.update(mono_ns=200, frontier_ns=150, model_valid=True,
                        model_bus_epoch=1, bus_revision=revision)
             a.consume(row, 'invalid-positive')
             self.assertIn('shadow_bus_mismatch', self.codes(a))
 
     def test_snapshot_identity_time_and_legacy(self):
-        row = shadow()
+        row = valid_shadow()
         row.update(mono_ns=200, frontier_ns=150, model_valid=True, model_bus_epoch=1, bus_revision=3)
         a = self.auditor()
         a.consume(marker(), 'initial')

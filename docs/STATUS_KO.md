@@ -118,7 +118,9 @@ runtime의 세션 29개·bus 31개를 통과했습니다. 원본 VM의 실제 LD
 경계 검증이며, 보정 위치를 실제 지도에 적용하는 live ASSIST는 여전히 미완료입니다.
 이번 추가 도구를 모두 제거했고 호스트 설치 전후 목록을 대조했습니다.
 마지막 fetch의 외부 `8cbcc29` 분석기로도 보관 로그 세 개의 전체 보고서가
-동일함을 확인했습니다. 해당 새 분석기·시험 코드의 브랜치 통합은 아직 남습니다.
+동일함을 확인했습니다. 이후 [같은 브랜치에 분석기·시험 코드를 통합](../validation/MODEL_RESULT_MERGE_2026-09-30.md)하고
+host Python 330개·C/C++와 고정 ARM의 결과 의미 검사 12개를 직접 통과했습니다.
+제품 runtime 소스는 변경하지 않았으며 유효 원본 GPS·ASSIST는 미완료입니다.
 
 [새로 제공된 펌웨어의 로컬 재실행](../validation/FIRMWARE_REPLAY_2026-09-30.md)에서는
 동일 커널·rootfs 해시와 당시 master(`2b959ff`)의 재현 빌드를 확인하고 전체 host/ARM 검사를
@@ -329,6 +331,14 @@ provider/receiver 자격과 이전 정리 실패의 원인·실차·폰 검증�
 MODEL은 invalid, 일반 분석은 inconclusive입니다. 상세 host/ARM 결과와
 초기 실패는 새 기록을 따릅니다. 기존 MODEL 결과 의미 검사 공백은 별도
 TODO이며 provider/receiver 자격·실차·폰 검증과 공개 ZIP 갱신은 미완료입니다.
+
+[MODEL 결과 의미 검토](../validation/MODEL_RESULT_REVIEW_2026-09-30.md)에서는
+위 분석기 공백을 수정했습니다. 실제 계산기 경계 출력과 세 독립 리뷰,
+host Python 330개 및 C/C++·고정 ARM journal 검사를 완료했습니다.
+기존 host/ARM worker 46개와 원본 VM journal 5개의 전체 분석 보고서는 동일합니다.
+새 원본 VM 실행이나 유효 GPS 검증은 아닙니다. 별도 generation 소진 후 fault의
+유효성 재노출은 독립 재현된 미구현 TODO로 남겼습니다. 외부 Claude 브랜치의
+cb65fd5 병합도 확인했습니다. ASSIST와 공개 ZIP은 변경하지 않았습니다.
 같은 기록에서 클로드의 후속 원본 SM·SYSTEM·USB 관리자 기동 조사도
 별도 커밋으로 확인했습니다. 외부 실행과 직접 실행을 구분합니다.
 
