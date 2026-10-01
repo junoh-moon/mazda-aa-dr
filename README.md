@@ -19,12 +19,14 @@ The current USB packaging includes the MP3 diagnostic-terminal entry and support
 the target's BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock storage aliases
 and read-only root. See [USB instructions](packaging/USB_START_KO.md) and
 [new installation evidence](validation/USB_INSTALL_2026-09-29.md).
-The published [v0.3.6-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.6-shadow.1)
-fixes stale qualified ASSIST anchors after an unpaired GPS callback while
-retaining raw request identity, delayed-yaw/holdout fixes, the numeric USB menu
-and storage limits. The live qualified input provider is still missing, so
-ASSIST stays disabled. The [release record](validation/RELEASE_V036_2026-10-01.md)
-pins the fresh host/ARM, OEM VM and stock BusyBox checks to the published ZIP.
+The published [v0.3.7-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.7-shadow.1)
+preserves all nine original position fields, including altitude, `horizontal`
+and `vertical` previously omitted from the journal. It retains the qualified anchor
+pairing fix, numeric USB menu and storage limits. The live qualified input
+provider is still missing, so ASSIST stays disabled. The
+[release record](validation/RELEASE_V037_2026-10-01.md) pins the host/ARM checks,
+actual DSO formatter, original LDS parser-to-reply execution, stock BusyBox
+installation and verified published download to the same product.
 Unpack its contents to the USB root and run `sh install.sh` from that directory
 once the diagnostic shell opens. While parked, use
 `sh /tmp/mnt/sda1/trial` for status, finish/export or removal.
