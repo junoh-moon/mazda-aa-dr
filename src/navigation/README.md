@@ -74,6 +74,15 @@ the supplied anchor without rewriting its context, evidence or validation
 claims. A stale replacement context revokes the old solution and rejects the
 anchor. Initial or already-reacquiring anchors can use the current context.
 
+The captured POSITION generation is authoritative for qualified mode controls.
+If a verified anchor has already performed GPS_RETURN and established a READY
+seed in that generation, its matching GPS mode 1/2 observation consumes the
+same return without invalidating the new seed. This also covers an anchor
+measured before the observation's receipt time; neither timestamp is rewritten.
+An ACTIVE estimate, a different generation, and untagged or MODEL input do not
+take this path. A later GAP still needs a newer observed generation. Sensor
+windows must arrive before their chronological watermark as usual.
+
 `tests/navigation/test_navigation.cpp` exercises the actual core and bridge with
 synthetic input: straight/turn/reverse/stop motion, timestamp and queue failures,
 receipt-only worker cadence, chronological cross-stream jitter, bounded reverse

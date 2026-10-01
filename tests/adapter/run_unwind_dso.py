@@ -136,7 +136,8 @@ def main():
             'PIPELINE_PUBLICATION': '_ZNK3mx510navigation8Pipeline21qualified_publicationEyRKNS_7runtime23CoreBridgeQualificationEyPNS_7adapter10DrSnapshotE',
         }
         cases = ('straight', 'quality_gap', 'quality_cycle', 'turn', 'reverse', 'expiry', 'reacquire',
-                 'native_return', 'stale_control', 'unverified')
+                 'native_return', 'stale_control', 'unverified', 'continuous_reacquire',
+                 'anchor_first_reacquire', 'separate_reacquire', 'native_reacquire', 'quality_reacquire')
         fixture, access = 'assist_publication', 'assist_dso_access.h'
         macro, marker = '-DMX5_ASSIST_DSO_TEST', 'PASS assist publication '
     offsets = {}

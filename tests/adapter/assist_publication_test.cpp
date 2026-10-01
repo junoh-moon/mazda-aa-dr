@@ -65,6 +65,9 @@ static uint64_t now_ns=1000000000ULL;
 static unsigned sends,replacements;
 static A::Observation position,selected;
 static A::DrSnapshot last_publication;
+static uint64_t previous_intervals,previous_solution;
+static double input_latitude=37,input_longitude=127;
+static uint64_t input_utc=1700000000ULL;
 static A::VehicleData* borrowed;
 static bool expect_original;
 static uint8_t sent[48],original[48];
@@ -97,8 +100,8 @@ static int32_t get32(const uint8_t* p) {
     uint32_t value=0;for(unsigned i=0;i<4;++i)value|=uint32_t(p[i])<<(8*i);return int32_t(value);
 }
 static void callback(int mode,uint64_t when,bool replacement) {
-    now_ns=when;uint8_t raw[72]={};put32(raw,uint32_t(mode));put64(raw+8,1700000000ULL);
-    const double lat=37,lon=127;std::memcpy(raw+16,&lat,8);std::memcpy(raw+24,&lon,8);
+    now_ns=when;uint8_t raw[72]={};put32(raw,uint32_t(mode));put64(raw+8,input_utc);
+    std::memcpy(raw+16,&input_latitude,8);std::memcpy(raw+24,&input_longitude,8);
     A::VehicleData data={1,original,48};borrowed=&data;expect_original=!replacement;
     const unsigned before=sends;errno=EDOM;
     A::position_enter(0,raw);assert(errno==EDOM);
@@ -108,16 +111,19 @@ static void callback(int mode,uint64_t when,bool replacement) {
     if(replacement)++replacements;else assert(!std::memcmp(sent,original,48));
     for(unsigned i=0;i<48;++i)assert(original[i]==uint8_t(i+1));
 }
-static void seed(ProductPipeline& pipeline,void* argument) {
-    const A::Observation& gps=*static_cast<A::Observation*>(argument);
-    const mx5_dr_context context={11,12,gps.prediction_generation};
-    assert(pipeline.init_qualified(mx5_dr_default_config(),context));
-    mx5_dr_anchor anchor=mx5_dr_anchor();anchor.context=context;
-    anchor.anchor_id=anchor.position_seq=1;anchor.measured_ns=gps.mono_ns;
-    anchor.utc_ns=1700000000000000000ULL;
+static mx5_dr_anchor authored_anchor(const A::Observation& gps,uint64_t id) {
+    mx5_dr_anchor anchor=mx5_dr_anchor();anchor.context=mx5_dr_context{11,12,gps.prediction_generation};
+    anchor.anchor_id=id;anchor.position_seq=gps.call_sequence;anchor.measured_ns=gps.mono_ns;
+    anchor.utc_ns=gps.position.utc_seconds*1000000000ULL;
     anchor.latitude_deg=gps.position.latitude_deg;anchor.longitude_deg=gps.position.longitude_deg;
     anchor.position_error_m=1;anchor.heading_error_rad=0.01;
     anchor.validated=anchor.heading_valid=anchor.calibration_verified=1;anchor.quality=MX5_DR_VALID;
+    return anchor;
+}
+static void seed(ProductPipeline& pipeline,void* argument) {
+    const A::Observation& gps=*static_cast<A::Observation*>(argument);
+    const mx5_dr_anchor anchor=authored_anchor(gps,1);
+    assert(pipeline.init_qualified(mx5_dr_default_config(),anchor.context));
     assert(pipeline.enqueue_anchor(anchor,gps.mono_ns)==N::PIPELINE_OK);
     assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
 }
@@ -180,8 +186,35 @@ static void reject_stale_control(ProductPipeline& pipeline,void* argument) {
 static void reject_old_publication(ProductPipeline&,void* argument) {
     assert(!A::publish_snapshot(*static_cast<A::DrSnapshot*>(argument)));
 }
-static void trajectory(Worker& worker,const char* name,uint64_t start,bool quality_change) {
-    callback(1,start,false);worker.call(seed,&position);
+struct Reanchor { A::Observation gps;bool anchor_first,separate_drain; };
+static void continuous_anchor(ProductPipeline& pipeline,void* argument) {
+    const Reanchor& r=*static_cast<Reanchor*>(argument);
+    const N::Diagnostic before=pipeline.diagnostic(r.gps.mono_ns);
+    const mx5_dr_anchor anchor=authored_anchor(r.gps,before.snapshot.anchor_id+1);
+    assert(before.status.resets==0&&before.status.intervals==previous_intervals&&previous_intervals>=10);
+    if(r.anchor_first)assert(pipeline.enqueue_anchor(anchor,r.gps.mono_ns)==N::PIPELINE_OK);
+    assert(pipeline.enqueue_position(r.gps)==N::PIPELINE_OK);
+    if(r.separate_drain)pipeline.drain(r.gps.mono_ns);
+    if(!r.anchor_first)assert(pipeline.enqueue_anchor(anchor,r.gps.mono_ns)==N::PIPELINE_OK);
+    assert(!pipeline.diagnostic(r.gps.mono_ns).snapshot.valid);
+    const N::PipelineResult result=pipeline.drain(r.gps.mono_ns);
+    const N::Diagnostic after=pipeline.diagnostic(r.gps.mono_ns);
+    if(result!=N::PIPELINE_OK||after.snapshot.state!=MX5_DR_READY)
+        std::fprintf(stderr,"reanchor: result=%u core=%u state=%u generation=%llu expected=%u resets=%llu\n",
+            unsigned(result),unsigned(after.result),unsigned(after.snapshot.state),
+            (unsigned long long)after.snapshot.context.generation,r.gps.prediction_generation,
+            (unsigned long long)after.status.resets);
+    assert(result==N::PIPELINE_OK&&after.snapshot.state==MX5_DR_READY);
+    assert(!after.snapshot.valid&&after.status.resets==0&&after.status.intervals==previous_intervals);
+    assert(after.snapshot.anchor_id==2&&after.snapshot.processed_position_seq==r.gps.call_sequence);
+    assert(after.snapshot.context.generation==r.gps.prediction_generation);
+    assert(std::fabs(after.snapshot.latitude_deg-anchor.latitude_deg)<1e-10);
+    assert(std::fabs(after.snapshot.longitude_deg-anchor.longitude_deg)<1e-10);
+    assert(after.snapshot.derived_utc_ns==anchor.utc_ns);
+}
+static void trajectory(Worker& worker,const char* name,uint64_t start,bool quality_change,
+                       bool initialize=true,unsigned sequence_base=0) {
+    if(initialize) { callback(1,start,false);worker.call(seed,&position); }
     if(quality_change) {
         callback(2,start+5000000,false);worker.call(enqueue_position,&position);
         if(!std::strcmp(name,"quality_cycle")) {
@@ -194,7 +227,7 @@ static void trajectory(Worker& worker,const char* name,uint64_t start,bool quali
     Step step=Step();
     for(unsigned i=0;i<10;++i) {
         step=Step();step.start=start+uint64_t(i)*100000000;step.end=step.start+100000000;
-        step.now=step.end+20000000;step.sequence=i+1;step.yaw=turn?0.2:0;
+        step.now=step.end+20000000;step.sequence=sequence_base+i+1;step.yaw=turn?0.2:0;
         step.reverse=reverse;step.verified=verified;now_ns=step.now;worker.call(calculate,&step);
         if(verified&&(!step.published||step.result!=R::CORE_BRIDGE_OK)) {
             std::fprintf(stderr,"publication: core_generation=%llu adapter_generation=%u bridge=%u core=%u\n",
@@ -218,6 +251,13 @@ static void trajectory(Worker& worker,const char* name,uint64_t start,bool quali
     const double north=turn?sign*50*std::sin(0.2):10;
     assert(std::fabs(step.diagnostic.snapshot.accumulated_east_m-east)<0.0001);
     assert(std::fabs(step.diagnostic.snapshot.accumulated_north_m-north)<0.0001);
+    assert(step.diagnostic.status.resets==0&&step.diagnostic.status.intervals>=10);
+    if(!initialize) {
+        assert(step.diagnostic.status.intervals>previous_intervals);
+        assert(step.diagnostic.snapshot.solution_seq>previous_solution);
+    }
+    previous_intervals=step.diagnostic.status.intervals;
+    previous_solution=step.diagnostic.snapshot.solution_seq;
     last_publication=step.mapped;
     if(verified&&!std::strcmp(name,"expiry")) {
         callback(0,step.mapped.valid_until_mono_ns,true);
@@ -227,7 +267,8 @@ static void trajectory(Worker& worker,const char* name,uint64_t start,bool quali
 int main(int argc,char** argv) {
     assert(argc==2);
     const char* const cases[]={"straight","quality_gap","quality_cycle","turn","reverse","expiry",
-        "reacquire","native_return","stale_control","unverified"};
+        "reacquire","native_return","stale_control","unverified","continuous_reacquire",
+        "anchor_first_reacquire","separate_reacquire","native_reacquire","quality_reacquire"};
     bool known=false;for(unsigned i=0;i<sizeof cases/sizeof cases[0];++i)known|=!std::strcmp(argv[1],cases[i]);
     assert(known);
 #ifdef MX5_ASSIST_DSO_TEST
@@ -242,11 +283,26 @@ int main(int argc,char** argv) {
     const bool expired=!std::strcmp(argv[1],"expiry");
     // Except in the expiry case, the previous lease still covers both sends:
     // only real GPS/native revocation can suppress the old prediction here.
-    const uint64_t returned=expired?2080000000ULL:2050000000ULL;
-    callback(!std::strcmp(argv[1],"native_return")?3:1,returned,false);
+    uint64_t returned=expired?2080000000ULL:2050000000ULL;
+    const bool native_reacquire=!std::strcmp(argv[1],"native_reacquire");
+    const bool quality_reacquire=!std::strcmp(argv[1],"quality_reacquire");
+    const bool continuous=!std::strcmp(argv[1],"continuous_reacquire")||
+        !std::strcmp(argv[1],"anchor_first_reacquire")||!std::strcmp(argv[1],"separate_reacquire")||
+        native_reacquire||quality_reacquire;
+    if(native_reacquire) {
+        callback(3,returned,false);worker.call(reject_return,&position);returned+=10000000;
+    }
+    if(continuous) { input_latitude=37.0002;input_longitude=127.0003;input_utc=1700000002ULL; }
+    callback(!std::strcmp(argv[1],"native_return")?3:quality_reacquire?2:1,returned,false);
     if(std::strcmp(argv[1],"unverified"))worker.call(reject_old_publication,&last_publication);
-    worker.call(!std::strcmp(argv[1],"stale_control")?reject_stale_control:reject_return,&position);
-    callback(0,returned+10000000,false);assert(selected.reason==A::EPOCH_MISMATCH);
+    if(continuous) {
+        Reanchor r={position,!std::strcmp(argv[1],"anchor_first_reacquire"),!std::strcmp(argv[1],"separate_reacquire")};
+        worker.call(continuous_anchor,&r);
+        trajectory(worker,"straight",returned,true,false,10);
+    } else {
+        worker.call(!std::strcmp(argv[1],"stale_control")?reject_stale_control:reject_return,&position);
+        callback(0,returned+10000000,false);assert(selected.reason==A::EPOCH_MISMATCH);
+    }
     if(!std::strcmp(argv[1],"reacquire"))trajectory(worker,"straight",2200000000ULL,true);
     std::printf("PASS assist publication %s: %u sends, %u replacements; authored inputs, product path\n",
                 argv[1],sends,replacements);

@@ -450,6 +450,35 @@ static void qualified_coverage(Pipeline& p) {
     CHECK(p.enqueue_reverse(evidence(3,2,100),0)==PIPELINE_OK);
     CHECK(p.enqueue_yaw(evidence(2,2,200),0,2047,1,T(100),T(200))==PIPELINE_OK);
 }
+static void qualified_anchor_before_observed_return() {
+    for(unsigned variant=0;variant<3;++variant) {
+        Pipeline p;seed_qualified(p,1);qualified_coverage(p);
+        mx5_dr_anchor a=mx5_dr_anchor();a.context=p.context();++a.context.generation;
+        a.anchor_id=2;a.position_seq=4;a.measured_ns=T(110);a.utc_ns=1700000000110000000ULL;
+        a.latitude_deg=36;a.longitude_deg=136;a.position_error_m=1;
+        a.validated=a.heading_valid=a.calibration_verified=1;a.quality=MX5_DR_VALID;
+        adapter::Observation gps=pos(130,variant==1?2:1,3);
+        gps.prediction_generation=uint32_t(a.context.generation)-(variant==2?1:0);
+        // The verified fix was measured before the callback. Queue by original
+        // time, without moving the anchor to receipt or rewriting the window.
+        CHECK(p.enqueue_position(gps)==PIPELINE_OK);
+        CHECK(p.enqueue_anchor(a,T(130))==PIPELINE_OK);
+        adapter::Observation gap=pos(140,0,5);gap.prediction_generation=uint32_t(a.context.generation+1);
+        CHECK(p.enqueue_position(gap)==PIPELINE_OK);
+        const PipelineResult result=p.drain(T(200));
+        const Diagnostic d=p.diagnostic(T(200));
+        if(variant==2) {
+            CHECK(result==PIPELINE_BAD_INPUT);CHECK(!d.snapshot.valid);CHECK(d.status.resets==1);
+        } else {
+            CHECK(result==PIPELINE_OK);CHECK(d.snapshot.valid);CHECK(d.status.resets==0);
+            CHECK(d.snapshot.anchor_id==2);CHECK(d.snapshot.context.generation==gap.prediction_generation);
+            CHECK(d.snapshot.frontier_ns==T(200));CHECK(d.snapshot.derived_utc_ns==a.utc_ns+90000000);
+            CHECK(std::fabs(d.snapshot.accumulated_north_m-0.9)<1e-10);
+            CHECK(std::fabs(d.snapshot.accumulated_east_m)<1e-10);
+            CHECK(d.snapshot.latitude_deg>36&&d.snapshot.latitude_deg<36.00001);
+        }
+    }
+}
 static void exhausted_qualified(unsigned trigger) {
     Pipeline p;seed_qualified(p,UINT64_MAX-1);
     CHECK(p.context().generation==UINT64_MAX);
@@ -539,7 +568,8 @@ int main(int argc,char** argv) {
     else { model_waits_for_closed_yaw_window();model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
         for(unsigned i=0;i<6;++i)raw_yaw_accumulator_rejection(i);
         raw_yaw_accumulator_boundaries();
-        rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();exhausted_model();
+        rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();
+        qualified_anchor_before_observed_return();exhausted_model();
         exhausted_qualified(0);exhausted_qualified(1);exhausted_qualified(2);
         exhausted_anchor_replacement();exhausted_position_sequence(); }
     std::printf("navigation: %u checks passed\n",checks); return 0; }

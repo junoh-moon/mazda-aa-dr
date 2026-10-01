@@ -333,8 +333,17 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     }
     if (position_mode_==0||position_mode_==3) {
         const uint64_t faults=status_.resets;
-        const PipelineResult r=control(MX5_DR_GPS_RETURN,o.prediction_generation);
-        if (status_.resets!=faults) return r;
+        // A qualified anchor can already have applied this GPS_RETURN (anchors
+        // sort before a POSITION with the same time, or carry an earlier
+        // measurement time). Its READY seed must survive the matching observed
+        // control. A different generation or an ACTIVE estimate still revokes.
+        const bool anchored_return=!model_&&(mode==1||mode==2)&&core_.seeded&&
+            core_.estimate.state==MX5_DR_READY&&o.prediction_generation&&
+            o.prediction_generation==context().generation;
+        if(!anchored_return) {
+            const PipelineResult r=control(MX5_DR_GPS_RETURN,o.prediction_generation);
+            if (status_.resets!=faults) return r;
+        }
         have_fix_=false; gps_wheel_.unavailable();
     }
     position_mode_=mode;
