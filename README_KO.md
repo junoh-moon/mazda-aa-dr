@@ -20,13 +20,12 @@ Shift 키나 긴 회수 경로 입력이 필요하지 않습니다.
 [사용 안내](packaging/USB_START_KO.md) · [설치 수정과 검증](validation/USB_INSTALL_2026-09-29.md).
 현재 소스는 CMU의 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
 이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리한다.
-설치 수정과 MODEL 초기화 진단을 포함한 [v0.3.3-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)이
-외부 master에서 게시되었습니다. 발행자의 전체 host/ARM·순정 BusyBox 검사는
-[릴리즈 검증](validation/RELEASE_V033_2026-10-01.md)을 따릅니다. 이번 작업도
-공개 파일을 직접 내려받아 SHA-256·CRC·전체 manifest를 대조했습니다.
-숫자 메뉴·저장 공간 보호·MODEL 초기화 사유·계산 호출 수를 포함한
-[b185b99 고정 후보](validation/KEYBOARD_TRIAL_2026-10-01.md)는 공개 v0.3.3과
-별개입니다. 기존 a29f1b8 후보에도 숫자 메뉴는 없습니다.
+숫자 메뉴·저장 공간 보완·MODEL 초기화 진단과 정상 yaw 구간의 잘못된
+`LATE` 거부 수정을 포함한 [v0.3.4-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.4-shadow.1)을
+게시했습니다. [릴리즈 검증](validation/RELEASE_V034_2026-10-01.md)에 전체
+host/ARM 검사와 동일한 새 빌드, 최종 ZIP의 순정 BusyBox 설치 검사를 구분했습니다.
+공개 파일도 직접 내려받아 SHA-256·CRC·전체 manifest와 고정 커밋을 확인했습니다.
+이전 v0.3.3과 a29f1b8 후보에는 숫자 메뉴가 없습니다.
 실제 차량과 ASSIST 적용은 아직 미검증입니다.
 기존 `v0.3.0-shadow.1` ZIP은 이 수정을 포함하지 않습니다.
 

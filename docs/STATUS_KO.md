@@ -10,9 +10,15 @@
 측정 준비를 판정하지 않으며 저장 공간과 실제 계산 시도·중단 사유를 확인합니다.
 실차 센서·폰 수용·물리 복구는 아직 미검증이고 제품 ASSIST는 미완료입니다.
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
-따르십시오. 현재 공개 ZIP을 새 시험 준비가 끝난 묶음으로 간주하지 않습니다.
+따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-외부 master에서 [v0.3.3-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)을
+현재 공개판은 [v0.3.4-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.4-shadow.1)입니다.
+사용자의 발행 지시에 따라 코드를 master에 반영하고 `4330e99`에 고정했습니다.
+숫자 메뉴·저장 공간 보완·MODEL 구간 순서 수정을 포함합니다. [발행 검증](../validation/RELEASE_V034_2026-10-01.md)은
+전체 host/ARM 검사를 통과한 제품과 새 빌드의 동일성, 최종 ZIP의 순정 BusyBox
+설치 검사와 게시 후 다운로드 대조를 기록합니다. live ASSIST는 계속 비활성입니다.
+
+앞선 외부 master에서 [v0.3.3-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)을
 커밋 `260528c751739c0afb59153f7a5cfa3585eb6048`에서 빌드하여 게시한 것을 확인했습니다.
 해당 host/ARM·순정 BusyBox 설치 검사는 외부 발행 기록을 따릅니다. 이번 작업은
 공개 ZIP을 직접 내려받아 SHA-256·CRC·전체 manifest와 고정 커밋을 대조했습니다.
