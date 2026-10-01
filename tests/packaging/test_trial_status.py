@@ -24,6 +24,7 @@ class TrialStatusTests(unittest.TestCase):
         self.logs.mkdir(parents=True)
         (self.base / 'guard').mkdir()
         (self.base / 'guard/last-boot').write_text(BOOT + '\n')
+        (self.base / 'guard/consumed').write_text('fixture arm manifest\n')
         bootfile = self.root / 'proc/sys/kernel/random/boot_id'
         bootfile.parent.mkdir(parents=True)
         bootfile.write_text(BOOT + '\n')
@@ -67,7 +68,27 @@ class TrialStatusTests(unittest.TestCase):
         r = self.run_status()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn('does not approve driving or ASSIST', r.stdout)
+        self.assertIn('guard_last_boot=current guard_consumed=present', r.stdout)
         self.assertIn('reverse_received_recently=observed receipt_only_not_direction_quality', r.stdout)
+
+    def test_guard_markers_survive_empty_log_failure(self):
+        r = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True, text=True,
+                           env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('one_boot=consumed_this_boot retained_bytes=0', r.stdout)
+        self.assertIn('guard_last_boot=current guard_consumed=present', r.stdout)
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text(OLD + '\n')
+        r = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True, text=True,
+                           env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('one_boot=unconfirmed retained_bytes=0', r.stdout)
+        self.assertIn('guard_last_boot=different guard_consumed=present', r.stdout)
+        (self.base / 'guard/last-boot').unlink()
+        (self.base / 'guard/consumed').unlink()
+        r = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True, text=True,
+                           env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('guard_last_boot=missing guard_consumed=absent', r.stdout)
 
     def test_usb_return_after_aa_disconnect_keeps_retained_and_current_separate(self):
         (self.root / 'proc/uptime').write_text('200.00 1.00\n')
@@ -85,6 +106,7 @@ class TrialStatusTests(unittest.TestCase):
         r = self.run_status()
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('runtime_current_boot=unavailable', r.stdout)
+        self.assertIn('guard_last_boot=different guard_consumed=present', r.stdout)
         self.assertIn('retained_runtime_last_boot=previous_boot boot_id=' + BOOT, r.stdout)
         self.assertIn('position_records=1 motion_batches=1 capture_end_record=observed', r.stdout)
         self.assertNotIn('health_recent=observed', r.stdout)

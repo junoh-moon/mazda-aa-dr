@@ -2,7 +2,7 @@
 
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
-**The current USB bundle is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. No vehicle or phone validation has been performed. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
+**The current USB bundle is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. An initial vehicle installation/removal was attempted, but the recovered archive had no trace or collector records; sensor, calculation and phone behavior remain unverified. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
 
 On 2026-10-01 the user authorized one combined vehicle installation/test before
 v1.0, after feasible firmware and offline verification. This updates the earlier
@@ -28,6 +28,8 @@ transport remain incomplete, so **ASSIST stays disabled**.
 hotfix and choose `3` after the command below, including after uninstalling.
 No reinstall or new drive is needed. The old menu incorrectly rejected the
 normal `/proc/mounts` symlink; see the [failure and fix](validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md).
+The actual follow-up export succeeded but contained no trace or collector journal;
+see the [empty-capture analysis](validation/FIELD_V039_EMPTY_CAPTURE_2026-10-02.md).
 
 The [original release record](validation/RELEASE_V039_2026-10-01.md) contains the source pin,
 ZIP hash, final host/ARM and stock BusyBox checks, published-download verification,
@@ -43,9 +45,16 @@ then Enter. Change the drive letter if needed; no Shift characters are required.
 sh /tmp/mnt/sda1/trial
 ```
 
-After successful installation, disconnect the installation USB, connect wired
-AA, and start the next normal boot. Recording starts automatically; menu `2`
-is optional. Use AA and the installation USB in turn through the single port. After parking,
+After successful installation, use a normal power cycle and return to the USB
+shell **while parked**. Before moving, use menu `2` to check
+`one_boot=consumed_this_boot`, nonzero `retained_bytes`, and
+`collector_poll_recent=observed`. Ignition off/on alone does not prove a CMU
+Linux reboot. If any of these startup observations is absent, export available
+evidence with `3`, then reopen the menu with the same command and disarm with
+`4`; do not proceed with that trial. A parked
+sensor-free status can exit nonzero even when these individual startup checks
+are present. Then swap the USB for AA or its dongle and check normal AA/touch
+operation while parked. Menu `2` does not itself start capture. After parking,
 disconnect AA, reconnect the USB, return to the shell and choose `3` directly.
 If shell reentry requires a normal reboot, retrieve the retained previous-boot
 logs without reinstalling or rearming. A nonzero `finish_exit` means current-boot
@@ -61,7 +70,8 @@ is retained separately.
 The [OEM execution and account correction](validation/OEM_RUNTIME_2026-09-29.md)
 supersedes the earlier non-root `cmu` test assumption: stock `cmu` is UID 0,
 so the separate collector uses the existing non-root `service` account.
-Stock-kernel/OEM service execution remains incomplete and is not vehicle validation.
+Stock-kernel/OEM service execution remains incomplete; the empty field archive
+does not validate live capture.
 
 ## Goal and current implementation
 

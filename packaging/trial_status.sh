@@ -16,10 +16,22 @@ now=$(awk 'NR==1 && $1 ~ /^[0-9]+\.[0-9]+$/ {print $1}' "$ROOT/proc/uptime")
 valid_boot_id "$boot_id" || fail 'Invalid current boot ID'
 # A guard marker alone proves neither a live process nor successful capture.
 oneboot=unconfirmed
+guard_last_boot=missing
 if [ -e "$BASE/guard/last-boot" ] || [ -L "$BASE/guard/last-boot" ]; then
     regular "$BASE/guard/last-boot"
     [ "$(wc -c < "$BASE/guard/last-boot")" -le 37 ] || fail 'Invalid guard boot marker'
-    [ "$(cat "$BASE/guard/last-boot")" != "$boot_id" ] || oneboot=consumed_this_boot
+    last_boot=$(cat "$BASE/guard/last-boot")
+    valid_boot_id "$last_boot" || fail 'Invalid guard boot marker'
+    guard_last_boot=different
+    if [ "$last_boot" = "$boot_id" ]; then
+        guard_last_boot=current
+        oneboot=consumed_this_boot
+    fi
+fi
+guard_consumed=absent
+if [ -e "$BASE/guard/consumed" ] || [ -L "$BASE/guard/consumed" ]; then
+    regular "$BASE/guard/consumed"
+    guard_consumed=present
 fi
 if [ -e "$BASE/guard/arm" ] || [ -L "$BASE/guard/arm" ]; then
     regular "$BASE/guard/arm"
@@ -44,6 +56,7 @@ done
 echo "Parked capture evidence only; this does not approve driving or ASSIST."
 echo "current_boot_id=$boot_id. Recent checks can be unavailable after AA disconnect or reboot; retained rows are reported separately."
 echo "one_boot=$oneboot retained_bytes=$retained trace_cap_bytes=25165824 collector_cap_bytes=2097152 (24+2 MiB, rotates)"
+echo "guard_last_boot=$guard_last_boot guard_consumed=$guard_consumed; markers alone do not prove collector or runtime capture."
 echo 'Retention duration is unknown until this vehicle log rate is measured. Export at the first parked USB return, without reinstalling or rearming. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
 space_ok=0
 space_free=$(storage_free_kib "$persist") || space_free=unknown
