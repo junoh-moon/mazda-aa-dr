@@ -26,6 +26,7 @@ for arg in "$@"; do
     esac
 done
 [ -z "$ROOT" ] || [ "$ALLOW_REMOUNT" = 0 ] || fail 'No remounts permitted for fixtures'
+if [ "$MODE" != OFF ]; then prepare_arm_boot; fi
 # Published bundles carry a full manifest; developer bundles still use the
 # mandatory per-binary hashes below. Do not require a separate user command.
 if [ -e "$HERE/SHA256SUMS" ] || [ -L "$HERE/SHA256SUMS" ]; then
@@ -97,6 +98,8 @@ mount_rw "$ROOT/usr/bin"
 mkdir -p "$BASE/guard"
 chmod 0700 "$BASE/guard"
 if [ -z "$ROOT" ]; then chown 0 "$BASE" "$BASE/guard"; fi
+# A retry must not reuse the old trial's boot marker if later staging fails.
+if [ "$MODE" != OFF ]; then stash_arm_boot; fi
 # No old arm may survive a partial replacement.
 rm -f "$BASE/guard/arm"
 clear_capture_markers
@@ -171,11 +174,19 @@ if [ -z "$ROOT" ]; then
 else
     echo 'Fixture staged only; target guard not executed.'
 fi
+if [ "$MODE" != OFF ]; then
+    if ! record_arm_boot; then
+        rm -f "$BASE/guard/arm" || fail 'Arming boot marker failed and arm could not be revoked'
+        sync
+        fail 'Arming boot marker failed; trial arm revoked. Autostart remains staged but disarmed; use menu 4 to remove it before retrying.'
+    fi
+fi
+ARM_PENDING=0
 echo "Staged $MODE for one guarded boot. Persistent service configs retain existing touch only. No processes restarted."
 if [ -z "$ROOT" ] && [ "$MODE" != OFF ]; then
     echo 'Install steps finished. A vehicle ignition cycle alone does not prove a new CMU Linux boot.'
     echo 'Remain parked with the engine actually running and this USB connected. Choose trial menu 5 to request CMU reboot; do not press the engine start/stop button.'
     echo "The next guarded CMU startup requests automatic $MODE capture; no driving-time commands are needed."
-    echo 'After CMU restart reopen the USB shell and trial menu 2: check reboot_check=new_boot_observed, one_boot=consumed_this_boot, retained_bytes>0 and collector_poll_recent=observed.'
+    echo "After CMU restart reopen trial menu 2: check reboot_check=new_boot_observed, startup_state=guard_committed_after_new_boot, one_boot=consumed_this_boot, config_mode=$MODE, runtime_disable_next_start=absent, retained_bytes>0 and collector_poll_recent=observed."
     echo 'Then exit the menu and replace the USB with the AA dongle while parked, keeping the same engine/CMU boot.'
 fi

@@ -11,6 +11,7 @@ import unittest
 import test_synthetic_install
 
 BOOT = '12345678-1234-1234-1234-123456789abc\n'
+MANIFEST = 'mx5dr-one-boot-v3\n' + ('a' * 64 + '\n') * 8
 
 
 class TrialMenuTests(unittest.TestCase):
@@ -26,7 +27,7 @@ class TrialMenuTests(unittest.TestCase):
         self.base = self.root / 'data_persist/mx5-aa-dr'
         self.logs = self.base / 'logs'
         bootfile = self.root / 'proc/sys/kernel/random/boot_id'
-        bootfile.parent.mkdir(parents=True)
+        bootfile.parent.mkdir(parents=True, exist_ok=True)
         bootfile.write_text(BOOT)
         (self.root / 'proc/uptime').write_text('100.00 1.00\n')
         # Linux exposes /proc/mounts as a kernel-owned relative symlink. The
@@ -80,6 +81,25 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('mode=SHADOW', (self.base / 'mx5dr.conf').read_text())
         self.assertIn('ONE-BOOT BEGIN', self.fixture.autostart.read_text())
         self.assertFalse(list(self.usb.glob('mx5dr-logs-*')))
+
+    def test_menu_two_distinguishes_arming_boot_from_new_linux_boot(self):
+        installed = self.menu('1\n')
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        self.assertEqual((self.base / 'guard/armed-boot').read_text(), BOOT)
+        # This host fixture stages files but cannot execute the ARM guard.
+        (self.base / 'guard/arm').write_text(MANIFEST)
+        before = self.menu('2\n0\n')
+        self.assertIn('current_boot_id=' + BOOT.strip(), before.stdout)
+        self.assertIn('startup_state=awaiting_linux_reboot', before.stdout)
+        self.assertIn('one_boot=arm_present retained_bytes=0', before.stdout)
+        self.assertIn('startup_state=awaiting_linux_reboot',
+                      (self.usb / 'startup-result.txt').read_text())
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text(
+            BOOT.replace('12345678', '87654321'))
+        after = self.menu('2\n0\n')
+        self.assertIn('startup_state=new_linux_boot_arm_unconsumed', after.stdout)
+        self.assertIn('one_boot=arm_present retained_bytes=0', after.stdout)
+        self.assertFalse((self.base / 'guard/last-boot').exists())
 
     def test_install_failure_is_not_reported_as_success(self):
         (self.usb / 'libmx5dr.so').write_bytes(b'damaged')
@@ -293,6 +313,16 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('mounted USB', result.stdout + result.stderr)
         self.assertFalse((self.logs / 'capture.stop').exists())
         self.assertFalse(list(self.usb.glob('mx5dr-logs-*')))
+
+    def test_hidden_usb_mount_does_not_stop_capture(self):
+        self.prepare_logs()
+        self.mounts.write_text(
+            f'/dev/sdb1 {self.usb} vfat rw 0 0\n'
+            f'tmpfs {self.usb} tmpfs rw 0 0\n')
+        result = self.menu('3\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('mounted USB', result.stdout + result.stderr)
+        self.assertFalse((self.logs / 'capture.stop').exists())
 
     def test_other_mount_does_not_make_the_launching_usb_mounted(self):
         self.prepare_logs()

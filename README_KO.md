@@ -13,12 +13,12 @@
 
 [과거 첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
-현재 공개판은 [v0.3.10-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)입니다.
+현재 공개 시험판은 [v0.3.10-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)입니다.
 원본 LDS callback·캐시의 필드 할당 출처와 응답 식별자를 관측하는 제품을
 자동 설치하고 기존 용량 제한 AA 기록에 연결합니다. 작성한 기동 경계에서
 원본 라이브러리의 응답 9건이 실제 AA worker까지 전달된
 [제품 실행](validation/LDS_PRODUCT_RUNTIME_2026-10-02.md)과
-[발행 검증](validation/RELEASE_V0310_2026-10-02.md)을 확인하십시오.
+[발행 검증](validation/RELEASE_V0310_SHADOW2_2026-10-02.md)을 확인하십시오.
 순정 CMU 재부팅 요청·전후 boot ID 대조·전체 설치 폴더 진단의 USB 회수와
 ACC·엔진이 꺼진 ON·실제 엔진 가동을 구분한 절차도 유지합니다.
 원본 AA 연결 등록에서 서버 주소 GUID와 client 고유 이름을 소유 복사하고,
@@ -26,7 +26,7 @@ ACC·엔진이 꺼진 ON·실제 엔진 가동을 구분한 절차도 유지합�
 보존하며, 생산자 측정 시각이나 센서 자격으로 인정하지 않습니다.
 원본 위치 아홉 필드와 GPS holdout의 호출·generation 연결, 누락·중복 진단,
 기존 MODEL 비교를 유지합니다. 기준점·콜백 및 큐 폐기 경계 수정도 포함합니다.
-물리 센서의 시각·품질과 실제 자격 입력 공급부는 미완료이므로
+실제 LDS 수신·측정 자격은 미검증이고 live 위치 입력 공급부는 미구현·미검증이므로
 **ASSIST는 계속 비활성**입니다.
 
 **v0.3.9-shadow.1의 회수 실패 복구:** 핫픽스로 USB 파일을 교체하고 아래
@@ -36,7 +36,7 @@ ACC·엔진이 꺼진 ON·실제 엔진 가동을 구분한 절차도 유지합�
 실제 후속 회수는 성공했지만 trace·collector 기록은 없었습니다.
 [빈 기록 분석](validation/FIELD_V039_EMPTY_CAPTURE_2026-10-02.md)을 확인하십시오.
 사용자는 설치 후 차량 점화 OFF/ON과 무선 AA 동글·S25를 이용한 주행을
-확인했으며, 실제 CMU Linux 새 부팅은 확인하지 못했습니다. 공개 `.3`은
+확인했으며, 실제 CMU Linux 새 부팅은 확인하지 못했습니다. 공개 `v0.3.9-shadow.3`은
 guard 표식 진단, 메뉴 `5`의 순정 CMU 재부팅 요청과 확대 회수를 포함합니다.
 재부팅 요청 수락과 실제 새 부팅 여부는 별도로 확인합니다.
 
@@ -57,8 +57,15 @@ sh /tmp/mnt/sda1/trial
 별도로 허용된 다음 시험에서는 [상세 설치 안내](packaging/USB_START_KO.md)에
 따라 중립·주차브레이크·실제 엔진 가동을 유지하고 `1` 설치 뒤 `5`로 CMU
 재부팅을 요청하십시오. 시동 버튼을 누르거나 USB를 빼지 마십시오.
-화면 복귀 후 USB·셸로 돌아와 `2`에서 새 boot ID, 현재 부팅의 가드 소비와
-collector 기록을 확인하십시오. `0`으로 종료한 뒤 추가 시동·CMU 재부팅 없이
+화면 복귀 후 USB·셸로 돌아와 `2`에서 새 boot ID,
+`startup_state=guard_committed_after_new_boot`, 현재 부팅의 가드 소비와
+`config_mode=SHADOW`, `runtime_disable_next_start=absent`, 전체 보존 파일의
+바이트 수와 현재 collector의 최근 poll을 확인하십시오. 이 일곱 근거는 공개
+`v0.3.10-shadow.2` 시험판에 해당하며 이전 `v0.3.10-shadow.1`에는 `startup_state`, `config_mode`,
+`runtime_disable_next_start` 출력이 없습니다. 새 부팅 직후 가드 예약이 남아 있거나
+collector poll이 아직 없으면 주차 상태에서 60초 기다린 뒤 `2`를 한 번만 다시
+확인하십시오. 여전히 일곱 근거가 모이지 않으면 `3`으로 회수하고 `4`로 예약을
+해제하십시오. 확인되면 `0`으로 종료한 뒤 추가 시동·CMU 재부팅 없이
 USB를 AA/동글로 교체하십시오.
 AA 사용 중 셸을 열 필요는 없습니다. 시험 후
 주차한 다음 AA를 분리하고 USB·셸로 돌아와 같은 메뉴의 **`3`으로 바로 회수**하십시오.

@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import tarfile
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -29,6 +30,9 @@ class PackagingTests(unittest.TestCase):
         self.root.mkdir()
         (self.root / '.mx5dr-fixture').touch()
         (self.root / 'data_persist').mkdir()
+        bootfile = self.root / 'proc/sys/kernel/random/boot_id'
+        bootfile.parent.mkdir(parents=True)
+        bootfile.write_text('12345678-1234-1234-1234-123456789abc\n')
         self.bundle = Path(self.tmp.name) / 'bundle'
         shutil.copytree(PACK, self.bundle)
         # Deliberately fake test-only ELF prefix. No executable code.
@@ -114,6 +118,118 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
         self.assertTrue((base / 'libmx5dr.so').exists())  # retain mapped inode/file
         self.assertIn('mode=OFF', (base / 'mx5dr.conf').read_text())
+
+    def test_invalid_arming_boot_id_does_not_publish_autostart(self):
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text('invalid\n')
+        result = self.run_script('install.sh', '--mode=SHADOW', ok=False)
+        self.assertIn('Invalid arming boot ID', result.stderr)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+        guard = self.root / 'data_persist/mx5-aa-dr/guard'
+        self.assertFalse((guard / 'arm').exists())
+        self.assertFalse(list(guard.glob('*.new.*')))
+
+    def test_multiline_arming_boot_id_is_rejected_before_mutation(self):
+        bootfile = self.root / 'proc/sys/kernel/random/boot_id'
+        for content in (b'12345678-1234-1234-1234-123456789abc\ninvalid\n',
+                        b'12345678-1234-1234-1234-123456789abc\n\n',
+                        b'12345678-1234-1234-1234-123456789abc\x00'):
+            with self.subTest(content=content):
+                bootfile.write_bytes(content)
+                result = self.run_script('install.sh', '--mode=SHADOW', ok=False)
+                self.assertIn('Invalid arming boot ID', result.stderr)
+                self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+                self.assertFalse((self.root / 'data_persist/mx5-aa-dr/guard/arm').exists())
+
+    def test_rearm_invalid_boot_id_preserves_existing_arm_diagnostics(self):
+        self.run_script('install.sh', '--mode=SHADOW')
+        previous = (self.root / 'data_persist/mx5-aa-dr/guard/armed-boot').read_bytes()
+        existing_arm = self.root / 'data_persist/mx5-aa-dr/guard/arm'
+        existing_arm.write_text('previous arm fixture\n')
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text('invalid\n')
+        self.run_script('arm.sh', '--mode=SHADOW', ok=False)
+        self.assertEqual((self.root / 'data_persist/mx5-aa-dr/guard/armed-boot').read_bytes(), previous)
+        self.assertEqual(existing_arm.read_text(), 'previous arm fixture\n')
+
+    def test_retry_invalid_boot_id_preserves_existing_install_and_log(self):
+        self.run_script('install.sh', '--mode=SHADOW')
+        base = self.root / 'data_persist/mx5-aa-dr'
+        armed = (base / 'guard/armed-boot').read_bytes()
+        (base / 'guard/arm').write_text('previous arm fixture\n')
+        (base / 'logs/capture.done').write_text('previous capture\n')
+        autostart = self.autostart.read_bytes()
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text('invalid\n')
+        result = self.run_script('install.sh', '--mode=SHADOW', ok=False)
+        self.assertIn('Invalid arming boot ID', result.stderr)
+        self.assertEqual((base / 'guard/armed-boot').read_bytes(), armed)
+        self.assertEqual((base / 'guard/arm').read_text(), 'previous arm fixture\n')
+        self.assertEqual((base / 'logs/capture.done').read_text(), 'previous capture\n')
+        self.assertEqual(self.autostart.read_bytes(), autostart)
+
+    def test_failed_rearm_cannot_pair_old_boot_with_old_consumption(self):
+        self.run_script('install.sh', '--mode=SHADOW')
+        base = self.root / 'data_persist/mx5-aa-dr'
+        old = (base / 'guard/armed-boot').read_bytes()
+        (base / 'guard/arm').write_text('old arm fixture\n')
+        (base / 'logs/trace.0.jsonl').write_text('old raw fixture\n')
+        # Failure after the old boot marker has been preserved separately.
+        self.sm.write_text(self.sm.read_text().replace(
+            'name="jciAAPA"', 'name="broken-AAPA"'))
+        self.run_script('arm.sh', '--mode=SHADOW', ok=False)
+        self.assertFalse((base / 'guard/armed-boot').exists())
+        self.assertEqual((base / 'guard/armed-boot.previous').read_bytes(), old)
+        self.assertFalse((base / 'guard/arm').exists())
+        self.assertEqual((base / 'logs/trace.0.jsonl').read_text(), 'old raw fixture\n')
+
+    def test_invalid_prior_boot_marker_stops_before_autostart(self):
+        marker = self.root / 'data_persist/mx5-aa-dr/guard/armed-boot'
+        marker.mkdir(parents=True)
+        arm = marker.parent / 'arm'
+        arm.write_text('old arm fixture\n')
+        result = self.run_script('install.sh', '--mode=SHADOW', ok=False)
+        self.assertIn('Invalid prior arming boot marker', result.stderr)
+        self.assertFalse(arm.exists())
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+        self.run_script('uninstall.sh')
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+
+    def test_malformed_prior_marker_preserves_previous_evidence_and_revokes_arm(self):
+        self.run_script('install.sh', '--mode=SHADOW')
+        guard = self.root / 'data_persist/mx5-aa-dr/guard'
+        previous = guard / 'armed-boot.previous'
+        previous.write_text('87654321-1234-1234-1234-123456789abc\n')
+        (guard / 'armed-boot').write_text('corrupt\n')
+        (guard / 'arm').write_text('old arm fixture\n')
+        result = self.run_script('arm.sh', '--mode=SHADOW', ok=False)
+        self.assertIn('Invalid prior arming boot marker', result.stderr)
+        self.assertEqual((guard / 'armed-boot').read_text(), 'corrupt\n')
+        self.assertEqual(previous.read_text(), '87654321-1234-1234-1234-123456789abc\n')
+        self.assertFalse((guard / 'arm').exists())
+
+    def test_malformed_previous_marker_without_current_blocks_rearm(self):
+        self.run_script('install.sh', '--mode=SHADOW')
+        guard = self.root / 'data_persist/mx5-aa-dr/guard'
+        (guard / 'armed-boot').unlink()
+        (guard / 'armed-boot.previous').write_text('corrupt\n')
+        (guard / 'arm').write_text('old arm fixture\n')
+        result = self.run_script('arm.sh', '--mode=SHADOW', ok=False)
+        self.assertIn('Invalid previous arming boot marker', result.stderr)
+        self.assertFalse((guard / 'arm').exists())
+        self.assertFalse((guard / 'armed-boot').exists())
+
+    def test_signal_after_stashing_boot_marker_revokes_old_arm(self):
+        self.run_script('install.sh', '--mode=SHADOW')
+        arm = self.root / 'data_persist/mx5-aa-dr/guard/arm'
+        prior = arm.parent / 'armed-boot'
+        previous_id = prior.read_bytes()
+        command = (f'. "{self.bundle / "common.sh"}"; '
+                   'ALLOW_REMOUNT=0; prepare_storage; prepare_arm_boot; '
+                   f': > "{arm}"; stash_arm_boot; kill -TERM $$')
+        result = subprocess.run(['sh', '-c', command], capture_output=True, text=True,
+                                env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(arm.exists())
+        self.assertFalse(prior.exists())
+        self.assertEqual((arm.parent / 'armed-boot.previous').read_bytes(), previous_id)
 
     def test_collector_payload_checksum_is_guarded_before_launcher_write(self):
         (self.bundle / 'mx5dr-collector').write_bytes(b'wrong collector')
@@ -247,6 +363,8 @@ class PackagingTests(unittest.TestCase):
 
     def test_export_is_local_and_preserves_source(self):
         self.run_script('install.sh')
+        guard = self.root / 'data_persist/mx5-aa-dr/guard'
+        (guard / 'arm').write_text('fixture arm\n')
         log = self.root / 'data_persist/mx5-aa-dr/logs/events.jsonl'
         log.write_text('{"test_only":true}\n')
         dest = Path(self.tmp.name) / 'usb'
@@ -255,6 +373,34 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(len(list(dest.glob('*.tar'))), 1)
         self.assertEqual(len(list(dest.glob('*.sha256'))), 1)
         self.assertTrue(log.exists())
+        with tarfile.open(next(dest.glob('*.tar'))) as archive:
+            marker, = [m for m in archive.getmembers()
+                       if m.name.endswith('/mx5-aa-dr/guard/armed-boot')]
+            arm, = [m for m in archive.getmembers()
+                    if m.name.endswith('/mx5-aa-dr/guard/arm')]
+            self.assertEqual(archive.extractfile(marker).read(),
+                             b'12345678-1234-1234-1234-123456789abc\n')
+            self.assertEqual(archive.extractfile(arm).read(), b'fixture arm\n')
+
+    def test_full_export_keeps_bad_guard_marker_without_dereference(self):
+        self.run_script('install.sh')
+        base = self.root / 'data_persist/mx5-aa-dr'
+        (base / 'logs/events.jsonl').write_text('{"raw":"retained"}\n')
+        guard = base / 'guard'
+        (guard / 'arm').write_text('oversized\n' * 60)
+        (guard / 'last-boot').symlink_to('missing-target')
+        dest = Path(self.tmp.name) / 'usb'
+        dest.mkdir()
+        self.run_script('export_logs.sh', str(dest))
+        with tarfile.open(next(dest.glob('*.tar'))) as archive:
+            members = archive.getmembers()
+            raw, = [m for m in members if m.name.endswith('/mx5-aa-dr/logs/events.jsonl')]
+            arm, = [m for m in members if m.name.endswith('/mx5-aa-dr/guard/arm')]
+            link, = [m for m in members if m.name.endswith('/mx5-aa-dr/guard/last-boot')]
+            self.assertEqual(archive.extractfile(raw).read(), b'{"raw":"retained"}\n')
+            self.assertEqual(archive.extractfile(arm).read(), b'oversized\n' * 60)
+            self.assertTrue(link.issym())
+            self.assertEqual(link.linkname, 'missing-target')
 
     def test_shadow_trial_wraps_both_services_and_rearm_removes_tap(self):
         self.add_touch(multiline=True)

@@ -194,6 +194,8 @@ if [ "$persist_ok" = 1 ] && [ -d "$BASE" ] && [ ! -L "$BASE" ]; then
 else partial=1; fi
 
 marker guard.last_boot "$BASE/guard/last-boot" boot "$guard_ok"
+marker guard.armed_boot "$BASE/guard/armed-boot" boot "$guard_ok"
+marker guard.previous_armed_boot "$BASE/guard/armed-boot.previous" boot "$guard_ok"
 marker guard.arm "$BASE/guard/arm" manifest "$guard_ok"
 marker guard.consumed "$BASE/guard/consumed" manifest "$guard_ok"
 marker guard.normal_source "$BASE/guard/normal.source.sha256" sha "$guard_ok"
@@ -208,7 +210,8 @@ if [ "$guard_ok" = 1 ]; then
         inventory=$({
             {
                 if find "$BASE/guard" -mindepth 1 -maxdepth 1 \
-                    ! -name last-boot ! -name arm ! -name consumed \
+                    ! -name last-boot ! -name armed-boot ! -name armed-boot.previous \
+                    ! -name arm ! -name consumed \
                     ! -name normal.source.sha256 ! -name wcp.source.sha256 \
                     ! -name normal.trial ! -name wcp.trial ! -name mx5dr-guard ! -name lock \
                     -print0 2>/dev/null; then scan_status=0; else scan_status=$?; fi

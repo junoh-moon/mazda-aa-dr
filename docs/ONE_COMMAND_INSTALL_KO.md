@@ -1,19 +1,21 @@
 # USB 숫자 메뉴로 설치·CMU 재부팅·회수
 
 대상은 **2019 MX-5 ND2 6MT / Mazda Connect NA 74.00.324A**입니다.
-현재 공개판은 [v0.3.10-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)이며,
-설치 파일 `mazda-aa-dr-v0.3.10-shadow.1.zip`의 SHA-256은
-`630d34be2cfe342a215d92a59d116e2ea1c61f00cb1154938083b85d126ef9a5`입니다.
+현재 공개 시험판은 [v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)이며,
+설치 파일 `mazda-aa-dr-v0.3.10-shadow.2.zip`의 SHA-256은
+`76d6049db04631352ee7b37cb5f4f0294ad9b36e123dc8ad05b062a1a59d4148`입니다.
 GitHub의 자동 `Source code (zip)`은 설치 ZIP이 아닙니다.
 
-**아래 `1 → 5 → 2 → 0`과 확대 회수는 공개 v0.3.9-shadow.3부터 도입한 절차이며 이번 판에서도 유지합니다.**
+**아래 `1 → 5 → 2 → 0`과 확대 회수는 `v0.3.9-shadow.3`부터 가능하지만, 일곱 근거 중
+`startup_state`, `config_mode`, `runtime_disable_next_start`는 `v0.3.10-shadow.2` 시험판에서 출력합니다.**
 이전 `v0.3.9-shadow.2`에는 메뉴 `5`와 새 부팅 대조·전체 설치 폴더 회수가 없습니다.
-[발행·재다운로드 검증](../validation/RELEASE_V0310_2026-10-02.md)을 확인하십시오.
+현재 공개판의 [발행·재다운로드 검증](../validation/RELEASE_V0310_SHADOW2_2026-10-02.md)과
+[이전 v0.3.9-shadow.3 검증](../validation/RELEASE_V039_SHADOW3_2026-10-02.md)을 구분하십시오.
 첫 실차 회수 archive에는 trace·collector 기록이 없었습니다.
 [빈 기록 분석](../validation/FIELD_V039_EMPTY_CAPTURE_2026-10-02.md)을 보존하며,
 지금 추가 방문·재설치·재주행을 요청하지 않습니다.
 
-기존 자료를 회수할 때는 새 공개 ZIP의 한 줄과 `3`을
+기존 자료를 회수할 때는 공개 `v0.3.10-shadow.2`의 한 줄과 `3`을
 사용합니다. 이미 제거했어도 남은 파일은 회수하지만, 기록이 없던 구간을
 복원하거나 같은 주행을 반복할 이유가 되지는 않습니다.
 
@@ -48,20 +50,31 @@ ACC와 엔진이 꺼진 ON은 실제 엔진 가동과 다릅니다. 둘 다 시�
    요청합니다. **시동 버튼을 누르지 말고 엔진과 USB 연결을 그대로 유지하십시오.**
    차량 시동 OFF/ON은 이 CMU 재부팅을 대신하지 않습니다.
 4. CMU 화면이 돌아오면 같은 USB의 MP3로 셸을 다시 열고, 같은 한 줄 뒤
-   **`2`와 Enter**를 누르십시오. 다음 네 줄을 각각 확인하십시오.
+   **`2`와 Enter**를 누르십시오. `v0.3.10-shadow.2` 시험판에서는 다음 일곱 줄을 각각 확인하십시오.
 
    - `reboot_check=new_boot_observed`
+   - `startup_state=guard_committed_after_new_boot`
    - `one_boot=consumed_this_boot`
+   - `config_mode=SHADOW`
+   - `runtime_disable_next_start=absent`
    - `retained_bytes`가 0보다 큼
    - `collector_poll_recent=observed`
 
+   양성 `startup_state`는 guard v3가 소비한 설정 해시와 현재 설정이 일치한
+   `guard_config_binding=matched`일 때만 출력됩니다. `config_mode` 자체는
+   현재 설정 파일의 값이며 실행 중인 AA 모드의 증명은 아닙니다. 가드 표식도
+   SM이 시험 경로를 받아 사용했다는 확인은 아닙니다.
    AA가 없어도 collector는 기동할 수 있습니다. 모든 센서 수신이나 전체
    `status_exit=0`을 요구하지 않으며, 정차·AA 분리로 종료 코드가 1일 수 있습니다.
-   네 근거 중 하나라도 없으면 이동하지 말고 `3`으로 자료를 회수하십시오.
+   화면 복귀 직후 `startup_state=new_linux_boot_arm_unconsumed`이거나 collector
+   poll만 아직 없으면 주차 상태로 60초 기다린 뒤 `2`를 한 번 더 확인하십시오.
+   그래도 일곱 근거 중 하나라도 없으면 이동하지 말고 `3`으로 자료를 회수하십시오.
    메뉴 종료 후 같은 한 줄로 돌아와 `4`로 예약을 해제하고, 임의로 재설치하지 마십시오.
+   가드 부팅 표식이 `invalid`이면 수동으로 고치지 말고 원본을 함께 보존하십시오.
 5. 확인됐으면 **`0`으로 메뉴를 끝내고 USB를 뺀 뒤 무선 AA 동글을 연결하십시오.**
    시동이나 CMU를 다시 재부팅하지 말고, 기존 AA·터치를 주차 중 확인하십시오.
-   `2`는 조회 명령이며 수집은 선택된 부팅에 자동으로 시작됩니다.
+   `2`는 조회 명령이며 수집은 선택된 부팅에 자동으로 시작됩니다. 이 근거는
+   VBS tap 로딩·원시 센서 수신이나 MODEL 계산 성공을 보장하지 않습니다.
 
 별도로 정한 시험이 끝나면 주차한 뒤 AA를 분리하고 같은 USB를 연결하십시오.
 MP3 셸에서 같은 한 줄 뒤 바로 **`3`과 Enter**로 종료·회수하십시오. 가능한 경우
@@ -73,6 +86,8 @@ MP3 셸에서 같은 한 줄 뒤 바로 **`3`과 Enter**로 종료·회수하십
 잘려도 보존 원시 자료의 회수를 계속합니다. 현재 종료 확인의 `finish_exit`와
 자료 회수의 `export_exit`를 구분하십시오. `export_exit=0`은 확보 가능한 자료의
 회수 성공이며, 정상 수집·계산이나 재부팅 완료를 뜻하지 않습니다.
+회수 후 기본 설정 복귀는 주차 중 메뉴 `4`로 제거한 다음 `5`로 새 CMU 부팅을
+요청하고, `2`에서 새 부팅 ID·OFF 설정·arm 부재를 확인하십시오.
 
 USB의 archive·`.sha256`·결과 텍스트를 함께 비공개로 보관하십시오. tar 실패로
 남은 `.partial`과 USB 진단 폴더도 버리지 마십시오. archive와 진단 임시 파일은

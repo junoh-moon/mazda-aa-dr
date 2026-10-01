@@ -7,6 +7,7 @@ ALLOW_REMOUNT=1
 MODE=OBSERVE
 for arg in "$@"; do case "$arg" in --remount) ALLOW_REMOUNT=1;; --mode=OBSERVE|--mode=SCRUB|--mode=SHADOW) MODE=${arg#--mode=};; *) fail "Unknown option $arg";; esac; done
 [ -z "$ROOT" ] || [ "$ALLOW_REMOUNT" = 0 ] || fail 'No remounts permitted for fixtures'
+prepare_arm_boot
 verify_firmware
 require_trial_space 0
 prepare_collector_storage
@@ -15,6 +16,7 @@ prepare_collector_storage
 regular "$BASE/guard/mx5dr-guard"
 regular "$BASE/libmx5dr-vimtap.so"
 regular "$BASE/libmx5dr-ldstap.so"
+stash_arm_boot
 # Disarm first: interrupted template refresh must not retain a previous authorization.
 rm -f "$BASE/guard/arm"
 clear_capture_markers
@@ -46,4 +48,10 @@ for trial in normal wcp; do
 done
 sync
 [ -n "$ROOT" ] || "$BASE/guard/mx5dr-guard" arm || fail 'Arm command failed; inspect guard status before reboot'
+if ! record_arm_boot; then
+    rm -f "$BASE/guard/arm" || fail 'Arming boot marker failed and arm could not be revoked'
+    sync
+    fail 'Arming boot marker failed; trial arm revoked. Templates remain staged; remove the trial before retrying.'
+fi
+ARM_PENDING=0
 echo "Armed one future boot for $MODE. Same-boot repeat trial remains blocked. No restart."
