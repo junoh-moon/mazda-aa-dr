@@ -20,6 +20,7 @@
 #include "model_session.h"
 #include "model_bus.h"
 #include "lds_sideband.h"
+#include "lds_request_source.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -339,11 +340,23 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
   flush_motion(j,batch);
 }
 
-void journal_health(Journal& j,uint64_t now,bool capture,bool computation) {
+void journal_health(Journal& j,uint64_t now,bool capture,bool computation,
+                    const mx5::runtime::LdsRequestSource* source=0) {
   const A::RequestHookHealth h=A::request_hook_health();
   const A::SessionHealth s=A::session_hook_health();
   const A::BusHealth b=A::bus_hook_health();
-  char line[1000];
+  char line[1450],source_status[420]="";
+  if(source) {
+    const mx5::runtime::LdsRequestSource::Status& status=source->status();
+    const int n=snprintf(source_status,sizeof source_status,
+        ",\"lds_request_source\":{\"association_only\":true,\"entries\":%u,"
+        "\"positions_total\":%llu,\"records_total\":%llu,\"matches_total\":%llu,"
+        "\"conflicts_total\":%llu,\"retirements_total\":%llu,\"rejected_total\":%llu}",
+        status.entries,(unsigned long long)status.positions,(unsigned long long)status.records,
+        (unsigned long long)status.matches,(unsigned long long)status.conflicts,
+        (unsigned long long)status.retirements,(unsigned long long)status.rejected);
+    if(n<=0 || size_t(n)>=sizeof source_status) { j.fail();return; }
+  }
   const int n=snprintf(line,sizeof line,
       "{\"kind\":\"health\",\"mono_ns\":%llu,\"dropped\":%llu,\"hook_installed\":%s,"
       "\"runtime_mode\":%u,\"audit_fault\":%u,\"capture_active\":%s,"
@@ -351,14 +364,14 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation) {
       "\"prepared\":%s,\"abi_fault\":%s,\"result\":\"%s\",\"loss_epoch\":%llu,"
       "\"requests\":%u,\"workers\":%u,\"loss_reasons\":%u,\"exhausted\":%s},"
       "\"session_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u},"
-      "\"bus_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u}}",
+      "\"bus_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u}%s}",
       (unsigned long long)now,(unsigned long long)queue.dropped(),hook_installed?"true":"false",
       unsigned(A::mode()),__sync_fetch_and_add(&audit_fault,0),capture?"true":"false",
       computation?"true":"false",h.prepared?"true":"false",h.abi_fault?"true":"false",
       A::R::result_name(h.result),(unsigned long long)h.ledger.loss_epoch,h.ledger.requests,
       h.ledger.workers,h.ledger.loss_reasons,h.ledger.exhausted?"true":"false",
       s.prepared?"true":"false",s.contexts,unsigned(A::SESSION_CONTEXT_CAPACITY),s.faults,
-      b.prepared?"true":"false",b.contexts,unsigned(A::BUS_CONTEXT_CAPACITY),b.faults);
+      b.prepared?"true":"false",b.contexts,unsigned(A::BUS_CONTEXT_CAPACITY),b.faults,source_status);
   if(n<=0 || size_t(n)>=sizeof line)j.fail();else j.line(line);
 }
 bool stop_requested(const char* root) {
@@ -388,7 +401,8 @@ bool drain_capture_tail(Journal& j) {
 }
 // Only after input is frozen and the bounded final drain has completed.
 // No acknowledgement can precede durable terminal records.
-bool finish_capture(Journal& j,const char* boot_id,uint64_t cutoff,uint64_t now) {
+bool finish_capture(Journal& j,const char* boot_id,uint64_t cutoff,uint64_t now,
+                    const mx5::runtime::LdsRequestSource* source=0) {
   if(!cutoff || now<cutoff || !queue.drained()) { j.fail();return false; }
   // A producer may have returned its failed reservation before the sink's
   // disable_mutation call. The closed+drained acquire covers its sticky loss.
@@ -400,7 +414,7 @@ bool finish_capture(Journal& j,const char* boot_id,uint64_t cutoff,uint64_t now)
       "\"cutoff_ns\":%llu,\"bounded_final_drain\":true}",
       (unsigned long long)now,boot_id,(unsigned long long)cutoff);
   j.line(line);
-  journal_health(j,now,false,false);
+  journal_health(j,now,false,false,source);
   j.flush();
   if(j.failed || !j.f || fsync(fileno(j.f))) { j.fail();return false; }
   const bool close_failed=fclose(j.f)!=0;j.f=0;
@@ -523,7 +537,8 @@ void journal_assist(Journal& j,const mx5::runtime::AssistStatus& s,uint64_t now)
 namespace mx5 { namespace runtime {
 // Kept separate so the same bounded drain can be exercised with a perpetually
 // readable authored receiver as well as the real credentialed socket.
-template<class Receiver> static unsigned drain_lds(Journal& journal,Receiver& receiver) {
+template<class Receiver> static unsigned drain_lds(Journal& journal,Receiver& receiver,
+                                                  LdsRequestSource* source=0) {
   namespace L=lds_sideband;
   char line[L::JSON_CAPACITY];unsigned drained=0;
   while(drained<L::DRAIN_LIMIT&&!journal.failed) {
@@ -538,9 +553,14 @@ template<class Receiver> static unsigned drain_lds(Journal& journal,Receiver& re
       formatted=L::format_status(line,sizeof line,"rejected",diagnostic);
     }
     if(formatted)journal.line(line);
+    if(source && result==L::RECORD && formatted && !journal.failed)
+      source->sideband(record,diagnostic,clock_ns(0));
     // Do not spin on a broken descriptor or let metadata acquisition faults
     // suppress the independently queued OEM POSITION/SEND observations.
-    if(diagnostic.fault==L::SYSCALL_FAILED) { receiver.close_channel();break; }
+    if(diagnostic.fault==L::SYSCALL_FAILED) {
+      if(source)source->reset(clock_ns(0));
+      receiver.close_channel();break;
+    }
   }
   if(drained==L::DRAIN_LIMIT) {
     L::Diagnostic diagnostic=L::Diagnostic();diagnostic.received_ns=clock_ns(0);
@@ -548,13 +568,16 @@ template<class Receiver> static unsigned drain_lds(Journal& journal,Receiver& re
   }
   return drained;
 }
-void* run_worker_channels(const char* root,const char* motion_channel,const char* lds_channel,
-                          uid_t lds_uid,AssistWorker* assist) {
+void* run_worker_inputs(const char* root,const char* motion_channel,const char* lds_channel,
+                       uid_t lds_uid,AssistWorker* assist,LdsRequestSource* supplied_source) {
+  LdsRequestSource local_source;
+  LdsRequestSource& source=supplied_source?*supplied_source:local_source;
   // Stop on every exit, including startup failures before the main loop.
   struct StopAssist {
     AssistWorker* worker;
-    ~StopAssist() { if(worker)worker->stop(); }
-  } stop_assist={assist};
+    LdsRequestSource* source;
+    ~StopAssist() { if(worker)worker->stop();source->reset(clock_ns(0)); }
+  } stop_assist={assist,&source};
   // An explicit stop survives same-boot service restarts. Do not rotate or
   // append even a boot record after an acknowledged capture was closed.
   if(stop_requested(root)) { freeze_capture();return 0; }
@@ -593,6 +616,8 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
   N::MotionReceiver motion;
   mx5::runtime::ModelSession model_session;
   mx5::runtime::ModelBus model_bus;
+  ModelSession source_session;
+  ModelBus source_bus;
   const N::ModelProfile model=N::research_model_profile();
   mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
   const bool capture=config.mode==4 && motion.open_channel(motion_channel);
@@ -629,15 +654,24 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
   uint64_t last_assist_unpaired=0;
   AssistState last_assist_state=ASSIST_WAITING_SOURCE;
   uint64_t drain_calls=0;
+  bool source_disabled=false;
   mx5::runtime::WorkerTick model_tick;
   for (;;) {
     const uint64_t cutoff=clock_ns(0);
+    source.advance(cutoff);
+    // Observed lifecycle changes retire the association window. Unknown
+    // initial context is not a physical qualification or a reason to discard
+    // exact queued requests. reset's negative clock floor rejects old input.
+    const ModelSession::Update session_update=source_session.update(A::read_issue_session(),cutoff);
+    const ModelBus::Update bus_update=source_bus.update(A::read_position_bus(),cutoff);
+    if(session_update==ModelSession::CHANGED || bus_update==ModelBus::CHANGED)source.reset(cutoff);
     bool stopping=false;
     if(cutoff>=last_stop_check && cutoff-last_stop_check>=1000000000ULL) {
       last_stop_check=cutoff;
       stopping=stop_requested(root);
       if(stopping) {
         if(assist)assist->stop();
+        source.reset(cutoff);source_disabled=true;
         freeze_capture();
         if(shadow) {
           navigation.reset(navigation.context());
@@ -654,6 +688,8 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
       if(!format_observation(line,sizeof line,o)) { j.fail();continue; }
       j.line(line);
       if (o.kind == A::Observation::POSITION) {
+        if(!source_disabled && !j.failed && !__sync_fetch_and_add(&audit_fault,0))
+          source.position(o,clock_ns(0));
         if(shadow && !__sync_fetch_and_add(&audit_fault,0)) {
           sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
           const char* reason=model_session.reject(o);
@@ -668,11 +704,14 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
         }
       }
     }
-    // Separate diagnostic rows may arrive before or after their raw POSITION.
-    // No wait/join, producer-time inference, motion freshness gate or queue
-    // substitution is performed in the AA process.
-    if(lds.active()&&!j.failed)drain_lds(j,lds);
+    // Resolve owned records on this worker without waiting for the other half
+    // or modifying the original POSITION/SEND. This does not qualify time,
+    // sensor freshness, receiver identity or the already completed callback.
+    if(lds.active()&&!j.failed)drain_lds(j,lds,source_disabled?0:&source);
     uint64_t now = clock_ns(0);
+    if(!source_disabled && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
+      source.reset(now);source_disabled=true;
+    }
     if(shadow && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
           navigation.reset(navigation.context());
           holdout.reset(navigation.context(),N::HOLDOUT_AUDIT_RESET);
@@ -692,7 +731,7 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
       if(lds_sideband::format_status(line,sizeof line,"closed",diagnostic))j.line(line);
       if(drain_capture_tail(j)) {
         if(assist)journal_assist(j,assist->status(),clock_ns(0));
-        finish_capture(j,boot_id,cutoff,clock_ns(0));
+        finish_capture(j,boot_id,cutoff,clock_ns(0),&source);
       }
       return 0; // Even failed finalization cannot reopen this capture.
     }
@@ -758,7 +797,7 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
     }
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;
-      journal_health(j,now,capture&&!j.failed,shadow && model_session.available() && model_bus.available());
+      journal_health(j,now,capture&&!j.failed,shadow && model_session.available() && model_bus.available(),&source);
       j.flush();
     }
     // The live qualified source remains unimplemented. A future verified
@@ -793,6 +832,10 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
 }
 void* run_worker(const char* root,const char* motion_channel,AssistWorker* assist) {
   return run_worker_channels(root,motion_channel,lds_sideband::CHANNEL_NAME,lds_sideband::LDS_UID,assist);
+}
+void* run_worker_channels(const char* root,const char* motion_channel,const char* lds_channel,
+                         uid_t lds_uid,AssistWorker* assist) {
+  return run_worker_inputs(root,motion_channel,lds_channel,lds_uid,assist,0);
 }
 } }
 

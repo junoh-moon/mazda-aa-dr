@@ -143,10 +143,16 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
   [제품 실행](../validation/LDS_PRODUCT_RUNTIME_2026-10-02.md)에서 응답 9건·
   원시 값 81개와 부분 할당 출처를 대조했습니다. 작성한 AA 기동·WorkerScope이며
   정상 전체 SM·AA 송신·물리 입력 자격의 완료로 세지 않습니다.
-- [ ] 같은 worker에서 immutable POSITION과 LDS sideband를 정확한 요청으로 연결하는
-  크기 제한 공급부를 구현합니다. 비동기로 늦게 도착한 관측 때문에 이미 실행한
+- [x] 같은 worker에서 immutable POSITION과 LDS sideband를 정확한 요청으로 연결하는
+  크기 제한 공급부를 구현합니다. [실제 입력 연결](../validation/LDS_REQUEST_SOURCE_2026-10-02.md)에서
+  같은 worker의 source callback 조회와 충돌·폐기·회복을 검사합니다.
+  비동기로 늦게 도착한 관측 때문에 이미 실행한
   callback의 출처를 사후 유효로 바꾸지 않습니다. cache 할당 번호·관측 시각은
   물리 측정 순번·시각이 아니며 센서·receiver 자격과 readiness는 별도로 구현합니다.
+- [ ] 연결 결과를 검증된 기준점·제어 입력으로 바꾸는 실제 공급부와 송신 전에
+  확립하는 요청별 출처를 구현합니다. 새 연결을 `ASSIST_POSITION`에 바로 넣거나
+  원본 callback provenance를 사후 수정하지 않습니다. 물리 센서 시각·보정·품질과
+  현재 요청·세션·버스 자격은 아직 공급되지 않습니다.
 - [x] 외부 journal 큐 수정을 통합하고 동일 제품의 원본 실행에서 관측 loss 0을 확인합니다.
   과거 drop의 정확한 호출 조합·원인을 확정한 것으로 세지 않습니다.
 - [x] 세션 관측·전환 검사의 추가 도구는 설치 전후 목록을 남기고 모두 제거했습니다.

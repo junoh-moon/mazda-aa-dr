@@ -66,6 +66,14 @@ host 회수 시험의 20초 초과는 원인 미확정으로 보존하며 동일
 v1.0에는 여전히 물리 입력의 단위·시각·품질, 요청별 자격, 실제 위치
 대체와 GPS 복귀 및 폰/지도 반영의 근거가 필요합니다.
 
+후속 소스는 [LDS 요청 연결 공급부](../validation/LDS_REQUEST_SOURCE_2026-10-02.md)를
+기존 AA worker에 연결합니다. 원본 POSITION과 LDS 응답을 제한된 메모리에서
+결합하고 실제 `AssistSource` callback이 소유된 결과를 조회하는 경로입니다.
+host·고정 ARM 코어 각 344개 검사와 실제 worker의 여섯 사례를 확인했습니다.
+전체 제품 검증은 별도로 진행하며 공개 v0.3.10 ZIP은 변경하지 않았습니다.
+이 연결은 아직 qualified 기준점·센서 입력이 아니고, 이미 끝난 callback의
+provenance도 바꾸지 않습니다. live ASSIST와 v1.0은 계속 미완료입니다.
+
 아래는 `.2` 회수와 검증의 기록이며 새판의 실행 횟수로 바꾸지 않습니다.
 실차에서 v0.3.9-shadow.1의 메뉴3이 정상 `/proc/mounts` 링크를 거부했습니다.
 이후 핫픽스로 archive 회수는 성공했지만 trace·collector 기록 파일이 모두
