@@ -40,6 +40,14 @@ live AA session은 없었습니다. holdout은 `bus_reset`으로 ABORT했고 비
 0건입니다. 이 조건에서는 계산이 꺼져 있는 결과를 결함이나 위치 정확도
 증거로 해석할 수 없습니다.
 
+`bus_reset`이라는 이유 문자열은 DBus daemon 재시작의 증거가 아닙니다.
+이번 trace에서는 먼저 연결 상태 `transition`·revision 0을 기록하고,
+이후 `unobserved`·revision 4로 바뀌면서 MODEL bus 경계가 초기화됐습니다.
+`ModelBus::update`는 경계 변화에 보수적으로 reset을 내며,
+`GpsHoldout::reset`은 열린 비교 구간이 없어도 `window_id=0` ABORT를
+기록합니다. 실제 daemon 재시작은 확인하지 못했습니다. 첫 유효 원본 위치
+이후에도 이런 초기화가 반복되는지는 입력 없는 이번 실행으로 알 수 없습니다.
+
 현재 `tools/analyze_logs.py --json` 결과는 종료 **2**, `status=inconclusive`입니다.
 사유는 session·bus 관측 불가, `holdout_aborted`, `shadow_bus_reset`,
 `no_location_samples` 다섯 가지입니다. `install_counts.ok=1`은 기록된
@@ -47,6 +55,14 @@ live AA session은 없었습니다. holdout은 `bus_reset`으로 ABORT했고 비
 240초 제한으로 종료됐고, 진단 shell 도달을 확인했지만
 `timed_out=true`, `verdict=observation_only`, `timeout_is_success=false`입니다.
 QEMU 자체의 종료 코드 0도 PASS로 취급하지 않습니다.
+
+다음 오프라인 확인은 **이 통합 ZIP**에 원본 LDS의 합성 GPS와 VBS 센서 입력을
+넣고 유효 위치 이후의 bus revision·holdout 구간을 추적하는 것입니다.
+[과거 R17 실행](LDS_GPIO_2026-09-30.md)은 다른 제품 DSO에서 원본
+mode 1 위치와 MODEL 결과를 만들었으므로 가능한 경로의 선례이지만,
+이번 통합판의 반복 reset 여부를 대신 검증하지 않습니다. 그 재실행은
+아직 구현·완료하지 않았습니다. 검증 시 mode 1을 무효로 취급하거나
+두 실행의 위치·계산 건수가 같을 것이라고 가정해서는 안 됩니다.
 
 | 비공개 증거 | SHA-256 |
 | --- | --- |
