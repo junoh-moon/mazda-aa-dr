@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <dlfcn.h>
 #include <link.h>
-#include <type_traits>
 
 static uintptr_t runtime_assist_dso_base;
 static void initialize_runtime_assist_test_dso() {
@@ -23,10 +22,11 @@ class ProductAssistWorker {
 public:
     ProductAssistWorker(const mx5_dr_config& config,const R::AssistSource& source)
         : object_(reinterpret_cast<R::AssistWorker*>(storage_)) {
-        static_assert(std::is_trivially_destructible<R::AssistWorker>::value,
-                      "Add product destruction if needed");
         runtime_assist_function<void(*)(R::AssistWorker*,const mx5_dr_config&,
             const R::AssistSource&)>(TEST_ASSIST_CONSTRUCT)(self(),config,source);
+    }
+    ~ProductAssistWorker() {
+        runtime_assist_function<void(*)(R::AssistWorker*)>(TEST_ASSIST_DESTRUCT)(self());
     }
     R::AssistWorker* self() { return object_; }
     // Like the product API, this is single-owner data. Inspect after joining

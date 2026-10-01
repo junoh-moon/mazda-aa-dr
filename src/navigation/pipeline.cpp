@@ -21,6 +21,7 @@ ModelProfile research_model_profile() {
 Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     last_yaw_time_(0), interval_seq_(0), position_seq_(0), wheel_conflict_since_(0), position_mode_(-1),
     configured_(false), model_(false), have_fix_(false),
+    qualified_retired_(false), retired_from_generation_(0),
     qualified_revoker_(0), qualified_revoker_user_(0), qualified_owner_(0) {
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
     fault_calibration_=FaultCalibration();
@@ -32,7 +33,7 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
 Pipeline::~Pipeline() {
     // A worker may be replaced while its last bounded publication remains
     // selectable. Retire that candidate before releasing the owner.
-    if(configured_&&!model_&&owns_qualified_revoker())
+    if(configured_&&!model_&&owns_qualified_revoker()&&!qualified_retired_)
         qualified_revoker_(qualified_revoker_user_);
 }
 bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias,bool gps_wheel) {
@@ -60,7 +61,8 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
         }
     }
     if(!valid_profile)return false;
-    model_=true; profile_=p; qualified_revoker_=0; qualified_revoker_user_=0;
+    model_=true; profile_=p; qualified_retired_=false;retired_from_generation_=0;
+    qualified_revoker_=0; qualified_revoker_user_=0;
     qualified_owner_=0;
     gyro_bias_.configure(auto_bias,p.yaw_zero,c.sample_age_max_ns);
     gps_wheel_.configure(gps_wheel,c.sample_age_max_ns);
@@ -82,7 +84,8 @@ bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
         }
         x.generation=next;
     }
-    model_=false; qualified_revoker_=0; qualified_revoker_user_=0;qualified_owner_=0;
+    model_=false; qualified_retired_=false;retired_from_generation_=0;
+    qualified_revoker_=0; qualified_revoker_user_=0;qualified_owner_=0;
     // MODEL assumptions cannot remain attached to a new qualified domain.
     status_.uncertainties=0;
     gyro_bias_.configure(false,profile_.yaw_zero,c.sample_age_max_ns);
@@ -97,6 +100,32 @@ bool Pipeline::bind_qualified_revoker(QualifiedRevoker revoke,void* user) {
        !context().generation||context().generation>UINT32_MAX)return false;
     qualified_revoker_=revoke;qualified_revoker_user_=user;qualified_owner_=this;return true;
 }
+bool Pipeline::retire_qualified() {
+    if(!configured_||model_||!owns_qualified_revoker())return false;
+    if(qualified_retired_)return true;
+    const uint64_t previous=context().generation;
+    const uint64_t next=qualified_revoker_(qualified_revoker_user_);
+    if(!next||next>UINT32_MAX||next<=previous) {
+        mx5_dr_context terminal=context();terminal.generation=UINT64_MAX;
+        reset_state(terminal);configured_=false;status_.result=PIPELINE_BAD_INPUT;
+        return false;
+    }
+    mx5_dr_context x=context();x.generation=next;
+    reset_state(x);qualified_retired_=true;retired_from_generation_=previous;
+    return true;
+}
+bool Pipeline::rearm_qualified(const mx5_dr_config& c,mx5_dr_context x) {
+    if(!configured_||model_||!owns_qualified_revoker()||!qualified_retired_||
+       !x.source_epoch||!x.session_epoch||x.generation<=retired_from_generation_||
+       x.generation>UINT32_MAX)return false;
+    // The old lifetime was invalidated before this call. The incoming BEGIN
+    // may precede a later captured GAP, so retain its original generation.
+    if(mx5_dr_init(&core_,&c,x)!=MX5_DR_OK) {
+        configured_=false;status_.result=PIPELINE_BAD_INPUT;return false;
+    }
+    reset_state(x);qualified_retired_=false;retired_from_generation_=0;
+    return true;
+}
 void Pipeline::reset_state(mx5_dr_context x) {
     if (!configured_) return;
     mx5_dr_reset(&core_,x); gyro_bias_.reset(); gps_wheel_.reset(); size_=0; watermark_=0; raw_epoch_=0;
@@ -110,6 +139,9 @@ void Pipeline::reset_state(mx5_dr_context x) {
 }
 void Pipeline::reset(mx5_dr_context x) {
     if(!configured_)return;
+    if(!model_&&owns_qualified_revoker()&&qualified_retired_) {
+        x.generation=context().generation;reset_state(x);return;
+    }
     if(!model_&&owns_qualified_revoker()) {
         const uint64_t previous=context().generation;
         const uint64_t next=qualified_revoker_(qualified_revoker_user_);
@@ -118,6 +150,7 @@ void Pipeline::reset(mx5_dr_context x) {
             status_.result=PIPELINE_BAD_INPUT;return;
         }
         x.generation=next;
+        qualified_retired_=true;retired_from_generation_=previous;
     }
     reset_state(x);
 }
@@ -141,11 +174,11 @@ PipelineResult Pipeline::fault(PipelineResult r) {
     if(before.valid) { before.gyro=gyro_bias_.status();before.wheel=gps_wheel_.status(); }
     mx5_dr_context x=context();
     bool exhausted=x.generation==UINT64_MAX;
-    if(configured_&&!model_&&owns_qualified_revoker()) {
+    if(configured_&&!model_&&owns_qualified_revoker()&&!qualified_retired_) {
         const uint64_t next=qualified_revoker_(qualified_revoker_user_);
         if(!next||next>UINT32_MAX||next<=x.generation) exhausted=true;
-        else x.generation=next;
-    } else if (!exhausted) ++x.generation;
+        else { retired_from_generation_=x.generation;x.generation=next;qualified_retired_=true; }
+    } else if (!exhausted && (model_||!owns_qualified_revoker())) ++x.generation;
     if(exhausted)x.generation=UINT64_MAX;
     if (configured_) reset_state(x);
     fault_calibration_=before;
@@ -664,6 +697,12 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
             position_seq_=max64(position_seq_,e.anchor.position_seq);
             if (status_.core_result!=MX5_DR_OK) {
                 return reject_core(PIPELINE_CORE_REJECTED);
+            }
+            // A directly owned qualified Pipeline may recover through a new
+            // verified anchor after a fault. It owns the new candidate again,
+            // so its next fault/destructor must revoke that generation.
+            if(!model_&&qualified_retired_) {
+                qualified_retired_=false;retired_from_generation_=0;
             }
             break;
         case POSITION_EVENT:

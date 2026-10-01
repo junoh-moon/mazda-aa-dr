@@ -62,9 +62,10 @@ struct FaultCalibration {
 class Pipeline {
 public:
     static const size_t CAPACITY=128;
-    // Must atomically invalidate an already published adapter candidate and
-    // return the newly issued adapter generation. Worker callback: no I/O,
-    // blocking lock, or reentry into this Pipeline.
+    // Must make this Pipeline's current generation unselectable and return a
+    // strictly newer adapter generation. If an external transition already
+    // advanced it, return that generation without advancing it again. Worker
+    // callback: no I/O, blocking lock, or reentry into this Pipeline.
     typedef uint64_t (*QualifiedRevoker)(void*);
     Pipeline();
     ~Pipeline();
@@ -80,6 +81,12 @@ public:
     // qualified instances cannot publish; the bound object owns revocation
     // and retires its candidate on reset/reinit/destruction.
     bool bind_qualified_revoker(QualifiedRevoker, void*);
+    // End this qualified lifetime exactly once. The revoker may return an
+    // already newer adapter generation; no candidate from this lifetime can
+    // then be selected. Rearm keeps the original generation of a captured
+    // BEGIN, even if later GAP controls are already in the input batch.
+    bool retire_qualified();
+    bool rearm_qualified(const mx5_dr_config&, mx5_dr_context);
     PipelineResult enqueue_raw(const RawEvent&);
     PipelineResult enqueue_position(const adapter::Observation&);
     // Qualified external adapter API: evidence and normalized windows retained
@@ -160,6 +167,8 @@ private:
     uint64_t last_yaw_time_, interval_seq_, position_seq_, wheel_conflict_since_;
     int position_mode_;
     bool configured_, model_, have_fix_;
+    bool qualified_retired_;
+    uint64_t retired_from_generation_;
     QualifiedRevoker qualified_revoker_;
     void* qualified_revoker_user_;
     const Pipeline* qualified_owner_;

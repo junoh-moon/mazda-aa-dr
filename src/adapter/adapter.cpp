@@ -121,6 +121,18 @@ uint32_t invalidate() {
     if (old == std::numeric_limits<unsigned>::max()) fault.store(1, std::memory_order_release);
     return old + 1;
 }
+uint32_t invalidate_if_generation(uint32_t owned) {
+    if (!owned || owned == std::numeric_limits<unsigned>::max()) {
+        fault.store(1, std::memory_order_release);return 0;
+    }
+    unsigned current=prediction_generation.load(std::memory_order_acquire);
+    for (;;) {
+        if (current>owned) return current;
+        if (current<owned) return 0;
+        if (prediction_generation.compare_exchange_weak(current,owned+1,
+                std::memory_order_acq_rel,std::memory_order_acquire)) return owned+1;
+    }
+}
 uint32_t generation() { return prediction_generation.load(std::memory_order_acquire); }
 bool publish_snapshot(const DrSnapshot& snapshot) {
     if (!configured || snapshot.prediction_generation != generation() ||

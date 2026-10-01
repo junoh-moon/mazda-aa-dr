@@ -134,7 +134,7 @@ static uint64_t seed() {
     begin.received_ns=gps.mono_ns;source.push(begin);
     R::AssistInput e=input(R::ASSIST_ANCHOR,gps.prediction_generation);
     mx5_dr_anchor& a=e.anchor;a.context=e.context;a.anchor_id=gps.call_sequence;
-    a.position_seq=gps.call_sequence;a.measured_ns=gps.mono_ns;a.utc_ns=1700000000000000000ULL;
+    a.position_seq=uint64_t(gps.call_sequence)*4;a.measured_ns=gps.mono_ns;a.utc_ns=1700000000000000000ULL;
     a.latitude_deg=37;a.longitude_deg=127;a.position_error_m=1;a.heading_error_rad=.01;
     a.validated=a.heading_valid=a.calibration_verified=1;a.quality=MX5_DR_VALID;e.received_ns=gps.mono_ns;
     source.push(e);enqueue_position();assert(!callback(0));enqueue_position();return gps.mono_ns;
@@ -167,11 +167,28 @@ static uint64_t drive(unsigned windows) {
 }
 static void withdrawn_before_expiry(uint64_t frontier,A::Reason reason) {
     bool withdrawn=false;
-    while(monotonic(0)<frontier+140*MS) {
+    A::Reason last_reason=A::PASS;
+    // QEMU scheduling is not a real-time timing oracle. Host execution keeps
+    // the strict pre-lease bound; product-DSO emulation must still observe the
+    // explicit withdrawal reason, not merely passive expiry.
+#ifdef MX5_RUNTIME_ASSIST_DSO_TEST
+    const uint64_t deadline=monotonic(0)+500*MS;
+#else
+    const uint64_t deadline=frontier+140*MS;
+#endif
+    while(monotonic(0)<deadline) {
         if(!callback(0)&&selected.reason==reason) { withdrawn=true;break; }
+        last_reason=selected.reason;
         usleep(3000);
     }
+    if(!withdrawn)std::fprintf(stderr,"withdraw miss: wanted=%u seen=%u now=%llu frontier=%llu reads=%u gen=%u\n",
+        unsigned(reason),unsigned(last_reason),(unsigned long long)monotonic(0),
+        (unsigned long long)frontier,source.reads.load(),A::generation());
+#ifdef MX5_RUNTIME_ASSIST_DSO_TEST
+    assert(withdrawn);
+#else
     assert(withdrawn&&monotonic(0)<frontier+150*MS);
+#endif
 }
 struct Running { const char* root;ProductAssistWorker* assist; };
 static void* run(void* raw) { Running& r=*static_cast<Running*>(raw);run_product_worker(r.root,r.assist);return 0; }
@@ -211,7 +228,7 @@ int main(int argc,char** argv) {
             if(scenario=="audit")audit_failure();
             if(scenario=="journal_failure")assert(!rename(logs.c_str(),(logs+"-retained").c_str()));
             if(scenario=="source_fault"||scenario=="unqualified"||scenario=="recovery") {
-                withdrawn_before_expiry(frontier,A::NOT_READY);assert(A::generation()==generation);
+                withdrawn_before_expiry(frontier,A::NOT_READY);assert(A::generation()==generation+1);
                 source.fault.store(false);source.qualified.store(true);
                 for(unsigned i=0;i<20;++i) { assert(!callback(0));usleep(5000); }
                 if(scenario=="recovery")drive(3); // New GPS, BEGIN and normalized evidence.

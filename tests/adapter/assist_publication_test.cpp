@@ -199,6 +199,14 @@ static void fault_after_publication(ProductPipeline& pipeline,void*) {
     assert(d.snapshot.context.generation==current_generation());
     assert(!A::publish_snapshot(last_publication));
 }
+static void fault_after_recovery(ProductPipeline& pipeline,void*) {
+    const uint32_t before=current_generation();
+    const mx5_dr_evidence invalid=mx5_dr_evidence();
+    assert(pipeline.enqueue_yaw(invalid,0,2047,1,2190000000ULL,2190000000ULL)==N::PIPELINE_BAD_INPUT);
+    assert(current_generation()==before+1);
+    const N::Diagnostic d=pipeline.diagnostic(2190000000ULL);
+    assert(d.status.resets==2&&!d.snapshot.valid);
+}
 static void reject_core_after_publication(ProductPipeline& pipeline,void*) {
     const uint32_t before=current_generation();
     mx5_dr_anchor anchor=mx5_dr_anchor();
@@ -421,6 +429,11 @@ int main(int argc,char** argv) {
         now_ns=recovered.now;worker.call(calculate,&recovered);
         assert(recovered.published&&recovered.result==R::CORE_BRIDGE_OK);
         callback(0,2190000000ULL,true);
+        // Recovery creates a new owned candidate. A second fault must retire
+        // it too; the first retirement must not suppress later revocation.
+        worker.call(fault_after_recovery,0);
+        assert(!A::publish_snapshot(recovered.mapped));
+        callback(0,2190000000ULL,false);assert(selected.reason==A::EPOCH_MISMATCH);
         std::printf("PASS assist publication %s: %u sends, %u replacements; authored inputs, product path\n",
             argv[1],sends,replacements);
         return 0;

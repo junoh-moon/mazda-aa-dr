@@ -154,6 +154,7 @@ def main():
             'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
             'VEHICLE_SEND': 'mx5_send_vehicle_data', 'DEFAULT_CONFIG': 'mx5_dr_default_config',
             'ASSIST_CONSTRUCT': '_ZN3mx57runtime12AssistWorkerC1ERK13mx5_dr_configRKNS0_12AssistSourceE',
+            'ASSIST_DESTRUCT': '_ZN3mx57runtime12AssistWorkerD1Ev',
             'RUN_WORKER': '_ZN3mx57runtime10run_workerEPKcS2_PNS0_12AssistWorkerE',
             'RUNTIME_CONFIG': '_ZN12_GLOBAL__N_16configE',
             'HOOK_INSTALLED': '_ZN12_GLOBAL__N_114hook_installedE',
