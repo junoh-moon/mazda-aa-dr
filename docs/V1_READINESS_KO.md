@@ -143,6 +143,19 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   별도 VM의 USB 출력 latch 1과 PSR/sysfs 0을 보고합니다. 그 진단에는 LDS의
   유효 NMEA·GetPosition 실행이 없으며 실제 하드웨어·receiver 자격은 미검증입니다.
   이 작업 브랜치의 후속 파서 실행은 위 GPIO·제품 통합 기록에서 구분합니다.
+  외부 master의 [후속 원본 LDS 합성 NMEA 실행](../validation/LDS_PATH_VM_2026-10-01.md)은
+  진단용 GPIO 되읽기 보정에서 원본 GetPosition의 유효→무효→재획득을
+  확인했습니다. 첫 무효 응답의 UTC·좌표 경계 혼합과 후속 fixture의 WFI
+  정지를 보존합니다. 수정 fixture는 진단용 CPU 유휴 방지 조건에서
+  START 이후 공급과 고유 주기 대조까지 완주했습니다. 합성 위치·부분
+  SM·진단 interposer와 바뀐 CPU 부하의 근거이며 물리 수신기나 제품
+  자격·폰 수용은 아닙니다.
+  [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)에서
+  원본 `GetPosition`과 `GetUbloxDiag`의 출력 형식·별도 cache mutex를
+  대조한 외부 결과를 보존합니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단
+  polling으로 요청별 자격을 만들 수 없습니다. 원본 갱신 순서의 근거는
+  [외부 정적 분석](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)이며
+  제품의 생산자→snapshot→요청·응답 연결은 미구현입니다.
   [세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서
   이전 세션의 기준점·학습 보정·대기 입력 잔류를 제거하고 원시 입력을 보존했습니다.
   원본 VM의 두 조건에서 각각 지연 요청 네 건을 새 MODEL에서 제외했고, 재시작
@@ -230,6 +243,11 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   [같은 브랜치의 통합·직접 재검증](../validation/PIPELINE_MERGE_2026-10-01.md)에서는
   수정 전 실패, 통합 host/ARM와 원본 LDS의 GPS 단절·복귀를 확인했습니다.
   새 제품의 MODEL 결과 56개를 수락된 기준점의 독립 계산과 대조했습니다.
+- [x] 외부 master에서 같은 원본 VIP의 16비트 요레이트 합계 넘침을 작은 정상 평균으로 수락하던
+  MODEL 결함을 수정했습니다. [원본 생산자 조사](../validation/VIP_ACCUMULATOR_2026-10-01.md)의
+  입력 해시를 대조한 기록과, [host/ARM 통합 검사](../validation/VIP_ACCUMULATOR_INTEGRATION_2026-10-01.md)를
+  보존합니다. 이번 후보의 검사 개수로 합산하지 않습니다. count 자체의 넘침·손실 창·생산 시각·물리 센서 품질은
+  이 경계식으로 복원되지 않으며 ASSIST 자격으로 세지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
@@ -242,7 +260,7 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
 | 정확한 펌웨어·계정·경로 | 네 원본 identity 유지. `cmu=0`, `service=1001`, 순정 저장소 symlink 반영 | 다른 펌웨어에 일반화하지 않음. 현장 설치 정보와 대조 필요 |
 | OEM 호출 계약·터치 공존 | ARM veneer/encoder 합성 시험. 순정 커널에서 AA 후크와 터치 DSO 동시 로드. 원본 manager의 자동 LDS→native send와 OBSERVE/SCRUB 실행 | 정상 폰 연결 상태의 AA 송신·터치 입력, 수명·동시성·지연 장애의 전 범위 미검증 |
 | 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. 원본 VBS callback과 AA 수신을 합성 입력으로 실행. journal·종료·회수 회귀 | 물리 센서 callback과 주행 전체의 누락·부하·로그 보관량 미검증 |
-| 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음 |
+| 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험. VIP 요레이트 생산자의 선택 경로 해석 실행과 MODEL 합계 넘침 거부 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음. count 넘침과 손실 창도 식별 불가 |
 | 적분 시간·신선도 | receipt와 producer 시각 분리, MODEL이 qualified로 승격되지 않는 검사 | 현재 IPC payload에는 생산자 시각/순번이 없음. 검증된 지연 상한 등 대체 근거도 없음 |
 | 위치 계산·재획득 | 코어·정차 보정·GPS holdout·wheel 보정 합성 시험 | 실제 경로·독립 기준 위치 비교 없음. GPS holdout 차이를 ground truth로 세지 않음 |
 | 요청 출처·ASSIST 실행 | adapter의 출처/epoch 검사와 qualified 파이프라인은 합성 입력으로 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 요청 관측 연계는 제품에 연결했으나 qualified 자격 입력은 미구현. 전체 manager 이후 반복 취소 timeout 원인 미분리 |

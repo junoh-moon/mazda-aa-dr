@@ -403,6 +403,33 @@ OTG 전원 `1` 되읽기를 기다리는 정적 조건도 구분했습니다. �
 VM에는 LDS 서비스가 없으며, 해당 기록을 이 작업 세션의 직접 실행으로 세지
 않습니다. 실제 LDS 파서의 후속 실행은 위 GPIO·제품 통합 검증 기록을 따릅니다.
 
+외부 master `7b5ceb6`의 [VIP 누적값 통합 검사](../validation/VIP_ACCUMULATOR_INTEGRATION_2026-10-01.md)는
+같은 MODEL 거부 동작을 독립적으로 검사한 기록입니다. 기존 제품 코드와 동작이
+같으며, 아래 외부 LDS·진단 API 기록과 함께 이 브랜치에 보존합니다. 외부 기록의
+검사 개수·바이너리 해시를 이번 설치 후보의 직접 검증 결과로 합산하지 않습니다.
+
+외부 master `4cc7e95`의 [원본 LDS 합성 NMEA 경로 실행](../validation/LDS_PATH_VM_2026-10-01.md)에서는
+같은 원본 커널·진단 initrd의 GPIO 되읽기 전달/보정 비교가 완주했습니다.
+보정 조건의 원본 LDS는 합성 유효→무효→재획득 좌표를 mode 1→0→1로
+응답했고, 전달 조건은 READ_NOT_READY·mode 0에 머물렀습니다. 사후
+검증에서 첫 무효 전환 응답의 UTC만 직전 유효 주기에 남은 경계 혼합을
+발견해 별도로 기록했습니다. 첫 fixture의 `strtok` 결함과 START 이전
+NMEA 공급을 수정한 뒤 기본 QEMU의 여러 실행은 WFI 정지 또는 SM 조기
+종료로 실패했습니다. 진단용 CPU 유휴 방지 루프를 추가한 동일 이미지
+비교는 30/37회 질의와 A/B/C의 고유 공급 주기 대조까지 완주했으며,
+첫 무효 응답의 같은 유형의 UTC 경계 혼합을 다시 보였습니다. 합성
+수신·진단용 GPIO 보정·부분 SM과 바뀐 CPU 부하의 관측이며 실제
+수신기/차량·폰이나 제품 ASSIST 검증이 아닙니다.
+
+외부 master `ad252cd`의 [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)는
+이 브랜치의 [원본 함수 정적 분석](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)을
+입력 해시와 공개 D-Bus 출력 형식·별도 cache mutex에서 대조한 기록입니다.
+`GetUbloxDiag`와 `GetPosition`에는 같은 생산 측정을 연결하는 ID가 없으므로
+진단값을 사후 polling하여 위치 응답별 수신기·센서 자격으로 승격할 수
+없습니다. 제품 live `provenance()`는 계속 false이고 ASSIST는 비활성입니다.
+원본 갱신 순서와 경쟁 가능성은 정적 분석이며 새 경쟁 상황 실행 결과가
+아닙니다. 생산자→위치 snapshot→실제 요청·응답 경계의 자격 연결은 미구현입니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
