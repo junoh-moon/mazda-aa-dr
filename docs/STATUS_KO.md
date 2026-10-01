@@ -35,6 +35,14 @@ live 자격 입력과 qualified worker 발행 연결은 미구현이며 ASSIST�
 qualified 입력 연결은 여전히 미구현입니다. 전체 host 검사와 패키징 누락 보완,
 고정 ARM 전체 검사를 완료하고 임시 도구를 제거했습니다. 공개 설치 ZIP은 변경하지 않았습니다.
 
+[같은 계산기의 ASSIST 재획득](../validation/ASSIST_REACQUISITION_2026-10-01.md)은
+`c56219b`에서 새 기준점과 같은 GPS 복귀 관측을 중복 처리하던 결함을 수정했습니다.
+재초기화 없이 두 단절을 처리하며 입력 순서·native/GPS 품질 복귀를 포함한
+제품 DSO 15개 사례를 고정 ARM과 순정 공유 runtime에서 통과했습니다.
+원본 측정 시각이 수신보다 이른 기준점도 별도로 검사했습니다. 실제 runtime의
+qualified 입력 연결·물리 센서·폰 수용은 미완료이며 공개 설치 ZIP은 유지합니다.
+전체 host·고정 ARM 검사도 생략 없이 통과했고 임시 도구를 제거했습니다.
+
 앞선 외부 master에서 [v0.3.3-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)을
 커밋 `260528c751739c0afb59153f7a5cfa3585eb6048`에서 빌드하여 게시한 것을 확인했습니다.
 해당 host/ARM·순정 BusyBox 설치 검사는 외부 발행 기록을 따릅니다. 이번 작업은
