@@ -322,7 +322,7 @@ int main(int argc,char** argv) {
 #if defined(__APPLE__)
     if(!strcmp(argv[1],"cancel")) { puts("SKIP Darwin forced unwind");return 77; }
 #endif
-    const A::BusBindings b={create,connect,disconnect,free_connection,signal,is_signal,{}};assert(A::prepare_bus_hooks(b));
+    const A::BusBindings b={create,connect,disconnect,free_connection,signal,is_signal,A::BusEndpointApi()};assert(A::prepare_bus_hooks(b));
     const char* c=argv[1];
     if(!strncmp(c,"prediction_",11))prediction_boundary(c+11);
     else if(!strcmp(c,"normal"))normal();

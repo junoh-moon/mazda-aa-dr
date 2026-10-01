@@ -43,7 +43,7 @@ static void open(unsigned index=0) {
     assert(mx5_bus_connect(&handles[index],"authored",0,0)==1);mark(index);
 }
 static void prepare() {
-    const A::BusBindings bus={create,connect,end,end,signal,is_signal,{}};
+    const A::BusBindings bus={create,connect,end,end,signal,is_signal,A::BusEndpointApi()};
     assert(A::prepare_bus_hooks(bus));
     A::RequestBindings r=A::RequestBindings();
     r.reply={get_reply,get_type,get_sender,get_error,get_serial};
