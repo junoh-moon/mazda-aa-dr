@@ -35,6 +35,7 @@ LIMITATIONS = [
     "Lower send result is not phone receipt, app adoption, or navigation success.",
     "SMDB/owner/receiver polls do not establish source freshness or exact-request provenance.",
     "Connection lifetimes are process-local observed API boundaries, not daemon GUIDs or provider qualification.",
+    "Endpoint server GUID is transport-specific, not the GetId bus ID; complete request keys do not establish LDS lineage or ASSIST qualification.",
     "An issue-time unique live session is ambient context, not request ownership or phone acceptance.",
     "SHADOW model diagnostics do not establish DR accuracy, ground truth, or ASSIST readiness.",
     "Yaw/wheel calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
@@ -183,6 +184,7 @@ class Auditor:
         self.request_errors = Counter()
         self.request_wire_headers = Counter()
         self.request_wire_errors = Counter()
+        self.request_endpoints = Counter()
         self.owners = Counter()
         self.receivers = Counter()
         self.runtime_modes = Counter()
@@ -1245,6 +1247,10 @@ class Auditor:
                     all(k in reply for k in ("observed_ns", "serial", "reply_serial", "type")) and
                     all(text(reply.get(k)) for k in ("sender", "error"))):
                 return False
+            if "endpoint_matched" in issue and (
+                    not isinstance(issue["endpoint_matched"], bool) or
+                    (issue["endpoint_matched"] and (not issue["known"] or issue["conflict"]))):
+                return False
             for header in (issue, reply):
                 clock = header["observed_ns"]
                 if clock is not None and not (unsigned(clock) and clock > 0):
@@ -1278,6 +1284,12 @@ class Auditor:
             valid = isinstance(route, dict) and all(text(route.get(k)) for k in fields)
             if valid and t["result"] != "observed":
                 valid = all(route[k]["value"] is None for k in fields)
+        if valid and "endpoint" in t:
+            endpoint = t["endpoint"]
+            fields = ("server_guid", "unique_name")
+            valid = isinstance(endpoint, dict) and all(text(endpoint.get(k)) for k in fields)
+            if valid and t["result"] != "observed":
+                valid = all(endpoint[k]["value"] is None for k in fields)
         if valid and "wire" in t:
             valid = wire_record(t["wire"])
             if valid and t["result"] != "observed":
@@ -1295,6 +1307,8 @@ class Auditor:
                 valid = t["bus_lifetime"] == t["issue_connection"]["lifetime"]
                 if t["result"] != "observed":
                     valid = valid and all(t[k]["result"] == "unobserved" for k in connection_fields)
+                if valid and "endpoint" in t and t["issue_connection"]["result"] != "connected":
+                    valid = all(t["endpoint"][k]["value"] is None for k in ("server_guid", "unique_name"))
         if valid:
             if t["result"] == "observed":
                 valid = all(t[k] > 0 for k in ids) and t["request_epoch"] == t["worker_epoch"]
@@ -1310,12 +1324,33 @@ class Auditor:
             self.request_reply_types[str(t["reply_type"])] += 1
             if t["error"]["complete"]:
                 self.request_errors[t["error"]["value"]] += 1
+            if "endpoint" in t:
+                endpoint = t["endpoint"]
+                fields = ("server_guid", "unique_name")
+                complete = all(endpoint[k]["complete"] and endpoint[k]["value"] for k in fields)
+                self.request_endpoints["records"] += 1
+                state = ("complete" if complete else
+                         "unavailable" if all(endpoint[k]["value"] is None for k in fields)
+                         else "incomplete")
+                self.request_endpoints[state] += 1
+                wire_issue = t.get("wire", {}).get("issue", {})
+                # A validated known issue has a nonzero uint32 serial. Count
+                # availability only; no LDS sideband join or qualification is
+                # implemented, and no reply/receipt clock proves freshness.
+                self.request_endpoints["exact_request_key_records"] += int(
+                    complete and wire_issue.get("known", False) and
+                    wire_issue.get("endpoint_matched", False) and not wire_issue["conflict"])
+            else:
+                self.request_endpoints["legacy_without_endpoint"] += 1
             if "wire" in t:
                 wire_issue, wire_reply = t["wire"]["issue"], t["wire"]["reply"]
                 self.request_wire_headers["records"] += 1
                 self.request_wire_headers["issue_known"] += int(wire_issue["known"])
                 self.request_wire_headers["reply_known"] += int(wire_reply["known"])
                 self.request_wire_headers["issue_conflicts"] += int(wire_issue["conflict"])
+                if "endpoint_matched" in wire_issue:
+                    self.request_wire_headers["issue_endpoint_match_records"] += 1
+                    self.request_wire_headers["issue_endpoint_matched"] += int(wire_issue["endpoint_matched"])
                 self.request_wire_headers["reply_without_remote_serial"] += int(
                     wire_reply["known"] and wire_reply["serial"] == 0)
                 if wire_reply["known"] and wire_reply["error"]["complete"]:
@@ -1587,6 +1622,8 @@ class Auditor:
                                              complete_error_names=dict(self.request_errors),
                                              wire_headers=dict(self.request_wire_headers),
                                              wire_complete_error_names=dict(self.request_wire_errors),
+                                             endpoint_identity=dict(self.request_endpoints),
+                                             lds_sideband_matching="not_implemented",
                                              qualification="not_established"),
                     stream_correlation=dict(aa_boot_ids=aa_boot_ids, collector_boot_ids=collector_boot_ids,
                                             shared_kernel_boot_ids=sorted(set(aa_boot_ids) & set(collector_boot_ids)),

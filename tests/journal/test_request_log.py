@@ -62,14 +62,14 @@ class RequestJournal(unittest.TestCase):
 
     @staticmethod
     def wire_record():
-        return dict(issue=dict(known=True, observed_ns=101, serial=23, conflict=False),
+        return dict(issue=dict(known=True, observed_ns=101, serial=23, conflict=False, endpoint_matched=False),
                     reply=dict(known=True, observed_ns=102, serial=41, reply_serial=23, type=3,
                                sender=dict(value=':1.42', complete=True),
                                error=dict(value='org.freedesktop.DBus.Error.ServiceUnknown', complete=True)))
 
     @staticmethod
     def unknown_wire():
-        return dict(issue=dict(known=False, observed_ns=None, serial=None, conflict=False),
+        return dict(issue=dict(known=False, observed_ns=None, serial=None, conflict=False, endpoint_matched=False),
                     reply=dict(known=False, observed_ns=None, serial=None, reply_serial=None, type=None,
                                sender=dict(value=None, complete=False), error=dict(value=None, complete=False)))
 
@@ -81,6 +81,11 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual(p['request'].get('wire'), self.wire_record())
         self.assertEqual(send['request']['wire'], p['request']['wire'])
         self.assertEqual(failed['request']['wire'], self.unknown_wire())
+        unknown_endpoint = dict(server_guid=dict(value=None, complete=False), unique_name=dict(value=None, complete=False))
+        self.assertEqual(p['request']['endpoint'], unknown_endpoint)
+        self.assertEqual(failed['request']['endpoint'], unknown_endpoint)
+        self.assertEqual(longest['request']['endpoint'], dict(server_guid=dict(value='\x01'*64, complete=False),
+                                                               unique_name=dict(value='\x01'*64, complete=False)))
         self.assertEqual(escaped['request']['wire']['reply']['sender']['value'], 'quote"\\\n\x01\xff')
         self.assertEqual(longest['request']['wire']['issue']['serial'], 2**32-1)
         self.assertEqual(longest['request']['wire']['reply']['reply_serial'], 2**32-1)

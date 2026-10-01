@@ -97,11 +97,13 @@ struct Fixture {
 };
 const uint8_t Fixture::bytes[16]={0x10,0x48,0x2d,0xe9,8,0xb0,0x8d,0xe2,1,2,3,4,5,6,7,8};
 int main() {
-    // Raw reply observation adds four pointer slots to the existing sixteen.
-    assert(sizeof(C::Plan().slots)/sizeof(C::Slot)>=20);
+    // AA now needs registration support before its existing connect/submit
+    // slots become visible; all 21 data slots share one transaction.
+    assert(C::Plan::SLOT_CAPACITY>=21);
+    assert(sizeof(C::Plan().slots)/sizeof(C::Slot)>=21);
     unsigned calls=0;
     { Fixture f;assert(f.run()==A::INSTALL_OK);f.restored(true);assert(f.prepared==1 && !f.released);calls=f.calls; }
-    assert(calls==29);
+    assert(calls==C::Plan::SLOT_CAPACITY+9);
     for(unsigned i=1;i<=calls;++i) {
         Fixture f;f.fail1=i;assert(f.run()==A::MEMORY_PROTECTION_FAILED);f.restored();
         if(f.prepared)assert(!f.released);
@@ -114,14 +116,14 @@ int main() {
         assert(f.run()==A::NEXT_CHAIN_MISMATCH && !f.prepared && f.released==1);
         reinterpret_cast<uintptr_t*>(f.got)[i]=f.plan.slots[i].expected;f.restored();
     }
-    for(unsigned second=30;second<=36;second+=3) {
-        Fixture f;f.fail1=26;f.fail2=second;assert(f.run()==A::RESTORE_FAILED_FATAL);
+    for(unsigned second=calls+1;second<=calls+7;second+=3) {
+        Fixture f;f.fail1=C::Plan::SLOT_CAPACITY+6;f.fail2=second;assert(f.run()==A::RESTORE_FAILED_FATAL);
         assert(!f.released); // Patched or non-executable OEM page: stop the service.
         for(unsigned i=0;i<f.plan.slot_count;++i)assert(*reinterpret_cast<uintptr_t*>(f.plan.slots[i].address)==f.plan.slots[i].expected);
     }
     // The doWork and destructor may share a page under a different page size.
     { Fixture f;f.plan.entries[3].address=f.plan.entries[2].address+32;
       memcpy(reinterpret_cast<void*>(f.plan.entries[3].address),Fixture::bytes,16);
-      assert(f.run()==A::INSTALL_OK);assert(f.calls==27);f.restored(true); }
-    puts("PASS cold transaction: 29 protection failures, rechecks, preparation/allocation and fatal rollback");
+      assert(f.run()==A::INSTALL_OK);assert(f.calls==C::Plan::SLOT_CAPACITY+7);f.restored(true); }
+    printf("PASS cold transaction: %u protection failures, rechecks, preparation/allocation and fatal rollback\n",calls);
 }

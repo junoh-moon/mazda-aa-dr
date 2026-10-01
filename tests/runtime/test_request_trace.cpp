@@ -789,7 +789,48 @@ static void raw_wire_unknown_and_local_error() {
     puts("PASS unknown raw metadata normalization and locally created NoReply remain distinct");
 }
 
+static void endpoint_copy_and_wire_conflict() {
+    rt::Ledger ledger;int method=0,worker=0,position=0;rt::Token token,returned;
+    rt::Issue request=issue(1);
+    request.connection={mx5::runtime::bus_trace::CONNECTED,1,7};
+    request.endpoint.server_guid=rt::copy_text("owned-server");
+    request.endpoint.unique_name=rt::copy_text(":1.7");
+    assert(ledger.request_begin(&method,request,&token)==rt::OK);
+    request.endpoint.server_guid=rt::copy_text("later-server");
+    request.endpoint.unique_name=rt::copy_text(":1.8");
+    rt::WireIssue wire=wire_issue(77);wire.endpoint_matched=true;wire.conflict=true;
+    assert(ledger.wire_issue(token,wire)==rt::CONFLICT);
+    wire.conflict=false;wire.observed_ns=200;
+    assert(ledger.wire_issue(token,wire)==rt::CONFLICT); // Cannot repair first mismatch.
+    assert(ledger.reply_enter(&method,reply(),&returned)==rt::OK);
+    post(ledger,&worker,&position,returned);assert(ledger.request_end(&method)==rt::OK);
+    const rt::Trace old=take(ledger,&worker,&position);
+    assert(!strcmp(old.issue.endpoint.server_guid.bytes,"owned-server"));
+    assert(!strcmp(old.issue.endpoint.unique_name.bytes,":1.7"));
+    assert(old.issue.wire.known&&old.issue.wire.serial==77&&old.issue.wire.observed_ns==100);
+    assert(old.issue.wire.conflict&&!old.issue.wire.endpoint_matched);
+    request.endpoint.server_guid.known=false;
+    memset(request.endpoint.unique_name.bytes,'x',sizeof request.endpoint.unique_name.bytes);
+    request.endpoint.unique_name.complete=true;
+    assert(ledger.request_begin(&method,request,&token)==rt::OK);
+    assert(ledger.reply_enter(&method,reply(),&returned)==rt::OK);
+    post(ledger,&worker,&position,returned);assert(ledger.request_end(&method)==rt::OK);
+    const rt::Trace bounded=take(ledger,&worker,&position);
+    assert(!bounded.issue.endpoint.server_guid.known&&!bounded.issue.endpoint.server_guid.bytes[0]);
+    assert(bounded.issue.endpoint.unique_name.known&&!bounded.issue.endpoint.unique_name.complete);
+    assert(strlen(bounded.issue.endpoint.unique_name.bytes)==rt::Text::CAPACITY-1);
+    request.connection=mx5::runtime::bus_trace::Snapshot();
+    assert(ledger.request_begin(&method,request,&token)==rt::OK);
+    assert(ledger.reply_enter(&method,reply(),&returned)==rt::OK);
+    post(ledger,&worker,&position,returned);assert(ledger.request_end(&method)==rt::OK);
+    const rt::Trace unbound=take(ledger,&worker,&position);
+    assert(!unbound.issue.endpoint.server_guid.known&&!unbound.issue.endpoint.unique_name.known);
+    assert(status(ledger).loss_epoch==1&&!status(ledger).loss_reasons);
+    puts("PASS owned endpoint normalization and first-conflict raw header preservation");
+}
+
 int main() {
+    endpoint_copy_and_wire_conflict();
     raw_wire_identity_out_of_order();
     raw_wire_duplicate_conflict_and_lifetime();
     raw_wire_contention_does_not_lose_lifetimes();
@@ -806,6 +847,6 @@ int main() {
     cross_thread_and_early_work();
     concurrency_stress();
     forwarding_and_errno();
-    puts("PASS 16 request-trace regression groups; synthetic only, OEM integration remains TODO");
+    puts("PASS 17 request-trace regression groups; synthetic only, OEM integration remains TODO");
     return 0;
 }

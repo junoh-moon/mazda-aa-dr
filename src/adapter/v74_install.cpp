@@ -108,7 +108,11 @@ const RawApiEntry kRawApi[]={
     {"dbus_message_get_reply_serial",0x132c8,16,{0xe52de004,0xe3a01005,0xe24dd00c,0xe3a02075}},
     {"dbus_message_get_type",0x1353c,8,{0xe2800004,0xeaffed31,0,0}},
     {"dbus_message_get_sender",0x14344,16,{0xe52de004,0xe3a02000,0xe24dd00c,0xe3a01007}},
-    {"dbus_message_get_error_name",0x142c4,16,{0xe52de004,0xe3a02000,0xe24dd00c,0xe3a01004}}
+    {"dbus_message_get_error_name",0x142c4,16,{0xe52de004,0xe3a02000,0xe24dd00c,0xe3a01004}},
+    {"dbus_bus_register",0x89ac,16,{0xe92d47f0,0xe59f4178,0xe59f3178,0xe08f4004}},
+    {"dbus_connection_get_server_id",0xa448,16,{0xe92d4038,0xe1a04000,0xe5900004,0xeb004115}},
+    {"dbus_bus_get_unique_name",0x90a8,16,{0xe92d4038,0xe59f3038,0xe08f3003,0xe59f2034}},
+    {"dbus_free",0x2021c,12,{0xe3500000,0x012fff1e,0xeaff93a6,0}}
 };
 A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::RequestBindings& bindings,A::BusBindings& connection) {
     if(!in.blm_handle)return A::INVALID_INSTALL_ARGUMENT;
@@ -147,6 +151,13 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
            !segment(lb,address,e.size,PROT_READ|PROT_EXEC))return A::MODULE_MISMATCH;
         if(std::memcmp(reinterpret_cast<void*>(address),e.words,e.size))return A::ORIGINAL_BYTES_MISMATCH;
     }
+    // This exact call owns conn+0x298 and reads its live raw pointer at +0x268.
+    // It is not safe to inspect that field later after outer connect returns.
+    const uint32_t register_call[]={0xe5932268,0xe24b3024,0xe1a00002,0xe1a01003,0xebfffdb3};
+    if(!matches_module(bb+0x6b44,bb,bus.dli_fname) ||
+       !segment(bb,bb+0x6b44,sizeof register_call,PROT_READ|PROT_EXEC))return A::MODULE_MISMATCH;
+    if(std::memcmp(reinterpret_cast<void*>(bb+0x6b44),register_call,sizeof register_call))
+        return A::ORIGINAL_BYTES_MISMATCH;
     if(data_entry!=reinterpret_cast<void*>(db+0x27e0) ||
        !segment(db,db+0x2228,16,PROT_READ|PROT_EXEC) ||
        std::memcmp(reinterpret_cast<void*>(db+0x2228),kNotify,16))return A::ORIGINAL_BYTES_MISMATCH;
@@ -190,6 +201,12 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
     if(!segment(bb,signal.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
     if(*reinterpret_cast<uintptr_t*>(signal.address)!=signal.expected)return A::NEXT_CHAIN_MISMATCH;
     plan.slots[plan.slot_count++]=signal;
+    // Registration support must be reachable before either connect owner and
+    // submit. It participates in the same preflight/prepare/publication plan.
+    const C::Slot registration={bb+0x34604,lb+0x89ac,reinterpret_cast<uintptr_t>(&mx5_bus_register)};
+    if(!segment(bb,registration.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
+    if(*reinterpret_cast<uintptr_t*>(registration.address)!=registration.expected)return A::NEXT_CHAIN_MISMATCH;
+    plan.slots[plan.slot_count++]=registration;
     const uintptr_t bus_slots[]={0x34560,0x34274,0x34400,0x345ec};
     const uintptr_t blm_slots[]={0xf7710,0xf7ce8,0xf8b84,0xf81a0};
     const uintptr_t targets[]={0xac54,0xb930,0xb360,0xb8c4};
@@ -225,6 +242,11 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
     connection.free=reinterpret_cast<A::BusEnd>(bb+0xb930);
     connection.signal=reinterpret_cast<A::BusSignal>(bb+0x2098c);
     connection.is_signal=reinterpret_cast<A::BusIsSignal>(predicate);
+    connection.endpoint.registration=reinterpret_cast<decltype(connection.endpoint.registration)>(lb+0x89ac);
+    connection.endpoint.get_server_id=reinterpret_cast<decltype(connection.endpoint.get_server_id)>(lb+0xa448);
+    connection.endpoint.get_unique_name=reinterpret_cast<decltype(connection.endpoint.get_unique_name)>(lb+0x90a8);
+    connection.endpoint.free_guid=reinterpret_cast<decltype(connection.endpoint.free_guid)>(lb+0x2021c);
+    connection.endpoint.register_caller=bb+0x6b58;
     bindings.reply.get_reply=reinterpret_cast<decltype(bindings.reply.get_reply)>(bb+0x19778);
     bindings.reply.get_type=reinterpret_cast<decltype(bindings.reply.get_type)>(bb+0x10b20);
     bindings.reply.get_sender=reinterpret_cast<decltype(bindings.reply.get_sender)>(bb+0x10c10);

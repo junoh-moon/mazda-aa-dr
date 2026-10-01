@@ -34,8 +34,12 @@ struct SubmitFrame {
     void* method;
     R::Token token;
     void* message;
+    void* connection;
+    mx5::runtime::bus_trace::Snapshot bus;
+    uintptr_t raw_key;
     unsigned builds,sends;
-    explicit SubmitFrame(void* value) : previous(submit_frame),method(value),token(),message(0),builds(0),sends(0) { submit_frame=this; }
+    explicit SubmitFrame(void* value) : previous(submit_frame),method(value),token(),message(0),connection(0),
+        bus(),raw_key(0),builds(0),sends(0) { submit_frame=this; }
     ~SubmitFrame() { const PreserveErrno saved;submit_frame=previous; }
 };
 struct PendingFrame {
@@ -132,7 +136,9 @@ extern "C" int32_t mx5_request_submit(void* connection, void* method,
     if(callback!=original.notify)
         return original.submit(connection,method,callback,context,timeout);
     A::observe_position_bus(connection);
-    observer->request_begin(method,&frame.token,A::read_issue_session(),A::read_bus_connection(connection));
+    R::Endpoint endpoint=R::Endpoint();frame.connection=connection;
+    frame.bus=A::read_bus_endpoint(connection,&endpoint,&frame.raw_key);
+    observer->request_begin(method,&frame.token,A::read_issue_session(),frame.bus,endpoint);
     // Register before submission; another thread can notify before it returns.
     // Neither a failure status nor elapsed time substitutes for method end.
     return original.submit(connection,method,notify,context,timeout);
@@ -162,8 +168,21 @@ extern "C" int32_t mx5_request_wire_send(void* connection,void* message,void** p
     SubmitFrame* frame=submit_frame;
     const bool matched=frame && frame->token.id && message && frame->message==message;
     if(matched)++frame->sends;
+    A::EndpointMatch endpoint=A::ENDPOINT_UNAVAILABLE;
+    if(matched && frame->raw_key) {
+        const PreserveErrno saved;
+        endpoint=frame->raw_key!=uintptr_t(connection)?A::ENDPOINT_MISMATCH:
+            A::bus_endpoint_matches(frame->connection,frame->bus,frame->raw_key);
+    }
     const int32_t result=original.wire.send(connection,message,pending,timeout);
     const PreserveErrno saved;
+    // Original JCIDBUS holds its owner mutex across this raw call. Still keep
+    // an authored/reentrant lifetime change from claiming an exact join. A
+    // change AFTER sending is uncertainty, not proof it sent on another raw
+    // connection; retain the header without inventing an endpoint conflict.
+    if(endpoint==A::ENDPOINT_MATCH &&
+       A::bus_endpoint_matches(frame->connection,frame->bus,frame->raw_key)!=A::ENDPOINT_MATCH)
+        endpoint=A::ENDPOINT_UNAVAILABLE;
     // The original registers notify only after this returns. Read the live
     // builder result, never a later method address or coincident routing text.
     if(matched) {
@@ -172,7 +191,8 @@ extern "C" int32_t mx5_request_wire_send(void* connection,void* message,void** p
             issue.serial=original.wire.serial(message);
             issue.known=issue.serial!=0;issue.observed_ns=wire_now();
         }
-        issue.conflict=frame->builds!=1 || frame->sends!=1;
+        issue.conflict=frame->builds!=1 || frame->sends!=1 || endpoint==A::ENDPOINT_MISMATCH;
+        issue.endpoint_matched=issue.known && !issue.conflict && endpoint==A::ENDPOINT_MATCH;
         // A second send attempt is ambiguous even when it fails. Preserve the
         // first header as diagnostic evidence but never present it as unique.
         if(issue.known || issue.conflict)observer->wire_issue(frame->token,issue);

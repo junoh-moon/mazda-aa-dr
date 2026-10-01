@@ -56,7 +56,7 @@ static int32_t original_send(void*,A::VehicleData*) { return 29; }
 int main(int argc,char** argv) {
     assert(argc==1 || (argc==2 && !strcmp(argv[1],"bus_recreated")));
     alarm(15);
-    const A::BusBindings bb={bus_create,bus_connect,bus_end,bus_end,bus_signal,bus_is_signal};
+    const A::BusBindings bb={bus_create,bus_connect,bus_end,bus_end,bus_signal,bus_is_signal,{}};
     assert(A::prepare_bus_hooks(bb));
     assert(mx5_bus_create(bus_closed,0)==&connection);
     assert(mx5_bus_connect(&connection,"authored",0,0)==1);

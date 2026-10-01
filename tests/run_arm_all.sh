@@ -49,6 +49,13 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/runtime-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-trace-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/request_trace.cpp src/runtime/request_observer.cpp tests/runtime/test_request_observer.cpp -pthread -o "$build/request-observer-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/request-observer-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/adapter/bus_endpoint_test.cpp tests/adapter/bus_endpoint_relay.S src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp -pthread -o "$build/bus-endpoint-test"
+for scenario in normal missing_guid missing_unique empty long failed_register failed_connect early_close wrong_raw wrong_caller duplicate nested getter_nested register_throw getter_throw getter_cancel connect_throw raw_mismatch reconnect_before_send reconnect_in_send transition_send reconnect address_reuse readers no_api; do
+    qemu-arm -L "$QEMU_SYSROOT" "$build/bus-endpoint-test" "$scenario"
+done
+python3 tests/adapter/run_unwind_dso.py --library "$preload" \
+    --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
+    --suite endpoint --output-dir "$build/endpoint-dso"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_model_session.cpp -o "$build/model-session-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/model-session-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_request_handoff.cpp -pthread -o "$build/request-handoff-test"

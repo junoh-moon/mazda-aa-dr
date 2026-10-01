@@ -5,7 +5,7 @@
 #include <cstring>
 
 namespace mx5 { namespace runtime {
-enum { REQUEST_JSON_CAPACITY = 5120, OBSERVATION_JSON_CAPACITY = 5120 };
+enum { REQUEST_JSON_CAPACITY = 6144, OBSERVATION_JSON_CAPACITY = 6144 };
 namespace request_log_detail {
 class Json {
     char* out_;size_t cap_,used_;bool ok_;
@@ -97,6 +97,8 @@ inline bool format_request_trace(char* out,size_t cap,request_trace::Result resu
     j.text("destination",t.issue.route.destination,true);
     j.text("path",t.issue.route.path);j.text("interface",t.issue.route.interface_name);
     j.text("member",t.issue.route.member);j.add("}");
+    j.add(",\"endpoint\":{");j.text("server_guid",t.issue.endpoint.server_guid,true);
+    j.text("unique_name",t.issue.endpoint.unique_name);j.add("}");
     j.signed_number("reply_type",t.reply.type,t.reply.type_known);
     j.number("wire_serial",t.reply.wire_serial,t.reply.wire_serial_known);
     j.text("sender",t.reply.sender);j.text("error",t.reply.error_name);
@@ -106,7 +108,9 @@ inline bool format_request_trace(char* out,size_t cap,request_trace::Result resu
     j.add(",\"wire\":{\"issue\":{\"known\":");j.add(t.issue.wire.known?"true":"false");
     j.number("observed_ns",t.issue.wire.observed_ns,t.issue.wire.known && t.issue.wire.observed_ns);
     j.number("serial",t.issue.wire.serial,t.issue.wire.known);
-    j.add(",\"conflict\":");j.add(t.issue.wire.conflict?"true":"false");j.add("}");
+    j.add(",\"conflict\":");j.add(t.issue.wire.conflict?"true":"false");
+    j.add(",\"endpoint_matched\":");
+    j.add(t.issue.wire.known && !t.issue.wire.conflict && t.issue.wire.endpoint_matched?"true":"false");j.add("}");
     const R::WireReply& raw=t.reply.wire.known?t.reply.wire:empty.reply.wire;
     j.add(",\"reply\":{\"known\":");j.add(raw.known?"true":"false");
     j.number("observed_ns",raw.observed_ns,raw.known && raw.observed_ns);

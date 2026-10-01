@@ -11,7 +11,7 @@ namespace mx5 { namespace adapter { namespace cold_patch {
 struct Entry { uintptr_t address; const uint8_t* bytes; uintptr_t replacement; };
 struct Slot { uintptr_t address, expected, replacement; };
 struct Plan {
-    enum { SLOT_CAPACITY=20 };
+    enum { SLOT_CAPACITY=21 };
     Entry entries[4]; unsigned entry_count;
     Slot slots[SLOT_CAPACITY]; unsigned slot_count;
 };

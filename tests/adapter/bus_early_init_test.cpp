@@ -12,7 +12,7 @@ static void end(void*) {}
 static int32_t signal(void*,void*) { return 0; }
 static int32_t is_signal(void*,const char*,const char*) { return 0; }
 __attribute__((constructor(101))) static void early_create() {
-    const A::BusBindings bindings={create,connect,end,end,signal,is_signal};
+    const A::BusBindings bindings={create,connect,end,end,signal,is_signal,{}};
     assert(A::prepare_bus_hooks(bindings));
     assert(mx5_bus_create(closed,0)==&object);
     assert(mx5_bus_connect(&object,"early",0,0)==1);

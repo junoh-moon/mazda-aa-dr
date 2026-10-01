@@ -2,6 +2,7 @@
 #include "adapter.h"
 #include <atomic>
 #include <errno.h>
+#include <string.h>
 
 #if defined(__arm__) && !defined(__EXCEPTIONS)
 #error "Bus wrappers require exception cleanup support"
@@ -9,17 +10,44 @@
 namespace {
 namespace A=mx5::adapter;
 namespace B=mx5::runtime::bus_trace;
+namespace R=mx5::runtime::request_trace;
 static_assert(ATOMIC_INT_LOCK_FREE==2 && ATOMIC_LLONG_LOCK_FREE==2 && ATOMIC_POINTER_LOCK_FREE==2,
               "Bus observation requires lock-free atomics");
 enum Phase { UNUSED, CREATING, IDLE, CONNECTING, ACTIVE, ENDED };
+struct AtomicText {
+    // atomic<T>'s default constructor does not initialize T in C++11. An
+    // explicit constant-initialized element also prevents a later DSO dynamic
+    // constructor from erasing connection observations made by early dlopen.
+    struct Byte {
+        std::atomic<unsigned char> value;
+        constexpr Byte():value(0) {}
+    };
+    Byte bytes[R::Text::CAPACITY];
+    std::atomic<unsigned> flags;
+    constexpr AtomicText():bytes(),flags(0) {}
+    void store(const R::Text& text) {
+        for(unsigned i=0;i<R::Text::CAPACITY;++i)bytes[i].value.store(static_cast<unsigned char>(text.bytes[i]));
+        flags.store((text.known?1u:0u)|(text.complete?2u:0u));
+    }
+    R::Text load() const {
+        R::Text text=R::Text();
+        for(unsigned i=0;i<R::Text::CAPACITY;++i)text.bytes[i]=static_cast<char>(bytes[i].value.load());
+        const unsigned f=flags.load();text.known=(f&1)!=0;text.complete=(f&2)!=0;return text;
+    }
+};
+static_assert(ATOMIC_CHAR_LOCK_FREE==2,"Endpoint copies require lock-free byte storage");
 struct Context {
     std::atomic<unsigned> phase;
     std::atomic<uintptr_t> address;
     std::atomic<uint64_t> lifetime;
     std::atomic<uint64_t> source_lifetime;
+    std::atomic<uint64_t> endpoint_lifetime;
+    std::atomic<uintptr_t> raw_key;
+    AtomicText server_guid,unique_name;
     A::BusClosed next;
     void* user;
-    constexpr Context():phase(UNUSED),address(0),lifetime(0),source_lifetime(0),next(0),user(0) {}
+    constexpr Context():phase(UNUSED),address(0),lifetime(0),source_lifetime(0),
+        endpoint_lifetime(0),raw_key(0),server_guid(),unique_name(),next(0),user(0) {}
 };
 // Keep the containing object constant-initialized, including on GCC 4.9.
 struct Pool {
@@ -37,6 +65,40 @@ struct PreserveErrno {
     const int value;
     PreserveErrno():value(errno) {}
     ~PreserveErrno() { errno=value; }
+};
+struct ConnectFrame;
+__thread ConnectFrame* connecting __attribute__((tls_model("initial-exec")));
+struct ConnectFrame {
+    ConnectFrame* previous;
+    Context* context;
+    void* connection;
+    uint64_t lifetime;
+    uintptr_t raw;
+    unsigned registrations;
+    bool in_register,captured;
+    R::Endpoint endpoint;
+    ConnectFrame(Context* c,void* value,uint64_t id):previous(connecting),context(c),
+        connection(value),lifetime(id),raw(0),registrations(0),in_register(false),captured(false),endpoint() {
+        connecting=this; // Even unobserved/nested connects mask the outer owner.
+    }
+    ~ConnectFrame() { const PreserveErrno saved;connecting=previous; }
+    bool current() const {
+        return context && lifetime && context->phase.load()==CONNECTING &&
+            context->lifetime.load()==lifetime && context->address.load()==uintptr_t(connection);
+    }
+};
+struct RegisterScope {
+    ConnectFrame* frame;
+    bool previous;
+    explicit RegisterScope(ConnectFrame* f):frame(f),previous(f && f->in_register) {
+        if(frame){frame->in_register=true;if(frame->registrations<2)++frame->registrations;frame->captured=false;}
+    }
+    ~RegisterScope() { const PreserveErrno saved;if(frame)frame->in_register=previous; }
+};
+struct GuidOwner {
+    char* value;
+    explicit GuidOwner(char* p):value(p) {}
+    ~GuidOwner() { const PreserveErrno saved;if(value)original.endpoint.free_guid(value); }
 };
 void ready() { if(!prepared.load(std::memory_order_acquire))__builtin_trap(); }
 void fault(unsigned why) { faults.fetch_or(why); }
@@ -116,28 +178,49 @@ namespace mx5 { namespace adapter {
 bool prepare_bus_hooks(const BusBindings& b) {
     const PreserveErrno saved;
     if(attempted || !b.create || !b.connect || !b.disconnect || !b.free || !b.signal || !b.is_signal)return false;
+    const BusEndpointApi& e=b.endpoint;
+    const bool any=e.registration||e.get_server_id||e.get_unique_name||e.free_guid||e.register_caller;
+    if(any && (!e.registration||!e.get_server_id||!e.get_unique_name||!e.free_guid||!e.register_caller))return false;
     attempted=true;original=b;prepared.store(1,std::memory_order_release);return true;
 }
 BusHealth bus_hook_health() {
     const PreserveErrno saved;
     const BusHealth out={prepared.load(std::memory_order_acquire)!=0,used.load(),faults.load()};return out;
 }
-B::Snapshot read_bus_connection(const void* connection) {
+B::Snapshot read_bus_endpoint(const void* connection,R::Endpoint* endpoint,uintptr_t* raw) {
     const PreserveErrno saved;
+    if(endpoint)*endpoint=R::Endpoint();
+    if(raw)*raw=0;
     if(!prepared.load(std::memory_order_acquire))return unavailable(B::UNOBSERVED);
     if(faults.load())return unavailable(B::FAULT);
     const uint64_t before=version.load();
     if(mutations.load())return unavailable(B::TRANSITION);
     B::Snapshot out=unavailable(B::UNOBSERVED);
+    R::Endpoint owned=R::Endpoint();uintptr_t key=0;
     if(Context* c=lookup(connection)) {
         const unsigned phase=c->phase.load();
         out.result=phase==ACTIVE?B::CONNECTED:B::DISCONNECTED;
         out.object=static_cast<uint32_t>(c-&contexts[0])+1;
-        if(phase==ACTIVE)out.lifetime=c->lifetime.load();
+        if(phase==ACTIVE) {
+            out.lifetime=c->lifetime.load();
+            if(out.lifetime && c->endpoint_lifetime.load()==out.lifetime) {
+                if(endpoint) { owned.server_guid=c->server_guid.load();owned.unique_name=c->unique_name.load(); }
+                key=c->raw_key.load();
+            }
+        }
     }
     if(mutations.load() || version.load()!=before)return unavailable(B::TRANSITION);
     if(faults.load())return unavailable(B::FAULT);
+    if(endpoint)*endpoint=owned;
+    if(raw)*raw=key;
     return out;
+}
+B::Snapshot read_bus_connection(const void* connection) { return read_bus_endpoint(connection,0,0); }
+EndpointMatch bus_endpoint_matches(const void* connection,const B::Snapshot& issue,uintptr_t raw) {
+    if(!raw || issue.result!=B::CONNECTED || !issue.object || !issue.lifetime)return ENDPOINT_UNAVAILABLE;
+    uintptr_t current=0;const B::Snapshot now=read_bus_endpoint(connection,0,&current);
+    if(now.result!=B::CONNECTED || !current)return ENDPOINT_UNAVAILABLE;
+    return now.object==issue.object && now.lifetime==issue.lifetime && current==raw?ENDPOINT_MATCH:ENDPOINT_MISMATCH;
 }
 void observe_position_bus(const void* connection) {
     const PreserveErrno saved;
@@ -184,6 +267,32 @@ B::Boundary read_position_bus() {
     out.revision=before;return out;
 }
 } }
+extern "C" int32_t mx5_bus_register(void* raw,void* error) {
+    ready();ConnectFrame* const frame=connecting;RegisterScope scope(frame);
+    // The exact original call owns JCIDBUS's mutex and its live raw pointer.
+    // Do not inspect +0x268 after outer connect: disconnect may leave it stale.
+    const uintptr_t caller=reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    bool matched=false;
+    {
+        const PreserveErrno saved;
+        if(frame && !scope.previous && frame->current() && caller==original.endpoint.register_caller) {
+            uint32_t actual=0;memcpy(&actual,static_cast<char*>(frame->connection)+0x268,4);
+            matched=raw && uintptr_t(actual)==uintptr_t(raw);
+        }
+    }
+    const int32_t result=original.endpoint.registration(raw,error);
+    const PreserveErrno saved;
+    if(result && matched && frame->registrations==1 && frame->current()) {
+        // Setup-only getter allocation/locks; no getter occurs on request/send.
+        GuidOwner guid(original.endpoint.get_server_id(raw));
+        R::Endpoint owned=R::Endpoint();owned.server_guid=R::copy_text(guid.value);
+        owned.unique_name=R::copy_text(original.endpoint.get_unique_name(raw));
+        if(frame->registrations==1 && frame->current()) {
+            frame->endpoint=owned;frame->raw=uintptr_t(raw);frame->captured=true;
+        }
+    }
+    return result;
+}
 extern "C" void* mx5_bus_create(A::BusClosed next,void* user) {
     ready();Mutation mutation;
     A::BusClosed wrapper=next;Context* c;
@@ -215,12 +324,20 @@ extern "C" int32_t mx5_bus_connect(void* connection,const char* name,int32_t typ
             c->lifetime.store(id);
         }
     }
+    ConnectFrame frame(c,connection,id);
     const int32_t result=original.connect(connection,name,type,callback_word);
     {
         const PreserveErrno saved;
-        if(c) {
+        if(c && frame.current()) {
+            // All shared bytes are atomic: a reconnecting writer racing a
+            // reader is not a C++ data race hidden behind version checks.
+            c->endpoint_lifetime.store(0);
+            if(result && frame.captured && frame.registrations==1) {
+                c->server_guid.store(frame.endpoint.server_guid);c->unique_name.store(frame.endpoint.unique_name);
+                c->raw_key.store(frame.raw);c->endpoint_lifetime.store(id);
+            }
             unsigned phase=CONNECTING;
-            c->phase.compare_exchange_strong(phase,result && id?ACTIVE:IDLE,
+            c->phase.compare_exchange_strong(phase,result?ACTIVE:IDLE,
                     std::memory_order_seq_cst,std::memory_order_seq_cst);
         }
         mutation.complete=true;

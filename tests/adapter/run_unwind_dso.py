@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'session', 'bus', 'assist', 'runtime-assist'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'endpoint', 'session', 'bus', 'assist', 'runtime-assist'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -69,7 +69,7 @@ def main():
                  'throw_getter', 'cancel_getter', 'session_transition')
         fixture, access = 'request_hooks_arm', 'request_dso_access.h'
         macro, marker = '-DMX5_REQUEST_DSO_TEST', 'PASS ARM request wrappers '
-    elif args.suite == 'request-wire':
+    elif args.suite in ('request-wire', 'endpoint'):
         names = {
             'PREPARE': '_ZN3mx57adapter21prepare_request_hooksERKNS0_15RequestBindingsEPFyPvES4_',
             'HEALTH': '_ZN3mx57adapter19request_hook_healthEv',
@@ -82,6 +82,25 @@ def main():
         cases = ('contract',)
         fixture, access = 'request_wire', 'request_wire_dso_access.h'
         macro, marker = '-DMX5_REQUEST_WIRE_DSO_TEST', 'PASS raw request wrappers '
+        if args.suite == 'endpoint':
+            names.update({
+                'BUS_PREPARE': '_ZN3mx57adapter17prepare_bus_hooksERKNS0_11BusBindingsE',
+                'BUS_HEALTH': '_ZN3mx57adapter15bus_hook_healthEv',
+                'BUS_READ': '_ZN3mx57adapter19read_bus_connectionEPKv',
+                'ENDPOINT_READ': '_ZN3mx57adapter17read_bus_endpointEPKvPNS_7runtime13request_trace8EndpointEPj',
+                'ENDPOINT_MATCH': '_ZN3mx57adapter20bus_endpoint_matchesEPKvRKNS_7runtime9bus_trace8SnapshotEj',
+                'BUS_CREATE': 'mx5_bus_create', 'BUS_CONNECT': 'mx5_bus_connect',
+                'BUS_DISCONNECT': 'mx5_bus_disconnect', 'BUS_FREE': 'mx5_bus_free',
+                'BUS_REGISTER': 'mx5_bus_register',
+                'RESULT_NAME': '_ZN3mx57runtime13request_trace11result_nameENS1_6ResultE',
+            })
+            cases = ('normal', 'missing_guid', 'missing_unique', 'empty', 'long', 'failed_register',
+                     'failed_connect', 'early_close', 'wrong_raw', 'wrong_caller', 'duplicate', 'nested',
+                     'getter_nested', 'register_throw', 'getter_throw', 'getter_cancel', 'connect_throw',
+                     'raw_mismatch', 'reconnect_before_send', 'reconnect_in_send', 'transition_send',
+                     'reconnect', 'address_reuse', 'readers', 'no_api')
+            fixture, access = 'bus_endpoint', 'bus_endpoint_dso_access.h'
+            macro, marker = '-DMX5_ENDPOINT_DSO_TEST', 'PASS endpoint wrappers '
     elif args.suite == 'session':
         names = {
             'PREPARE': '_ZN3mx57adapter21prepare_session_hooksERKNS0_15SessionBindingsE',
@@ -194,7 +213,9 @@ def main():
     (build / 'unwind_offsets.h').write_text(''.join(
         '#define TEST_' + label + ' 0x%xu\n' % offset for label, offset in offsets.items()))
     names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
-    if args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist'):
+    if args.suite == 'endpoint':
+        names += ['bus_endpoint_relay.S', 'request_wire_dso_access.h']
+    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
     for root, directories, files in os.walk(repo / 'src'):
@@ -212,7 +233,9 @@ def main():
                '-D_GNU_SOURCE', macro, '-mcpu=cortex-a9', '-mfpu=neon',
                '-mfloat-abi=softfp', '-marm', '-I' + str(build / 'source/src'), '-I' + str(build),
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
-    if args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist'):
+    if args.suite == 'endpoint':
+        command.append(str(build / 'source/tests/adapter/bus_endpoint_relay.S'))
+    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
     if args.suite == 'runtime-assist':
         # The pinned glibc provides the real monotonic fixture clock in librt.

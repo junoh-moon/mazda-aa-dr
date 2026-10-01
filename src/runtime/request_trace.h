@@ -68,6 +68,11 @@ Text copy_text(const char* text);
 struct Route {
     Text destination, path, interface_name, member;
 };
+// Owned registration-time endpoint, scoped to Issue.connection. Neither the
+// server GUID nor this client's unique name establishes provider qualification.
+// The server GUID is transport-specific, not the bus's GetId result.
+// Incomplete prefixes are diagnostic text, never an exact join key.
+struct Endpoint { Text server_guid, unique_name; };
 // Supplemental observations from the exact raw transport calls. Neither
 // identity nor successful submission establishes provider/sensor qualification.
 struct WireIssue {
@@ -76,6 +81,10 @@ struct WireIssue {
     // A known request serial must be nonzero. Unknown clears serial/time but
     // retains an observed conflict; an absent clock alone does not erase it.
     bool known, conflict;
+    // Exact actual-send raw connection and issue object/lifetime were observed
+    // together. Unavailable inspection is false, not a conflict. An exact key
+    // also needs both nonempty, known, complete endpoint fields and no conflict.
+    bool endpoint_matched;
 };
 struct WireReply {
     uint64_t observed_ns; // Header inspection time, never measurement time.
@@ -100,6 +109,7 @@ struct Issue {
     // session_lifetime/state above stay unknown until that binding is proved.
     session_trace::Snapshot session_context;
     bus_trace::Snapshot connection;
+    Endpoint endpoint;
     // Original method's routing fields, copied BEFORE async submission.
     // A well-known destination is not the provider identity or bus lifetime.
     Route route;

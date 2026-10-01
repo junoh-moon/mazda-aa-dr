@@ -31,6 +31,7 @@ WireIssue copy_wire_issue(const WireIssue& input) {
         const bool conflict=result.conflict;
         result=WireIssue();result.conflict=conflict;
     }
+    if(result.conflict)result.endpoint_matched=false;
     return result;
 }
 WireReply copy_wire_reply(const WireReply& input) {
@@ -52,6 +53,9 @@ Issue copy_issue(const Issue& input) {
     }
     normalize_text(result.route.destination);normalize_text(result.route.path);
     normalize_text(result.route.interface_name);normalize_text(result.route.member);
+    normalize_text(result.endpoint.server_guid);normalize_text(result.endpoint.unique_name);
+    if(result.connection.result!=bus_trace::CONNECTED || !result.connection.object || !result.connection.lifetime)
+        result.endpoint=Endpoint();
     result.wire=copy_wire_issue(input.wire);
     return result;
 }
@@ -237,10 +241,16 @@ Result Ledger::wire_issue(Token request, const WireIssue& input) {
     WireIssue& stored=slot->issue.wire;
     const WireIssue observed=copy_wire_issue(input);
     if(stored.conflict)return leave(CONFLICT);
-    if(observed.conflict) { stored.conflict=true;return leave(CONFLICT); }
+    if(observed.conflict) {
+        // Conflict invalidates the association, not the observed raw header.
+        // Preserve the first serial even when its first capture also detects
+        // a mismatched endpoint; later reads cannot silently repair that fact.
+        if(!stored.known && observed.known)stored=observed;
+        stored.conflict=true;stored.endpoint_matched=false;return leave(CONFLICT);
+    }
     if(!observed.known)return leave(NOT_READY);
     if(stored.known) {
-        if(stored.serial!=observed.serial) { stored.conflict=true;return leave(CONFLICT); }
+        if(stored.serial!=observed.serial) { stored.conflict=true;stored.endpoint_matched=false;return leave(CONFLICT); }
         // A second read of the same serial does not refresh its observed time.
         return leave(OK);
     }

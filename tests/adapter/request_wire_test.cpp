@@ -15,6 +15,12 @@ namespace R=mx5::runtime::request_trace;
 namespace mx5 { namespace adapter {
 S::Snapshot read_issue_session() { return S::Snapshot(); }
 runtime::bus_trace::Snapshot read_bus_connection(const void*) { return runtime::bus_trace::Snapshot(); }
+runtime::bus_trace::Snapshot read_bus_endpoint(const void*,R::Endpoint* endpoint,uintptr_t* raw) {
+    if(endpoint)*endpoint=R::Endpoint();
+    if(raw)*raw=0;
+    return runtime::bus_trace::Snapshot();
+}
+EndpointMatch bus_endpoint_matches(const void*,const runtime::bus_trace::Snapshot&,uintptr_t) { return ENDPOINT_UNAVAILABLE; }
 void observe_position_bus(const void*) {}
 } }
 #if defined(__arm__)

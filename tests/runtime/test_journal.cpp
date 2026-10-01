@@ -206,17 +206,23 @@ static A::Observation long_route_event() {
   memset(text.bytes,1,sizeof text.bytes-1);
   A::R::Trace& t=event.request_trace;
   t.issue.route.destination=t.issue.route.path=t.issue.route.interface_name=t.issue.route.member=text;
+  t.issue.endpoint.server_guid=t.issue.endpoint.unique_name=text;
   t.reply.sender=t.reply.error_name=text;
   t.issue.wire.serial=1;t.issue.wire.known=true;
   t.reply.wire.serial=2;t.reply.wire.reply_serial=1;t.reply.wire.type=3;t.reply.wire.known=true;
   t.reply.wire.sender=t.reply.wire.error_name=text;
+  t.request.id=t.request.epoch=t.worker.id=t.worker.epoch=UINT64_MAX;
+  t.issue.observed_ns=t.reply.observed_ns=t.issue.wire.observed_ns=t.reply.wire.observed_ns=UINT64_MAX;
+  t.issue.connection={mx5::runtime::bus_trace::CONNECTED,UINT32_MAX,UINT64_MAX};
+  t.reply.connection=t.issue.connection;t.issue.bus_lifetime=UINT64_MAX;t.issue.known=A::R::ISSUE_BUS_LIFETIME;
+  event.call_sequence=event.prediction_generation=UINT32_MAX;event.mono_ns=UINT64_MAX;
   return event;
 }
 static void route_capture_tail(const char* root,const std::string& logs) {
   arm_test_mode();
   const A::Observation event=long_route_event();
   char expected[mx5::runtime::OBSERVATION_JSON_CAPACITY];
-  assert(format_observation(expected,sizeof expected,event) && strlen(expected)>2200);
+  assert(format_observation(expected,sizeof expected,event) && strlen(expected)>5120);
   sink(&event,0);freeze_capture();
   {
     Journal j(root);assert(drain_capture_tail(j));j.flush();
@@ -232,7 +238,7 @@ static void route_general_worker(const char* root,const std::string& logs) {
   arm_test_mode();config.mode=1;config.max_log_bytes=65536;
   const A::Observation event=long_route_event();
   char expected[mx5::runtime::OBSERVATION_JSON_CAPACITY];
-  assert(format_observation(expected,sizeof expected,event) && strlen(expected)>2200);
+  assert(format_observation(expected,sizeof expected,event) && strlen(expected)>5120);
   sink(&event,0);
   pthread_t thread;assert(!pthread_create(&thread,0,route_worker,const_cast<char*>(root)));
   bool found=false;
@@ -321,6 +327,7 @@ static void request_journal(bool emit) {
   memset(t.reply.sender.bytes,1,sizeof t.reply.sender.bytes);
   t.reply.sender.complete=false;t.reply.error_name=t.reply.sender;
   t.issue.route.destination=t.issue.route.path=t.issue.route.interface_name=t.issue.route.member=t.reply.sender;
+  t.issue.endpoint.server_guid=t.issue.endpoint.unique_name=t.reply.sender;
   t.reply.wire.sender=t.reply.wire.error_name=t.reply.sender;
   t.issue.wire.observed_ns=t.reply.wire.observed_ns=UINT64_MAX;
   t.issue.wire.serial=t.reply.wire.serial=t.reply.wire.reply_serial=UINT32_MAX;
@@ -367,6 +374,17 @@ static void request_journal(bool emit) {
   assert(!format_observation(position_bounds+1,position_required-1,full));
   assert(position_bounds[position_required-1]==0 && position_bounds[0]==0x5a &&
       position_bounds[position_required]==0x5a);
+  A::Observation identified=full;
+  identified.request_trace.issue.endpoint.server_guid=R::copy_text("0123456789abcdef0123456789abcdef");
+  identified.request_trace.issue.endpoint.unique_name=R::copy_text(":1.7");
+  identified.request_trace.issue.wire.endpoint_matched=true;
+  assert(format_observation(line,sizeof line,identified));
+  assert(strstr(line,"\"server_guid\":{\"value\":\"0123456789abcdef0123456789abcdef\",\"complete\":true}"));
+  assert(strstr(line,"\"unique_name\":{\"value\":\":1.7\",\"complete\":true}"));
+  assert(strstr(line,"\"endpoint_matched\":true"));
+  identified.request_trace.issue.wire.conflict=true;
+  assert(format_observation(line,sizeof line,identified));
+  assert(strstr(line,"\"endpoint_matched\":false"));
   // Exact-size success, one byte short failure, and adjacent bytes untouched.
   char request[mx5::runtime::REQUEST_JSON_CAPACITY];assert(mx5::runtime::format_request_trace(request,sizeof request,R::OK,t));
   const size_t required=strlen(request)+1;

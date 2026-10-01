@@ -28,7 +28,7 @@ bool Observer::valid() const {
 uint64_t Observer::now() const { return clock_ ? clock_(clock_user_) : 0; }
 
 Result Observer::request_begin(void* method, Token* out, const session_trace::Snapshot& context,
-                               const bus_trace::Snapshot& connection) {
+                               const bus_trace::Snapshot& connection,const Endpoint& endpoint) {
     const PreserveErrno saved;
     if (out) *out = Token();
     if (!valid() || !method || !out) return BAD_INPUT;
@@ -36,6 +36,7 @@ Result Observer::request_begin(void* method, Token* out, const session_trace::Sn
     issue.observed_ns = now();
     issue.session_context = context;
     issue.connection = connection;
+    issue.endpoint = endpoint;
     if(connection.result==bus_trace::CONNECTED && connection.object && connection.lifetime) {
         issue.bus_lifetime=connection.lifetime;issue.known|=ISSUE_BUS_LIFETIME;
     }

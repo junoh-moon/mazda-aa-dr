@@ -40,7 +40,8 @@ public:
              const MethodApi& = MethodApi());
     bool valid() const;
     Result request_begin(void* method, Token*, const session_trace::Snapshot& = session_trace::Snapshot(),
-                         const bus_trace::Snapshot& = bus_trace::Snapshot());
+                         const bus_trace::Snapshot& = bus_trace::Snapshot(),
+                         const Endpoint& = Endpoint());
     Result wire_issue(Token request, const WireIssue&);
     Result request_end(void* method);
     // Exact worker and position supplied by the verified BLM ABI, before post.
