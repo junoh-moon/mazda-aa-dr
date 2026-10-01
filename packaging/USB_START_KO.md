@@ -64,16 +64,22 @@ SHADOW는 위치 계산을 로그로만 기록하며 폰에 자체 위치를 전
 이 후속 SHADOW 후보에서 이동 전 `2`로 다음 일곱 근거를 각각 확인하십시오.
 
 - `reboot_check=new_boot_observed`: USB 요청 기록과 현재 부팅 ID가 다릅니다.
-- `startup_state=guard_selected_after_new_boot`: 무장한 Linux 부팅과 현재
-  guard 선택 부팅이 다릅니다.
+- `startup_state=guard_committed_after_new_boot`: 무장한 Linux 부팅과 현재
+  guard 표식 확정 부팅이 다릅니다.
 - `one_boot=consumed_this_boot`: 이번 부팅에서 일회성 예약을 소비했습니다.
-- `config_mode=SHADOW`: 시험할 설정이 실제로 SHADOW입니다.
+- `config_mode=SHADOW`: 현재 설정 파일의 mode가 SHADOW입니다.
 - `runtime_disable_next_start=absent`: 런타임의 다음 시작 차단 표식이 없습니다.
 - `retained_bytes`가 0보다 큽니다.
 - `collector_poll_recent=observed`: 현재 collector의 최근 poll 기록이 있습니다.
 
-`startup_state=guard_selected_after_new_boot`은 이 묶음의 guard v3 소비 표식에서만
-출력됩니다. 이전 v2 표식은 회수 자료로 보존하지만 새 시험 기동 근거가 아닙니다.
+`startup_state=guard_committed_after_new_boot`은 v3 형식의 guard 소비 표식에서만
+출력되며 `guard_config_binding=matched`도 필요합니다. 이 값은 가드가 확정할
+때 결합한 설정 파일의 해시가 현재 파일과 같다는 뜻입니다. 이 표식만으로
+SM이 시험 경로를 받아 사용했거나 AA 런타임이 시작됐다고 증명하지 않습니다.
+이전 v2 표식은
+회수 자료로 보존하지만 새 시험 기동 근거가 아닙니다.
+부팅 표식이 `invalid`이면 설치·재무장을 반복하지 마십시오. 손상 원본과 로그를
+회수한 뒤 PC에서 원인을 조사해야 하며, 메뉴 `4`만으로 손상 표식이 복구되지는 않습니다.
 AA 동글을 아직 연결하지 않아도 collector는 기동·기록할 수 있습니다.
 정차 중 센서가 아직 없거나 AA가 분리돼 전체 상태의 `status_exit`가 1일 수
 있으므로, 모든 센서나 `status_exit=0`을 이 단계의 조건으로 요구하지 않습니다.

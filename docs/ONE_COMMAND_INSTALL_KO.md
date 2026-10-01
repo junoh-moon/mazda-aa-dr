@@ -53,13 +53,17 @@ ACC와 엔진이 꺼진 ON은 실제 엔진 가동과 다릅니다. 둘 다 시�
    **`2`와 Enter**를 누르십시오. 후속 `v0.3.10-shadow.2` 후보에서는 다음 일곱 줄을 각각 확인하십시오.
 
    - `reboot_check=new_boot_observed`
-   - `startup_state=guard_selected_after_new_boot`
+   - `startup_state=guard_committed_after_new_boot`
    - `one_boot=consumed_this_boot`
    - `config_mode=SHADOW`
    - `runtime_disable_next_start=absent`
    - `retained_bytes`가 0보다 큼
    - `collector_poll_recent=observed`
 
+   양성 `startup_state`는 guard v3가 소비한 설정 해시와 현재 설정이 일치한
+   `guard_config_binding=matched`일 때만 출력됩니다. `config_mode` 자체는
+   현재 설정 파일의 값이며 실행 중인 AA 모드의 증명은 아닙니다. 가드 표식도
+   SM이 시험 경로를 받아 사용했다는 확인은 아닙니다.
    AA가 없어도 collector는 기동할 수 있습니다. 모든 센서 수신이나 전체
    `status_exit=0`을 요구하지 않으며, 정차·AA 분리로 종료 코드가 1일 수 있습니다.
    화면 복귀 직후 `startup_state=new_linux_boot_arm_unconsumed`이거나 collector

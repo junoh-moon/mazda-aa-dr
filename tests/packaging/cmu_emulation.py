@@ -572,12 +572,17 @@ def startup_menu_flow(stock, bundle):
                     f'Startup menu unexpected rc={result.returncode}: {script}')
             return result
 
-        run("printf '1\\n5\\n' | sh /tmp/mnt/sda1/trial")
+        run("printf '1\\n0\\n' | sh /tmp/mnt/sda1/trial")
+        base = root / 'tmp/mnt/data_persist/mx5-aa-dr'
+        require((base / 'guard/arm').is_file(), 'Menu 1 did not arm actual ARM guard')
+        run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
+        require((base / 'guard/arm').is_file() and
+                not (base / 'guard/consumed').exists(),
+                'Same-boot Service Manager retry consumed the next-boot arm')
+        run("printf '5\\n' | sh /tmp/mnt/sda1/trial")
         require((root / 'reboot.witness').read_text() == 'called\n' and
                 'boot_id=' + BOOT.strip() in (usb / 'reboot-request.txt').read_text(),
                 'Menu 1→5 failed to preserve the pre-request boot ID')
-        base = root / 'tmp/mnt/data_persist/mx5-aa-dr'
-        require((base / 'guard/arm').is_file(), 'Menu 1 did not arm actual ARM guard')
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf')
         require((base / 'guard/last-boot').read_text() == new_boot + '\n' and
                 not (base / 'guard/arm').exists(), 'Authored new boot did not consume arm')
@@ -589,7 +594,7 @@ def startup_menu_flow(stock, bundle):
             separators=(',', ':')) + '\n' for row in rows))
         status = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
         for expected in ('reboot_check=new_boot_observed',
-                         'startup_state=guard_selected_after_new_boot',
+                         'startup_state=guard_committed_after_new_boot',
                          'one_boot=consumed_this_boot', 'config_mode=SHADOW',
                          'runtime_disable_next_start=absent',
                          'collector_poll_recent=observed'):
@@ -600,6 +605,15 @@ def startup_menu_flow(stock, bundle):
                 'Synthetic poll was not retained or missing AA runtime was overclaimed')
         require('reboot_check=new_boot_observed' in (usb / 'startup-result.txt').read_text(),
                 'Menu 2 did not save the startup comparison to USB')
+        config = base / 'mx5dr.conf'
+        config_original = config.read_bytes()
+        config.write_bytes(config_original + b'# changed after guard selection\n')
+        changed = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        require('config_mode=SHADOW' in changed.stdout and
+                'guard_config_binding=changed' in changed.stdout and
+                'startup_state=guard_config_changed_since_selection' in changed.stdout,
+                'Stock BusyBox borrowed a consumed guard after config changed')
+        config.write_bytes(config_original)
         marker = base / 'guard/armed-boot'
         marker.write_bytes(BOOT.strip().encode() + b'\x00')
         damaged = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
@@ -614,22 +628,21 @@ def startup_menu_flow(stock, bundle):
         consumed.write_bytes(consumed_damaged)
         damaged = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
         require('guard_consumed=invalid' in damaged.stdout and
-                'startup_state=guard_selected_after_new_boot' not in damaged.stdout,
+                'startup_state=guard_committed_after_new_boot' not in damaged.stdout,
                 'Stock BusyBox accepted an internal NUL in the v3 consumed marker')
         consumed.write_bytes(consumed_original)
-        config = base / 'mx5dr.conf'
-        config_original = config.read_bytes()
         config.write_bytes(config_original.replace(b'mode=', b'mo\x00e=', 1))
         damaged = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
         require('config_mode=unconfirmed' in damaged.stdout and
-                'startup_state=guard_selected_after_new_boot' not in damaged.stdout,
+                'startup_state=guard_committed_after_new_boot' not in damaged.stdout,
                 'Stock BusyBox accepted an internal NUL in the trial config')
         config.write_bytes(config_original)
         put(root, '/test-bin/od', '#!/bin/sh\nexit 1\n', 0o755)
         missing_od = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
         require('Invalid current boot ID' in missing_od.stdout + missing_od.stderr,
                 'Failed od was hidden by a successful tr pipeline')
-        print('PASS: stock ARM BusyBox menu1→5→2, real guard selection, authored reboot '
+        print('PASS: stock ARM BusyBox menu1→5→2, same-boot retry refusal, '
+              'real guard selection, authored reboot '
               'and collector witnesses, seven startup fields and corrupt-byte rejection; '
               'no PID 1/AA/VBS execution.',
               flush=True)
@@ -793,7 +806,7 @@ def main():
             observed_at_mono_ns=99000000000, producer_mono_ns=None,
             producer_time_status='unknown', **row), separators=(',', ':')) + '\n' for row in collector))
         status = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial")
-        require('startup_state=guard_selected_after_new_boot' in status.stdout and
+        require('startup_state=guard_committed_after_new_boot' in status.stdout and
                 'linux_reboot_after_arm=observed' in status.stdout,
                 'Status did not prove a distinct authored Linux boot after arming')
         require('model_solution=not_observed' in status.stdout and

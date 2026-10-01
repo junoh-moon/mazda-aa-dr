@@ -187,6 +187,6 @@ if [ -z "$ROOT" ] && [ "$MODE" != OFF ]; then
     echo 'Install steps finished. A vehicle ignition cycle alone does not prove a new CMU Linux boot.'
     echo 'Remain parked with the engine actually running and this USB connected. Choose trial menu 5 to request CMU reboot; do not press the engine start/stop button.'
     echo "The next guarded CMU startup requests automatic $MODE capture; no driving-time commands are needed."
-    echo "After CMU restart reopen trial menu 2: check reboot_check=new_boot_observed, startup_state=guard_selected_after_new_boot, one_boot=consumed_this_boot, config_mode=$MODE, runtime_disable_next_start=absent, retained_bytes>0 and collector_poll_recent=observed."
+    echo "After CMU restart reopen trial menu 2: check reboot_check=new_boot_observed, startup_state=guard_committed_after_new_boot, one_boot=consumed_this_boot, config_mode=$MODE, runtime_disable_next_start=absent, retained_bytes>0 and collector_poll_recent=observed."
     echo 'Then exit the menu and replace the USB with the AA dongle while parked, keeping the same engine/CMU boot.'
 fi

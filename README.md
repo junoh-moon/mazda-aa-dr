@@ -65,7 +65,7 @@ the parking brake applied and the engine actually running. Follow the
 choose `5` with the same USB connected, without pressing the engine button.
 After the CMU returns, reopen the USB shell. Before moving, use menu `2` to check
 `reboot_check=new_boot_observed`,
-`startup_state=guard_selected_after_new_boot`,
+`startup_state=guard_committed_after_new_boot`,
 `one_boot=consumed_this_boot`, `config_mode=SHADOW`,
 `runtime_disable_next_start=absent`, nonzero `retained_bytes`, and
 `collector_poll_recent=observed`. These seven checks apply to the subsequent

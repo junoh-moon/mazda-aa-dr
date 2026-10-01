@@ -37,7 +37,29 @@ class Gate(unittest.TestCase):
  def tearDown(self):self.tmp.cleanup()
  def put(self,p,b):x=self.root/p;x.write_bytes(b);x.chmod(0o600)
  def call(self,*a,env=None):return subprocess.run(self.command+list(a),env=env or self.env,text=True,capture_output=True)
- def arm(self):self.assertEqual(self.call('arm').returncode,0)
+ def arm(self):
+  self.assertEqual(self.call('arm').returncode,0)
+  # Direct guard fixtures represent the installer-published arming marker from
+  # an earlier Linux boot. The real installer test covers the publication order.
+  current=(self.root/'proc/sys/kernel/random/boot_id').read_bytes()
+  prior=(b'11234567' if not current.startswith(b'11234567') else b'21234567')+current[8:]
+  for location in (self.root/BASE, self.root/'mnt'/BASE,
+                   self.root/'tmp/mnt'/BASE):
+   if location.is_dir():
+    marker=location/'guard/armed-boot';marker.write_bytes(prior);marker.chmod(0o600)
+    break
+  else:self.fail('No fixture persistent directory for arming marker')
+ def test_same_boot_or_missing_arming_marker_cannot_select(self):
+  self.arm()
+  marker=self.root/BASE/'guard/armed-boot'
+  prior=marker.read_bytes()
+  marker.unlink()
+  self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  self.put(BASE+'/guard/armed-boot',(self.root/'proc/sys/kernel/random/boot_id').read_bytes())
+  self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  self.assertTrue((self.root/BASE/'guard/arm').is_file())
+  self.put(BASE+'/guard/armed-boot',prior)
+  self.assertEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
  def test_check_does_not_arm_and_rejects_missing_boot_id(self):
   self.assertEqual(self.call('check').returncode,0)
   self.assertFalse((self.root/BASE/'guard/arm').exists())
@@ -205,15 +227,33 @@ class Gate(unittest.TestCase):
     if stage != 'trial-dir':
      self.assertFalse((self.root/BASE/'guard/arm').exists())
      self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+    if stage == 'last-boot':
+     self.assertFalse((self.root/BASE/'guard/last-boot').exists())
+     self.assertTrue((self.root/BASE/'guard/consumed').is_file())
+     (self.root/BASE/'logs').mkdir(exist_ok=True)
+     self.put('proc/uptime',b'100.00 0.00\n')
+     status=subprocess.run(['sh',str(HERE/'packaging/trial_status.sh')],
+                           env=dict(self.env,MX5DR_FIXTURE_ROOT=str(self.root)),
+                           text=True,capture_output=True)
+     self.assertNotIn('startup_state=guard_committed_after_new_boot',status.stdout)
  def test_failed_arm_publish_revokes_authorization(self):
   r=self.call('arm',env=dict(self.env,MX5DR_GUARD_FAIL_FSYNC='arm'))
   self.assertNotEqual(r.returncode,0)
   self.assertFalse((self.root/BASE/'guard/arm').exists())
   self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_failed_last_boot_rollback_durability_is_explicit(self):
+  self.arm()
+  result=self.call('select','/jci/sm/sm.conf',
+                   env=dict(self.env,MX5DR_GUARD_FAIL_FSYNC='last-boot,last-boot-cancel'))
+  self.assertEqual(result.returncode,3)
+  self.assertEqual(result.stdout,'')
+  self.assertIn('unable to confirm durable rollback',result.stderr)
+  self.assertFalse((self.root/BASE/'guard/last-boot').exists())
+  self.assertFalse((self.root/BASE/'guard/arm').exists())
  def test_failed_arm_rollback_durability_is_explicit(self):
   r=self.call('arm',env=dict(self.env,MX5DR_GUARD_FAIL_FSYNC='arm,arm-cancel'))
   self.assertEqual(r.returncode,3)
-  self.assertIn('unable to confirm durable disarm',r.stderr)
+  self.assertIn('unable to confirm durable rollback',r.stderr)
   self.assertFalse((self.root/BASE/'guard/arm').exists())
   self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
  def test_concurrent_selection_at_most_one(self):

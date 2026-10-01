@@ -58,7 +58,7 @@ sh /tmp/mnt/sda1/trial
 따라 중립·주차브레이크·실제 엔진 가동을 유지하고 `1` 설치 뒤 `5`로 CMU
 재부팅을 요청하십시오. 시동 버튼을 누르거나 USB를 빼지 마십시오.
 화면 복귀 후 USB·셸로 돌아와 `2`에서 새 boot ID,
-`startup_state=guard_selected_after_new_boot`, 현재 부팅의 가드 소비와
+`startup_state=guard_committed_after_new_boot`, 현재 부팅의 가드 소비와
 `config_mode=SHADOW`, `runtime_disable_next_start=absent`, 전체 보존 파일의
 바이트 수와 현재 collector의 최근 poll을 확인하십시오. 이 일곱 근거는 후속
 `v0.3.10-shadow.2` 후보에 해당하며 공개 `v0.3.10-shadow.1`에는 `startup_state`, `config_mode`,

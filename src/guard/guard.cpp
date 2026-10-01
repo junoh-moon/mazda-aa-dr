@@ -84,7 +84,20 @@ bool sync_dir(int fd,const char*stage){
 #endif
  return fsync(fd)==0;
 }
-bool atomic_file(const char*name,const std::string&s){char temp[96];snprintf(temp,sizeof temp,".%s.%ld",name,(long)getpid());int fd=openat(gd,temp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return false;bool ok=write_all(fd,s)&&fsync(fd)==0;int e=close(fd);ok=ok&&e==0;if(ok)ok=renameat(gd,temp,gd,name)==0&&sync_dir(gd,name);if(!ok)unlinkat(gd,temp,0);return ok;}
+bool atomic_file(const char*name,const std::string&s,bool*published=0){
+ if(published)*published=false;
+ char temp[96];snprintf(temp,sizeof temp,".%s.%ld",name,(long)getpid());
+ int fd=openat(gd,temp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+ if(fd<0)return false;
+ bool ok=write_all(fd,s)&&fsync(fd)==0;
+ int e=close(fd);ok=ok&&e==0;
+ if(ok){
+  ok=renameat(gd,temp,gd,name)==0;
+  if(ok){if(published)*published=true;ok=sync_dir(gd,name);}
+ }
+ if(!ok)unlinkat(gd,temp,0);
+ return ok;
+}
 bool manifest(std::string&s){
  s="mx5dr-one-boot-v3\n";
  for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){
@@ -126,8 +139,12 @@ int run(int argc,char**argv){if(geteuid()!=expected_owner()||argc<2)return 2;
  }
  if(strcmp(argv[1],"select")||argc!=3)return 2;
  unsigned index;if(!strcmp(argv[2],"/jci/sm/sm.conf"))index=3;else if(!strcmp(argv[2],"/jci/sm/sm_WCP.conf"))index=5;else return 2;
- std::string arm,id,last;if(!owned_read("arm",arm)||arm!=expected||!boot_id(id)||!last_boot_record(last))return 2;
- if(last==id)return 2;
+ std::string arm,id,last,armed;
+ if(!owned_read("arm",arm)||arm!=expected||!boot_id(id)||!last_boot_record(last)||
+    !owned_read("armed-boot",armed)||!valid_boot_record(armed))return 2;
+ // The installer publishes this marker after arming. A Service Manager restart
+ // in that same Linux boot must not consume the future-boot trial.
+ if(last==id||armed==id)return 2;
  std::string content;if(!read_file(prefix+names[index],content,1024*1024))return 2;
  // Temporary parent is a real directory. mkdtemp gives an unguessable exclusive child.
  std::string t=prefix+"/tmp/mx5dr-trial-XXXXXX";std::vector<char> d(t.begin(),t.end());d.push_back(0);
@@ -140,11 +157,22 @@ int run(int argc,char**argv){if(geteuid()!=expected_owner()||argc<2)return 2;
  if(ok)ok=fchmod(td,0755)==0&&sync_dir(td,"trial-dir");
  // No path is published until arm consumption and boot marker are durable.
  if(ok)ok=renameat(gd,"arm",gd,"consumed")==0&&sync_dir(gd,"consume-dir");
- if(ok)ok=atomic_file("last-boot",id);
- if(!ok){unlinkat(td,"sm.conf",0);close(td);rmdir(&d[0]);return 2;}
+ bool last_published=false;
+ if(ok)ok=atomic_file("last-boot",id,&last_published);
+ if(!ok){
+  // rename can succeed before the directory fsync fails. The SM receives no
+  // trial path, so remove the visible success marker as well.
+  bool revoked=true;
+  if(last_published){
+   revoked=unlinkat(gd,"last-boot",0)==0||errno==ENOENT;
+   if(revoked)revoked=sync_dir(gd,"last-boot-cancel");
+  }
+  unlinkat(td,"sm.conf",0);close(td);rmdir(&d[0]);
+  return revoked?2:3;
+ }
  close(td);std::string result=std::string(&d[0])+"/sm.conf";
  if(printf("%s\n",result.c_str())<0||fflush(stdout))return 2;
  return 0;
 }
 }
-int main(int argc,char**argv){int r=run(argc,argv);if(r==3)fprintf(stderr,"mx5dr guard: unable to confirm durable disarm; inspect storage before reboot\n");else if(r)fprintf(stderr,"mx5dr guard: no trial path published\n");return r;}
+int main(int argc,char**argv){int r=run(argc,argv);if(r==3)fprintf(stderr,"mx5dr guard: unable to confirm durable rollback; inspect storage before reboot\n");else if(r)fprintf(stderr,"mx5dr guard: no trial path published\n");return r;}

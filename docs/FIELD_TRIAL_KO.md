@@ -154,7 +154,7 @@ CMU 화면이 돌아오면 같은 USB의 MP3로 셸을 다시 열어 같은 한 
 **후속 `v0.3.10-shadow.2` 후보에서는 이동 전에 계속 주차 중 메뉴 `2`로 다음 일곱 근거를 확인하십시오.**
 
 - `reboot_check=new_boot_observed`: 요청 기록과 현재 부팅 ID가 다릅니다.
-- `startup_state=guard_selected_after_new_boot`: 무장과 guard 선택이 서로 다른
+- `startup_state=guard_committed_after_new_boot`: 무장과 guard 표식 확정이 서로 다른
   Linux 부팅에 있었습니다.
 - `one_boot=consumed_this_boot`: 현재 부팅에서 일회성 예약을 소비했습니다.
 - `config_mode=SHADOW`: 현재 설정 파일이 SHADOW로 해석됩니다.
@@ -162,8 +162,11 @@ CMU 화면이 돌아오면 같은 USB의 MP3로 셸을 다시 열어 같은 한 
 - `retained_bytes`가 0보다 큽니다.
 - `collector_poll_recent=observed`: 현재 collector의 최근 poll이 기록됐습니다.
 
-새 부팅의 guard 선택은 이 묶음의 v3 표식에서만 인정합니다. 이전 v2 표식은
-회수하되 새 시험의 성공 근거로 바꾸지 않습니다.
+양성 `startup_state`는 `guard_config_binding=matched`도 요구하여 guard v3가
+소비한 설정 해시와 현재 설정 파일이 같을 때만 출력합니다. 이 표식은 SM의
+시험 경로 수신이나 AA 런타임 기동까지 증명하지 않습니다. 새 부팅의 guard
+확정은 v3 형식의 표식에서만 인정합니다. 이전 v2 표식은 회수하되 새
+시험의 성공 근거로 바꾸지 않습니다.
 이 일곱 근거는 VBS tap 로딩·원시 센서 수신이나 MODEL 계산 성공을 증명하지
 않습니다. 주차 중 AA 연결과 기존 터치 동작을 확인하고, 실제 기록은 회수 후
 별도로 판정하십시오.

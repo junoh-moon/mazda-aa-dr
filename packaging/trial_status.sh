@@ -150,7 +150,7 @@ elif [ "$guard_last_boot" = current ] && [ "$guard_consumed" = present ]; then
     else
         case "$guard_armed_boot" in
             current) startup_state=guard_selected_same_boot_as_arm;;
-            different) startup_state=guard_selected_after_new_boot;;
+            different) startup_state=guard_committed_after_new_boot;;
             *) startup_state=guard_selected_reboot_unconfirmed;;
         esac
     fi
@@ -179,6 +179,24 @@ if [ -e "$BASE/logs/disable-next-start" ] || [ -L "$BASE/logs/disable-next-start
     startup_state=runtime_disabled_next_start
 fi
 echo "runtime_disable_next_start=$runtime_disable_next_start"
+guard_config_binding=unconfirmed
+if [ "$startup_state" = guard_committed_after_new_boot ]; then
+    # Row 3 of the validated v3 manifest is the configuration digest used by
+    # guard selection. A later file edit cannot turn an OBSERVE boot into an
+    # apparent SHADOW boot merely by changing the current config text.
+    if expected_config_digest=$(LC_ALL=C awk 'NR==3 {print; exit}' "$BASE/guard/consumed") &&
+       actual_config_digest=$(hash "$BASE/mx5dr.conf"); then
+        if [ "$expected_config_digest" = "$actual_config_digest" ]; then
+            guard_config_binding=matched
+        else
+            guard_config_binding=changed
+            startup_state=guard_config_changed_since_selection
+        fi
+    else
+        startup_state=guard_config_unconfirmed
+    fi
+fi
+echo "guard_config_binding=$guard_config_binding"
 set --
 retained=0
 # Fixed bounded filenames only, oldest first within each stream. A rotated-away
@@ -196,7 +214,7 @@ for name in trace.2.jsonl trace.1.jsonl trace.0.jsonl collector.1.jsonl collecto
     fi
 done
 echo "one_boot=$oneboot retained_bytes=$retained trace_cap_bytes=25165824 collector_cap_bytes=2097152 (24+2 MiB, rotates)"
-echo "guard_last_boot=$guard_last_boot guard_consumed=$guard_consumed; markers alone do not prove collector or runtime capture."
+echo "guard_last_boot=$guard_last_boot guard_consumed=$guard_consumed; markers do not prove SM received the trial path or that runtime capture began."
 echo "guard_arm=$guard_arm guard_armed_boot=$guard_armed_boot guard_previous_armed_boot=$guard_previous_armed_boot startup_state=$startup_state"
 echo "guard_arm_schema=$guard_arm_schema guard_consumed_schema=$guard_consumed_schema (v2 is retained evidence, not a v3 startup gate)"
 echo "config_mode=$config_mode"

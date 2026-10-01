@@ -1,5 +1,6 @@
 """Read-only parked check with synthetic bounded journals; no firmware needed."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -12,7 +13,9 @@ PACK = Path(__file__).resolve().parents[2] / 'packaging'
 COLLECTOR = Path(os.environ.get('MX5DR_TEST_BUILD', PACK.parent / 'build')) / 'test_collector'
 BOOT = '12345678-1234-1234-1234-123456789abc'
 OLD = '87654321-1234-1234-1234-123456789abc'
-MANIFEST = 'mx5dr-one-boot-v3\n' + ('a' * 64 + '\n') * 8
+CONFIG = 'mode=SHADOW\nsample_ms=1000\n'
+CONFIG_DIGEST = hashlib.sha256(CONFIG.encode()).hexdigest()
+MANIFEST = 'mx5dr-one-boot-v3\n' + ('a' * 64 + '\n') + CONFIG_DIGEST + '\n' + ('a' * 64 + '\n') * 6
 LEGACY_MANIFEST = 'mx5dr-one-boot-v2\n' + ('a' * 64 + '\n') * 7
 
 
@@ -29,7 +32,7 @@ class TrialStatusTests(unittest.TestCase):
         (self.base / 'guard/last-boot').write_text(BOOT + '\n')
         (self.base / 'guard/consumed').write_text(MANIFEST)
         (self.base / 'guard/armed-boot').write_text(OLD + '\n')
-        (self.base / 'mx5dr.conf').write_text('mode=SHADOW\nsample_ms=1000\n')
+        (self.base / 'mx5dr.conf').write_text(CONFIG)
         bootfile = self.root / 'proc/sys/kernel/random/boot_id'
         bootfile.parent.mkdir(parents=True)
         bootfile.write_text(BOOT + '\n')
@@ -110,7 +113,7 @@ exec "$MX5DR_REAL_OD" "$@"
                                         env=dict(base_env, MX5DR_OD_FAIL_PATH=path))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stdout + result.stderr)
-                self.assertNotIn('startup_state=guard_selected_after_new_boot',
+                self.assertNotIn('startup_state=guard_committed_after_new_boot',
                                  result.stdout)
 
     def test_guard_markers_survive_empty_log_failure(self):
@@ -159,8 +162,18 @@ exec "$MX5DR_REAL_OD" "$@"
         marker.write_text(OLD + '\n')
         different = self.run_status()
         self.assertEqual(different.returncode, 0, different.stdout + different.stderr)
-        self.assertIn('startup_state=guard_selected_after_new_boot', different.stdout)
+        self.assertIn('startup_state=guard_committed_after_new_boot', different.stdout)
         self.assertIn('linux_reboot_after_arm=observed', different.stdout)
+        self.assertIn('guard_config_binding=matched', different.stdout)
+
+    def test_changed_config_cannot_borrow_consumed_guard_selection(self):
+        (self.base / 'mx5dr.conf').write_text('mode=SHADOW\nsample_ms=1500\n')
+        changed = self.run_status()
+        self.assertNotEqual(changed.returncode, 0)
+        self.assertIn('config_mode=SHADOW', changed.stdout)
+        self.assertIn('guard_config_binding=changed', changed.stdout)
+        self.assertIn('startup_state=guard_config_changed_since_selection', changed.stdout)
+        self.assertIn('linux_reboot_after_arm=unavailable', changed.stdout)
 
     def test_legacy_manifest_is_retained_but_cannot_qualify_v3_startup(self):
         (self.base / 'guard/consumed').write_text(LEGACY_MANIFEST)
@@ -654,6 +667,8 @@ exec "$MX5DR_REAL_OD" "$@"
         (self.root / 'proc/sys/kernel/random/boot_id').write_text(actual_boot)
         (self.base / 'guard/last-boot').write_text(actual_boot)
         (self.base / 'mx5dr.conf').write_text('mode=SHADOW\nsample_ms=500\n')
+        updated = hashlib.sha256((self.base / 'mx5dr.conf').read_bytes()).hexdigest()
+        (self.base / 'guard/consumed').write_text(MANIFEST.replace(CONFIG_DIGEST, updated, 1))
         proc = subprocess.Popen([str(COLLECTOR), '--root', str(self.base),
                                  '--bus-address', 'unix:path=' + str(self.root / 'absent'),
                                  '--smdb', '/nonexistent-mx5dr-smdb'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
