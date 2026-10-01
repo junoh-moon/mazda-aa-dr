@@ -81,7 +81,9 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   차량 경로는 여전히 미확정입니다.
   파일 trace를 끈 후속 실행에서는 guest의 직전 TCN 읽기보다 254 tick
   앞선 GPT 비교값이 QEMU 계산 시 이미 295 tick 지난 상태였습니다.
-  정확한 guest 재시도·clockevent 결과는 아직 측정하지 못했습니다.
+  별도 실행에서는 325 tick 뒤였고, 마지막 비교값 쓰기 뒤 같은
+  스레드의 TCN 재읽기는 제한 종료까지 미관측이었습니다. TCG 스케줄링
+  지연과 정확한 guest 재시도·clockevent 결과는 아직 분리하지 못했습니다.
   [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)에서
   원본 `GetPosition`과 `GetUbloxDiag`의 출력 형식·별도 cache mutex를
   직접 대조했습니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단
