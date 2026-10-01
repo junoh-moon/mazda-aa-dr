@@ -64,6 +64,13 @@ GPS 참조는 고정 큐에서 대기한다. yaw 평균 구간이 나중에 도�
   적용 영점도 포함한다. 준비 단계의 중단과 SKIPPED는 구간 ID 0이며
   SKIPPED는 cooldown을 재시작하지 않는다.
 
+후속 소스의 `shadow_holdout`은 실제로 사용한 원본 위치의 `reference_call`과
+`reference_generation`도 기록합니다. 지연된 참조 큐의 Observation에서 값을
+복사하며 0과 UINT32_MAX도 유효한 식별자입니다. END와 일반 ABORT처럼 개별
+참조가 없는 사건은 두 값 모두 null입니다. 출력 큐 초과가 참조 있는 사건을
+ABORT로 바꾼 경우에는 원래 식별자를 보존합니다. 이 값은 물리 생산 시각이나
+ASSIST 자격이 아닙니다. v0.3.7 및 이전 설치 ZIP에는 이 두 필드가 없습니다.
+
 모두 `domain=model`, `assist_ready=false`다. COMPARED가 아닌 이벤트에는 위치 차이 숫자를 넣지 않는다. 원본 `motion_batch`의 센서 필드와 순서는 유지한다.
 
 기존 PC 명령으로 읽는다.
@@ -73,6 +80,20 @@ python3 tools/analyze_logs.py exported-logs.tar.gz --json
 ```
 
 분석기는 잘못된 MODEL/ASSIST 표시, 비정상 숫자, 참조와 예측 시각 불일치, 누락된 BEGIN/종료, 역행 참조 및 구간 도중 보정값 변경을 확인한다. 비교 수·최소/최대/평균 GPS 차이를 요약하되 정확도 합격 판정을 만들지 않는다. ABORT나 잘린 구간은 불완전한 비교로 남긴다. 회전 로그의 보관 한계와 차량 위치 정보 취급은 기존과 같다.
+
+새 `shadow_holdout.reference_links` 요약은 같은 trace 묶음·기록 session의
+`(reference_call, reference_generation)`으로 앞선 원본 position을 찾습니다.
+찾은 뒤 수신 시각과 비교 좌표가 일치하는지 검사하며, 시각이나 좌표로 식별자를
+대신하지 않습니다. 연결 성공(`matched`), 과거 형식(`legacy_without_identity`),
+참조 없음(`no_reference`), 원본 누락(`raw_missing`), 중복(`ambiguous`),
+기록 불일치(`mismatch`), 잘못된 식별자(`malformed`)를 구분합니다.
+뒤늦게 같은 식별자가 중복돼도 기존 성공 수를 모호한 연결로 다시 집계합니다.
+
+같은 디렉터리의 trace.N.jsonl 회전 파일은 이어 읽되 별도 export·디렉터리·
+boot 경계를 넘어 원본을 가져오지 않습니다. boot가 없는 부분 로그는 행끼리
+일치해도 프로세스 동일성과 수집 완전성이 미확인입니다. 연결 진단에 문제가
+있어도 기록된 유효 MODEL 비교 수와 차이는 남습니다. 연결 성공은 GPS 제외
+계약이나 물리 정확도 검증을 대신하지 않습니다.
 
 ## 검증과 다음 증거
 

@@ -66,8 +66,10 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
 for scenario in startup during query invalid healthy; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test" --storage "$scenario"
 done
-MX5DR_JOURNAL_FIXTURE="qemu-arm -L $QEMU_SYSROOT $build/journal-test" \
-    python3 -m unittest discover -s tests/journal -p test_shadow_results.py -v
+for journal_suite in test_shadow_results.py test_request_log.py; do
+    MX5DR_JOURNAL_FIXTURE="qemu-arm -L $QEMU_SYSROOT $build/journal-test" \
+        python3 -m unittest discover -s tests/journal -p "$journal_suite" -v
+done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_worker_session.cpp -ldl -pthread -lrt -lm -o "$build/worker-session-test"
 for scenario in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
@@ -133,6 +135,8 @@ done
 
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_shadow_log.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -o "$build/shadow-log-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/shadow-log-test"
+MX5DR_SHADOW_FIXTURE="qemu-arm -L $QEMU_SYSROOT $build/shadow-log-test" \
+    python3 -m unittest discover -s tests/journal -p test_calibration_logs.py -v
 
 python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \

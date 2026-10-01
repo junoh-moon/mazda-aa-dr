@@ -47,6 +47,11 @@ inline bool format_shadow_holdout(char* out,size_t capacity,uint64_t now,
     const bool compared=r.event==navigation::HOLDOUT_COMPARED;
     char lat[48]="null",lon[48]="null",ref_lat[48]="null",ref_lon[48]="null";
     char error[48]="null",heading[48]="null",zero[48],scale[48];
+    char reference_call[16]="null",reference_generation[16]="null";
+    if(r.has_reference_observation) {
+        ::snprintf(reference_call,sizeof reference_call,"%u",r.reference_call);
+        ::snprintf(reference_generation,sizeof reference_generation,"%u",r.reference_generation);
+    }
     if (compared) {
         shadow_number(r.prediction.latitude_deg,lat); shadow_number(r.prediction.longitude_deg,lon);
         shadow_number(r.reference.latitude_deg,ref_lat); shadow_number(r.reference.longitude_deg,ref_lon);
@@ -59,12 +64,14 @@ inline bool format_shadow_holdout(char* out,size_t capacity,uint64_t now,
         "{\"kind\":\"shadow_holdout\",\"mono_ns\":%llu,\"domain\":\"model\","
         "\"assist_ready\":false,\"time_basis\":\"receipt_model\",\"event\":\"%s\",\"reason\":\"%s\","
         "\"window_id\":%llu,\"anchor_ns\":%llu,\"reference_ns\":%llu,\"frontier_ns\":%llu,"
+        "\"reference_call\":%s,\"reference_generation\":%s,"
         "\"model_valid\":%s,\"lat\":%s,\"lon\":%s,\"ref_lat\":%s,\"ref_lon\":%s,"
         "\"position_error_m\":%s,\"heading_error_rad\":%s,\"yaw_zero\":%s,\"calibration_version\":%llu,"
         "\"wheel_scale\":%s,\"wheel_scale_version\":%llu}",
         (unsigned long long)now,navigation::holdout_event_name(r.event),navigation::holdout_reason_name(r.reason),
         (unsigned long long)r.window_id,(unsigned long long)r.anchor_ns,
         (unsigned long long)r.reference_ns,(unsigned long long)r.prediction_frontier_ns,
+        reference_call,reference_generation,
         compared&&r.prediction.model_valid?"true":"false",lat,lon,ref_lat,ref_lon,error,heading,zero,
         (unsigned long long)r.calibration_version,scale,(unsigned long long)r.wheel_scale_version);
     return n>0 && size_t(n)<capacity;

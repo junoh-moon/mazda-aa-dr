@@ -21,13 +21,16 @@ Shift 키나 긴 회수 경로 입력이 필요하지 않습니다.
 [사용 안내](packaging/USB_START_KO.md) · [설치 수정과 검증](validation/USB_INSTALL_2026-09-29.md).
 현재 소스는 CMU의 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
 이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리한다.
-오래된 ASSIST 기준점 재사용 결함을 수정한
-[v0.3.6-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.6-shadow.1)을
-게시했습니다. raw 요청 연결·지연 yaw/holdout·숫자 메뉴와 저장 공간 정책을
-유지합니다. 실제 자격 입력 공급부는 미구현이므로 ASSIST는 비활성입니다.
-[릴리즈 검증](validation/RELEASE_V036_2026-10-01.md)은 clean host/ARM 전체,
-원본 OEM VM cold 설치, 최종 ZIP의 순정 BusyBox 설치와 공개 파일 재다운로드를
-구분합니다. 기존 v0.3.5에는 비활성 계산 경로의 결함이 남아 있습니다.
+GPS holdout 결과를 원본 위치의 호출·generation 식별자에 연결하는
+[v0.3.8-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.8-shadow.1)을
+게시했습니다. 분석기는 정확한 연결·원본 누락·중복·과거 형식을 구분합니다.
+기존 MODEL 비교와 원본 위치 아홉 필드, 기준점·콜백 결합 수정, 숫자 메뉴와
+저장 공간 정책을 유지합니다. 실제 자격 입력 공급부는 미구현이므로 ASSIST는
+비활성입니다. [릴리즈 검증](validation/RELEASE_V038_2026-10-01.md)에 host/ARM 전체,
+최종 ZIP의 순정 BusyBox 설치와 공개 파일 재다운로드 대조를 기록했습니다.
+원본 LDS 실행과 실제 위치 기록 함수의 직접 검사는
+[v0.3.7 기록](validation/RELEASE_V037_2026-10-01.md)에 보존하며 이번 판에서
+다시 실행한 것으로 세지 않습니다.
 이전 v0.3.3과 a29f1b8 후보에는 숫자 메뉴가 없습니다.
 실제 차량과 ASSIST 적용은 아직 미검증입니다.
 기존 `v0.3.0-shadow.1` ZIP은 이 수정을 포함하지 않습니다.

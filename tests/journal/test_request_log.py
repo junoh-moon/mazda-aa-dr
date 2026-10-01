@@ -15,6 +15,52 @@ spec.loader.exec_module(audit)
 
 class RequestJournal(unittest.TestCase):
     @staticmethod
+    def position_rows():
+        command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+        return [json.loads(s) for s in subprocess.check_output(command + ['--emit-positions'], text=True).splitlines()]
+
+    def test_position_formatter_preserves_partial_cache_updates(self):
+        rows = self.position_rows()
+        self.assertEqual(len(rows), 8)
+        expected = dict(mode=1, utc_s=1790856000, lat=35, lon=135, altitude_m=0,
+                        heading=20, kmh=18, horizontal=0, vertical=0)
+        updates = ({}, dict(horizontal=1, vertical=1.5), dict(altitude_m=12),
+                   dict(lat=36, lon=136, altitude_m=24),
+                   dict(utc_s=1790856001, heading=40, kmh=37))
+        for stage, update in enumerate(updates):
+            with self.subTest(stage=stage):
+                expected.update(update)
+                row = rows[stage]
+                self.assertEqual({key: row.get(key) for key in expected}, expected)
+                self.assertEqual((row['call'], row['generation'], row['mono_ns']), (17+stage, 4, 103+stage))
+                # Preserve the unqualified request state; values do not prove
+                # simultaneous production, freshness, or a verified source.
+                self.assertEqual(row['request'], rows[0]['request'])
+                auditor = audit.Auditor()
+                auditor.consume(row, 'full-position')
+                self.assertNotIn('partial_record', [i['code'] for i in auditor.issues])
+                legacy = {key: value for key, value in row.items()
+                          if key not in ('altitude_m', 'horizontal', 'vertical')}
+                older = audit.Auditor()
+                older.consume(legacy, 'legacy-position')
+                self.assertNotIn('partial_record', [i['code'] for i in older.issues])
+
+    def test_position_formatter_keeps_quality_zero_and_nonfinite_distinct(self):
+        rows = self.position_rows()
+        for index, expected in ((0, (0, 0)), (5, (None, None)), (6, (None, 0)), (7, (-0.25, 0.5))):
+            with self.subTest(index=index):
+                self.assertIn('horizontal', rows[index])
+                self.assertIn('vertical', rows[index])
+                self.assertEqual((rows[index]['horizontal'], rows[index]['vertical']), expected)
+
+    def test_position_formatter_preserves_signed_altitude(self):
+        rows = self.position_rows()
+        for index, altitude in ((0, 0), (2, 12), (3, 24), (5, -(2**31)), (6, 2**31-1), (7, -12)):
+            with self.subTest(index=index):
+                self.assertEqual(rows[index].get('altitude_m'), altitude)
+                self.assertIs(type(rows[index]['altitude_m']), int)
+
+    @staticmethod
     def wire_record():
         return dict(issue=dict(known=True, observed_ns=101, serial=23, conflict=False),
                     reply=dict(known=True, observed_ns=102, serial=41, reply_serial=23, type=3,

@@ -81,7 +81,11 @@ void GpsHoldout::emit(HoldoutEvent event,HoldoutReason reason,
     r.calibration_version=gyro.calibration_version;
     r.applied_wheel_scale=wheel.active_scale;
     r.wheel_scale_version=wheel.calibration_version;
-    if(o) { r.reference=o->position;r.reference_ns=o->mono_ns; }
+    if(o) {
+        r.has_reference_observation=true;
+        r.reference_call=o->call_sequence;r.reference_generation=o->prediction_generation;
+        r.reference=o->position;r.reference_ns=o->mono_ns;
+    }
     if(s) { r.prediction=*s;r.prediction_frontier_ns=s->frontier_ns; }
     if(event==HOLDOUT_COMPARED&&o&&s) {
         adapter::PositionInput p=adapter::PositionInput();

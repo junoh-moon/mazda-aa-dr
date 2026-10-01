@@ -12,25 +12,55 @@
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.6-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.6-shadow.1)입니다.
-`bdda755`에 고정한 새 ARM 빌드·설치 ZIP으로, v0.3.5의 오래된 ASSIST
-기준점 재사용 결함을 [정확한 GPS 콜백 결합](../validation/ASSIST_ANCHOR_PAIRING_2026-10-01.md)으로
-수정했습니다. raw 요청 연결·지연 yaw/holdout·숫자 메뉴·저장 공간 정책은
-유지합니다. [발행 검증](../validation/RELEASE_V036_2026-10-01.md)에 clean host
-Python 374개·C/C++와 고정 ARM 전체(생략 0), 순정 BusyBox 최종 ZIP 설치,
-원본 OEM VM의 제품 cold 설치·요청 연결, 게시 후 파일 재다운로드를 기록했습니다.
-VM runner의 240초 제한 종료와 bus lifetime 미확인 네 건은 별도로 남깁니다.
-실제 qualified 입력 공급부·물리 센서·차량 복구·폰 수용은 미완료이며 live
-ASSIST는 계속 비활성입니다. 기존 [v0.3.5](../validation/RELEASE_V035_2026-10-01.md)는
-비활성 계산 경로에 결함이 있으므로 실차 시험 후보로 선택하지 마십시오.
+현재 공개판은 [v0.3.8-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.8-shadow.1)입니다.
+`40051f8`에 고정한 새 ARM 빌드·설치 ZIP은 GPS holdout 결과에 원본 위치의
+호출·generation 식별자를 보존합니다. 분석기는 같은 기록 묶음·세션에서 정확한
+원본 행을 연결하고 누락·중복·불일치·과거 형식을 구분합니다. 연결 진단 때문에
+기존 MODEL 비교를 버리거나 GPS 차이를 참값으로 표시하지 않습니다.
+[기능 검증](../validation/HOLDOUT_REFERENCE_2026-10-01.md)과
+[발행 검증](../validation/RELEASE_V038_2026-10-01.md)에 새 checkout의 host Python
+401개·C/C++와 고정 ARM 전체(생략 0), 최종 ZIP의 순정 BusyBox 설치·계정·복구·
+회수·제거를 기록했습니다. 공개 파일을 다시 내려받아 SHA·CRC·전체 manifest·
+고정 소스를 대조했습니다. 추가 설치 도구를 제거하고 최초 호스트 목록과
+일치함을 확인했습니다. 실제 qualified 입력 공급부·물리 센서·차량 복구·폰 수용은
+미완료이며 live ASSIST는 계속 비활성입니다.
+
+[v0.3.7 검증](../validation/RELEASE_V037_2026-10-01.md)은 `56a7042` 제품의 원본
+위치 아홉 필드 보완, host Python 378개·C/C++·고정 ARM, 실제 위치 기록 함수와
+원본 LDS parser→service 응답→제품 token 실행을 별도 보존합니다. 이 원본 LDS
+실행과 기록 함수 직접 검사를 v0.3.8에서 다시 실행한 것으로 세지 않습니다.
+기준점·GPS 콜백 결합 수정, 숫자 메뉴와 저장 공간 정책은 유지합니다.
+
+외부 [v0.3.6 발행 기록](../validation/RELEASE_V036_2026-10-01.md)과
+[기준점 결합 검증](../validation/ASSIST_ANCHOR_PAIRING_2026-10-01.md)을 보존합니다.
+그 기록의 원본 VM runner 240초 제한 종료·bus lifetime 미확인 네 건은
+이번 실행의 결과와 구분합니다. 기존 [v0.3.5](../validation/RELEASE_V035_2026-10-01.md)의
+비활성 계산 경로 결함은 후속 판에서 수정했습니다.
 아래 이력의 공개 ZIP 미갱신·미구현 설명은 각 검증 당시의 상태입니다.
 
-공개 v0.3.6 이후의 [이전 세대 콜백 경계 보완](../validation/ASSIST_STALE_CALLBACK_2026-10-01.md)은
+공개 v0.3.8 이후의 [이전 세대 콜백 경계 보완](../validation/ASSIST_STALE_CALLBACK_2026-10-01.md)은
 폐기된 qualified 계산기의 늦은 GPS 콜백과 새 기준점의 순서 역전을
 구분합니다. 아직 소스 후속 변경이며 공개 ZIP에는 들어 있지 않습니다.
-새 소스의 전체 host Python 375개·C/C++와 고정 ARM 전체는 생략 없이
-통과했습니다. live ASSIST는 계속 비활성이고, 이 수정의 합성 회귀를
-실차 입력·폰 수용 증거로 세지 않습니다.
+해당 독립 변경 소스의 전체 host Python 375개·C/C++와 고정 ARM 전체는
+생략 없이 통과했습니다. live ASSIST는 계속 비활성이고, 이 수정의 합성
+회귀를 실차 입력·폰 수용 증거로 세지 않습니다.
+
+[원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
+실제 NMEA parser→callback→잠금 cache 쓰기→원본 service snapshot→serializer와
+공개 v0.3.5 제품 token을 연결했습니다. GGA 좌표·고도가 갱신돼도 이전 RMC의
+UTC·방향·속도가 함께 반환되며, snapshot 뒤 새 쓰기가 완료되어도 이미 복사한
+응답은 이전 값을 유지했습니다. 작성 입력·초기화·진단 계측의 결과이며 개별 필드의
+물리 측정 시각이나 제품 qualified 공급부를 구현한 것은 아닙니다. 같은 바이너리의
+서버 계측 on/off 응답도 비교했습니다. 제품 position 기록의 고도·horizontal·vertical
+누락은 후속 소스에서 수정하여 formatter 회귀를 통과했고 v0.3.7에 포함했습니다.
+실제 ASSIST는 여전히 비활성입니다.
+
+[ASSIST 선택 후 철회 경계](../validation/ASSIST_SELECTION_BOUNDARY_2026-10-01.md)는
+변경하지 않은 adapter 소스와 작성한 host 대기 지점에서 실제 pthread 철회를
+실행했습니다. 선택 전 철회는 ORIGINAL, 마지막 선택 검사 뒤 철회는 이미 선택한
+DR을 원본 대역에 전달했습니다. 현재 명시한 선택 시점 계약과 일치하며 추가
+guard를 넣지 않았습니다. 실제 ARM DSO의 해당 구간과 OEM teardown 동시성은
+이 검사에서 실행하지 않았습니다.
 
 [평탄화 전 요청·응답 연결](../validation/WIRE_REQUEST_2026-10-01.md)을
 `3812fe6`·`fe052be`에서 구현했습니다. 원본 builder와 pending의 실제 수명 안에서

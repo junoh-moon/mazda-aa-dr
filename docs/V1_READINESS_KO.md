@@ -80,11 +80,24 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   [wire 연결 검증](../validation/WIRE_REQUEST_2026-10-01.md)에서 원본 라이브러리의
   역순·재사용·timeout·취소, 제품 cold 설치와 원본 data-client 연결을 확인했습니다.
   작성 서버/worker fixture이며 producer snapshot 자격이나 폰 수용을 뜻하지 않습니다.
+- [x] 작성 NMEA 입력을 실제 원본 parser·callback·cache·service 응답과 제품 token까지 연결합니다.
+  [원본 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서 부분 갱신,
+  무갱신 재조회, serial 분리, 같은 바이너리의 계측 on/off와 snapshot 뒤 새 쓰기를
+  대조했습니다. 관측기 쓰기 번호는 개별 필드의 물리 생산 시각이 아니며, 초기화·입력·
+  대기 순서는 작성한 조건입니다. 제품 qualified 공급부와 전체 SM 기동은 미완료입니다.
+- [x] 원본 위치 journal의 고도·horizontal·vertical 누락을 수정합니다.
+  [v0.3.7 검증](../validation/RELEASE_V037_2026-10-01.md)에서 실제 제품 DSO의
+  아홉 필드·nonfinite/0 구별·버퍼 경계와 host/ARM 전체를 검사했습니다.
+  데이터 보존이며 해당 필드의 품질·생산자 시각을 자격화한 것은 아닙니다.
+- [x] 지연된 GPS holdout 결과에 실제 원본 위치의 호출·generation 식별자를 보존합니다.
+  [연결 검증](../validation/HOLDOUT_REFERENCE_2026-10-01.md)에서 실제 지연 큐·worker와
+  formatter, 분석기의 누락·중복·session·과거 형식을 검사했습니다. 연결 진단은
+  기존 MODEL 비교와 분리하며 GPS 참값·생산자 시각·ASSIST 자격으로 세지 않습니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
   [LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
   위치·진단 캐시의 별도 갱신과 공통 snapshot 식별자의 부재를 확인했습니다.
-  진단 polling으로 자격을 채우지 않으며 생산자→snapshot→응답 연결은 미구현입니다.
-  정적 조사만 수행했으며 상위 자격·ASSIST 항목의 완료로 세지 않습니다.
+  진단 polling으로 자격을 채우지 않으며 제품의 생산자→snapshot→응답 공급부는 미구현입니다.
+  해당 정적 조사와 위 별도 실행을 상위 물리 자격·ASSIST 항목의 완료로 세지 않습니다.
   [요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)은 발행 당시 원본
   목적지·경로·인터페이스·메서드명을 응답까지 연결합니다. well-known 서비스
   이름은 실제 제공자 인증이 아니므로 이 상위 자격 항목은 미완료입니다.
@@ -112,6 +125,15 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   clean host·고정 ARM 전체, 원본 OEM VM의 개별 결과, 순정 BusyBox 설치와
   공개 파일 재다운로드를 검사했습니다. VM runner의 제한 종료와 실제 차량·폰
   미검증을 구분합니다.
+  [v0.3.7 발행](../validation/RELEASE_V037_2026-10-01.md)은 누락 위치 필드 보완을
+  고정한 새 제품의 host Python 378개·C/C++·고정 ARM 전체, 실제 DSO 기록 함수,
+  원본 LDS parser부터 응답까지, 최종 순정 BusyBox ZIP과 공개 파일을 대조했습니다.
+  임시 도구를 제거하고 최초 호스트 목록과 일치함을 확인했습니다.
+  [v0.3.8 발행](../validation/RELEASE_V038_2026-10-01.md)은 holdout 원본 연결을
+  포함한 `40051f8`의 새 checkout에서 host Python 401개·C/C++·고정 ARM 전체를
+  생략 없이 통과했습니다. 최종 순정 BusyBox ZIP과 공개 파일을 대조하고
+  추가 설치 도구를 제거했습니다. 이번 판에서 원본 LDS 실행이나 실제 DSO의
+  holdout formatter 직접 호출을 새로 검사한 것은 아닙니다.
 - [x] 센서·항법, OEM 호출/복구, USB/분석기의 독립 감사를 수행하고 확인된 결함을 수정합니다.
 - [x] 실제 OEM SM의 명시적 재시작과 지연 종료 정책을 실행·정적 근거로 확인합니다.
   정상 전체 기동과 물리 watchdog 재부팅은 아래 별도 조건으로 남깁니다.
@@ -317,7 +339,9 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   기한을 구하는 API와 파이프라인 연결을 구현했습니다.
   [송신 기한 검증](../validation/ASSIST_PUBLICATION_2026-10-01.md)은 지연 송신,
   기한 경계·GPS 복귀·대기 중인 기준점·MODEL 거부와 전체 host/ARM 통과를
-  기록합니다. live 자격 입력 및 qualified worker 발행 연결은 여전히 미구현입니다.
+  기록합니다. 해당 검사 당시 미구현이던 qualified worker 발행 연결은
+  [후속 runtime 구현](../validation/ASSIST_RUNTIME_2026-10-01.md)에서 보완했습니다.
+  live 자격 입력 공급부는 여전히 미구현입니다.
 - [x] 실제 adapter 관측을 계산기에 연결해 GPS 품질 변경·복귀의 generation
   불일치를 재현·수정했습니다. [제품 DSO 연결 검사](../validation/ASSIST_GENERATION_2026-10-01.md)는
   별도 시험 worker의 계산→발행→송신 10개 사례를 고정 ARM 및 순정 공유 runtime에서
@@ -325,7 +349,8 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
 - [x] 동일 qualified Pipeline을 유지한 GPS 복귀·새 기준점·다음 단절을 구현·검사했습니다.
   [연속 재획득 검증](../validation/ASSIST_REACQUISITION_2026-10-01.md)은 이전 ARM DSO의
   중복 복귀 실패와 수정 제품 15개 송신 사례를 기록합니다. 별도 초기화로 재시작한
-  이전 시험과 구분하며, 실제 입력 자격·runtime worker 연결은 여전히 미완료입니다.
+  이전 시험과 구분합니다. 당시 미완료였던 runtime worker 연결은 위 후속
+  구현에서 보완했으며, 실제 입력 자격 공급부는 여전히 미완료입니다.
 - [x] 기준점이 결합되지 않은 새 GPS 콜백 뒤 이전 READY seed를 재사용하는
   결함을 수정했습니다. [콜백 순번 결합 검증](../validation/ASSIST_ANCHOR_PAIRING_2026-10-01.md)은
   이전 제품의 잘못된 DR 선택을 재현하고, 같은 POSITION의 ANCHOR만 후보로
@@ -350,7 +375,7 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
 | 휴대폰·앱 수용 | OEM LOCATION 경로의 정적 근거와 VM의 실제 native API 호출. 폰 없이도 send=0을 반환함 | Galaxy S25·동글·네이버 지도에서 위치가 반영되는 실행 증거 없음 |
 | 다음 부팅과 장애 복구 | 일회 소비 가드·설치 중단 회귀. 실제 SM에서 명시적 재시작과 지연 SIGKILL 뒤 보드 재부팅 요청 관찰 | 다른 실패 경로와 물리 watchdog·전원 차단·다음 부팅의 복구는 미검증 |
 | 기존 설정 보존 | touch 설정 편집/제거 roundtrip, 무관한 파일을 변경하지 않는 설치기 | 기존 터치와 km/L의 실제 화면·입력 결과 미검증 |
-| 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 다섯 ARM 바이너리, ZIP manifest/source commit. [v0.3.6-shadow.1](../validation/RELEASE_V036_2026-10-01.md) 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |
+| 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 다섯 ARM 바이너리, ZIP manifest/source commit. [v0.3.8-shadow.1](../validation/RELEASE_V038_2026-10-01.md) 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |
 
 독립 감사에서 정차 GPS·지연 수신 시 heading 상실, 자이로 보정의 수신 시각,
 단일 휠 모순과 빌드/검사의 오래된 입력·상속 환경 문제를 재현하고 수정했습니다.
