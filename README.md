@@ -19,12 +19,14 @@ The current USB packaging includes the MP3 diagnostic-terminal entry and support
 the target's BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock storage aliases
 and read-only root. See [USB instructions](packaging/USB_START_KO.md) and
 [new installation evidence](validation/USB_INSTALL_2026-09-29.md).
-The published [v0.3.4-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.4-shadow.1)
-includes storage checks, retained MODEL reset reasons, drain counters, a numeric
-USB menu, and the fix for falsely late yaw windows during anchor preparation.
-The [release record](validation/RELEASE_V034_2026-10-01.md) distinguishes the verified
-host/ARM tests, identical clean rebuild, final stock BusyBox installation test,
-and the published download's checked hashes, CRC and manifest.
+The published [v0.3.5-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.5-shadow.1)
+adds raw request identity, delayed-yaw/holdout fixes, and qualified ASSIST worker
+publication and revocation. The live qualified input provider is still missing,
+so ASSIST stays disabled. The numeric USB menu and storage limits are retained.
+The [release record](validation/RELEASE_V035_2026-10-01.md) records the fresh
+host/ARM checks, an unresolved initial host queue stall and unchanged rerun,
+final stock BusyBox installation test, and the published download's hashes,
+CRC, manifest and pinned source identity.
 Open it with `sh /tmp/mnt/sda1/trial`; select 1 to install, 2 for status, or 3 to
 finish and export to the same USB while parked. These inputs need no Shift key.
 The older v0.3.3 ZIP and a29f1b8 candidate do not contain the menu.
