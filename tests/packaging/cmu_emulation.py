@@ -474,10 +474,10 @@ def main():
         lib = usb / 'libmx5dr.so'
         saved = lib.read_bytes()
         lib.write_bytes(saved + b'damage')
-        run('cd /tmp/mnt/sda1 && sh install.sh', ok=False)
+        run("printf '1\\n' | sh /tmp/mnt/sda1/trial", ok=False)
         require(not base.exists(), 'Damaged bundle made installation changes')
         lib.write_bytes(saved)
-        run('cd /tmp/mnt/sda1 && sh install.sh')
+        run("printf '1\\n' | sh /tmp/mnt/sda1/trial")
         require((base / 'guard/arm').is_file(), 'Actual ARM guard did not arm')
         require('mode=' + default_mode in (base / 'mx5dr.conf').read_text().splitlines(),
                 'Installed config differs from the bundle default mode')
@@ -541,11 +541,13 @@ def main():
         journal.write_text(''.join(json.dumps(dict(stream='collector', collector_pid=123,
             observed_at_mono_ns=99000000000, producer_mono_ns=None,
             producer_time_status='unknown', **row), separators=(',', ':')) + '\n' for row in collector))
-        run('sh /data_persist/mx5-aa-dr/tools/trial_status.sh')
+        run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial")
         (base / 'logs/capture.done').write_text(current_boot + '\n')
-        run('sh /data_persist/mx5-aa-dr/tools/finish_capture.sh')
         journal.write_bytes(original_collector)
-        run('sh /data_persist/mx5-aa-dr/tools/export_logs.sh /tmp/mnt/sda1')
+        run("printf '3\\n' | sh /tmp/mnt/sda1/trial")
+        report = (usb / 'trial-result.txt').read_text()
+        require('finish_exit=0' in report and 'export_exit=0' in report,
+                'USB menu did not preserve separate finish/export outcomes')
         archive = next(usb.glob('mx5dr-logs-*.tar'))
         require(archive.with_suffix('.tar.sha256').read_text().split()[0] ==
                 hashlib.sha256(archive.read_bytes()).hexdigest(), 'Export checksum mismatch')
@@ -565,7 +567,7 @@ def main():
         require(updated_touch in (root / result.stdout.strip().lstrip('/')).read_text(),
                 'Explicit rearm lost the new touch setting')
         # Removal and reinstallation use the same no-sha256sum environment.
-        run('sh /data_persist/mx5-aa-dr/tools/uninstall.sh')
+        run("printf '4\\n' | sh /tmp/mnt/sda1/trial")
         for name, before in baseline.items():
             require((root / name).read_bytes() == before, 'Uninstall damaged baseline: ' + name)
         run('cd /tmp/mnt/sda1 && sh install.sh')
@@ -573,7 +575,8 @@ def main():
         run('cd /tmp/mnt/sda1 && sh uninstall.sh')
         require(not (base / 'guard/arm').exists(), 'Uninstall left a trial armed')
         print('PASS: stock ARM BusyBox/libc, damaged USB rejection, install, loader, one boot, '
-              'collector UID/exit, status/finish (explicit SHADOW, synthetic rows), USB export, touch update/rearm, uninstall, reinstall. Mount operations simulated; '
+              'collector UID/exit, numeric USB menu install/status/finish/export/report/remove '
+              '(explicit SHADOW, synthetic rows), touch update/rearm, reinstall. Mount operations simulated; '
               'no OEM service or vehicle execution.')
 
 

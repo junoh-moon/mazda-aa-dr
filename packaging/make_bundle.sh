@@ -17,7 +17,7 @@ build_dir=$(dirname -- "$lib")
 [ -f "$lib" ] && [ ! -e "$dest" ] || { echo 'Input missing or output already exists' >&2; exit 1; }
 mkdir -p "$dest"
 printf '%s\n' "$DEFAULT_MODE" > "$dest/bundle-default-mode"
-for file in install.sh uninstall.sh export_logs.sh common.sh edit_service.awk edit_autostart.awk arm.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk firmware.sha256 mx5dr.conf; do cp "$HERE/$file" "$dest/$file"; done
+for file in trial install.sh uninstall.sh export_logs.sh common.sh edit_service.awk edit_autostart.awk arm.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk firmware.sha256 mx5dr.conf; do cp "$HERE/$file" "$dest/$file"; done
 cp "$lib" "$dest/libmx5dr.so"
 cp "$build_dir/libmx5dr-vimtap.so" "$dest/libmx5dr-vimtap.so"
 cp "$build_dir/mx5dr-guard" "$dest/mx5dr-guard"

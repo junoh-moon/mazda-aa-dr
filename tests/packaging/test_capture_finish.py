@@ -124,7 +124,7 @@ class TrialBundleTests(unittest.TestCase):
                                     str(build / 'libmx5dr.so'), str(dest)], capture_output=True, text=True)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertEqual((dest / 'bundle-default-mode').read_text(), expected + '\n')
-                for name in ('trial_status.sh', 'trial_status.awk', 'finish_capture.sh',
+                for name in ('trial', 'trial_status.sh', 'trial_status.awk', 'finish_capture.sh',
                              'mx5dr-sha256', 'mx5dr-sha256.sha256', 'js/run.js', 'INSTALL_KO.md'):
                     self.assertTrue((dest / name).is_file())
                 for letter in 'abcd':
