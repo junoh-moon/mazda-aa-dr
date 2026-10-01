@@ -316,8 +316,8 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
       if(enabled) {navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);}
       journal_motion(j,batch,raw);
       if(enabled && navigation.status().resets!=resets) {
-        // Flush the offending raw input before its diagnostic, so the causal
-        // evidence survives even if the journal fails on the next record.
+        // Write the offending raw input before its diagnostic. These are
+        // separate buffered records, not an atomic durable pair.
         flush_motion(j,batch);
         journal_pipeline_reset(j,navigation,resets,"raw",raw.received_ns,
                                raw.receive_seq,unsigned(raw.kind));
