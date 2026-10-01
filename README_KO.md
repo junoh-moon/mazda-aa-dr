@@ -13,27 +13,45 @@
 
 [과거 첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
-USB 설치 ZIP의 내용물을 FAT32 USB 최상위에 복사하면 MP3/JS로 진단 셸에
-진입할 수 있습니다. USB 디렉터리에서 `sh install.sh`로 설치하십시오.
-주차 중 `sh /tmp/mnt/sda1/trial`로 숫자 메뉴를 열어 `2` 상태 확인,
-`3` 종료·USB 회수, `4` 제거를 선택할 수 있습니다.
-Shift 키나 긴 회수 경로 입력이 필요하지 않습니다.
-[사용 안내](packaging/USB_START_KO.md) · [설치 수정과 검증](validation/USB_INSTALL_2026-09-29.md).
-현재 소스는 CMU의 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
-이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리한다.
-GPS holdout 결과를 원본 위치의 호출·generation 식별자에 연결하는
-[v0.3.8-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.8-shadow.1)을
-게시했습니다. 분석기는 정확한 연결·원본 누락·중복·과거 형식을 구분합니다.
-기존 MODEL 비교와 원본 위치 아홉 필드, 기준점·콜백 결합 수정, 숫자 메뉴와
-저장 공간 정책을 유지합니다. 실제 자격 입력 공급부는 미구현이므로 ASSIST는
-비활성입니다. [릴리즈 검증](validation/RELEASE_V038_2026-10-01.md)에 host/ARM 전체,
-최종 ZIP의 순정 BusyBox 설치와 공개 파일 재다운로드 대조를 기록했습니다.
-원본 LDS 실행과 실제 위치 기록 함수의 직접 검사는
-[v0.3.7 기록](validation/RELEASE_V037_2026-10-01.md)에 보존하며 이번 판에서
-다시 실행한 것으로 세지 않습니다.
-이전 v0.3.3과 a29f1b8 후보에는 숫자 메뉴가 없습니다.
+현재 공개판은 [v0.3.9-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)입니다.
+원본 AA 연결 등록에서 서버 주소 GUID와 client 고유 이름을 소유 복사하고,
+실제 raw 송신이 같은 연결을 사용했는지 기록합니다. 식별자가 없어도 원시 위치를
+보존하며, 생산자 측정 시각이나 센서 자격으로 인정하지 않습니다.
+원본 위치 아홉 필드와 GPS holdout의 호출·generation 연결, 누락·중복 진단,
+기존 MODEL 비교를 유지합니다. 기준점·콜백 및 큐 폐기 경계 수정도 포함합니다.
+실제 자격 입력 공급부와 LDS producer의 프로세스 간 연결은 미완료이므로
+**ASSIST는 계속 비활성**입니다.
+
+[릴리즈 검증](validation/RELEASE_V039_2026-10-01.md)에 고정 소스·ZIP 해시,
+최종 host/ARM·순정 BusyBox 검사와 공개 재다운로드 대조를 기록했습니다.
+선행 원본 라이브러리 실행과 최종판의 검증 범위도 구분합니다.
+[v0.3.8](validation/RELEASE_V038_2026-10-01.md)과
+[v0.3.7](validation/RELEASE_V037_2026-10-01.md)의 검증 이력은 별도로 보존합니다.
+
+ZIP의 내용물을 FAT32 USB 최상위에 복사하십시오. **주차 중 기존에 작동하는
+진단 셸을 열고**, 다음 한 줄로 숫자 메뉴에 들어가 `1`과 Enter를 누르십시오.
+필요하면 USB 경로의 글자만 바꾸십시오. Shift 입력은 필요하지 않습니다.
+
+```sh
+sh /tmp/mnt/sda1/trial
+```
+
+설치 성공 후 설치 USB를 분리하고 유선 AA를 연결한 뒤 정상 시험 부팅으로
+들어가십시오. 자동으로 기록을 시작합니다. 포트 하나를 번갈아
+쓰므로 **`2`는 선택 진단이며 AA 사용 중 셸을 열 필요가 없습니다.** 시험 후
+주차한 다음 AA를 분리하고 USB·셸로 돌아와 같은 메뉴의 **`3`으로 바로 회수**하십시오.
+셸 복귀에 정상 재부팅이 필요해도 재설치·재무장 없이 이전 부팅의 보존 파일을
+회수합니다. `finish_exit`가 0이 아니면 현재 부팅의 완료 미확인이고,
+`export_exit=0`은 확보 가능한 파일의 회수 성공이며 시험 성공이 아닙니다.
+archive·체크섬·`trial-result.txt`를 함께
+가져오십시오. 운전 중에는 명령을 입력하거나 USB를 바꾸지 마십시오.
+[사용 안내](packaging/USB_START_KO.md)와 [통합 시험 절차](docs/FIELD_TRIAL_KO.md)를
+따르십시오.
+
+현재 묶음은 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
+이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리합니다.
+[이전 설치 수정·검증](validation/USB_INSTALL_2026-09-29.md)은 별도 이력입니다.
 실제 차량과 ASSIST 적용은 아직 미검증입니다.
-기존 `v0.3.0-shadow.1` ZIP은 이 수정을 포함하지 않습니다.
 
 **master의 추가 변경(PR #12):** 실제 VIM 센서 콜백 → 시간 정렬 → DR 코어 → LOCATION 미리보기의 SHADOW 계산을 구현했다. [기능·계약·남은 조건](docs/LIVE_SHADOW_2026-09-29_KO.md). 배포된 `v0.2.0-observe.2`에는 이 기능이 없으며 live ASSIST는 계속 차단된다.
 

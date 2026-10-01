@@ -1,9 +1,9 @@
 # USB 숫자 메뉴로 설치·시험·회수
 
 현재 공개 파일은 NA 74.00.324A 전용
-[v0.3.8-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.8-shadow.1)입니다.
-파일명은 `mazda-aa-dr-v0.3.8-shadow.1.zip`이고, SHA-256은
-`19edb8b72faba813e169543ff6e1697a945954f13f76d5ee1346803b81168686`입니다.
+[v0.3.9-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)입니다.
+파일명은 `mazda-aa-dr-v0.3.9-shadow.1.zip`이고, SHA-256은
+`293361fc8267cd12e1b1002be904b5a85cdd28d19e7518acc8e143c35215873b`입니다.
 GitHub의 자동 `Source code (zip)` 대신 이 설치 ZIP을 받으십시오.
 
 ZIP의 **내용물 전체**를 깨끗한 FAT32 USB 최상위에 풀어 복사하십시오.
@@ -37,5 +37,5 @@ AA 분리·재부팅 뒤의 현재 상태와 이전 시험 기록은 별도로 �
 운전 중에는 명령을 입력하거나 USB를 바꾸지 마십시오.
 
 [통합 시험 절차](FIELD_TRIAL_KO.md)와
-[최종 ZIP 검증](../validation/RELEASE_V038_2026-10-01.md)을 따르십시오.
+[최종 ZIP 검증](../validation/RELEASE_V039_2026-10-01.md)을 따르십시오.
 실제 차량 기동·센서·복구·휴대폰 수용은 아직 검증하지 않았습니다.

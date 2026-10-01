@@ -12,8 +12,25 @@
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.8-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.8-shadow.1)입니다.
-`40051f8`에 고정한 새 ARM 빌드·설치 ZIP은 GPS holdout 결과에 원본 위치의
+현재 공개판은 [v0.3.9-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)입니다.
+`3346854`의 새 ARM 빌드·설치 ZIP은 실제 AA 등록에서 서버 주소 GUID와
+client 고유 이름을 보존하고 raw 송신 연결·요청 수명을 대조합니다. 정보가
+누락돼도 원시 위치는 남깁니다. [연결 식별자](../validation/AA_ENDPOINT_IDENTITY_2026-10-01.md)와
+[발행 검증](../validation/RELEASE_V039_2026-10-01.md)에 host Python 421개·C/C++,
+고정 ARM 전체와 실제 DSO 8개 suite·145개 사례, 최종 순정 BusyBox ZIP의
+설치·계정·종료·회수 검사를 생략 없이 기록했습니다. 원본 여덟 요청은 선행
+`f2ec7c2`에서 실행했으며 최종 빌드 입력 63개·다섯 산출물이 같음을 대조했습니다.
+이를 최종 pin의 새로운 원본 실행으로 세지 않습니다.
+
+USB 한 포트에서 설치 후 AA로 바꾸면 시험 부팅에 자동 기록합니다. 주차 후
+USB·셸로 돌아와 바로 메뉴3으로 회수하며 메뉴2는 선택 진단입니다. 실제 순정
+BusyBox에서 설치 USB 부재와 작성한 새 boot 뒤 이전 기록 회수를 검사했습니다.
+물리 USB 전환이나 정상 전체 OEM 기동 검증은 아닙니다. 공개 파일을 다시 받아
+SHA·CRC·manifest·고정 소스를 대조했고 추가 도구를 제거했습니다.
+LDS 제품 공급부·물리 센서·차량 복구·폰 수용은 남아 있으며 ASSIST는 비활성입니다.
+
+이전 [v0.3.8 검증](../validation/RELEASE_V038_2026-10-01.md)의
+`40051f8` ARM 빌드·설치 ZIP은 GPS holdout 결과에 원본 위치의
 호출·generation 식별자를 보존합니다. 분석기는 같은 기록 묶음·세션에서 정확한
 원본 행을 연결하고 누락·중복·불일치·과거 형식을 구분합니다. 연결 진단 때문에
 기존 MODEL 비교를 버리거나 GPS 차이를 참값으로 표시하지 않습니다.
@@ -31,9 +48,9 @@
 이전 값 복원·같은 값 재할당·미확인 쓰기·응답 복사 뒤 갱신을 대조했습니다.
 host·고정 ARM·순정 공유 runtime의 코어 각 11,732개와 독립 분석기 16개,
 전체 host Python 401개·C/C++와 고정 ARM 전체를 생략 없이 통과했습니다.
-제품 LDS 기동·등록 수명과 프로세스 간 공급부 연결은 미구현입니다.
-공개 설치 ZIP에는 아직 포함하지 않았고
-물리 측정 시각이나 ASSIST 자격을 부여하지 않습니다.
+v0.3.9에는 이 코어의 소스를 포함했습니다. 제품 LDS 기동·등록 수명과
+프로세스 간 공급부 연결은 미구현이며 물리 측정 시각이나 ASSIST 자격을
+부여하지 않습니다.
 
 [v0.3.7 검증](../validation/RELEASE_V037_2026-10-01.md)은 `56a7042` 제품의 원본
 위치 아홉 필드 보완, host Python 378개·C/C++·고정 ARM, 실제 위치 기록 함수와
@@ -50,20 +67,20 @@ host·고정 ARM·순정 공유 runtime의 코어 각 11,732개와 독립 분석
 
 공개 v0.3.8 이후의 [이전 세대 콜백 경계 보완](../validation/ASSIST_STALE_CALLBACK_2026-10-01.md)은
 폐기된 qualified 계산기의 늦은 GPS 콜백과 새 기준점의 순서 역전을
-구분합니다. 아직 소스 후속 변경이며 공개 ZIP에는 들어 있지 않습니다.
+구분합니다. 해당 수정은 이번 v0.3.9에 포함됐습니다.
 해당 독립 변경 소스의 전체 host Python 375개·C/C++와 고정 ARM 전체는
 생략 없이 통과했습니다. live ASSIST는 계속 비활성이고, 이 수정의 합성
 회귀를 실차 입력·폰 수용 증거로 세지 않습니다.
 [v0.3.8 소스와 병합한 후속 검증](../validation/ASSIST_STALE_CALLBACK_2026-10-01.md)도
 새 ARM 빌드·로컬 SHADOW ZIP에서 host Python 401개·C/C++와 고정 ARM 전체를
-생략 없이 통과했습니다. 공개 v0.3.8 ZIP은 그대로이며 이 후속 수정은
-아직 공개되지 않았습니다.
+생략 없이 통과했습니다. 과거 v0.3.8 ZIP은 그대로 보존하고 후속 수정은
+별도 고정한 v0.3.9 ZIP으로 발행했습니다.
 [큐 폐기 경계 보완](../validation/ASSIST_QUEUE_CUTOFF_2026-10-01.md)은
 같은 tick의 큐에 남은 POSITION을 지우며 경계를 잃던 후속 결함을 수정했습니다.
 수정 전 실제 ARM DSO에서 이전 기준점의 DR 선택을 재현했고, 수정 후 두
 전달 순서의 거부와 정상 기준점의 회복을 대조했습니다. `9e082f7`의 전체
 host Python 401개·C/C++와 고정 ARM 전체는 생략 없이 통과했습니다.
-공개 ZIP은 유지하며 live ASSIST 자격이나 LDS 제품 공급부를 추가하지 않습니다.
+이 수정도 v0.3.9에 포함됐으며 live ASSIST 자격이나 LDS 제품 공급부는 추가하지 않습니다.
 [외부 통합판 `d3c6fa1` ZIP의 원본 userspace VM 관측](../validation/INTEGRATED_VM_2026-10-01.md)은
 진단용 PID 1에서 `sh install.sh`·일회성 guard·collector·원본
 VBS/AA/LDS/navi 기동과 LDS 위치 질의 응답을 확인했습니다. GPS/CAN·live
@@ -72,7 +89,7 @@ AA session이 없어 위치 poll 22건은 모두 mode 0, 완전 LOCATION payload
 `observation_only`입니다. 정상 전체 차량 기동·실차·폰 자격을 추가하지 않습니다.
 
 후속 [양성 입력 통합 VM](../validation/INTEGRATED_POSITIVE_VM_2026-10-01.md)은
-**같은 로컬 제품 DSO**를 원본 LDS의 합성 NMEA와 원본 VIM·VBS의 합성 센서에
+외부 `d3c6fa1` 제품 DSO를 원본 LDS의 합성 NMEA와 원본 VIM·VBS의 합성 센서에
 연결했습니다. r7에서 정차 영점 후보를 이동 GPS 기준점에 적용하고, 원본
 mode 0 약 5초 동안 MODEL 유효 snapshot 47건을 얻었습니다. 별도 WGS84
 계산은 작성한 10 m/s 휠 입력과 4.844초·48.440 m에서 일치했고 이동
@@ -81,12 +98,14 @@ mode 1 복귀 뒤 유효 결과가 철회됐습니다. LOCATION 48바이트 쌍 
 보존한 전체 PC 판정은 여전히 `inconclusive`입니다. 이는 부분 SM·가상
 GPIO·합성 수신 시각 시험이며 차량·폰 검증이나 live ASSIST 자격이 아닙니다.
 
-[후속 최신 DSO 재실행](../validation/INTEGRATED_CURRENT_DSO_VM_2026-10-01.md)은
-ASSIST 큐 수정이 포함된 `fda002…` 제품의 새 ZIP을 같은 원본 LDS·VIM 경계에
+[외부 `c62b313` DSO 재실행](../validation/INTEGRATED_CURRENT_DSO_VM_2026-10-01.md)은
+ASSIST 큐 수정이 포함된 `fda002…` 제품의 별도 ZIP을 같은 원본 LDS·VIM 경계에
 연결했습니다. 두 VM에서 no-fix 중 연속 MODEL 유효 55·47건과 작성 휠
 10m/s의 거리 일치를 다시 관측했습니다. guest 진단은 끝났으나 두 runner는
-guest halt 뒤 제한 종료됐고 전체 분석도 `inconclusive`입니다. 최신 소스의
-host/ARM 빌드·설치 fixture를 별도로 통과했지만 차량·폰 자격은 추가되지 않았습니다.
+guest halt 뒤 제한 종료됐고 전체 분석도 `inconclusive`입니다. 해당 소스의
+host/ARM 빌드·설치 fixture를 별도로 통과했다는 외부 기록이며 차량·폰 자격은
+추가되지 않았습니다. 두 외부 VM 기록의 원시 자료는 이번 작업에 없어 수치를
+독립 재검증하지 않았으며, v0.3.9의 `bb01d42…` 제품 검사와 합산하지 않습니다.
 
 [원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
 실제 NMEA parser→callback→잠금 cache 쓰기→원본 service snapshot→serializer와

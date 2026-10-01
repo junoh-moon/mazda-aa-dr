@@ -15,26 +15,44 @@ See [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate remov
 
 [한국어](README_KO.md) · [Current status / handoff](docs/STATUS_KO.md) · [Review corrections](docs/REVIEW_2026-09-28_KO.md)
 
-The current USB packaging includes the MP3 diagnostic-terminal entry and supports
-the target's BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock storage aliases
-and read-only root. See [USB instructions](packaging/USB_START_KO.md) and
-[new installation evidence](validation/USB_INSTALL_2026-09-29.md).
-The published [v0.3.8-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.8-shadow.1)
-links GPS holdout results to the original position's call and generation IDs.
-The analyzer distinguishes exact matches, missing or ambiguous references, and
-older logs without these IDs. It preserves the MODEL comparisons and all nine
-original position fields, along with the anchor pairing fix, numeric USB menu
-and storage limits. The live qualified input provider is still missing, so
-ASSIST stays disabled. The [release record](validation/RELEASE_V038_2026-10-01.md)
-pins the full host/ARM checks, stock BusyBox installation and verified published
-download to the same product. The [v0.3.7 record](validation/RELEASE_V037_2026-10-01.md)
-separately preserves the earlier original LDS execution and actual position
-formatter checks; these were not repeated for v0.3.8.
-Unpack its contents to the USB root and run `sh install.sh` from that directory
-once the diagnostic shell opens. While parked, use
-`sh /tmp/mnt/sda1/trial` for status, finish/export or removal.
-The older v0.3.3 ZIP and a29f1b8 candidate do not contain the menu.
-The older v0.3.0-shadow.1 ZIP does not contain these fixes.
+The published [v0.3.9-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)
+records the transport server GUID and the client's unique name at the original
+AA connection registration, then records whether the actual raw send used that
+same connection binding. Missing identity does not discard raw position
+observations. All nine original position fields, GPS holdout call/generation
+references and MODEL comparisons remain, alongside anchor/callback and
+discarded-queue fixes. The live qualified input provider and LDS producer
+transport remain incomplete, so **ASSIST stays disabled**.
+
+The [release record](validation/RELEASE_V039_2026-10-01.md) contains the source pin,
+ZIP hash, final host/ARM and stock BusyBox checks, published-download verification,
+and the distinct scope of earlier original-library execution.
+[v0.3.8](validation/RELEASE_V038_2026-10-01.md) and
+[v0.3.7](validation/RELEASE_V037_2026-10-01.md) retain their historical evidence.
+
+Unpack the installation ZIP's contents to the FAT32 USB root. **While parked,
+open your existing working diagnostic shell**, run this line, and choose `1`
+then Enter. Change the drive letter if needed; no Shift characters are required.
+
+```sh
+sh /tmp/mnt/sda1/trial
+```
+
+After successful installation, disconnect the installation USB, connect wired
+AA, and start the next normal boot. Recording starts automatically; menu `2`
+is optional. Use AA and the installation USB in turn through the single port. After parking,
+disconnect AA, reconnect the USB, return to the shell and choose `3` directly.
+If shell reentry requires a normal reboot, retrieve the retained previous-boot
+logs without reinstalling or rearming. A nonzero `finish_exit` means current-boot
+completion is unconfirmed; `export_exit=0` separately confirms export of available
+files, not trial success.
+Keep the archive, checksum and `trial-result.txt` together. See the
+[USB instructions](packaging/USB_START_KO.md) and [combined trial](docs/FIELD_TRIAL_KO.md).
+Do not enter commands or change USB devices while driving.
+
+The packaging supports BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock
+storage aliases and read-only root; [earlier installation evidence](validation/USB_INSTALL_2026-09-29.md)
+is retained separately.
 The [OEM execution and account correction](validation/OEM_RUNTIME_2026-09-29.md)
 supersedes the earlier non-root `cmu` test assumption: stock `cmu` is UID 0,
 so the separate collector uses the existing non-root `service` account.
