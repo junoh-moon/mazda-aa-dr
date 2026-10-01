@@ -29,8 +29,8 @@ awk -v mp="$3" -v mode="$mode" '
  $2==mp && $1!="rootfs" {
   n=split($4,a,","); $4=""
   for(i=1;i<=n;i++){if(a[i]=="ro" || a[i]=="rw")a[i]=mode; $4=$4 (i>1?",":"") a[i]}
- } {print}' /proc/mounts > /proc/mounts.next || exit 93
-/bin/mv /proc/mounts.next /proc/mounts
+ } {print}' /proc/mounts > /proc/self/mounts.next || exit 93
+/bin/mv /proc/self/mounts.next /proc/self/mounts
 '''
 # Catch the original bug even though the test host's chroot storage is writable.
 # cp is always the first staging operation on each OEM file. Other operations
@@ -64,6 +64,15 @@ def copy_file(stock, root, name):
     dest = root / name.lstrip('/')
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest, follow_symlinks=False)
+
+
+def require_mounts_link(root):
+    mounts = root / 'proc/mounts'
+    target = root / 'proc/self/mounts'
+    require(mounts.is_symlink() and os.readlink(mounts) == 'self/mounts',
+            'Emulated /proc/mounts lost the Linux self/mounts symlink')
+    require(target.is_file() and not target.is_symlink(),
+            'Emulated /proc/self/mounts is not a regular backing file')
 
 
 def make_root(root, stock, bundle):
@@ -108,9 +117,13 @@ def make_root(root, stock, bundle):
     put(root, '/etc/group', 'cmu:x:0:\nservice:x:1001:\nhmi:x:1002:\nbrowser:x:1003:\n')
     put(root, '/etc/nsswitch.conf', 'passwd: files\ngroup: files\n')
     put(root, '/proc/sys/kernel/random/boot_id', BOOT)
-    put(root, '/proc/mounts', 'rootfs / rootfs rw 0 0\n/dev/root / relfs ro,relatime 0 0\n'
+    # Linux exposes /proc/mounts as this kernel-owned symlink. The backing
+    # contents remain authored: no host filesystem is mounted or remounted.
+    put(root, '/proc/self/mounts', 'rootfs / rootfs rw 0 0\n/dev/root / relfs ro,relatime 0 0\n'
         'tmpfs /tmp tmpfs rw 0 0\n/dev/mtdblock8 /tmp/mnt/data_persist relfs rw 0 0\n'
         '/dev/sda1 /tmp/mnt/sda1 vfat ro,noexec 0 0\n')
+    (root / 'proc/mounts').symlink_to('self/mounts')
+    require_mounts_link(root)
     put(root, '/proc/uptime', '100.00 0.00\n')
     put(root, '/test-bin/mount', MOUNT, 0o755)
     put(root, '/test-bin/cp', COPY, 0o755)
@@ -133,11 +146,13 @@ def guest_environment():
 
 
 def execute_guest(root, script):
+    require_mounts_link(root)
     result = subprocess.run(['/usr/sbin/chroot', str(root), '/bin/sh', '-c', script],
                             env=guest_environment(), capture_output=True, text=True, timeout=90)
     print(result.stdout, end='')
     if result.stderr:
         print(result.stderr, end='')
+    require_mounts_link(root)
     return result
 
 
@@ -492,9 +507,10 @@ def main():
         # collector execution. Startup must use the installed persistent files.
         saved_mounts = (root / 'proc/mounts').read_text()
         usb.rename(Path(detached) / 'usb')
-        (root / 'proc/mounts').write_text(''.join(
+        (root / 'proc/self/mounts').write_text(''.join(
             line for line in saved_mounts.splitlines(keepends=True)
             if line.split()[1] != '/tmp/mnt/sda1'))
+        require_mounts_link(root)
         require(not usb.exists(), 'Installation USB was not detached')
         # Exercise both experimental DSOs with the stock dynamic loader/libc.
         # glibc returns success even when it ignores a missing LD_PRELOAD DSO.
@@ -537,7 +553,8 @@ def main():
         require('collector_stop' in journal.read_text(), 'Collector stop evidence missing')
         require(not usb.exists(), 'USB reappeared before persistent execution ended')
         (Path(detached) / 'usb').rename(usb)
-        (root / 'proc/mounts').write_text(saved_mounts)
+        (root / 'proc/self/mounts').write_text(saved_mounts)
+        require_mounts_link(root)
         print('PASS: absent installation USB during stock loader, actual guard selection '
               'and collector execution; no OEM service startup claimed', flush=True)
         # Run the parked helpers with explicitly synthetic sensor/health rows.
@@ -637,6 +654,31 @@ def main():
         run("printf '4\\n' | sh /tmp/mnt/sda1/trial")
         for name, before in baseline.items():
             require((root / name).read_bytes() == before, 'Uninstall damaged baseline: ' + name)
+        # Removal retains collected evidence. A parked USB return must retrieve
+        # those exact bytes without reinstalling or arming a new experiment.
+        before = set(usb.glob('mx5dr-logs-*.tar'))
+        removed_config = (base / 'mx5dr.conf').read_bytes()
+        run("printf '3\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        report = (usb / 'trial-result.txt').read_text()
+        require('finish_exit=1' in report and 'export_exit=0' in report,
+                'Post-uninstall retrieval lost separate finish/export outcomes')
+        exports = set(usb.glob('mx5dr-logs-*.tar')) - before
+        require(len(exports) == 1, 'Post-uninstall retrieval did not create one archive')
+        archive = exports.pop()
+        require(archive.with_suffix('.tar.sha256').read_text().split()[0] ==
+                hashlib.sha256(archive.read_bytes()).hexdigest(),
+                'Post-uninstall export checksum mismatch')
+        with tarfile.open(archive) as exported:
+            require(exported.extractfile('logs/trace.0.jsonl').read() == raw and
+                    exported.extractfile('logs/collector.0.jsonl').read() == original_collector,
+                    'Post-uninstall archive changed retained raw bytes')
+        require((base / 'logs/trace.0.jsonl').read_bytes() == raw and
+                (base / 'mx5dr.conf').read_bytes() == removed_config and
+                not (base / 'guard/arm').exists(), 'Retrieval changed removed state or raw files')
+        for name, before in baseline.items():
+            require((root / name).read_bytes() == before, 'Retrieval changed OEM baseline: ' + name)
+        print('PASS: menu4 removal then menu3 retained raw export, unchanged OFF/no-arm '
+              'state and Linux mounts symlink', flush=True)
         run('cd /tmp/mnt/sda1 && sh install.sh')
         require((base / 'guard/arm').exists(), 'Reinstall did not arm')
         run('cd /tmp/mnt/sda1 && sh uninstall.sh')

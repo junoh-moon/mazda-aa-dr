@@ -111,6 +111,7 @@ done > "$RELEASE_WORK/evidence/elf.txt"
 - ARM runner는 명시한 compiler/sysroot/preload를 사용한다. 상속된 GCC 검색 경로와 `LD_LIBRARY_PATH`, `LD_PRELOAD`, QEMU guest 환경 덮어쓰기는 제거하고 실제 loader 시험에서 지정한 preload만 적용한다.
 - 변경 부분에 따른 추가 ARM 로더/guard 시험은 [통합 검증](../validation/INTEGRATION_2026-09-28.md), SHADOW 범위는 [기능 검증](../validation/LIVE_SHADOW_2026-09-29.md)을 참고한다.
 - 원본 펌웨어, 개인 경로, 실차 위치 로그를 공개하지 않는다. 실행 로그는 먼저 비공개 evidence에 보관하고, 공개 검증 요약에 실행 환경·커밋·생략·미검증을 적는다.
+- 최종 ZIP으로 숫자 메뉴의 설치·USB 분리·다음 부팅·회수·제거와 제거 후 회수를 실행한다. `/proc/mounts -> self/mounts`처럼 실제 환경의 파일 형태를 보존하고, 모의 remount가 링크를 일반 파일로 바꾸지 않았는지도 확인한다. 순정 BusyBox를 사용했다는 사실만으로 파일시스템·mount·전체 기동까지 실제라고 판단하지 않는다. 실 Linux procfs의 직접 확인과 작성한 mount 모델의 결과를 구분한다. v0.3.9-shadow.1은 이 전제를 놓쳐 실차 회수가 실패했다.
 
 ## 4. USB 최상위 ZIP과 전체 체크섬
 

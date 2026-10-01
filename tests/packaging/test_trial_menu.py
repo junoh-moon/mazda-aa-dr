@@ -29,8 +29,12 @@ class TrialMenuTests(unittest.TestCase):
         bootfile.parent.mkdir(parents=True)
         bootfile.write_text(BOOT)
         (self.root / 'proc/uptime').write_text('100.00 1.00\n')
-        self.mounts = self.root / 'proc/mounts'
+        # Linux exposes /proc/mounts as a kernel-owned relative symlink. The
+        # earlier regular-file fixture missed the actual menu3 startup failure.
+        (self.root / 'proc/self').mkdir()
+        self.mounts = self.root / 'proc/self/mounts'
         self.mounts.write_text(f'/dev/sdb1 {self.usb} vfat rw 0 0\n')
+        (self.root / 'proc/mounts').symlink_to('self/mounts')
         self.env = dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root),
                         MX5DR_FIXTURE_FINISH_WAIT='0')
 
@@ -95,12 +99,22 @@ class TrialMenuTests(unittest.TestCase):
 
     def test_finish_exports_to_the_launching_usb_and_records_outcome(self):
         self.prepare_logs()
+        self.assertTrue((self.root / 'proc/mounts').is_symlink())
         result = self.menu('3\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         report = self.assert_export()
         self.assertIn('finish_exit=0', report)
         self.assertIn('export_exit=0', report)
         self.assertTrue((self.logs / 'capture.stop').is_dir())
+
+    def test_regular_mount_table_remains_compatible(self):
+        mounts_alias = self.root / 'proc/mounts'
+        mounts_alias.unlink()
+        mounts_alias.write_bytes(self.mounts.read_bytes())
+        self.prepare_logs()
+        result = self.menu('3\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('export_exit=0', self.assert_export())
 
     def test_status_failure_does_not_block_finish_and_export(self):
         self.prepare_logs()
@@ -164,6 +178,63 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('mounted USB', result.stdout + result.stderr)
         self.assertFalse((self.logs / 'capture.stop').exists())
         self.assertFalse(list(self.usb.glob('mx5dr-logs-*')))
+
+    def test_other_mount_does_not_make_the_launching_usb_mounted(self):
+        self.prepare_logs()
+        for row in (f'/dev/sda1 {self.usb.parent}/sda1 vfat rw 0 0\n',
+                    f'/dev/sdb1 {self.usb}/nested vfat rw 0 0\n',
+                    f'/dev/mmcblk0p1 {self.usb} ext4 rw 0 0\n'):
+            with self.subTest(mount=row):
+                self.mounts.write_text(row)
+                result = self.menu('3\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('mounted USB', result.stdout + result.stderr)
+                self.assertFalse((self.logs / 'capture.stop').exists())
+                self.assertFalse(list(self.usb.glob('mx5dr-logs-*')))
+
+    def test_missing_mount_table_does_not_freeze_or_export(self):
+        self.prepare_logs()
+        self.mounts.unlink()  # The real /proc/mounts alias is now dangling.
+        result = self.menu('3\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.logs / 'capture.stop').exists())
+        self.assertFalse(list(self.usb.glob('mx5dr-logs-*')))
+
+    def test_kernel_alias_exception_does_not_allow_a_symlink_usb_report(self):
+        self.prepare_logs()
+        sentinel = self.root / 'untouched-report'
+        sentinel.write_bytes(b'preserve original report target\n')
+        (self.usb / 'trial-result.txt').symlink_to(sentinel)
+        result = self.menu('3\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Not a regular non-symlink file: ' + str(self.usb / 'trial-result.txt'),
+                      result.stderr)
+        self.assertEqual(sentinel.read_bytes(), b'preserve original report target\n')
+
+    def test_export_after_remove_preserves_raw_logs_without_reinstall_or_rearm(self):
+        self.prepare_logs(acknowledged=False)
+        removed = self.menu('4\n')
+        self.assertEqual(removed.returncode, 0, removed.stdout + removed.stderr)
+        self.assertIn('mode=OFF', (self.base / 'mx5dr.conf').read_text())
+        before = {path: path.read_bytes() for path in
+                  (self.fixture.autostart, self.fixture.sm,
+                   self.root / 'jci/sm/sm_WCP.conf', self.base / 'mx5dr.conf')}
+        result = self.menu('3\n')  # No install, arm or diagnostic command.
+        self.assertNotEqual(result.returncode, 0)  # Current-boot finish unproved.
+        self.assertIn('export_exit=0', result.stdout)
+        report = self.assert_export()
+        self.assertIn('status_exit=1', report)
+        self.assertIn('finish_exit=1', report)
+        self.assertIn('export_scope=all_retained_boots', report)
+        archive, = self.usb.glob('mx5dr-logs-*.tar')
+        with tarfile.open(archive) as tar:
+            self.assertEqual(tar.extractfile('mx5dr.conf').read(),
+                             before[self.base / 'mx5dr.conf'])
+        for path, contents in before.items():
+            self.assertEqual(path.read_bytes(), contents)
+        self.assertFalse((self.base / 'guard/arm').exists())
+        self.assertFalse((self.base / 'pending').exists())
+        self.assertFalse((self.base / 'installed.txt').exists())
 
     def test_export_failure_is_visible_and_logged(self):
         self.prepare_logs()

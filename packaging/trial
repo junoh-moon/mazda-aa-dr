@@ -7,7 +7,10 @@ HERE=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P)
 require_usb() {
     # A detached USB can leave its directory on CMU tmpfs. Never infer a mounted
     # destination from that directory alone or choose another connected disk.
-    regular "$ROOT/proc/mounts"
+    # Linux provides this kernel-owned table through the self/mounts symlink.
+    # Read that alias; the no-symlink rule still applies to ordinary files.
+    [ -f "$ROOT/proc/mounts" ] && [ -r "$ROOT/proc/mounts" ] ||
+        fail 'Cannot read the kernel mount table: /proc/mounts'
     awk -v dest="$HERE" '$2==dest && $1 ~ /^\/dev\/sd[a-z]+[0-9]+$/ {found=1}
         END {exit !found}' "$ROOT/proc/mounts" ||
         fail 'Run trial from the mounted USB root; keep that USB connected.'
