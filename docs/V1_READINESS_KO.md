@@ -89,6 +89,10 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   관찰했습니다. 다른 실행의 정시 GPT callback은 제한 종료 직전이라
   그 뒤 동작을 판정할 수 없습니다. GIC 전달·CPU 수락을 포함한
   같은 실행의 원인 경계는 미확정입니다.
+  [사건 동기화 후속 계측](../validation/LDS_TIMER_WAKE_BOUNDARY_2026-10-01.md)은
+  늦은 GPT 비교값 뒤 가상 시계 증가, 두 vCPU의 halted 상태와
+  새 GPT·GIC IRQ 87 요청 부재를 같은 VM에서 기록했습니다. OEM
+  쓰기 후 검사·재시도와 차량 하드웨어 동작은 여전히 미검증입니다.
   [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)에서
   원본 `GetPosition`과 `GetUbloxDiag`의 출력 형식·별도 cache mutex를
   직접 대조했습니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단

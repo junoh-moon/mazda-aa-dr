@@ -28,6 +28,11 @@ TCG 스케줄링 지연의 영향과 guest 재시도 경로는 아직 확인하�
 단일 스레드 실행의 정상 예약·callback은 제한 종료 직전에 발생해
 후속 guest 동작을 판정할 수 없습니다. GIC IRQ 87 전달·CPU 수락은
 같은 정지 경계에서 미측정입니다.
+[같은 실행의 GPT→GIC→CPU 후속 계측](../validation/LDS_TIMER_WAKE_BOUNDARY_2026-10-01.md)은
+LDS 질의 6회 뒤 비교값이 계산 시 287 tick 지난 사건을 포착했습니다.
+QEMU 가상 시계는 계속 증가했지만 두 vCPU는 1·5·10초 표본 모두
+halted였고, 새 GPT 출력·GIC IRQ 87 요청은 없었습니다. 이는 QEMU
+모델 안의 정지 경계이며 OEM 재시도 코드와 실차 동작의 판정은 아닙니다.
 
 [후속 MODEL 초기화 원인 기록](../validation/MODEL_RESET_REVIEW_2026-10-01.md)은
 외부 `feat/session-observation`의 아이디어를 검토하고 raw 원본이 원인
