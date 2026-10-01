@@ -170,6 +170,14 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
   [inline 요청 문맥 검사](../validation/PROVENANCE_CONTEXT_2026-10-02.md)에서
   one-shot 재조회 없이 동일 요청을 전달하고 중첩 frame·실패·세대 철회를
   확인했습니다. 실제 provider·receiver의 자격 판단 구현과 구분합니다.
+- [x] 실제 제품 cold 설치와 원본 BLM·AA IPC 세션의 생성·해제·큐 종료를 연결합니다.
+  [원본 세션 실행](../validation/AA_PRODUCT_STARTUP_2026-10-02.md)에서 첫 환경 실패와
+  후속 성공, 입력 불변·잔여 정리를 구분했습니다. 작성한 부분 초기화이며
+  위치 callback·DR 계산·LOCATION 송신은 아직 이 실행에 포함하지 않았습니다.
+- [ ] 제품 AssistWorker의 계산부터 원본 BLM LOCATION 송신까지 한 실행에서
+  연결하고 작성한 자격 허용·거부·MODEL 입력, GPS 복귀와 자격 상실 뒤 회복을
+  비교합니다. 과거 소스 링크 계산기의 송신 시험과 실제 제품 worker의 합성
+  endpoint 시험을 합쳐 완료로 세지 않습니다. 물리 자격·폰 수용도 별도로 남습니다.
 - [x] 외부 journal 큐 수정을 통합하고 동일 제품의 원본 실행에서 관측 loss 0을 확인합니다.
   과거 drop의 정확한 호출 조합·원인을 확정한 것으로 세지 않습니다.
 - [x] 세션 관측·전환 검사의 추가 도구는 설치 전후 목록을 남기고 모두 제거했습니다.

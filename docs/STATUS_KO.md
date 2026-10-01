@@ -122,6 +122,13 @@ one-shot으로 확보한 Trace·호출·세대를 inline 출처 검증 함수에
 Python 163개를 별도로 확인했습니다. 물리 자격 공급부는 계속 미구현이고
 live ASSIST·폰 반영의 완료는 아닙니다.
 
+[실제 제품과 원본 AA 세션 기동](../validation/AA_PRODUCT_STARTUP_2026-10-02.md)은
+같은 `8d5669c` 제품의 cold 설치, 원본 IPC 세션 생성·해제와 BLM 작업 큐의
+정상 join을 확인했습니다. 첫 큐 설정 실패를 보존하고 별도 IPC namespace에서
+원본이 요구한 크기·권한을 맞춰 재실행했습니다. 작성한 시작 순서와 부분 기동이며
+이 실행에는 위치 callback·DR 계산·LOCATION 송신이 없습니다. 실제 제품의
+ASSIST 계산과 원본 AA 송신을 결합하는 다음 실행은 준비 중입니다.
+
 아래는 `.2` 회수와 검증의 기록이며 새판의 실행 횟수로 바꾸지 않습니다.
 실차에서 v0.3.9-shadow.1의 메뉴3이 정상 `/proc/mounts` 링크를 거부했습니다.
 이후 핫픽스로 archive 회수는 성공했지만 trace·collector 기록 파일이 모두
