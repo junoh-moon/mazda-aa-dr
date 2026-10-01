@@ -3,8 +3,9 @@
 **2026-10-01에 사용자가 v1.0 전 실차 설치·시험 기회를 한 번 허용했습니다.**
 아래 통합 절차를 갱신하여 해당 기회에 필요한 후보를 준비합니다. 현재 공개된
 ZIP에 이번 보완이 포함되어 있다고 간주하지 마십시오. 저장 공간 부족 대응과
-실제 계산 진행 확인을 새 소스에 구현했습니다. 새 고정 커밋의 묶음 검증은
-[준비 기록](../validation/TRIAL_PREPARATION_2026-10-01.md)에서 별도로 추적합니다.
+실제 계산 진행 확인을 구현하고 커밋 `a29f1b8`의 최종 묶음을 검증했습니다.
+이번 시험용 파일은 `mazda-aa-dr-a29f1b8-shadow-trial.zip`입니다.
+[고정 커밋·해시·검증](../validation/TRIAL_PREPARATION_2026-10-01.md)을 따르십시오.
 [v1.0 완료 조건](V1_READINESS_KO.md)은 유지하며 live ASSIST는 계속 비활성입니다.
 
 허용된 실차 시험 기회는 한 번입니다. 가능한 구현·펌웨어 분석·오프라인
@@ -12,10 +13,10 @@ ZIP에 이번 보완이 포함되어 있다고 간주하지 마십시오. 저장
 로그 회수·다음 부팅 복귀 확인을 묶습니다. OBSERVE와 SHADOW를 별도 방문으로
 나누는 것을 기본 절차로 삼지 않습니다.
 
-현재 공개 묶음은 [v0.3.1-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.1-shadow.1)입니다.
-고정 커밋·ZIP 해시·실행 범위는 [릴리즈 검증 기록](../validation/RELEASE_2026-09-30.md),
+현재 공개 묶음은 [v0.3.2-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)입니다.
+고정 커밋·ZIP 해시·실행 범위는 [릴리즈 검증 기록](../validation/RELEASE_2026-10-01.md),
 압축 해제와 `sh install.sh` 절차는 [USB 설치 안내](../packaging/USB_START_KO.md)를
-따르십시오. 새 시험에는 보완 후 고정한 후보를 사용합니다. 실제 차량의
+따르십시오. 이 공개판에는 위 추가 보완이 없으므로 새 시험에는 위 고정 후보를 사용합니다. 실제 차량의
 정상 기동·복구·센서와 폰 수용은 아직 검증하지 않았습니다.
 
 ## 이번 변경이 막는 낭비
@@ -52,7 +53,7 @@ sh packaging/make_bundle.sh --default-mode=SHADOW build/libmx5dr.so new-trial-bu
 
 ## 한 번의 시험 기회
 
-아래 절차는 이번 보완 후 고정할 SHADOW 후보용입니다. 기존 공개 ZIP의
+아래 절차는 위 `a29f1b8` SHADOW 후보용입니다. 기존 공개 ZIP의
 상태 helper에 새 진단·저장 공간 보호가 포함되어 있다고 간주하지 마십시오.
 
 **설치와 초기 확인은 주차 중에 한다.** 압축을 푼 디렉터리에서 `sh ./install.sh`를 실행하고 정상적인 다음 기동으로 들어간다. 기존 AA·터치가 정상인지 확인한다. 정상 동작을 확인할 수 없으면 주행으로 진행하지 않고 현재 자료부터 보존한다.

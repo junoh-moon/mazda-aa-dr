@@ -12,23 +12,27 @@
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 현재 공개 ZIP을 새 시험 준비가 끝난 묶음으로 간주하지 않습니다.
 
-[v0.3.1-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.1-shadow.1)을
-커밋 `bcdfda9b6a98e1ec9bc6d880015d5de2222c593b`에서 빌드하여 게시했습니다.
-전체 host/ARM·순정 BusyBox 설치 검사와 공개 ZIP 재다운로드 검증을 완료했습니다.
-[최종 검증 기록](../validation/RELEASE_2026-09-30.md)에 파일 해시와 실행 범위를
+외부 master에서 [v0.3.2-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)을
+커밋 `af1a24aafaf401f1b648b5af5d21b0d611f6f71a`에서 빌드하여 게시한 것을 확인했습니다.
+해당 host/ARM·순정 BusyBox 설치 검사는 외부 발행 기록을 따릅니다. 이번 작업은
+공개 ZIP을 직접 내려받아 SHA-256·CRC·전체 manifest와 고정 커밋을 대조했습니다.
+[이번 릴리즈 검증](../validation/RELEASE_2026-10-01.md)에 파일 해시와 실행 범위를
 고정했습니다. 기본 모드는 SHADOW이며 ASSIST는 비활성입니다. 실차 센서 callback,
-위치 정확도, 정상 전체 차량 기동·복구와 폰 수용은 미검증입니다.
+위치 정확도, 정상 전체 차량 기동·복구와 폰 수용은 미검증입니다. 조사 문단의
+`공개 ZIP 미갱신`은 해당 시점의 기록이며 포함 여부는 고정 커밋으로 대조하십시오.
 
 아래 조사 이력의 미구현·미검증 범위는 각 기록 시점의 상태입니다. 요청 관측은
 후속 제품 설치·journal까지 연결했습니다. [제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)과
 [후속 반복 취소 비교](../validation/MANAGER_CANCELLATION_2026-09-30.md)를 함께 따릅니다.
 
-[한 번의 시험 준비](../validation/TRIAL_PREPARATION_2026-10-01.md)에서 상태 확인의
-계산 진행 누락을 수정하고 저장 공간 보호를 추가했습니다. 설치 전 예상 공간,
-두 기록기의 8MiB 여유 정책과 고정 중단 진단, PC 분석과 내부 저장소로의 회수
-방지를 연결했습니다. 실제 작은 임시 파일시스템, host/고정 ARM 및 원본 BusyBox
-경로를 검사하고 있으며 최종 후보의 고정·검증은 별도 기록합니다. 공개 ZIP을
-이 수정본으로 간주하지 마십시오. live ASSIST와 실차 실행은 여전히 미완료입니다.
+[한 번의 시험 후보](../validation/TRIAL_PREPARATION_2026-10-01.md)는 별도 커밋
+`a29f1b89987dc647f2146df945b9d2ba16526047`의
+`mazda-aa-dr-a29f1b8-shadow-trial.zip`입니다. 설치 전 예상 공간, 두 기록기의
+8MiB 여유 정책, 중단·MODEL 초기화 사유와 실제 계산 호출 수를 추가했습니다.
+최종 host Python 358개·C/C++, 고정 ARM 전체, 원본 BusyBox awk 33개와
+최종 ZIP 설치·회수·제거 검사를 생략 없이 통과했습니다. 이 추가 보완은
+공개 v0.3.2 ZIP에 없습니다. 동시 부하 시험의 지연 원인은 미확정이고 실차
+센서·복구·폰 수용과 live ASSIST는 미완료입니다. 임시 도구는 모두 제거했습니다.
 
 [LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
 `GetUbloxDiag`도 특정 위치 응답의 출처 증거로 바로 사용할 수 없음을 확인했습니다.

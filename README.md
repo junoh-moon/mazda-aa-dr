@@ -18,9 +18,12 @@ The current USB packaging includes the MP3 diagnostic-terminal entry and support
 the target's BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock storage aliases
 and read-only root. See [USB instructions](packaging/USB_START_KO.md) and
 [new installation evidence](validation/USB_INSTALL_2026-09-29.md).
-The published [v0.3.1-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.1-shadow.1)
+The published [v0.3.2-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)
 includes these fixes. Its downloaded bytes, full host/ARM checks and stock BusyBox
-installation checks are recorded in the [final release verification](validation/RELEASE_2026-09-30.md).
+installation checks are recorded in the [final release verification](validation/RELEASE_2026-10-01.md).
+The additional storage reserve, retained MODEL reset reasons and drain counters
+are in the separate [a29f1b8 trial candidate](validation/TRIAL_PREPARATION_2026-10-01.md),
+not the published v0.3.2 ZIP. Use that pinned candidate for the authorized combined trial.
 The older v0.3.0-shadow.1 ZIP does not contain these fixes.
 The [OEM execution and account correction](validation/OEM_RUNTIME_2026-09-29.md)
 supersedes the earlier non-root `cmu` test assumption: stock `cmu` is UID 0,
@@ -31,7 +34,7 @@ Stock-kernel/OEM service execution remains incomplete and is not vehicle validat
 
 The goal is to let Android Auto navigation, initially Naver Map, benefit from vehicle motion during GNSS outages. Other apps and other firmware versions are separate compatibility questions.
 
-The source baseline contains an offline DR core, version-specific ARM hooks, automatic observation, a bounded journal, an installer, and a PC log analyzer. SCRUB removes optional stale speed/bearing fields from selected mode-0 cached locations; it does not generate a new position. The earlier v0.2.0-observe.2 release has an observation-only SHADOW placeholder; v0.3.1-shadow.1 includes the MODEL calculation described below. Runtime ASSIST is blocked in code and configuration.
+The source baseline contains an offline DR core, version-specific ARM hooks, automatic observation, a bounded journal, an installer, and a PC log analyzer. SCRUB removes optional stale speed/bearing fields from selected mode-0 cached locations; it does not generate a new position. The earlier v0.2.0-observe.2 release has an observation-only SHADOW placeholder; v0.3.2-shadow.1 includes the MODEL calculation and request/session observations described below. Runtime ASSIST is blocked in code and configuration.
 
 The original 0.1 baseline is retained in Git history. The subsequent loader, collector and recovery changes have separate PRs and verification records. Branch contents do not imply that those PRs have been merged into master.
 
