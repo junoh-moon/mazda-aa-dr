@@ -177,8 +177,8 @@ private:
     uint64_t qualified_anchor_call_sequence_, last_qualified_position_call_sequence_;
     // Retained across candidate retirement within one source/session epoch.
     uint64_t qualified_observed_position_call_sequence_;
-    // Negative boundaries from ignored old-generation POSITIONs. Neither
-    // observation time nor callback order can qualify a later GPS anchor.
+    // Negative boundaries from discarded queued or ignored old-generation
+    // POSITIONs. Neither observation time nor callback order qualifies an anchor.
     uint64_t qualified_stale_position_cutoff_ns_;
     uint64_t qualified_stale_position_call_sequence_;
     bool qualified_anchor_paired_;
@@ -193,6 +193,7 @@ private:
     PipelineResult insert(const Event&);
     PipelineResult fault(PipelineResult);
     PipelineResult reject_core(PipelineResult);
+    void preserve_discarded_positions();
     void reset_state(mx5_dr_context);
     bool owns_qualified_revoker() const {
         return qualified_revoker_ && qualified_owner_==this;

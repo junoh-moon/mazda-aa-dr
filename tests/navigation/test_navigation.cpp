@@ -712,6 +712,103 @@ static void stale_position_cannot_cross_a_queued_qualified_anchor() {
     CHECK(anchor_live.context().generation==3&&anchor_live.status().resets==1);
     CHECK(!anchor_live.diagnostic(T(115)).snapshot.valid);
 }
+static mx5_dr_anchor discarded_queue_anchor(const Pipeline& p,unsigned ms,unsigned call) {
+    mx5_dr_anchor a=mx5_dr_anchor();a.context=p.context();
+    a.anchor_id=call;a.position_seq=uint64_t(call)*4;a.measured_ns=T(ms);
+    a.utc_ns=1700000000000000000ULL;a.latitude_deg=35;a.longitude_deg=135;
+    a.position_error_m=1;a.validated=a.heading_valid=a.calibration_verified=1;
+    a.quality=MX5_DR_VALID;return a;
+}
+static void queue_discarded_positions(Pipeline& p) {
+    // Independent maxima matter: observer order and callback entry can invert.
+    adapter::Observation time=pos(160,1,10),call=pos(150,1,20);
+    time.prediction_generation=call.prediction_generation=uint32_t(p.context().generation);
+    CHECK(p.enqueue_position(time)==PIPELINE_OK);CHECK(p.enqueue_position(call)==PIPELINE_OK);
+}
+static void discarded_qualified_queue_keeps_negative_boundaries() {
+    for(unsigned path=0;path<5;++path)for(unsigned position=0;position<2;++position)
+    for(unsigned boundary=0;boundary<3;++boundary) {
+        uint64_t revoker=0;Pipeline p;seed_qualified(p,1,&revoker);
+        // Rearm must also preserve callbacks queued after the earlier retirement.
+        if(path==3)CHECK(p.retire_qualified());
+        queue_discarded_positions(p);
+        if(path==0)CHECK(p.retire_qualified());
+        else if(path==1)p.reset(p.context());
+        else if(path==2)
+            CHECK(p.enqueue_yaw(evidence(2,2,170),0,2047,1,T(170),T(170))==PIPELINE_BAD_INPUT);
+        else if(path==3)CHECK(p.rearm_qualified(mx5_dr_default_config(),p.context()));
+        else {
+            CHECK(p.init_qualified(mx5_dr_default_config(),p.context()));
+            CHECK(p.bind_qualified_revoker(test_revoke_generation,&revoker));
+        }
+        const unsigned time=boundary==0?160:170,call=boundary==1?20:21;
+        PipelineResult result;
+        if(position) {
+            adapter::Observation next=pos(time,1,call);
+            next.prediction_generation=uint32_t(p.context().generation);
+            result=p.enqueue_position(next);
+        } else result=p.enqueue_anchor(discarded_queue_anchor(p,time,call),T(170),call);
+        if(boundary<2) {
+            if(result!=PIPELINE_BAD_INPUT)
+                std::fprintf(stderr,"discarded queue: path=%u position=%u boundary=%u result=%s\n",
+                             path,position,boundary,pipeline_result_name(result));
+            CHECK(result==PIPELINE_BAD_INPUT&&!p.diagnostic(T(170)).snapshot.valid);
+        } else CHECK(result==PIPELINE_OK);
+    }
+    uint64_t revoker=0;Pipeline retired;seed_qualified(retired,1,&revoker);
+    queue_discarded_positions(retired);CHECK(retired.retire_qualified());
+    adapter::Observation old=pos(150,1,20);old.prediction_generation=2;
+    // Discarded is not applied: repeated old backlog remains harmless while retired.
+    CHECK(retired.enqueue_position(old)==PIPELINE_STALE_INPUT);
+    CHECK(retired.enqueue_position(old)==PIPELINE_STALE_INPUT);
+    for(unsigned native=0;native<2;++native) {
+        uint64_t later_generation=0;Pipeline p;seed_qualified(p,1,&later_generation);
+        adapter::Observation pending=pos(200,native?3:0,40);
+        pending.prediction_generation=uint32_t(p.context().generation+1);
+        later_generation=pending.prediction_generation;
+        CHECK(p.enqueue_position(pending)==PIPELINE_OK);CHECK(p.retire_qualified());
+        // Queued adapter transitions can be ahead of the calculator. Neither
+        // mode nor generation permits forgetting their negative call boundary.
+        CHECK(p.enqueue_anchor(discarded_queue_anchor(p,210,40),T(210),40)==PIPELINE_BAD_INPUT);
+        CHECK(p.enqueue_anchor(discarded_queue_anchor(p,220,41),T(220),41)==PIPELINE_OK);
+    }
+}
+static void discarded_queue_boundaries_do_not_cross_epochs_or_model() {
+    for(unsigned change=0;change<2;++change)for(unsigned path=0;path<3;++path) {
+        uint64_t revoker=0;Pipeline p;seed_qualified(p,1,&revoker);
+        queue_discarded_positions(p);CHECK(p.retire_qualified());
+        // New-epoch rearm also discards a queued record belonging to the old epoch.
+        adapter::Observation pending=pos(200,0,30);
+        pending.prediction_generation=uint32_t(p.context().generation);
+        CHECK(p.enqueue_position(pending)==PIPELINE_OK);
+        mx5_dr_context x=p.context();if(change)++x.session_epoch;else ++x.source_epoch;
+        if(path==0)CHECK(p.rearm_qualified(mx5_dr_default_config(),x));
+        else if(path==1) {
+            CHECK(p.init_qualified(mx5_dr_default_config(),x));
+            CHECK(p.bind_qualified_revoker(test_revoke_generation,&revoker));
+        } else p.reset(x);
+        mx5_dr_anchor a=discarded_queue_anchor(p,130,1);
+        CHECK(p.enqueue_anchor(a,T(140),1)==PIPELINE_OK);
+        adapter::Observation gps=pos(140,1,1);gps.prediction_generation=uint32_t(p.context().generation);
+        CHECK(p.enqueue_position(gps)==PIPELINE_OK);
+        CHECK(p.enqueue_speed(evidence(1,1,130),10)==PIPELINE_OK);
+        CHECK(p.enqueue_reverse(evidence(3,1,130),0)==PIPELINE_OK);
+        CHECK(p.enqueue_yaw(evidence(2,1,140),0,2047,1,T(130),T(140))==PIPELINE_OK);
+        const PipelineResult result=p.drain(T(140));
+        if(result!=PIPELINE_OK)
+            std::fprintf(stderr,"new epoch queue: change=%u path=%u result=%s state=%u\n",
+                change,path,pipeline_result_name(result),unsigned(p.diagnostic(T(140)).snapshot.state));
+        CHECK(result==PIPELINE_OK);
+        CHECK(p.diagnostic(T(140)).snapshot.state==MX5_DR_READY);
+    }
+    uint64_t revoker=0;Pipeline model;seed_qualified(model,1,&revoker);
+    queue_discarded_positions(model);CHECK(model.retire_qualified());
+    CHECK(model.init_model(research_model_profile(),mx5_dr_default_config(),model.context()));
+    CHECK(model.enqueue_position(pos(140,1,1))==PIPELINE_OK);
+    CHECK(model.init_qualified(mx5_dr_default_config(),model.context()));
+    CHECK(model.bind_qualified_revoker(test_revoke_generation,&revoker));
+    CHECK(model.enqueue_anchor(discarded_queue_anchor(model,130,1),T(140),1)==PIPELINE_OK);
+}
 static void qualified_coverage(Pipeline& p) {
     CHECK(p.enqueue_speed(evidence(1,2,100),10)==PIPELINE_OK);
     CHECK(p.enqueue_reverse(evidence(3,2,100),0)==PIPELINE_OK);
@@ -838,7 +935,9 @@ int main(int argc,char** argv) {
         raw_yaw_accumulator_boundaries();
         rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();
         qualified_anchor_before_observed_return();qualified_revoker_failure_is_terminal();
-        stale_position_cannot_cross_a_queued_qualified_anchor();exhausted_model();
+        stale_position_cannot_cross_a_queued_qualified_anchor();
+        discarded_qualified_queue_keeps_negative_boundaries();
+        discarded_queue_boundaries_do_not_cross_epochs_or_model();exhausted_model();
         exhausted_qualified(0);exhausted_qualified(1);exhausted_qualified(2);
         exhausted_anchor_replacement();exhausted_position_sequence(); }
     std::printf("navigation: %u checks passed\n",checks); return 0; }

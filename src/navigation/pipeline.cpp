@@ -80,6 +80,8 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
 bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
     const bool same_source_session=configured_&&!model_&&
         x.source_epoch==context().source_epoch&&x.session_epoch==context().session_epoch;
+    // This entry replaces the revoker before reset_state can see its owner.
+    if(same_source_session)preserve_discarded_positions();
     if(configured_&&!model_&&owns_qualified_revoker()) {
         const uint64_t previous=context().generation;
         const uint64_t next=qualified_revoker_(qualified_revoker_user_);
@@ -146,8 +148,29 @@ bool Pipeline::rearm_qualified(const mx5_dr_config& c,mx5_dr_context x) {
     }
     return true;
 }
+void Pipeline::preserve_discarded_positions() {
+    if(!configured_||model_||!owns_qualified_revoker())return;
+    // Retirement can discard callbacks queued beyond the drain watermark.
+    // Keep the same negative evidence as later old-generation delivery, but
+    // never mark these unprocessed callbacks as applied or infer sample time.
+    for(size_t j=0;j<size_;++j)if(queue_[j].kind==POSITION_EVENT) {
+        const adapter::Observation& o=queue_[j].observation;
+        qualified_stale_position_cutoff_ns_=max64(qualified_stale_position_cutoff_ns_,o.mono_ns);
+        qualified_stale_position_call_sequence_=max64(qualified_stale_position_call_sequence_,
+                                                      o.call_sequence);
+    }
+}
 void Pipeline::reset_state(mx5_dr_context x) {
     if (!configured_) return;
+    if(!model_&&owns_qualified_revoker()) {
+        if(x.source_epoch==context().source_epoch&&x.session_epoch==context().session_epoch)
+            preserve_discarded_positions();
+        else {
+            qualified_observed_position_call_sequence_=0;
+            qualified_stale_position_cutoff_ns_=0;
+            qualified_stale_position_call_sequence_=0;
+        }
+    }
     mx5_dr_reset(&core_,x); gyro_bias_.reset(); gps_wheel_.reset(); size_=0; watermark_=0; raw_epoch_=0;
     fault_calibration_.valid=false;
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);

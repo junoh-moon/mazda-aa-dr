@@ -276,6 +276,66 @@ static void stale_position_batching_keeps_verified_recovery_available() {
         startup(s,false);expect_ready(w);CHECK(w.status().begins==1);w.stop();
     }
 }
+static R::AssistInput queued_cutoff_anchor(const A::Observation& gps,uint64_t measured) {
+    R::AssistInput a=input(R::ASSIST_ANCHOR);a.context.generation=gps.prediction_generation;
+    a.received_ns=gps.mono_ns;a.position_call_sequence=gps.call_sequence;
+    a.anchor.context=a.context;a.anchor.anchor_id=gps.call_sequence;
+    a.anchor.position_seq=uint64_t(gps.call_sequence)*4;a.anchor.measured_ns=measured;
+    a.anchor.utc_ns=1700000000000000000ULL;a.anchor.latitude_deg=37;a.anchor.longitude_deg=127;
+    a.anchor.position_error_m=1;a.anchor.heading_error_rad=.01;
+    a.anchor.validated=a.anchor.heading_valid=a.anchor.calibration_verified=1;
+    a.anchor.quality=MX5_DR_VALID;return a;
+}
+static R::AssistInput queued_cutoff_position(const A::Observation& gps) {
+    R::AssistInput p=input(R::ASSIST_POSITION);
+    p.context.generation=gps.prediction_generation;p.observation=gps;return p;
+}
+static void queued_retirement_keeps_the_same_negative_time_boundary() {
+    for(unsigned next_tick=0;next_tick<2;++next_tick)for(unsigned boundary=0;boundary<3;++boundary) {
+        Source s;R::AssistWorker w(mx5_dr_default_config(),s.api());startup(s);expect_ready(w);
+        now_ns+=10000000ULL;const A::Observation paired=callback(1);
+        s.add(queued_cutoff_anchor(paired,paired.mono_ns));s.add(queued_cutoff_position(paired));
+        now_ns+=10000000ULL;const A::Observation unpaired=callback(1);
+        s.add(queued_cutoff_position(unpaired));
+        now_ns+=10000000ULL;const A::Observation discarded=callback(1);
+        CHECK(discarded.prediction_generation==unpaired.prediction_generation);
+        if(!next_tick)s.add(queued_cutoff_position(discarded));
+        // The newer callback can already be queued beyond complete-through.
+        // A later anchor between these times does not violate the watermark.
+        s.watermark=unpaired.mono_ns;w.tick(clock_fn,0);
+        CHECK(w.status().state==R::ASSIST_WAITING_INPUT&&w.status().unpaired_positions==1);
+        const uint32_t retired=A::generation();
+        CHECK(retired>discarded.prediction_generation);
+        if(next_tick)s.add(queued_cutoff_position(discarded));
+        w.tick(clock_fn,0);CHECK(w.status().state==R::ASSIST_WAITING_INPUT);
+        CHECK(A::generation()==retired&&w.status().ignored==next_tick);
+
+        now_ns+=10000000ULL;const A::Observation fresh=callback(1);
+        const uint64_t measured=discarded.mono_ns+uint64_t(boundary)*5000000ULL-5000000ULL;
+        CHECK(measured>s.watermark&&measured<=fresh.mono_ns);
+        CHECK(fresh.prediction_generation==retired&&fresh.call_sequence>discarded.call_sequence);
+        s.add(queued_cutoff_anchor(fresh,measured));s.add(queued_cutoff_position(fresh));
+        now_ns+=10000000ULL;s.add(queued_cutoff_position(callback(0)));
+        const uint64_t end=measured+100000000ULL;
+        motion(s,measured,end,2);now_ns=s.watermark=end;w.tick(clock_fn,0);
+        const R::AssistStatus result=w.status();callback(0);
+        if(boundary<2) {
+            if(result.state!=R::ASSIST_INPUT_FAULT||last_send.choice!=A::ORIGINAL)
+                std::fprintf(stderr,"queued cutoff: next_tick=%u boundary=%u state=%u published=%llu choice=%u\n",
+                    next_tick,boundary,unsigned(result.state),(unsigned long long)result.published,
+                    unsigned(last_send.choice));
+            CHECK(result.state==R::ASSIST_INPUT_FAULT&&result.published==1);
+            CHECK(last_send.choice==A::ORIGINAL&&!std::memcmp(original,forwarded,48));
+            startup(s,false);w.tick(clock_fn,0);CHECK(w.status().state==R::ASSIST_WAITING_BEGIN);
+            startup(s);expect_ready(w);CHECK(w.status().begins==2);
+        } else {
+            // A genuinely later measurement can recover without a new BEGIN.
+            CHECK(result.state==R::ASSIST_PUBLISHED&&result.published==2);
+            CHECK(last_send.choice==A::DR_REPLACEMENT&&result.begins==1);
+        }
+        w.stop();
+    }
+}
 static void unseen_old_gps_cannot_survive_a_new_unpublished_seed() {
     Source s;R::AssistWorker w(mx5_dr_default_config(),s.api());startup(s);expect_ready(w);
     const uint64_t old_deadline=w.status().last_publication.valid_until_mono_ns;
@@ -540,6 +600,7 @@ int main() {
     delayed_anchor_after_gps_return_keeps_the_worker();clock_is_rechecked_after_calculation();
     unpaired_gps_fix_cannot_reactivate_an_old_anchor();
     stale_position_batching_keeps_verified_recovery_available();
+    queued_retirement_keeps_the_same_negative_time_boundary();
     unseen_old_gps_cannot_survive_a_new_unpublished_seed();
     discarded_old_gps_excludes_earlier_future_inputs();
     late_anchor_for_observed_gps_requires_recovery();
