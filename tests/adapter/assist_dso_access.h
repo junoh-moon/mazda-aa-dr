@@ -33,8 +33,8 @@ public:
     bool bind_qualified_revoker(N::Pipeline::QualifiedRevoker revoke,void* user) {
         return assist_function<bool(*)(N::Pipeline*,N::Pipeline::QualifiedRevoker,void*)>(TEST_PIPELINE_BIND)(self(),revoke,user);
     }
-    N::PipelineResult enqueue_anchor(const mx5_dr_anchor& a,uint64_t received) {
-        return assist_function<N::PipelineResult(*)(N::Pipeline*,const mx5_dr_anchor&,uint64_t)>(TEST_PIPELINE_ANCHOR)(self(),a,received);
+    N::PipelineResult enqueue_anchor(const mx5_dr_anchor& a,uint64_t received,uint64_t call_sequence) {
+        return assist_function<N::PipelineResult(*)(N::Pipeline*,const mx5_dr_anchor&,uint64_t,uint64_t)>(TEST_PIPELINE_ANCHOR)(self(),a,received,call_sequence);
     }
     N::PipelineResult enqueue_position(const A::Observation& o) {
         return assist_function<N::PipelineResult(*)(N::Pipeline*,const A::Observation&)>(TEST_PIPELINE_POSITION)(self(),o);

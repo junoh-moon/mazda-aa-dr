@@ -16,6 +16,9 @@ struct AssistInput {
     mx5_dr_context context;
     adapter::Observation observation;
     mx5_dr_anchor anchor;
+    // ANCHOR: exact adapter POSITION callback this verified anchor supports.
+    // Neither receipt time nor mode generation is a unique GPS-fix identity.
+    uint64_t position_call_sequence;
     mx5_dr_evidence evidence;
     // BEGIN: when this new qualified lifetime was established. ANCHOR: its
     // original receipt time. Recovery within the same source/session requires
@@ -49,7 +52,7 @@ enum AssistState {
 };
 struct AssistStatus {
     AssistState state;
-    uint64_t ticks, inputs, begins, published, withdrawn, ignored;
+    uint64_t ticks, inputs, begins, published, withdrawn, ignored, unpaired_positions;
     navigation::PipelineResult pipeline_result;
     CoreBridgeResult bridge_result;
     // Last ready publication for diagnostics; state/withdrawn describe later

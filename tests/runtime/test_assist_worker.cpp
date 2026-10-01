@@ -8,6 +8,7 @@
 #include <cstring>
 
 namespace A=mx5::adapter;
+namespace N=mx5::navigation;
 namespace R=mx5::runtime;
 static unsigned checks, sends;
 #define CHECK(x) do { ++checks; if(!(x)) { std::fprintf(stderr,"line %d: %s\n",__LINE__,#x); std::exit(1); } } while(0)
@@ -93,6 +94,7 @@ static void startup(Source& s,bool begin=true) {
     R::AssistInput i=input(R::ASSIST_BEGIN);i.received_ns=start;if(begin)s.add(i);
     i=input(R::ASSIST_POSITION);i.observation=gps;s.add(i);
     i=input(R::ASSIST_ANCHOR);i.received_ns=start;i.anchor.context=context();
+    i.position_call_sequence=gps.call_sequence;
     i.anchor.anchor_id=gps.call_sequence;i.anchor.position_seq=uint64_t(gps.call_sequence)*4;
     i.anchor.measured_ns=start;i.anchor.utc_ns=1700000000000000000ULL;
     i.anchor.latitude_deg=37;i.anchor.longitude_deg=127;
@@ -173,6 +175,7 @@ static void delayed_anchor_after_gps_return_keeps_the_worker() {
     CHECK(w.status().state==R::ASSIST_CONTEXT_CHANGED);
     CHECK(A::generation()==generation);
     R::AssistInput anchor=input(R::ASSIST_ANCHOR);anchor.received_ns=gps.mono_ns;
+    anchor.position_call_sequence=gps.call_sequence;
     anchor.anchor.context=anchor.context;anchor.anchor.anchor_id=gps.call_sequence;
     anchor.anchor.position_seq=uint64_t(gps.call_sequence)*4;
     anchor.anchor.measured_ns=gps.mono_ns;
@@ -186,6 +189,41 @@ static void delayed_anchor_after_gps_return_keeps_the_worker() {
     motion(s,gps.mono_ns,gps.mono_ns+100000000ULL,2);
     now_ns=s.watermark=gps.mono_ns+100000000ULL;
     expect_ready(w);CHECK(w.status().begins==1);w.stop();
+}
+static void unpaired_gps_fix_cannot_reactivate_an_old_anchor() {
+    for(unsigned quality_change=0;quality_change<2;++quality_change) {
+        Source s;R::AssistWorker w(mx5_dr_default_config(),s.api());startup(s);expect_ready(w);
+        const uint64_t old_deadline=w.status().last_publication.valid_until_mono_ns;
+        now_ns+=10000000ULL;const A::Observation paired=callback(1);
+        R::AssistInput anchor=input(R::ASSIST_ANCHOR);
+        anchor.received_ns=paired.mono_ns;anchor.position_call_sequence=paired.call_sequence;
+        anchor.anchor.context=anchor.context;anchor.anchor.anchor_id=paired.call_sequence;
+        anchor.anchor.position_seq=uint64_t(paired.call_sequence)*4;
+        anchor.anchor.measured_ns=paired.mono_ns;
+        anchor.anchor.utc_ns=1700000000000000000ULL;
+        anchor.anchor.latitude_deg=37;anchor.anchor.longitude_deg=127;
+        anchor.anchor.position_error_m=1;anchor.anchor.heading_error_rad=.01;
+        anchor.anchor.validated=anchor.anchor.heading_valid=anchor.anchor.calibration_verified=1;
+        anchor.anchor.quality=MX5_DR_VALID;s.add(anchor);
+        R::AssistInput i=input(R::ASSIST_POSITION);i.observation=paired;s.add(i);
+        now_ns+=10000000ULL;const A::Observation unpaired=callback(quality_change?2:1);
+        i=input(R::ASSIST_POSITION);i.observation=unpaired;s.add(i); // no matching anchor
+        now_ns+=10000000ULL;const A::Observation gap=callback(0);
+        i=input(R::ASSIST_POSITION);i.observation=gap;s.add(i);
+        motion(s,paired.mono_ns,paired.mono_ns+100000000ULL,2);
+        now_ns=s.watermark=paired.mono_ns+100000000ULL;
+        w.tick(clock_fn,0);
+        if(w.status().state!=R::ASSIST_WAITING_INPUT)
+            std::fprintf(stderr,"unpaired worker: state=%u result=%u generation=%u published=%llu inputs=%llu index=%zu count=%zu\n",
+                unsigned(w.status().state),unsigned(w.status().pipeline_result),A::generation(),
+                (unsigned long long)w.status().published,
+                (unsigned long long)w.status().inputs,s.index,s.count);
+        CHECK(w.status().state==R::ASSIST_WAITING_INPUT);
+        CHECK(w.status().pipeline_result==N::PIPELINE_NO_ANCHOR);
+        CHECK(w.status().unpaired_positions==1);
+        CHECK(w.status().published==1);
+        expect_withdrawn(old_deadline);w.stop();
+    }
 }
 static void verified_epoch_rollover_uses_its_original_begin_time() {
     for(unsigned changed=0;changed<2;++changed) {
@@ -286,6 +324,7 @@ int main() {
     loss_withdraws_and_requires_new_begin(false,false);loss_withdraws_and_requires_new_begin(false,true);
     generation_changes_are_not_retagged();healthy_reacquisition_keeps_the_same_worker();
     delayed_anchor_after_gps_return_keeps_the_worker();clock_is_rechecked_after_calculation();
+    unpaired_gps_fix_cannot_reactivate_an_old_anchor();
     verified_epoch_rollover_uses_its_original_begin_time();
     events_arriving_during_tick_keep_their_actual_timestamps();
     missing_begin_and_model_inputs_stay_unqualified();bounded_batch_does_not_publish_across_unread_inputs();

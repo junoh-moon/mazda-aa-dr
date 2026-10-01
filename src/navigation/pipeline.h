@@ -42,7 +42,7 @@ struct Status {
     PipelineResult result;
     mx5_dr_result core_result;
     uint32_t uncertainties;
-    uint64_t events, intervals, resets, rejected, last_received_ns;
+    uint64_t events, intervals, resets, rejected, unpaired_positions, last_received_ns;
     bool have_speed, have_yaw, have_reverse;
 };
 struct Diagnostic {
@@ -97,7 +97,11 @@ public:
     // after a one-callback GAP; the qualified worker must allocate a separate
     // monotonic core sequence while retaining the raw count as provenance.
     // A stale-context replacement revokes old output and rejects the anchor.
-    PipelineResult enqueue_anchor(const mx5_dr_anchor&, uint64_t received_ns);
+    // A bound qualified anchor must name the exact adapter POSITION callback
+    // it verifies. Receipt time and generation alone cannot distinguish two
+    // same-mode GPS fixes. Zero remains usable only by nonpublishing callers.
+    PipelineResult enqueue_anchor(const mx5_dr_anchor&, uint64_t received_ns,
+                                  uint64_t position_call_sequence=0);
     PipelineResult enqueue_speed(const mx5_dr_evidence&, double speed_mps);
     PipelineResult enqueue_yaw(const mx5_dr_evidence&, double yaw_rad_s,
                                uint16_t raw_mean, uint16_t count,
@@ -148,6 +152,7 @@ private:
         bool wheel_zero_conflict;
         uint16_t raw, count;
         mx5_dr_anchor anchor;
+        uint64_t anchor_call_sequence;
         adapter::Observation observation;
     };
     static const size_t HISTORY_CAPACITY=64;
@@ -165,6 +170,10 @@ private:
     uint64_t watermark_, raw_epoch_, raw_seq_[4], raw_time_[4];
     int raw_transport_[4];
     uint64_t last_yaw_time_, interval_seq_, position_seq_, wheel_conflict_since_;
+    uint64_t qualified_anchor_call_sequence_, last_qualified_position_call_sequence_;
+    // Retained across candidate retirement within one source/session epoch.
+    uint64_t qualified_observed_position_call_sequence_;
+    bool qualified_anchor_paired_;
     int position_mode_;
     bool configured_, model_, have_fix_;
     bool qualified_retired_;

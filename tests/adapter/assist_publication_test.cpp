@@ -130,11 +130,43 @@ static void seed(ProductPipeline& pipeline,void* argument) {
     assert(pipeline.init_qualified(mx5_dr_default_config(),anchor.context));
     assert(pipeline.bind_qualified_revoker(revoke_candidate,0));
     assert(pipeline.diagnostic(gps.mono_ns).snapshot.context.generation==current_generation());
-    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns)==N::PIPELINE_OK);
+    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns,gps.call_sequence)==N::PIPELINE_OK);
     assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
+}
+static void seed_anchor_only(ProductPipeline& pipeline,void* argument) {
+    const A::Observation& gps=*static_cast<A::Observation*>(argument);
+    const mx5_dr_anchor anchor=authored_anchor(gps,1);
+    assert(pipeline.init_qualified(mx5_dr_default_config(),anchor.context));
+    assert(pipeline.bind_qualified_revoker(revoke_candidate,0));
+    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns,gps.call_sequence)==N::PIPELINE_OK);
+}
+static void seed_unpaired_position(ProductPipeline& pipeline,void* argument) {
+    const A::Observation& gps=*static_cast<A::Observation*>(argument);
+    const mx5_dr_context context={11,12,gps.prediction_generation};
+    assert(pipeline.init_qualified(mx5_dr_default_config(),context));
+    assert(pipeline.bind_qualified_revoker(revoke_candidate,0));
+    assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
+    assert(pipeline.drain(gps.mono_ns)==N::PIPELINE_NO_ANCHOR);
+    assert(pipeline.diagnostic(gps.mono_ns).status.unpaired_positions==1);
+}
+static void reject_older_same_time(ProductPipeline& pipeline,void* argument) {
+    const A::Observation& gps=*static_cast<A::Observation*>(argument);
+    const mx5_dr_anchor anchor=authored_anchor(gps,1);
+    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns,gps.call_sequence)==N::PIPELINE_BAD_INPUT);
+    assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
+    assert(pipeline.drain(gps.mono_ns)==N::PIPELINE_BAD_INPUT);
+    const N::Diagnostic d=pipeline.diagnostic(gps.mono_ns);
+    assert(!d.snapshot.valid&&d.status.unpaired_positions==1);
 }
 static void enqueue_position(ProductPipeline& pipeline,void* argument) {
     assert(pipeline.enqueue_position(*static_cast<A::Observation*>(argument))==N::PIPELINE_OK);
+}
+static void enqueue_wrong_anchor_position(ProductPipeline& pipeline,void* argument) {
+    const A::Observation& gps=*static_cast<A::Observation*>(argument);
+    const mx5_dr_anchor anchor=authored_anchor(gps,2);
+    assert(gps.call_sequence>1);
+    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns,gps.call_sequence-1)==N::PIPELINE_OK);
+    assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
 }
 struct Step {
     uint64_t start,end,now;
@@ -145,7 +177,7 @@ struct Step {
     N::Diagnostic diagnostic;
     R::CoreBridgeResult result;
     A::DrSnapshot mapped;
-    bool published;
+    bool published,allow_no_anchor;
 };
 static mx5_dr_evidence evidence(unsigned id,const Step& s,bool mean) {
     mx5_dr_evidence e=mx5_dr_evidence();e.source_id=id;e.source_epoch=1;
@@ -158,7 +190,9 @@ static void calculate(ProductPipeline& pipeline,void* argument) {
     assert(pipeline.enqueue_speed(evidence(1,s,false),10)==N::PIPELINE_OK);
     assert(pipeline.enqueue_reverse(evidence(3,s,false),s.reverse)==N::PIPELINE_OK);
     assert(pipeline.enqueue_yaw(evidence(2,s,true),s.yaw,2047,1,s.start,s.end)==N::PIPELINE_OK);
-    assert(pipeline.drain(s.end)==N::PIPELINE_OK);
+    const N::PipelineResult drained=pipeline.drain(s.end);
+    assert(drained==N::PIPELINE_OK||
+           (s.allow_no_anchor&&drained==N::PIPELINE_NO_ANCHOR));
     s.diagnostic=pipeline.diagnostic(s.now);
     R::CoreBridgeQualification q=R::CoreBridgeQualification();
     // Expected identity comes from the real adapter's control generation,
@@ -177,17 +211,16 @@ static void reject_return(ProductPipeline& pipeline,void* argument) {
     pipeline.drain(gps.mono_ns);
     const N::Diagnostic d=pipeline.diagnostic(gps.mono_ns);
     assert(!d.snapshot.valid);
-    if(d.snapshot.context.generation!=gps.prediction_generation)
-        std::fprintf(stderr,"return: core_generation=%llu adapter_generation=%u\n",
-            (unsigned long long)d.snapshot.context.generation,gps.prediction_generation);
-    assert(d.snapshot.context.generation==gps.prediction_generation);
+    assert(d.snapshot.context.generation==current_generation());
+    assert(d.snapshot.context.generation>=gps.prediction_generation);
 }
 static void reject_stale_control(ProductPipeline& pipeline,void* argument) {
     A::Observation gps=*static_cast<A::Observation*>(argument);--gps.prediction_generation;
     assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
-    assert(pipeline.drain(gps.mono_ns)==N::PIPELINE_BAD_INPUT);
+    assert(pipeline.drain(gps.mono_ns)==N::PIPELINE_NO_ANCHOR);
     const N::Diagnostic d=pipeline.diagnostic(gps.mono_ns);
-    assert(!d.snapshot.valid&&d.result!=MX5_DR_OK&&d.status.resets==1);
+    assert(!d.snapshot.valid&&d.result!=MX5_DR_OK&&
+           d.status.unpaired_positions==1&&d.snapshot.context.generation==current_generation());
 }
 static void fault_after_publication(ProductPipeline& pipeline,void*) {
     const uint32_t before=current_generation();
@@ -217,7 +250,7 @@ static void reject_core_after_publication(ProductPipeline& pipeline,void*) {
     anchor.position_error_m=1;anchor.heading_error_rad=0.01;
     anchor.validated=anchor.heading_valid=anchor.calibration_verified=1;
     anchor.quality=MX5_DR_VALID;
-    assert(pipeline.enqueue_anchor(anchor,anchor.measured_ns)==N::PIPELINE_OK);
+    assert(pipeline.enqueue_anchor(anchor,anchor.measured_ns,1000)==N::PIPELINE_OK);
     assert(pipeline.drain(anchor.measured_ns)==N::PIPELINE_CORE_REJECTED);
     assert(current_generation()==before+1);
     const N::Diagnostic d=pipeline.diagnostic(anchor.measured_ns);
@@ -255,7 +288,7 @@ static void failed_model_reinit_after_publication(ProductPipeline& pipeline,void
 static void recover_anchor_after_fault(ProductPipeline& pipeline,void* argument) {
     const A::Observation& gps=*static_cast<A::Observation*>(argument);
     const mx5_dr_anchor anchor=authored_anchor(gps,1);
-    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns)==N::PIPELINE_OK);
+    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns,gps.call_sequence)==N::PIPELINE_OK);
     assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
     assert(pipeline.drain(gps.mono_ns)==N::PIPELINE_OK);
     const N::Diagnostic d=pipeline.diagnostic(gps.mono_ns);
@@ -265,7 +298,7 @@ static void recover_anchor_after_fault(ProductPipeline& pipeline,void* argument)
 static void reseed_after_reinit(ProductPipeline& pipeline,void* argument) {
     const A::Observation& gps=*static_cast<A::Observation*>(argument);
     const mx5_dr_anchor anchor=authored_anchor(gps,1);
-    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns)==N::PIPELINE_OK);
+    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns,gps.call_sequence)==N::PIPELINE_OK);
     assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
 }
 static void reject_old_publication(ProductPipeline&,void* argument) {
@@ -277,10 +310,12 @@ static void continuous_anchor(ProductPipeline& pipeline,void* argument) {
     const N::Diagnostic before=pipeline.diagnostic(r.gps.mono_ns);
     const mx5_dr_anchor anchor=authored_anchor(r.gps,before.snapshot.anchor_id+1);
     assert(before.status.resets==0&&before.status.intervals==previous_intervals&&previous_intervals>=10);
-    if(r.anchor_first)assert(pipeline.enqueue_anchor(anchor,r.gps.mono_ns)==N::PIPELINE_OK);
+    if(r.anchor_first)assert(pipeline.enqueue_anchor(anchor,r.gps.mono_ns,r.gps.call_sequence)==N::PIPELINE_OK);
     assert(pipeline.enqueue_position(r.gps)==N::PIPELINE_OK);
-    if(r.separate_drain)pipeline.drain(r.gps.mono_ns);
-    if(!r.anchor_first)assert(pipeline.enqueue_anchor(anchor,r.gps.mono_ns)==N::PIPELINE_OK);
+    // A producer may deliver the anchor in a later worker batch, but its
+    // complete-through watermark must stay before this unmatched GPS fix.
+    if(r.separate_drain)pipeline.drain(r.gps.mono_ns-1);
+    if(!r.anchor_first)assert(pipeline.enqueue_anchor(anchor,r.gps.mono_ns,r.gps.call_sequence)==N::PIPELINE_OK);
     assert(!pipeline.diagnostic(r.gps.mono_ns).snapshot.valid);
     const N::PipelineResult result=pipeline.drain(r.gps.mono_ns);
     const N::Diagnostic after=pipeline.diagnostic(r.gps.mono_ns);
@@ -316,13 +351,49 @@ static void short_gap(ProductPipeline& pipeline,void* argument) {
 static void short_reanchor(ProductPipeline& pipeline,void* argument) {
     const A::Observation& gps=*static_cast<A::Observation*>(argument);
     const mx5_dr_anchor anchor=authored_anchor(gps,2);
-    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns)==N::PIPELINE_OK);
+    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns,gps.call_sequence)==N::PIPELINE_OK);
     assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
     assert(pipeline.drain(gps.mono_ns)==N::PIPELINE_OK);
     const N::Diagnostic d=pipeline.diagnostic(gps.mono_ns);
     assert(d.snapshot.state==MX5_DR_READY&&d.snapshot.anchor_id==2);
     assert(d.snapshot.context.generation==current_generation()&&d.status.resets==0);
     assert(d.snapshot.processed_position_seq==anchor.position_seq);
+}
+static void early_measured_reanchor(ProductPipeline& pipeline,void* argument) {
+    const A::Observation& gps=*static_cast<A::Observation*>(argument);
+    mx5_dr_anchor anchor=authored_anchor(gps,2);
+    anchor.measured_ns=gps.mono_ns-1000000ULL;
+    assert(pipeline.enqueue_anchor(anchor,gps.mono_ns,gps.call_sequence)==N::PIPELINE_OK);
+    assert(pipeline.enqueue_position(gps)==N::PIPELINE_OK);
+    const N::PipelineResult drained=pipeline.drain(gps.mono_ns);
+    assert(drained==N::PIPELINE_OK||drained==N::PIPELINE_WAITING);
+    const N::Diagnostic d=pipeline.diagnostic(gps.mono_ns);
+    assert(d.snapshot.state==MX5_DR_READY&&d.snapshot.anchor_id==2);
+    assert(d.snapshot.context.generation==current_generation());
+    assert(d.snapshot.frontier_ns==anchor.measured_ns);
+    assert(d.status.unpaired_positions==0);
+}
+static void gps_without_anchor(Worker& worker,int next_mode,bool cycle,bool anchor_only,
+                               bool wrong_token) {
+    callback(1,1000000000ULL,false);
+    worker.call(anchor_only?seed_anchor_only:seed,&position);
+    if(!anchor_only) {
+        callback(next_mode,1005000000ULL,false);
+        worker.call(wrong_token?enqueue_wrong_anchor_position:enqueue_position,&position);
+    }
+    if(cycle) {
+        callback(1,1006000000ULL,false);worker.call(enqueue_position,&position);
+    }
+    callback(0,1010000000ULL,false);worker.call(enqueue_position,&position);
+    Step step=Step();step.start=1000000000ULL;step.end=1100000000ULL;
+    step.now=1120000000ULL;step.sequence=1;step.verified=true;
+    step.allow_no_anchor=true;
+    now_ns=step.now;worker.call(calculate,&step);
+    assert(!step.published&&step.result==R::CORE_BRIDGE_UNQUALIFIED);
+    assert(step.diagnostic.status.unpaired_positions==1);
+    assert(step.diagnostic.snapshot.context.generation==current_generation());
+    assert(step.diagnostic.snapshot.state!=MX5_DR_ACTIVE);
+    callback(0,1140000000ULL,false);
 }
 static void trajectory(Worker& worker,const char* name,uint64_t start,bool quality_change,
                        bool initialize=true,unsigned sequence_base=0) {
@@ -378,11 +449,13 @@ static void trajectory(Worker& worker,const char* name,uint64_t start,bool quali
 }
 int main(int argc,char** argv) {
     assert(argc==2);
-    const char* const cases[]={"straight","quality_gap","quality_cycle","turn","reverse","expiry",
+    const char* const cases[]={"straight","quality_gap","quality_cycle","same_mode_no_anchor",
+        "anchor_only_gap","wrong_anchor_token","same_time_old_anchor",
+        "turn","reverse","expiry",
         "reacquire","native_return","stale_control","fault_recovery","core_reject",
         "reinit","failed_reinit","failed_model_reinit","owner_exit","unverified","continuous_reacquire",
         "anchor_first_reacquire","separate_reacquire","native_reacquire","quality_reacquire",
-        "single_gap_reacquire","ready_quality_reanchor"};
+        "single_gap_reacquire","ready_quality_reanchor","early_measured_reanchor"};
     bool known=false;for(unsigned i=0;i<sizeof cases/sizeof cases[0];++i)known|=!std::strcmp(argv[1],cases[i]);
     assert(known);
 #ifdef MX5_ASSIST_DSO_TEST
@@ -400,15 +473,38 @@ int main(int argc,char** argv) {
         return 0;
     }
     Worker worker;
+    if(!std::strcmp(argv[1],"same_time_old_anchor")) {
+        callback(1,1000000000ULL,false);A::Observation old=position;
+        callback(1,1000000000ULL,false);worker.call(seed_unpaired_position,&position);
+        worker.call(reject_older_same_time,&old);
+        callback(0,1010000000ULL,false);
+        std::printf("PASS assist publication %s: %u sends, %u replacements; same-time callback order\n",
+            argv[1],sends,replacements);
+        return 0;
+    }
+    if(!std::strcmp(argv[1],"quality_gap")||!std::strcmp(argv[1],"quality_cycle")||
+       !std::strcmp(argv[1],"same_mode_no_anchor")||
+       !std::strcmp(argv[1],"anchor_only_gap")||
+       !std::strcmp(argv[1],"wrong_anchor_token")) {
+        gps_without_anchor(worker,!std::strcmp(argv[1],"same_mode_no_anchor")?1:2,
+            !std::strcmp(argv[1],"quality_cycle"),
+            !std::strcmp(argv[1],"anchor_only_gap"),
+            !std::strcmp(argv[1],"wrong_anchor_token"));
+        std::printf("PASS assist publication %s: %u sends, %u replacements; unanchored GPS fix\n",
+            argv[1],sends,replacements);
+        return 0;
+    }
     if(!std::strcmp(argv[1],"single_gap_reacquire")||
-       !std::strcmp(argv[1],"ready_quality_reanchor")) {
+       !std::strcmp(argv[1],"ready_quality_reanchor")||
+       !std::strcmp(argv[1],"early_measured_reanchor")) {
         callback(1,1000000000ULL,false);worker.call(seed,&position);
         worker.call(drain_initial_anchor,&position);
         if(!std::strcmp(argv[1],"single_gap_reacquire")) {
             callback(0,1010000000ULL,false);worker.call(short_gap,&position);
             callback(1,1020000000ULL,false);
         } else callback(2,1010000000ULL,false);
-        worker.call(short_reanchor,&position);
+        worker.call(!std::strcmp(argv[1],"early_measured_reanchor")?
+            early_measured_reanchor:short_reanchor,&position);
         std::printf("PASS assist publication %s: %u sends, %u replacements; authored inputs, product path\n",
             argv[1],sends,replacements);
         return 0;
@@ -461,7 +557,7 @@ int main(int argc,char** argv) {
         callback(1,2200000000ULL,false);
         worker.call(reseed_after_reinit,&position);
         previous_intervals=previous_solution=0;
-        trajectory(worker,"straight",2200000000ULL,true,false);
+        trajectory(worker,"straight",2200000000ULL,false,false);
         std::printf("PASS assist publication %s: %u sends, %u replacements; authored inputs, product path\n",
             argv[1],sends,replacements);
         return 0;
@@ -484,7 +580,7 @@ int main(int argc,char** argv) {
     if(continuous) {
         Reanchor r={position,!std::strcmp(argv[1],"anchor_first_reacquire"),!std::strcmp(argv[1],"separate_reacquire")};
         worker.call(continuous_anchor,&r);
-        trajectory(worker,"straight",returned,true,false,10);
+        trajectory(worker,"straight",returned,false,false,10);
     } else {
         worker.call(!std::strcmp(argv[1],"stale_control")?reject_stale_control:reject_return,&position);
         callback(0,returned+10000000,false);assert(selected.reason==A::EPOCH_MISMATCH);

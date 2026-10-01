@@ -130,7 +130,7 @@ def main():
             'PIPELINE_INIT': '_ZN3mx510navigation8Pipeline14init_qualifiedERK13mx5_dr_config14mx5_dr_context',
             'PIPELINE_MODEL_INIT': '_ZN3mx510navigation8Pipeline10init_modelERKNS0_12ModelProfileERK13mx5_dr_config14mx5_dr_contextbb',
             'PIPELINE_BIND': '_ZN3mx510navigation8Pipeline22bind_qualified_revokerEPFyPvES2_',
-            'PIPELINE_ANCHOR': '_ZN3mx510navigation8Pipeline14enqueue_anchorERK13mx5_dr_anchory',
+            'PIPELINE_ANCHOR': '_ZN3mx510navigation8Pipeline14enqueue_anchorERK13mx5_dr_anchoryy',
             'PIPELINE_POSITION': '_ZN3mx510navigation8Pipeline16enqueue_positionERKNS_7adapter11ObservationE',
             'PIPELINE_SPEED': '_ZN3mx510navigation8Pipeline13enqueue_speedERK15mx5_dr_evidenced',
             'PIPELINE_REVERSE': '_ZN3mx510navigation8Pipeline15enqueue_reverseERK15mx5_dr_evidencei',
@@ -139,11 +139,14 @@ def main():
             'PIPELINE_DIAGNOSTIC': '_ZNK3mx510navigation8Pipeline10diagnosticEy',
             'PIPELINE_PUBLICATION': '_ZNK3mx510navigation8Pipeline21qualified_publicationEyRKNS_7runtime23CoreBridgeQualificationEyPNS_7adapter10DrSnapshotE',
         }
-        cases = ('straight', 'quality_gap', 'quality_cycle', 'turn', 'reverse', 'expiry', 'reacquire',
+        cases = ('straight', 'quality_gap', 'quality_cycle', 'same_mode_no_anchor',
+                 'anchor_only_gap', 'wrong_anchor_token', 'same_time_old_anchor',
+                 'turn', 'reverse', 'expiry', 'reacquire',
                  'native_return', 'stale_control', 'fault_recovery', 'core_reject',
                  'reinit', 'failed_reinit', 'failed_model_reinit', 'owner_exit', 'unverified', 'continuous_reacquire',
                  'anchor_first_reacquire', 'separate_reacquire', 'native_reacquire', 'quality_reacquire',
-                 'single_gap_reacquire', 'ready_quality_reanchor')
+                 'single_gap_reacquire', 'ready_quality_reanchor',
+                 'early_measured_reanchor')
         fixture, access = 'assist_publication', 'assist_dso_access.h'
         macro, marker = '-DMX5_ASSIST_DSO_TEST', 'PASS assist publication '
     elif args.suite == 'runtime-assist':

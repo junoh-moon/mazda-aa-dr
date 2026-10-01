@@ -502,11 +502,13 @@ void journal_assist(Journal& j,const mx5::runtime::AssistStatus& s,uint64_t now)
       "{\"kind\":\"assist_worker\",\"mono_ns\":%llu,\"state\":\"%s\","
       "\"candidate_ready\":%s,\"ticks\":%llu,\"inputs\":%llu,\"begins\":%llu,"
       "\"publications\":%llu,\"withdrawals\":%llu,\"ignored\":%llu,"
+      "\"unpaired_positions\":%llu,"
       "\"pipeline\":\"%s\",\"bridge_result\":%u,"
       "\"last_frontier_ns\":%llu,\"last_valid_until_ns\":%llu}",
       (unsigned long long)now,states[unsigned(s.state)],s.state==mx5::runtime::ASSIST_PUBLISHED?"true":"false",
       (unsigned long long)s.ticks,(unsigned long long)s.inputs,(unsigned long long)s.begins,
       (unsigned long long)s.published,(unsigned long long)s.withdrawn,(unsigned long long)s.ignored,
+      (unsigned long long)s.unpaired_positions,
       N::pipeline_result_name(s.pipeline_result),unsigned(s.bridge_result),
       (unsigned long long)s.last_publication.frontier_mono_ns,
       (unsigned long long)s.last_publication.valid_until_mono_ns);
@@ -584,6 +586,7 @@ void* run_worker(const char* root,const char* motion_channel,AssistWorker* assis
   uint64_t last_calibration_log=0;
   uint64_t last_stop_check=0;
   uint64_t last_assist_log=0;
+  uint64_t last_assist_unpaired=0;
   AssistState last_assist_state=ASSIST_WAITING_SOURCE;
   uint64_t drain_calls=0;
   mx5::runtime::WorkerTick model_tick;
@@ -720,8 +723,10 @@ void* run_worker(const char* root,const char* motion_channel,AssistWorker* assis
       const AssistStatus& status=assist->status();
       now=clock_ns(0);
       if(!last_assist_log || status.state!=last_assist_state ||
+         status.unpaired_positions!=last_assist_unpaired ||
          (now>=last_assist_log && now-last_assist_log>=1000000000ULL)) {
         last_assist_log=now;last_assist_state=status.state;
+        last_assist_unpaired=status.unpaired_positions;
         journal_assist(j,status,now);
       }
       if(j.failed || __sync_fetch_and_add(&audit_fault,0))assist->stop();

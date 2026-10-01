@@ -435,42 +435,28 @@ static mx5_dr_evidence evidence(uint64_t id,uint64_t seq,unsigned ms) {
 static uint64_t test_revoke_generation(void* value) {
     return ++*static_cast<uint64_t*>(value);
 }
-static void seed_qualified(Pipeline&,uint64_t);
+static void seed_qualified(Pipeline&,uint64_t,uint64_t* revoker=0);
 static void qualified() {
     uint64_t published_generation=0,gps_generation=0,anchor_generation=0,stale_generation=0;
-    Pipeline p; mx5_dr_context x={1,1,1}; CHECK(p.init_qualified(mx5_dr_default_config(),x));
-    mx5_dr_anchor a=mx5_dr_anchor(); a.context=x; a.anchor_id=a.position_seq=1;
-    a.measured_ns=T(0); a.utc_ns=1700000000000000000ULL;
-    a.latitude_deg=35; a.longitude_deg=135; a.position_error_m=1;
-    a.validated=a.heading_valid=a.calibration_verified=1; a.quality=MX5_DR_VALID;
-    CHECK(p.enqueue_anchor(a,T(0))==PIPELINE_OK);
-    CHECK(p.enqueue_speed(evidence(1,1,0),10)==PIPELINE_OK);
-    CHECK(p.enqueue_reverse(evidence(3,1,0),0)==PIPELINE_OK);
-    CHECK(p.enqueue_yaw(evidence(2,1,100),0,2047,1,T(0),T(100))==PIPELINE_OK);
-    CHECK(p.enqueue_position(pos(10,0,2))==PIPELINE_OK);
-    CHECK(p.drain(T(100))==PIPELINE_OK);
+    Pipeline p;seed_qualified(p,1,&published_generation);
     Diagnostic d=p.diagnostic(T(100)); CHECK(d.result==MX5_DR_OK); CHECK(d.snapshot.valid==1);
+    Pipeline unbound;seed_qualified(unbound,1);
     Pipeline missing;seed_qualified(missing,1);
     CHECK(missing.drain(T(350))==PIPELINE_OK);
     CHECK(missing.drain(T(351))==PIPELINE_MISSING_SENSOR);
     CHECK(missing.status().resets==1);
     CHECK(!missing.diagnostic(T(351)).snapshot.valid);
     Pipeline pending_gps,pending_anchor,stale_anchor;
-    seed_qualified(pending_gps,1);
-    seed_qualified(pending_anchor,1);
-    seed_qualified(stale_anchor,1);
+    seed_qualified(pending_gps,1,&gps_generation);
+    seed_qualified(pending_anchor,1,&anchor_generation);
+    seed_qualified(stale_anchor,1,&stale_generation);
     runtime::CoreBridgeQualification q=runtime::CoreBridgeQualification(); q.expected_context=d.snapshot.context;
     q.now_mono_ns=T(100); q.max_snapshot_age_ns=150000000;
     q.limits_verified_until_mono_ns=T(100); q.duration_max_s=60;
     q.distance_max_m=1500; q.error_max_m=100; q.profile_verified=q.input_quality_verified=true;
     adapter::DrSnapshot out=adapter::DrSnapshot();
-    CHECK(p.qualified_snapshot(T(100),q,&out)==runtime::CORE_BRIDGE_UNQUALIFIED&&!out.ready);
-    CHECK(p.qualified_publication(T(100),q,T(150),&out)==runtime::CORE_BRIDGE_UNQUALIFIED&&!out.ready);
-    published_generation=gps_generation=anchor_generation=stale_generation=p.context().generation;
-    CHECK(p.bind_qualified_revoker(test_revoke_generation,&published_generation));
-    CHECK(pending_gps.bind_qualified_revoker(test_revoke_generation,&gps_generation));
-    CHECK(pending_anchor.bind_qualified_revoker(test_revoke_generation,&anchor_generation));
-    CHECK(stale_anchor.bind_qualified_revoker(test_revoke_generation,&stale_generation));
+    CHECK(unbound.qualified_snapshot(T(100),q,&out)==runtime::CORE_BRIDGE_UNQUALIFIED&&!out.ready);
+    CHECK(unbound.qualified_publication(T(100),q,T(150),&out)==runtime::CORE_BRIDGE_UNQUALIFIED&&!out.ready);
     CHECK(p.qualified_snapshot(T(100),q,&out)==runtime::CORE_BRIDGE_OK&&out.ready);
     CHECK(out.valid_until_mono_ns==T(100));
     CHECK(published_generation==p.context().generation);
@@ -488,28 +474,34 @@ static void qualified() {
     CHECK(out.valid_until_mono_ns==T(130)-1);
     runtime::CoreBridgeQualification later=q;later.now_mono_ns=later.limits_verified_until_mono_ns=T(130);
     CHECK(pending_gps.qualified_publication(T(130),later,T(150),&out)==runtime::CORE_BRIDGE_UNQUALIFIED&&!out.ready);
-    mx5_dr_anchor future=a;
+    mx5_dr_anchor future=mx5_dr_anchor();
     future.context=p.context();++future.context.generation;
-    future.anchor_id=2;future.position_seq=4;future.measured_ns=T(140);future.utc_ns+=140000000;
-    CHECK(pending_anchor.enqueue_anchor(future,T(140))==PIPELINE_OK);
+    future.anchor_id=2;future.position_seq=4;future.measured_ns=T(140);
+    future.utc_ns=1700000000140000000ULL;future.latitude_deg=35;future.longitude_deg=135;
+    future.position_error_m=1;future.validated=future.heading_valid=future.calibration_verified=1;
+    future.quality=MX5_DR_VALID;
+    CHECK(pending_anchor.enqueue_anchor(future,T(140),3)==PIPELINE_OK);
     CHECK(pending_anchor.qualified_publication(T(100),q,T(150),&out)==runtime::CORE_BRIDGE_OK);
     CHECK(out.valid_until_mono_ns==T(140)-1);
-    mx5_dr_anchor returned=a; returned.context=p.context();
+    mx5_dr_anchor returned=future; returned.context=p.context();
     returned.anchor_id=2; returned.position_seq=4; returned.measured_ns=T(100);
-    returned.utc_ns+=100000000; returned.latitude_deg+=0.00001;
-    CHECK(stale_anchor.enqueue_anchor(returned,T(100))==PIPELINE_OK);
+    returned.utc_ns=1700000000100000000ULL; returned.latitude_deg+=0.00001;
+    CHECK(stale_anchor.enqueue_anchor(returned,T(100),3)==PIPELINE_OK);
     CHECK(!stale_anchor.diagnostic(T(100)).snapshot.valid);
     CHECK(stale_anchor.qualified_publication(T(100),q,T(150),&out)==runtime::CORE_BRIDGE_UNQUALIFIED&&!out.ready);
     CHECK(stale_anchor.drain(T(100))==PIPELINE_CORE_REJECTED);
     CHECK(!stale_anchor.diagnostic(T(100)).snapshot.valid);
     ++returned.context.generation;
-    CHECK(p.enqueue_anchor(returned,T(100))==PIPELINE_OK);
+    CHECK(p.enqueue_anchor(returned,T(100),3)==PIPELINE_OK);
     CHECK(!p.diagnostic(T(100)).snapshot.valid);
     CHECK(p.drain(T(100))==PIPELINE_OK);
     CHECK(p.diagnostic(T(100)).snapshot.state==MX5_DR_READY);
     CHECK(p.diagnostic(T(100)).snapshot.anchor_id==2);
     CHECK(p.diagnostic(T(100)).snapshot.latitude_deg==returned.latitude_deg);
+    mx5_dr_context x={1,1,1};
     Pipeline bad; CHECK(bad.init_qualified(mx5_dr_default_config(),x));
+    mx5_dr_anchor a=future;a.context=x;a.anchor_id=a.position_seq=1;
+    a.measured_ns=T(0);a.utc_ns=1700000000000000000ULL;
     CHECK(bad.enqueue_anchor(a,T(0))==PIPELINE_OK);
     mx5_dr_evidence fake=evidence(1,1,0); fake.quality=MX5_DR_MODEL; fake.freshness=MX5_DR_MODEL_TIME;
     CHECK(bad.enqueue_speed(fake,10)==PIPELINE_OK);
@@ -548,18 +540,32 @@ static void exhausted_model() {
     CHECK(!p.diagnostic(T(320)).snapshot.model_valid);
     seeded(p);CHECK(p.diagnostic(T(300)).snapshot.model_valid); // Explicit init can recover.
 }
-static void seed_qualified(Pipeline& p,uint64_t generation) {
+static void seed_qualified(Pipeline& p,uint64_t generation,uint64_t* revoker) {
     mx5_dr_context x={1,1,generation};CHECK(p.init_qualified(mx5_dr_default_config(),x));
+    if(revoker) {
+        *revoker=generation+1;
+        CHECK(p.bind_qualified_revoker(test_revoke_generation,revoker));
+    }
     mx5_dr_anchor a=mx5_dr_anchor();a.context=x;a.anchor_id=a.position_seq=1;
     a.measured_ns=T(0);a.utc_ns=1700000000000000000ULL;
     a.latitude_deg=35;a.longitude_deg=135;a.position_error_m=1;
     a.validated=a.heading_valid=a.calibration_verified=1;a.quality=MX5_DR_VALID;
-    CHECK(p.enqueue_anchor(a,T(0))==PIPELINE_OK);
+    CHECK(p.enqueue_anchor(a,T(0),1)==PIPELINE_OK);
+    adapter::Observation gps=pos(0,1,1);
+    gps.prediction_generation=generation<=UINT32_MAX?uint32_t(generation):0;
+    CHECK(p.enqueue_position(gps)==PIPELINE_OK);
     CHECK(p.enqueue_speed(evidence(1,1,0),10)==PIPELINE_OK);
     CHECK(p.enqueue_reverse(evidence(3,1,0),0)==PIPELINE_OK);
     CHECK(p.enqueue_yaw(evidence(2,1,100),0,2047,1,T(0),T(100))==PIPELINE_OK);
-    CHECK(p.enqueue_position(pos(10,0,2))==PIPELINE_OK);
-    CHECK(p.drain(T(100))==PIPELINE_OK);
+    adapter::Observation gap=pos(10,0,2);
+    gap.prediction_generation=generation<UINT32_MAX?uint32_t(generation+1):0;
+    CHECK(p.enqueue_position(gap)==PIPELINE_OK);
+    const PipelineResult drained=p.drain(T(100));
+    if(drained!=PIPELINE_OK)
+        std::fprintf(stderr,"qualified seed: generation=%llu bound=%d result=%s core=%s\n",
+            (unsigned long long)generation,revoker!=0,pipeline_result_name(drained),
+            mx5_dr_result_name(p.status().core_result));
+    CHECK(drained==PIPELINE_OK);
     CHECK(p.diagnostic(T(100)).snapshot.valid);
 }
 struct RevocationResponse { uint64_t value; unsigned calls; };
@@ -660,10 +666,10 @@ static void qualified_revoker_failure_is_terminal() {
     CHECK(unseeded.bind_qualified_revoker(test_revoke_generation,&unseeded_generation));
     adapter::Observation gps_first=pos(10,1,1);gps_first.prediction_generation=1;
     CHECK(unseeded.enqueue_position(gps_first)==PIPELINE_OK);
-    CHECK(unseeded.drain(T(10))==PIPELINE_OK);
+    CHECK(unseeded.drain(T(10))==PIPELINE_NO_ANCHOR);
     adapter::Observation first_gap=pos(20,0,2);first_gap.prediction_generation=2;
     CHECK(unseeded.enqueue_position(first_gap)==PIPELINE_OK);
-    CHECK(unseeded.drain(T(20))==PIPELINE_OK);
+    CHECK(unseeded.drain(T(20))==PIPELINE_NO_ANCHOR);
     CHECK(unseeded.status().resets==0&&unseeded.context().generation==2);
     CHECK(unseeded_generation==1&&unseeded.status().core_result==MX5_DR_E_NO_SEED);
 

@@ -133,6 +133,7 @@ static uint64_t seed() {
     R::AssistInput begin=input(R::ASSIST_BEGIN,gps.prediction_generation);
     begin.received_ns=gps.mono_ns;source.push(begin);
     R::AssistInput e=input(R::ASSIST_ANCHOR,gps.prediction_generation);
+    e.position_call_sequence=gps.call_sequence;
     mx5_dr_anchor& a=e.anchor;a.context=e.context;a.anchor_id=gps.call_sequence;
     a.position_seq=uint64_t(gps.call_sequence)*4;a.measured_ns=gps.mono_ns;a.utc_ns=1700000000000000000ULL;
     a.latitude_deg=37;a.longitude_deg=127;a.position_error_m=1;a.heading_error_rad=.01;

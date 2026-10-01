@@ -19,7 +19,10 @@ ModelProfile research_model_profile() {
     return p;
 }
 Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
-    last_yaw_time_(0), interval_seq_(0), position_seq_(0), wheel_conflict_since_(0), position_mode_(-1),
+    last_yaw_time_(0), interval_seq_(0), position_seq_(0), wheel_conflict_since_(0),
+    qualified_anchor_call_sequence_(0), last_qualified_position_call_sequence_(0),
+    qualified_observed_position_call_sequence_(0),
+    qualified_anchor_paired_(false), position_mode_(-1),
     configured_(false), model_(false), have_fix_(false),
     qualified_retired_(false), retired_from_generation_(0),
     qualified_revoker_(0), qualified_revoker_user_(0), qualified_owner_(0) {
@@ -72,6 +75,8 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
     return configured_;
 }
 bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
+    const bool same_source_session=configured_&&!model_&&
+        x.source_epoch==context().source_epoch&&x.session_epoch==context().session_epoch;
     if(configured_&&!model_&&owns_qualified_revoker()) {
         const uint64_t previous=context().generation;
         const uint64_t next=qualified_revoker_(qualified_revoker_user_);
@@ -93,6 +98,7 @@ bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
     configured_=mx5_dr_init(&core_,&c,x)==MX5_DR_OK;
     if (configured_) reset_state(x);
     else status_.result=PIPELINE_BAD_INPUT;
+    if(!same_source_session)qualified_observed_position_call_sequence_=0;
     return configured_;
 }
 bool Pipeline::bind_qualified_revoker(QualifiedRevoker revoke,void* user) {
@@ -120,10 +126,13 @@ bool Pipeline::rearm_qualified(const mx5_dr_config& c,mx5_dr_context x) {
        x.generation>UINT32_MAX)return false;
     // The old lifetime was invalidated before this call. The incoming BEGIN
     // may precede a later captured GAP, so retain its original generation.
+    const bool same_source_session=x.source_epoch==context().source_epoch&&
+        x.session_epoch==context().session_epoch;
     if(mx5_dr_init(&core_,&c,x)!=MX5_DR_OK) {
         configured_=false;status_.result=PIPELINE_BAD_INPUT;return false;
     }
     reset_state(x);qualified_retired_=false;retired_from_generation_=0;
+    if(!same_source_session)qualified_observed_position_call_sequence_=0;
     return true;
 }
 void Pipeline::reset_state(mx5_dr_context x) {
@@ -133,6 +142,8 @@ void Pipeline::reset_state(mx5_dr_context x) {
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
     last_yaw_time_=0; interval_seq_=0; position_seq_=0; position_mode_=-1;
+    qualified_anchor_call_sequence_=last_qualified_position_call_sequence_=0;
+    qualified_anchor_paired_=false;
     wheel_conflict_since_=0;clear_history();
     have_fix_=false; status_.have_speed=status_.have_yaw=status_.have_reverse=false;
     status_.result=PIPELINE_WAITING; status_.core_result=MX5_DR_E_NO_SEED;
@@ -308,13 +319,20 @@ PipelineResult Pipeline::enqueue_position(const adapter::Observation& o) {
     Event e=Event(); e.kind=POSITION_EVENT; e.time=e.received=o.mono_ns; e.observation=o;
     return insert(e);
 }
-PipelineResult Pipeline::enqueue_anchor(const mx5_dr_anchor& a,uint64_t received) {
+PipelineResult Pipeline::enqueue_anchor(const mx5_dr_anchor& a,uint64_t received,
+                                        uint64_t position_call_sequence) {
     if (model_) return PIPELINE_BAD_INPUT;
     if(owns_qualified_revoker()&&a.context.generation&&
        a.context.generation<context().generation) {
         ++status_.rejected;status_.result=PIPELINE_BAD_INPUT;return PIPELINE_BAD_INPUT;
     }
-    Event e=Event(); e.kind=ANCHOR_EVENT; e.time=a.measured_ns; e.received=received; e.anchor=a;
+    if(owns_qualified_revoker()&&!position_call_sequence)return fault(PIPELINE_BAD_INPUT);
+    if(owns_qualified_revoker()&&
+       position_call_sequence<=qualified_observed_position_call_sequence_) {
+        ++status_.rejected;status_.result=PIPELINE_BAD_INPUT;return PIPELINE_BAD_INPUT;
+    }
+    Event e=Event(); e.kind=ANCHOR_EVENT; e.time=a.measured_ns; e.received=received;
+    e.anchor=a;e.anchor_call_sequence=position_call_sequence;
     return insert(e);
 }
 PipelineResult Pipeline::enqueue_speed(const mx5_dr_evidence& v,double speed) {
@@ -360,6 +378,7 @@ PipelineResult Pipeline::control(mx5_dr_control_kind kind,uint64_t observed_gene
     }
     ++position_seq_;
     status_.core_result=mx5_dr_control(&core_,kind,x,position_seq_);
+    if(!model_&&kind!=MX5_DR_GAP)qualified_anchor_paired_=false;
     clear_history();
     // GAP before the first qualified anchor is an expected absence of a
     // solution. The core has accepted and recorded the newer generation; no
@@ -434,6 +453,38 @@ bool Pipeline::can_keep_stationary_heading(const adapter::Observation& o) const 
 }
 PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     const int mode=o.position.mode;
+    if(!model_&&owns_qualified_revoker()) {
+        if(!o.call_sequence||o.call_sequence<=qualified_observed_position_call_sequence_)
+            return fault(PIPELINE_BAD_INPUT);
+        qualified_observed_position_call_sequence_=o.call_sequence;
+        if(mode==1||mode==2) {
+            // A mode generation may stay unchanged across many GPS fixes.
+            // Only the verified anchor explicitly tied to this callback can
+            // authorize its next gap; an earlier READY seed cannot do so.
+            const bool paired=qualified_anchor_call_sequence_==o.call_sequence&&
+                o.call_sequence>last_qualified_position_call_sequence_&&
+                core_.seeded&&core_.estimate.state==MX5_DR_READY&&
+                o.prediction_generation==context().generation;
+            if(!paired) {
+                ++status_.rejected;++status_.unpaired_positions;
+                if(core_.seeded) {
+                    if(!retire_qualified())return PIPELINE_BAD_INPUT;
+                }
+                status_.result=PIPELINE_NO_ANCHOR;
+                return PIPELINE_NO_ANCHOR;
+            }
+            last_qualified_position_call_sequence_=o.call_sequence;
+            qualified_anchor_call_sequence_=0;
+            qualified_anchor_paired_=true;
+        } else if(mode==0&&core_.seeded&&!qualified_anchor_paired_) {
+            // An anchor by itself is not an adapter GPS decision. Never
+            // activate it merely because a later GAP has a newer generation.
+            ++status_.rejected;++status_.unpaired_positions;
+            if(!retire_qualified())return PIPELINE_BAD_INPUT;
+            status_.result=PIPELINE_NO_ANCHOR;
+            return PIPELINE_NO_ANCHOR;
+        }
+    }
     // After invalidate(), the adapter keeps its new generation through
     // same-mode callbacks. A reset qualified calculator is already unseeded;
     // do not ask the core for another transition with that same generation.
@@ -487,10 +538,6 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
         }
         have_fix_=false; gps_wheel_.unavailable();
     }
-    // A GPS quality-only 1<->2 transition can advance the adapter generation
-    // without a new verified anchor. Keep the old core generation: adapter
-    // publication then remains unavailable until a qualified anchor arrives.
-    // Retagging this seed from receipt alone would bypass that qualification.
     position_mode_=mode;
     if (!model_) return PIPELINE_OK;
     if (!good_fix(o)) {
@@ -704,10 +751,15 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
             if(!model_&&qualified_retired_) {
                 qualified_retired_=false;retired_from_generation_=0;
             }
+            if(!model_&&owns_qualified_revoker()) {
+                qualified_anchor_call_sequence_=e.anchor_call_sequence;
+                qualified_anchor_paired_=false;
+            }
             break;
         case POSITION_EVENT:
-            apply_position(e.observation);
+            r=apply_position(e.observation);
             if (status_.resets!=faults) return status_.result;
+            if(!model_&&owns_qualified_revoker()&&r!=PIPELINE_OK)return r;
             break;
         }
     }
@@ -766,7 +818,8 @@ runtime::CoreBridgeResult Pipeline::qualified_publication(uint64_t now,
         adapter::DrSnapshot* out) const {
     if (!out) return runtime::CORE_BRIDGE_NO_OUTPUT;
     std::memset(out,0,sizeof *out);
-    if (model_||!owns_qualified_revoker()||q.now_mono_ns!=now||diagnostic(now).result!=MX5_DR_OK)
+    if (model_||!owns_qualified_revoker()||!qualified_anchor_paired_||
+        q.now_mono_ns!=now||diagnostic(now).result!=MX5_DR_OK)
         return runtime::CORE_BRIDGE_UNQUALIFIED;
     for (size_t i=0;i<size_;++i) {
         if ((queue_[i].kind==POSITION_EVENT&&queue_[i].observation.position.mode!=0)||

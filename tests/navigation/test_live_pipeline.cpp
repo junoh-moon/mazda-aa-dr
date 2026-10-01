@@ -142,10 +142,11 @@ static void qualified_case(bool stopped) {
     // This side deliberately starts from qualified synthetic contracts. Parsed
     // raw data above is never upgraded into this evidence or this pipeline.
     clock_value=T(3000);CHECK(A::set_mode(A::ASSIST));
-    unsigned char position[72];position_bytes(position,0);
+    unsigned char position[72];position_bytes(position,1);
     A::position_enter(0,position);A::position_leave();
+    const A::Observation gps=last_position;
     const uint32_t generation=A::generation();CHECK(generation>1);
-    N::Pipeline p;mx5_dr_context context={11,12,generation-1};
+    N::Pipeline p;mx5_dr_context context={11,12,generation};
     mx5_dr_config config=mx5_dr_default_config();
     if(stopped)config.stop_hold_s=0.1; // explicit fast stationary fixture
     CHECK(p.init_qualified(config,context));
@@ -154,12 +155,13 @@ static void qualified_case(bool stopped) {
     a.measured_ns=T(3000);a.utc_ns=1700000000000000000ULL;a.latitude_deg=35;a.longitude_deg=135;
     a.position_error_m=1;a.heading_error_rad=0.01;
     a.validated=a.heading_valid=a.calibration_verified=1;a.quality=MX5_DR_VALID;
-    CHECK(p.enqueue_anchor(a,T(3000))==N::PIPELINE_OK);
+    CHECK(p.enqueue_anchor(a,T(3000),gps.call_sequence)==N::PIPELINE_OK);
+    CHECK(p.enqueue_position(gps)==N::PIPELINE_OK);
     CHECK(p.enqueue_speed(evidence(1,1,3000),stopped?0:10)==N::PIPELINE_OK);
     CHECK(p.enqueue_reverse(evidence(3,1,3000),1)==N::PIPELINE_OK);
     CHECK(p.enqueue_yaw(evidence(2,1,3100),0,2047,1,T(3000),T(3100))==N::PIPELINE_OK);
-    A::Observation gap=A::Observation();gap.kind=A::Observation::POSITION;
-    gap.mono_ns=T(3000);gap.position.mode=0;gap.prediction_generation=generation;
+    position_bytes(position,0);A::position_enter(0,position);A::position_leave();
+    A::Observation gap=last_position;
     CHECK(p.enqueue_position(gap)==N::PIPELINE_OK);CHECK(p.drain(T(3100))==N::PIPELINE_OK);
     clock_value=T(3100);N::Diagnostic d=p.diagnostic(clock_value);
     CHECK(d.result==MX5_DR_OK&&d.snapshot.valid&&!d.snapshot.model_valid);

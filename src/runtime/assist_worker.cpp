@@ -100,9 +100,10 @@ bool AssistWorker::consume(const AssistInput& in,uint64_t now,const AssistReadin
            !o.provenance.verified_lds||!o.provenance.legacy_receiver)return false;
         result=pipeline_.enqueue_position(o);
     } else if(in.kind==ASSIST_ANCHOR) {
-        if(!same_context(in.context,in.anchor.context)||!in.received_ns||in.received_ns>now||
+        if(!same_context(in.context,in.anchor.context)||!in.position_call_sequence||
+           !in.received_ns||in.received_ns>now||
            (same_epochs(in.context,recovery_binding_)&&in.anchor.measured_ns<recovery_after_ns_))return false;
-        result=pipeline_.enqueue_anchor(in.anchor,in.received_ns);
+        result=pipeline_.enqueue_anchor(in.anchor,in.received_ns,in.position_call_sequence);
     } else {
         // Sensor stream epochs belong to each producer, independently of the
         // per-request provenance context. The core enforces their continuity.
@@ -149,8 +150,10 @@ void AssistWorker::tick(adapter::MonotonicClock clock,void* clock_user) {
     // Bounded work is not evidence of an empty stream. A revocation may be the
     // very next item; do not publish across an unconsumed part of this batch.
     if(!empty) { revoke(ASSIST_BACKLOG,last_now_ns_,false);return; }
-    if(active_)
+    if(active_) {
         status_.pipeline_result=pipeline_.drain(initial.watermark_ns);
+        status_.unpaired_positions=pipeline_.status().unpaired_positions;
+    }
     const uint64_t after=clock(clock_user);
     if(!after||after<last_now_ns_) { revoke(ASSIST_CLOCK_FAULT,last_now_ns_,true);return; }
     last_now_ns_=after;
