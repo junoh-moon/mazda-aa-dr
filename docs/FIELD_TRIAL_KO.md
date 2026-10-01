@@ -5,11 +5,15 @@
 제약을 반영한 숫자 메뉴와 저장 공간·계산 진단을 포함합니다.
 차량 USB 포트는 하나이고 허브를 사용할 수 없으므로 설치·회수 USB와 유선 AA를
 주차 중에 번갈아 연결합니다. AA 연결 중 셸이나 상태 명령을 요구하지 않습니다.
-이번 시험용 파일은 [v0.3.9-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)의
-`mazda-aa-dr-v0.3.9-shadow.1.zip`입니다. 소스는
-`33468547437000d28f9b939c4117f64a9182e5f0`, ZIP의 SHA-256은
-`293361fc8267cd12e1b1002be904b5a85cdd28d19e7518acc8e143c35215873b`입니다.
-[고정 커밋·해시·발행 검증](../validation/RELEASE_V039_2026-10-01.md)을 따르십시오.
+현재 파일은 [v0.3.9-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)의
+`mazda-aa-dr-v0.3.9-shadow.2.zip`입니다. 소스는
+`bdb37e0f8cf5c8acb95166fba7f02fce860e9e21`, ZIP의 SHA-256은
+`4f6633ac95a20aa6c9907c2938843dff2fa769e6fd4c14dbc4fc243d7bf30699`입니다.
+[회수 실패와 핫픽스 검증](../validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)을 따르십시오.
+이전 시험의 메뉴3이 `/proc/mounts` 오류로 실패했다면 USB 파일을 교체하고
+기존 한 줄 뒤 `3`만 사용하십시오. 이미 제거했어도 남은 로그를 회수합니다.
+재설치·재주행은 필요하지 않습니다. 설치·제거 사진은 받았으나 원시 로그가 없어
+센서 수집과 계산 결과는 아직 판정하지 못했습니다.
 원본 AA 연결 등록의 서버 주소 GUID·client 고유 이름과 실제 raw 송신 연결의
 일치를 기록합니다. 식별자가 없어도 원시 위치는 보존합니다. 이 연결 정보가
 LDS의 물리 측정 시각이나 센서 자격을 대신하지는 않습니다.
@@ -22,12 +26,14 @@ v0.3.5의 첫 host 큐 막힘 원인은
 미확정이며 이번 판의 별도 전체 검사 통과와 구분합니다.
 [v1.0 완료 조건](V1_READINESS_KO.md)은 유지하며 live ASSIST는 계속 비활성입니다.
 
-최종판의 host Python 421개와 C/C++, 고정 ARM 전체는 생략 없이 통과했습니다.
+이전 v0.3.9-shadow.1의 host Python 421개와 C/C++, 고정 ARM 전체는 생략 없이 통과했습니다.
 실제 DSO 8개 suite의 145개 사례와 순정 BusyBox 3개 검사, 공개 재다운로드의
 해시·ZIP CRC·manifest·소스 고정을 대조하고 추가 도구를 제거했습니다.
 선행 `f2ec7c2`에서 원본 라이브러리의 여덟 요청을 실행했습니다. 최종판의
 다섯 제품 바이너리와 63개 빌드 입력이 이 선행 제품과 같음을 별도로
 대조했으며, 최종 소스에서 원본 실행을 반복한 것은 아닙니다.
+그 BusyBox fixture는 `/proc/mounts`를 일반 파일로 만들어 실제 회수 결함을
+놓쳤습니다. 핫픽스는 링크 구조를 반영한 별도 결과를 위 문서에 기록합니다.
 [v0.3.8](../validation/RELEASE_V038_2026-10-01.md)과
 [v0.3.7](../validation/RELEASE_V037_2026-10-01.md) 검증은 각각의 이력으로 남깁니다.
 

@@ -15,7 +15,7 @@ See [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate remov
 
 [한국어](README_KO.md) · [Current status / handoff](docs/STATUS_KO.md) · [Review corrections](docs/REVIEW_2026-09-28_KO.md)
 
-The published [v0.3.9-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)
+The published [v0.3.9-shadow.2 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)
 records the transport server GUID and the client's unique name at the original
 AA connection registration, then records whether the actual raw send used that
 same connection binding. Missing identity does not discard raw position
@@ -24,14 +24,19 @@ references and MODEL comparisons remain, alongside anchor/callback and
 discarded-queue fixes. The live qualified input provider and LDS producer
 transport remain incomplete, so **ASSIST stays disabled**.
 
-The [release record](validation/RELEASE_V039_2026-10-01.md) contains the source pin,
+**Recovering a failed v0.3.9-shadow.1 export:** replace the USB files with this
+hotfix and choose `3` after the command below, including after uninstalling.
+No reinstall or new drive is needed. The old menu incorrectly rejected the
+normal `/proc/mounts` symlink; see the [failure and fix](validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md).
+
+The [original release record](validation/RELEASE_V039_2026-10-01.md) contains the source pin,
 ZIP hash, final host/ARM and stock BusyBox checks, published-download verification,
 and the distinct scope of earlier original-library execution.
 [v0.3.8](validation/RELEASE_V038_2026-10-01.md) and
 [v0.3.7](validation/RELEASE_V037_2026-10-01.md) retain their historical evidence.
 
 Unpack the installation ZIP's contents to the FAT32 USB root. **While parked,
-open your existing working diagnostic shell**, run this line, and choose `1`
+open your existing working diagnostic shell**, run this line, and choose `1` for a first installation
 then Enter. Change the drive letter if needed; no Shift characters are required.
 
 ```sh

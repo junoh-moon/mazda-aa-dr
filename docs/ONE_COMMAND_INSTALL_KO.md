@@ -1,16 +1,21 @@
 # USB 숫자 메뉴로 설치·시험·회수
 
 현재 공개 파일은 NA 74.00.324A 전용
-[v0.3.9-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)입니다.
-파일명은 `mazda-aa-dr-v0.3.9-shadow.1.zip`이고, SHA-256은
-`293361fc8267cd12e1b1002be904b5a85cdd28d19e7518acc8e143c35215873b`입니다.
+[v0.3.9-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)입니다.
+파일명은 `mazda-aa-dr-v0.3.9-shadow.2.zip`이고, SHA-256은
+`4f6633ac95a20aa6c9907c2938843dff2fa769e6fd4c14dbc4fc243d7bf30699`입니다.
 GitHub의 자동 `Source code (zip)` 대신 이 설치 ZIP을 받으십시오.
+
+**이전 회수가 `/proc/mounts` 오류로 실패했다면:** USB에 기존 결과가 있을 경우
+PC에 먼저 보관하고 핫픽스 내용물로 교체하십시오. 아래 한 줄 뒤 **`3`과 Enter만**
+누르십시오. `4`로 제거한 뒤에도 남은 로그를 회수합니다. 재설치·재주행은
+필요하지 않으며 현재 종료 확인 실패와 `export_exit=0`의 회수 성공은 구분합니다.
 
 ZIP의 **내용물 전체**를 깨끗한 FAT32 USB 최상위에 풀어 복사하십시오.
 USB에서 `install.sh`, `mp3/`, `js/`, `trial`이 바로 보여야 합니다.
 차량의 USB 포트 하나를 설치·회수용 USB와 유선 AA가 번갈아 사용합니다.
 주차 중 Entertainment → USB에서 포함된 곡을 재생하고 진단 셸이 열리면
-다음 한 줄로 메뉴를 열고 `1`과 Enter를 누르십시오. 실제 USB가 sdb1 등으로
+다음 한 줄로 메뉴를 열고 최초 설치에만 `1`과 Enter를 누르십시오. 실제 USB가 sdb1 등으로
 잡히면 경로만 바꾸십시오. Shift 입력은 필요하지 않습니다.
 
 ```sh
@@ -37,5 +42,5 @@ AA 분리·재부팅 뒤의 현재 상태와 이전 시험 기록은 별도로 �
 운전 중에는 명령을 입력하거나 USB를 바꾸지 마십시오.
 
 [통합 시험 절차](FIELD_TRIAL_KO.md)와
-[최종 ZIP 검증](../validation/RELEASE_V039_2026-10-01.md)을 따르십시오.
+[회수 핫픽스 검증](../validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)을 따르십시오.
 실제 차량 기동·센서·복구·휴대폰 수용은 아직 검증하지 않았습니다.

@@ -13,7 +13,7 @@
 
 [과거 첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
-현재 공개판은 [v0.3.9-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)입니다.
+현재 공개판은 [v0.3.9-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)입니다.
 원본 AA 연결 등록에서 서버 주소 GUID와 client 고유 이름을 소유 복사하고,
 실제 raw 송신이 같은 연결을 사용했는지 기록합니다. 식별자가 없어도 원시 위치를
 보존하며, 생산자 측정 시각이나 센서 자격으로 인정하지 않습니다.
@@ -22,14 +22,19 @@
 실제 자격 입력 공급부와 LDS producer의 프로세스 간 연결은 미완료이므로
 **ASSIST는 계속 비활성**입니다.
 
-[릴리즈 검증](validation/RELEASE_V039_2026-10-01.md)에 고정 소스·ZIP 해시,
+**v0.3.9-shadow.1의 회수 실패 복구:** 핫픽스로 USB 파일을 교체하고 아래
+한 줄과 `3`만 사용하십시오. 이미 제거했어도 남은 로그를 회수하며 재설치·
+재주행은 필요하지 않습니다. 정상 `/proc/mounts` 링크를 거부한 결함과
+[핫픽스 검증](validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)을 확인하십시오.
+
+[이전 릴리즈 검증](validation/RELEASE_V039_2026-10-01.md)에 고정 소스·ZIP 해시,
 최종 host/ARM·순정 BusyBox 검사와 공개 재다운로드 대조를 기록했습니다.
 선행 원본 라이브러리 실행과 최종판의 검증 범위도 구분합니다.
 [v0.3.8](validation/RELEASE_V038_2026-10-01.md)과
 [v0.3.7](validation/RELEASE_V037_2026-10-01.md)의 검증 이력은 별도로 보존합니다.
 
 ZIP의 내용물을 FAT32 USB 최상위에 복사하십시오. **주차 중 기존에 작동하는
-진단 셸을 열고**, 다음 한 줄로 숫자 메뉴에 들어가 `1`과 Enter를 누르십시오.
+진단 셸을 열고**, 다음 한 줄로 숫자 메뉴에 들어가 최초 설치에만 `1`과 Enter를 누르십시오.
 필요하면 USB 경로의 글자만 바꾸십시오. Shift 입력은 필요하지 않습니다.
 
 ```sh

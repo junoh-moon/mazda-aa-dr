@@ -1,4 +1,4 @@
-# 현재 상태와 인계 — 2026-10-01
+# 현재 상태와 인계 — 2026-10-02
 
 이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 설치 가능 판단보다 우선한다. 현재 USB는 SHADOW 시험 후보이며 OFF·폴링 분리·일회성 기동 보호를 구현했다. 호스트·ARM·부분 OEM 실행과 실제 차량 검증을 구분한다. 소스 커밋과 공개 릴리즈는 별개다.
 
@@ -12,7 +12,18 @@
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.9-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)입니다.
+현재 공개판은 [v0.3.9-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)입니다.
+실차에서 v0.3.9-shadow.1의 메뉴3이 정상 `/proc/mounts` 링크를 거부했습니다.
+설치 완료·제거 완료 사진은 받았지만 원시 주행 로그는 아직 없으므로 센서·계산
+결과는 미판정입니다. [회수 핫픽스](../validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)는
+그 결함과 잘못된 시험 fixture를 수정했습니다. USB 파일을 교체하고 기존 한 줄과
+`3`만 사용하며 제거 후에도 재설치·재주행 없이 보존 파일을 회수합니다.
+실제 Linux procfs와 순정 BusyBox의 회수 경로를 구분해 검사했습니다. 새 host
+Python 426개·C/C++, 고정 ARM 전체와 최종 ZIP의 BusyBox 세 검사를 생략 없이
+통과했고 공개 재다운로드 대조 및 임시 도구 제거를 마쳤습니다. 기존판의
+BusyBox 통과를 실차 회수 성공의 근거로 취급하지 않습니다.
+
+아래는 이전 공개판 [v0.3.9-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.1)의 기록입니다.
 `3346854`의 새 ARM 빌드·설치 ZIP은 실제 AA 등록에서 서버 주소 GUID와
 client 고유 이름을 보존하고 raw 송신 연결·요청 수명을 대조합니다. 정보가
 누락돼도 원시 위치는 남깁니다. [연결 식별자](../validation/AA_ENDPOINT_IDENTITY_2026-10-01.md)와
