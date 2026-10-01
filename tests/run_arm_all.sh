@@ -73,6 +73,7 @@ for scenario in destroy recreate status failed_create ambiguous inflight bus_dis
     qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
 done
 MX5DR_TEST_STALE_RAW=1 qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" bus_reuse
+MX5DR_TEST_SLOW_YAW=1 qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" bus_reuse
 for scenario in bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do
     MX5DR_TEST_PREGAP=1 qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
 done

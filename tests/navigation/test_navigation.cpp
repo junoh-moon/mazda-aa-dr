@@ -44,6 +44,45 @@ static void seeded(Pipeline& p,int direction=0,unsigned speed=13600,unsigned yaw
     feed(p,200,3,speed,yaw); feed(p,300,4,speed,yaw);
     CHECK(p.drain(T(200))==PIPELINE_OK);
 }
+static void model_waits_for_closed_yaw_window() {
+    // Wheel traffic can arrive before a slightly delayed, still-fresh mean
+    // yaw window. Without an anchor, consuming those wheels must not make
+    // that window's retained start time late before it can be submitted.
+    for(unsigned transport=0;transport<2;++transport) {
+        Pipeline p;mx5_dr_context context={1,1,1};
+        CHECK(p.init_model(research_model_profile(),mx5_dr_default_config(),context,true,true));
+        for(unsigned ms=0;ms<=100;ms+=100) {
+            for(unsigned kind=WHEELS;kind<=REVERSE;++kind) {
+                RawEvent r=raw(static_cast<SensorKind>(kind),ms,ms+1);
+                if(!transport)r.source_mono_ms=0;
+                const PipelineResult result=p.enqueue_raw(r);
+                CHECK(result==PIPELINE_OK||result==PIPELINE_WAITING);
+            }
+        }
+        CHECK(p.drain(T(100))==PIPELINE_OK);
+        RawEvent wheel=raw(WHEELS,120,121),yaw=raw(YAW,220,221);
+        if(!transport)wheel.source_mono_ms=yaw.source_mono_ms=0;
+        CHECK(p.enqueue_raw(wheel)==PIPELINE_OK);
+        CHECK(p.drain(T(120))==PIPELINE_OK);
+        CHECK(p.enqueue_raw(yaw)==PIPELINE_OK);
+        CHECK(!p.status().resets);
+        CHECK(p.drain(T(220))==PIPELINE_OK);
+        CHECK(!p.diagnostic(T(220)).snapshot.model_valid);
+        // An actually missing interval retains the original age rejection.
+        yaw=raw(YAW,480,481);if(!transport)yaw.source_mono_ms=0;
+        CHECK(p.enqueue_raw(yaw)==PIPELINE_MISSING_SENSOR);
+        CHECK(p.status().resets==1);
+
+        Pipeline stopped;init(stopped);
+        feed(stopped,0,1);feed(stopped,100,2);
+        CHECK(stopped.enqueue_raw(raw(WHEELS,120,3))==PIPELINE_OK);
+        CHECK(stopped.drain(T(350))==PIPELINE_OK);
+        CHECK(!stopped.status().resets);
+        CHECK(stopped.drain(T(351))==PIPELINE_MISSING_SENSOR);
+        CHECK(stopped.status().resets==1);
+        CHECK(!stopped.diagnostic(T(351)).snapshot.model_valid);
+    }
+}
 static void model_motion() {
     Pipeline p; seeded(p);
     Diagnostic d=p.diagnostic(T(300));
@@ -476,7 +515,7 @@ int main(int argc,char** argv) {
     else if(argc==2&&!std::strcmp(argv[1],"exhausted_sequence"))exhausted_position_sequence();
     else if(argc==2&&!std::strncmp(argv[1],"yaw_accumulator_",16))
         raw_yaw_accumulator_rejection(unsigned(std::atoi(argv[1]+16)));
-    else { model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
+    else { model_waits_for_closed_yaw_window();model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
         for(unsigned i=0;i<6;++i)raw_yaw_accumulator_rejection(i);
         raw_yaw_accumulator_boundaries();
         rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();exhausted_model();

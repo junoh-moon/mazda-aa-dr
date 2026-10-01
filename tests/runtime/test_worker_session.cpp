@@ -95,6 +95,7 @@ int main(int argc,char** argv) {
     assert(argc==2);const std::string scenario=argv[1];alarm(20);
     const bool bus_case=scenario.compare(0,4,"bus_")==0;
     const bool stale_raw_case=getenv("MX5DR_TEST_STALE_RAW")!=0;
+    const bool slow_yaw=getenv("MX5DR_TEST_SLOW_YAW")!=0;
     const bool pre_gap=getenv("MX5DR_TEST_PREGAP")!=0;assert(!pre_gap||bus_case);
     assert(scenario=="destroy"||scenario=="recreate"||scenario=="status"||
            scenario=="failed_create"||scenario=="ambiguous"||scenario=="inflight"||
@@ -197,7 +198,7 @@ int main(int argc,char** argv) {
             }
         }
         for(unsigned kind=1;kind<=3;++kind) {
-            if(kind!=N::WHEELS && ms%100)continue;
+            if(kind!=N::WHEELS && ms%(kind==N::YAW&&slow_yaw?160:100))continue;
             N::RawEvent r=N::RawEvent();r.kind=static_cast<N::SensorKind>(kind);
             r.epoch=1;r.receive_seq=++sequence;r.received_ns=now;r.count=1;
             for(unsigned i=0;i<4;++i)r.raw[i]=kind==N::WHEELS?13600:2047;
@@ -256,6 +257,10 @@ int main(int argc,char** argv) {
             assert(line.substr(at)=="]}");
         }
         assert(line.find("\"kind\":\"motion_rejected\"")==std::string::npos);
+        // Once the authored stream ends at 7500 ms, the unchanged age limit
+        // may expire while the worker waits for its capture-stop check.
+        if(slow_yaw&&line.find("\"kind\":\"shadow_pipeline_reset\"")!=std::string::npos)
+            assert(number(line,"mono_ns")>=start+7500000000ULL);
         if(line.find("\"kind\":\"position\"")!=std::string::npos)++positions;
         if(line.find("\"kind\":\"shadow_holdout\"")!=std::string::npos) {
             if(line.find("\"event\":\"BEGIN\"")!=std::string::npos) {

@@ -438,6 +438,23 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
     if (watermark<watermark_) return fault(PIPELINE_CLOCK_RESET);
     while (size_ && queue_[0].time<=watermark) {
         Event e=queue_[0];
+        // Before an anchor exists, advance() has no estimate to hold at the
+        // last closed mean window. Do not consume wheel/GPS events beyond
+        // that boundary and make the next fresh yaw window appear late.
+        // Retain original times and the existing sensor-age limit.
+        if(model_ && !core_.seeded && last_yaw_time_ && e.time>last_yaw_time_) {
+            bool position_pending=false;
+            for(size_t j=0;j<size_&&queue_[j].time<=watermark;++j)
+                if(queue_[j].kind==POSITION_EVENT)position_pending=true;
+            // GPS mode changes/reacquisition must still drain past absent
+            // coverage. Their existing control path withdraws old anchors.
+            if(!position_pending) {
+                if(watermark>last_yaw_time_ &&
+                   watermark-last_yaw_time_>core_.config.sample_age_max_ns)
+                    return fault(PIPELINE_MISSING_SENSOR);
+                break;
+            }
+        }
         const uint64_t faults=status_.resets;
         PipelineResult r=advance(e.time);
         if (status_.resets!=faults) return status_.result;

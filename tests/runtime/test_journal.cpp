@@ -58,12 +58,18 @@ static void cadence_tests() {
     const CadenceResult minimum_gate=cadence_case(2,wheel,5*wheel);
     const CadenceResult fixed=cadence_case(3,wheel,5*wheel);
     assert(old.late==0&&old.holdout_late==0&&old.resets==0);
-    assert(every_input.late>0&&every_input.holdout_late>0);
-    if(wheel==20)assert(minimum_gate.late>0&&minimum_gate.holdout_late>0);
+    // Warmup now retains open yaw windows even with these alternate wake
+    // schedules. Keep the cadence regression independent of that old fault:
+    // input-driven draining runs too often, and a minimum-only gate drifts.
+    assert(every_input.late==0&&every_input.holdout_late==0&&every_input.resets==0);
+    assert(minimum_gate.late==0&&minimum_gate.holdout_late==0&&minimum_gate.resets==0);
+    assert(every_input.drains!=old.drains&&every_input.drains.size()>old.drains.size());
+    if(wheel==20)
+      assert(minimum_gate.drains!=old.drains&&minimum_gate.drains.size()<old.drains.size());
     assert(fixed.late==0&&fixed.holdout_late==0&&fixed.resets==0);
     assert(fixed.drains==old.drains&&fixed.drains.size()==31);
   }
-  puts("worker cadence: receipt-only 150ms yaw, 10/20ms wheels; negative schedules fail, deadline preserves MODEL/holdout");
+  puts("worker cadence: 150ms yaw, 10/20ms wheels; warmup survives all schedules, deadline preserves 31 drains");
 }
 static void arm_test_mode() {
   audit_fault = 0;
