@@ -253,18 +253,18 @@ void journal_model_motion_excluded(Journal& j,const N::RawEvent& raw,
 void journal_pipeline_reset(Journal& j,const N::Pipeline& navigation,uint64_t before,
                             const char* operation,uint64_t input_ns,
                             uint64_t receive_seq=0,unsigned sensor=0,unsigned call=0) {
-  const N::Status& s=navigation.status();
-  if(s.resets==before)return;
-  // A following accepted input replaces status.result. Preserve the primary
-  // MODEL reset at the operation boundary, while leaving raw capture active.
+  const N::Status& status=navigation.status();
+  if(status.resets==before)return;
+  // The next accepted input can overwrite status.result in the same receive
+  // turn. Record the primary MODEL fault while its cause is still available.
   char line[600];
   const int n=snprintf(line,sizeof line,
       "{\"kind\":\"shadow_pipeline_reset\",\"mono_ns\":%llu,\"domain\":\"model\","
       "\"assist_ready\":false,\"reason\":\"%s\",\"operation\":\"%s\","
       "\"input_ns\":%llu,\"receive_seq\":%llu,\"sensor\":%u,\"call\":%u,\"resets\":%llu}",
-      (unsigned long long)clock_ns(0),N::pipeline_result_name(s.result),operation,
+      (unsigned long long)clock_ns(0),N::pipeline_result_name(status.result),operation,
       (unsigned long long)input_ns,(unsigned long long)receive_seq,sensor,call,
-      (unsigned long long)s.resets);
+      (unsigned long long)status.resets);
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
 }
 
@@ -318,13 +318,16 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
                 (bus_boundary?"transport_before_bus":"transport_before_session"));
         continue;
       }
-      if(enabled) {
-        const uint64_t resets=navigation.status().resets;
-        navigation.enqueue_raw(raw);
-        journal_pipeline_reset(j,navigation,resets,"raw",raw.received_ns,raw.receive_seq,unsigned(raw.kind));
-        holdout.enqueue_raw(raw);
-      }
+      const uint64_t resets=navigation.status().resets;
+      if(enabled) {navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);}
       journal_motion(j,batch,raw);
+      if(enabled && navigation.status().resets!=resets) {
+        // Flush the offending raw input before its diagnostic, so the causal
+        // evidence survives even if the journal fails on the next record.
+        flush_motion(j,batch);
+        journal_pipeline_reset(j,navigation,resets,"raw",raw.received_ns,
+                               raw.receive_seq,unsigned(raw.kind));
+      }
     }
   }
   // No batch crosses the worker sleep, including a capped or failed turn.
@@ -638,7 +641,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
           uint8_t bytes[48];
           const bool encoded=mx5::runtime::encode_model_location_preview(d.snapshot,bytes);
           if(encoded)hex48(bytes,preview);
-          snprintf(line,sizeof line,
+          const int formatted=snprintf(line,sizeof line,
               "{\"kind\":\"shadow\",\"mono_ns\":%llu,\"domain\":\"model\","
               "\"model_session_epoch\":%llu,\"session_revision\":%llu,"
               "\"model_bus_epoch\":%llu,\"bus_revision\":%llu,"
@@ -663,7 +666,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
               (unsigned long long)navigation.calibration().calibration_version,
               navigation.wheel_calibration().active_scale,
               (unsigned long long)navigation.wheel_calibration().calibration_version,encoded?"true":"false",preview);
-          j.line(line);
+          if(formatted>0 && size_t(formatted)<sizeof line)j.line(line);else j.fail();
         }
     }
     if (now - last_flush >= 1000000000ULL) {

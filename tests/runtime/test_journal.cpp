@@ -144,6 +144,8 @@ static void pipeline_fault_capture(const char* root,const std::string& logs) {
   assert(saved.find("\"receive_seq\":1")!=std::string::npos);
   assert(saved.find(",50000,50000,50000,50000,")!=std::string::npos);
   assert(saved.find("\"kind\":\"motion_batch\"")!=std::string::npos);
+  assert(saved.find(",50000,50000,50000,50000,")<
+         saved.find("\"kind\":\"shadow_pipeline_reset\""));
   puts("MODEL reset: reason and raw input survive subsequent successful input");
 }
 static void stop_tests(const char* root,const std::string& logs) {

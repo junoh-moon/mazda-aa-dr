@@ -497,7 +497,8 @@ class Auditor:
                 self.motion_batches += 1
             for event in events:
                 self.motion(event, source)
-        elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled", "shadow_pipeline_reset"):
+        elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled",
+                      "shadow_pipeline_reset"):
             self.shadow(row, source)
         elif kind == "shadow_bus":
             self.model_bus(row, source)
@@ -738,24 +739,25 @@ class Auditor:
         if row["assist_ready"]:
             self.issue("impossible_live_capability", source, "SHADOW cannot authorize ASSIST", True)
         kind = row["kind"]
-        if kind == 'shadow_pipeline_reset':
-            if (not self.validate(row, source,
-                    ints=('mono_ns', 'input_ns', 'receive_seq', 'sensor', 'call', 'resets'),
-                    strings=('reason', 'operation'))):
+        if kind == "shadow_pipeline_reset":
+            if not self.validate(row, source,
+                    ints=("mono_ns", "input_ns", "receive_seq", "sensor", "call", "resets"),
+                    strings=("reason", "operation")):
                 return
-            faults = ('BAD_INPUT', 'LATE', 'CLOCK_RESET', 'SOURCE_RESET', 'OVERFLOW',
-                      'MISSING_SENSOR', 'CORE_REJECTED')
-            if (row.get('domain') != 'model' or row['reason'] not in faults or
-                    row['operation'] not in ('raw', 'position', 'drain') or
+            reasons = ("BAD_INPUT", "LATE", "CLOCK_RESET", "SOURCE_RESET",
+                       "OVERFLOW", "MISSING_SENSOR", "CORE_REJECTED")
+            if (row.get("domain") != "model" or row["reason"] not in reasons or
+                    row["operation"] not in ("raw", "position", "drain") or
                     any(not bounded_int(row[key], 0, 2**64-1) for key in
-                        ('mono_ns', 'input_ns', 'receive_seq', 'sensor', 'call', 'resets')) or
-                    not row['mono_ns'] or not row['resets'] or
-                    (row['operation'] == 'raw' and
-                     (row['sensor'] not in (1, 2, 3) or not row['receive_seq']))):
-                self.issue('partial_record', source, 'Invalid primary MODEL reset diagnostic')
+                        ("mono_ns", "input_ns", "receive_seq", "sensor", "call", "resets")) or
+                    not row["mono_ns"] or not row["resets"] or
+                    (row["operation"] == "raw" and
+                     (row["sensor"] not in (1, 2, 3) or not row["receive_seq"]))):
+                self.issue("partial_record", source, "Invalid primary MODEL reset diagnostic")
                 return
-            self.issue(kind, source, '%s: %s receive_seq=%d' %
-                       (row['operation'], row['reason'], row['receive_seq']))
+            self.issue("shadow_pipeline_reset", source,
+                       "%s: %s receive_seq=%d" %
+                       (row["operation"], row["reason"], row["receive_seq"]))
             return
         if kind in ("shadow_input_reset", "shadow_disabled"):
             self.validate(row, source, strings=("reason",))
@@ -801,6 +803,10 @@ class Auditor:
                     not bounded_int(row[key], 0, 2**64-1)
                     for key in ('events', 'intervals', 'resets', 'rejected', 'frontier_ns'))):
             self.issue('partial_record', source, 'SHADOW state/counter/time outside integer range')
+            return
+        if ('drain_calls_total' in row and
+                not bounded_int(row['drain_calls_total'], 0, 2**64-1)):
+            self.issue('partial_record', source, 'Invalid MODEL drain invocation counter')
             return
         if boundary is not None and (
                 row['mono_ns'] < boundary['mono_ns'] or row['frontier_ns'] > row['mono_ns'] or

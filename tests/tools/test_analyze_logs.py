@@ -74,7 +74,7 @@ class AnalyzeTests(unittest.TestCase):
         (self.root / "collector.0.jsonl").write_bytes(encode(current))
         return module.analyze([self.root])
 
-    def test_primary_pipeline_reset_remains_an_explicit_inconclusive_reason(self):
+    def test_primary_pipeline_reset_is_a_named_inconclusive_reason(self):
         reset = dict(kind='shadow_pipeline_reset', mono_ns=35, domain='model',
                      assist_ready=False, reason='LATE', operation='raw', input_ns=20,
                      receive_seq=45, sensor=2, call=0, resets=1)
@@ -85,6 +85,19 @@ class AnalyzeTests(unittest.TestCase):
         self.assertIn('shadow_pipeline_reset', self.codes(report))
         self.assertNotIn('unknown_record_kind', self.codes(report))
         reset['receive_seq'] = -1
+        self.assertIn('partial_record', self.codes(self.audit(rows)))
+
+    def test_malformed_optional_drain_counter_is_inconclusive(self):
+        row = dict(kind='shadow', mono_ns=35, domain='model', assist_ready=False,
+                   model_valid=False, state=0, result='E_NO_SEED', pipeline='WAITING',
+                   uncertainties=0, events=0, intervals=0, resets=0, rejected=0,
+                   drain_calls_total='3', frontier_ns=0, lat=None, lon=None,
+                   heading_rad=None, speed_mps=None, error_model_m=None,
+                   stopped=False, yaw_zero=0.0, calibration_version=0,
+                   wheel_scale=1.0, wheel_scale_version=0,
+                   preview_encoded=False, location_preview_hex='')
+        rows = records()
+        rows.insert(-1, row)
         self.assertIn('partial_record', self.codes(self.audit(rows)))
 
     def test_original_pass_scope_is_local(self):

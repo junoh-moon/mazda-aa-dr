@@ -28,6 +28,7 @@ function reset_runtime() {
     position_rejection="none_observed"; motion_rejection="none_observed"
     motion_exclusion="none_observed"
     pipeline_reset="none_observed"; reset_operation=""; reset_sequence=""; reset_time=""
+    untimed_pipeline_reset=0
     for (i=1;i<=3;i++) {sensor[i]=""; rejected_sensor[i]=0}
 }
 function report(name, ok, detail) {
@@ -78,10 +79,14 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
         if ((kind=="shadow_session" || kind=="shadow_bus") && field("reset")=="true") {
             clear_model_snapshot(); anchor="none_observed"
         }
-        if (kind=="shadow_input_reset" || kind=="shadow_pipeline_reset") {clear_model_snapshot(); anchor="none_observed"}
-        if (kind=="shadow_pipeline_reset" && not_future(field("mono_ns"))) {
-            pipeline_reset=field("reason"); reset_operation=field("operation")
-            reset_sequence=field("receive_seq"); reset_time=field("mono_ns")
+        if (kind=="shadow_input_reset" || kind=="shadow_pipeline_reset") {
+            clear_model_snapshot(); anchor="none_observed"
+        }
+        if (kind=="shadow_pipeline_reset") {
+            if (not_future(field("mono_ns"))) {
+                pipeline_reset=field("reason"); reset_operation=field("operation")
+                reset_sequence=field("receive_seq"); reset_time=field("mono_ns")
+            } else if (field("mono_ns")=="0") untimed_pipeline_reset=1
         }
         if (kind=="position") {position=field("mono_ns"); position_mode=field("mode")}
         if (kind=="shadow") {
@@ -94,8 +99,8 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
                 field("result") ~ /^[A-Z_]+$/ && field("pipeline") ~ /^[A-Z_]+$/) {
                 shadow=field("mono_ns"); processed=field("events")
                 solution=field("model_valid"); pipeline=field("pipeline"); result=field("result")
-                if(unsigned_field("drain_calls_total")) attempts=field("drain_calls_total")
-                if(unsigned_field("intervals")) intervals=field("intervals")
+                if (unsigned_field("drain_calls_total")) attempts=field("drain_calls_total")
+                if (unsigned_field("intervals")) intervals=field("intervals")
             }
         }
         if (fresh(field("mono_ns"))) {
@@ -156,7 +161,8 @@ END {
     # This is an actual drain invocation counter, including empty/waiting
     # calls, not queued input count or successful integration/qualification.
     observe("calculation_attempt_recent",diagnostic_recent && health_recent(health) &&
-        computation=="true" && attempts+0>0,"drain_calls_total=" (attempts==""?"unknown":attempts) " intervals_total=" (intervals==""?"unknown":intervals))
+        computation=="true" && attempts+0>0,
+        "drain_calls_total=" (attempts==""?"unknown":attempts) " intervals_total=" (intervals==""?"unknown":intervals))
     observe("wheels_rejected_checked_recently",runtime && rejected_sensor[1],"worker_check_only")
     observe("yaw_rejected_checked_recently",runtime && rejected_sensor[2],"worker_check_only")
     observe("reverse_rejected_checked_recently",runtime && rejected_sensor[3],"worker_check_only")
@@ -167,7 +173,7 @@ END {
     print "model_solution=" (usable ? "observed" : "not_observed") " domain=model assist_ready=false"
     print "gps_anchor_gate=" anchor " last_position_rejection_30s=" position_rejection " last_motion_reset_30s=" motion_rejection " last_model_exclusion_30s=" motion_exclusion
     print "rejected_raw_seen_this_boot=" (rejected_raw ? "true" : "false") " untimed_rejected_raw_seen=" (untimed_rejected_raw ? "true" : "false") " untimed_motion_reset_seen=" (untimed_motion_reset ? "true" : "false")
-    print "last_pipeline_reset=" pipeline_reset " operation=" reset_operation " receive_seq=" reset_sequence " mono_ns=" reset_time
+    print "last_pipeline_reset_this_boot=" pipeline_reset " operation=" reset_operation " receive_seq=" reset_sequence " mono_ns=" reset_time " untimed_reset_seen=" (untimed_pipeline_reset ? "true" : "false")
     if (bad) print "Collection evidence incomplete. Keep/export existing logs; missing/rotated boot markers cannot be reconstructed by this check."
     else print "Capture startup evidence only. Inspect MODEL status and reasons; this is not a completed navigation trial."
     exit bad
