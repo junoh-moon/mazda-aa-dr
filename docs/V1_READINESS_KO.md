@@ -50,8 +50,15 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   이 상위 항목은 미완료입니다. 외부 SM·SYSTEM·USB 기동 조사도 따로 추적합니다.
   [원본 커널 GPIO 되읽기 진단](../validation/LDS_GPIO_VM_2026-10-01.md)에서는
   격리 VM의 USB 출력 latch 1과 PSR/sysfs 0을 직접 확인했습니다. 원본 LDS의
-  legacy 선택을 가로막는 에뮬레이터 조건을 좁혔지만, 유효 NMEA·GetPosition과
-  실제 하드웨어·receiver 자격은 미검증입니다.
+  legacy 선택을 가로막는 에뮬레이터 조건을 좁혔지만, 당시에는 원본 LDS의
+  유효 NMEA·GetPosition과 실제 하드웨어·receiver 자격을 검증하지 못했습니다.
+  [후속 원본 LDS 합성 NMEA 실행](../validation/LDS_PATH_VM_2026-10-01.md)은
+  진단용 GPIO 되읽기 보정에서 원본 GetPosition의 유효→무효→재획득을
+  확인했습니다. 첫 무효 응답의 UTC·좌표 경계 혼합과 후속 fixture의 WFI
+  정지를 보존합니다. 수정 fixture는 진단용 CPU 유휴 방지 조건에서
+  START 이후 공급과 고유 주기 대조까지 완주했습니다. 합성 위치·부분
+  SM·진단 interposer와 바뀐 CPU 부하의 근거이며 물리 수신기나 제품
+  자격·폰 수용은 아닙니다.
   [세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서
   이전 세션의 기준점·학습 보정·대기 입력 잔류를 제거하고 원시 입력을 보존했습니다.
   원본 VM의 두 조건에서 각각 지연 요청 네 건을 새 MODEL에서 제외했고, 재시작
