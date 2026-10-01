@@ -29,7 +29,7 @@ class ShadowResults(unittest.TestCase):
     def test_actual_pipeline_snapshots_pass_in_complete_legacy_envelope(self):
         cases = self.producer_cases()
         expected = {'unseeded', 'active_valid', 'active_stale', 'active_time_error',
-                    'active_valid_waiting', 'active_queued_gps', 'active_queued_native',
+                    'active_valid_pending', 'active_queued_gps', 'active_queued_native',
                     'native', 'active_near_zero_not_stopped', 'active_stopped'}
         rows = {name: row for name, row in cases.items() if row['kind'] == 'shadow'}
         self.assertEqual(set(rows), expected)
@@ -37,8 +37,8 @@ class ShadowResults(unittest.TestCase):
             with self.subTest(case=name):
                 self.assertEqual(report(row)['status'], 'local_checks_pass')
         self.assertTrue(rows['active_valid']['model_valid'])
-        self.assertEqual(rows['active_valid_waiting']['pipeline'], 'WAITING')
-        self.assertTrue(rows['active_valid_waiting']['model_valid'])
+        self.assertEqual(rows['active_valid_pending']['pipeline'], 'OK')
+        self.assertTrue(rows['active_valid_pending']['model_valid'])
         for name, state in (('unseeded', 0), ('native', 4)):
             self.assertFalse(rows[name]['model_valid'])
             self.assertEqual(rows[name]['state'], state)

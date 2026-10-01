@@ -82,6 +82,9 @@ bool configure(SendFunction next, const Options& options);
 bool set_mode(Mode mode);
 Mode mode();
 uint32_t invalidate(); // Bounded atomic revocation; no waits.
+// Retire one owned generation only if it is still current. A newer adapter
+// generation has already made that candidate unselectable.
+uint32_t invalidate_if_generation(uint32_t owned);
 uint32_t generation();
 // Worker-side only; copies values, never borrowed OEM pointers.
 bool publish_snapshot(const DrSnapshot& snapshot);

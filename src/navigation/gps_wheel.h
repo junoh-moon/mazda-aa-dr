@@ -16,6 +16,9 @@ inline const char* anchor_gate_name(GpsAnchorGate gate) {
 struct WheelScaleStatus {
     bool enabled, candidate_ready;
     double active_scale, candidate_scale, gps_distance_m, wheel_distance_m;
+    // Accepted straight wheel distance since the current training baseline.
+    // A reset during the first segment must not erase this attempt silently.
+    double partial_training_distance_m;
     uint64_t calibration_version, segments, evidence_end_ns;
 };
 // Original MODEL samples selected for one GPS anchor. This does not replace
@@ -71,6 +74,8 @@ public:
                 std::fabs(yaw_)<=0.03;
             if (clean) {
                 distance_+=speed_*double(end-time_)/1e9;
+                if (have_training_ && !status_.candidate_ready)
+                    status_.partial_training_distance_m=distance_-training_distance_;
                 // A completed MODEL mean window may cover shorter wheel/GPS
                 // subintervals. Retain its actual receipt frontier so none of
                 // this evidence can change an earlier anchor retrospectively.
@@ -186,6 +191,7 @@ public:
                         candidate_received_=distance_received_;
                     }
                     training_=o; training_distance_=distance_;
+                    status_.partial_training_distance_m=0;
                 }
             }
         }
@@ -222,7 +228,7 @@ private:
         have_training_=false; candidate_received_=0;
         status_.candidate_ready=false; status_.candidate_scale=1;
         status_.segments=0; status_.gps_distance_m=status_.wheel_distance_m=0;
-        status_.evidence_end_ns=0;
+        status_.evidence_end_ns=0;status_.partial_training_distance_m=0;
     }
     void break_training() { ++broken_; clear_training(); }
     bool reject(GpsAnchorGate reason) { unavailable(reason); return false; }
@@ -231,6 +237,7 @@ private:
         base_broken_=broken_; base_reverse_=reverse;
         if (!have_training_) {
             training_=o; training_distance_=distance_; have_training_=true;
+            status_.partial_training_distance_m=0;
         }
     }
 };

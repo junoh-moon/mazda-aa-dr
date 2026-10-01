@@ -64,6 +64,7 @@ class AssistWorker {
 public:
     static const size_t INPUT_BUDGET=128;
     AssistWorker(const mx5_dr_config&, const AssistSource&);
+    ~AssistWorker();
     void tick(adapter::MonotonicClock, void* clock_user);
     void stop();
     const AssistStatus& status() const { return status_; }
@@ -74,7 +75,9 @@ private:
     AssistStatus status_;
     mx5_dr_context binding_, recovery_binding_;
     uint64_t last_now_ns_, recovery_after_ns_;
-    bool active_, stopped_;
+    uint32_t published_generation_;
+    bool active_, stopped_, begun_, publication_live_;
+    static uint64_t revoke_candidate(void*);
     bool readiness(uint64_t, AssistReadiness*);
     bool consume(const AssistInput&, uint64_t, const AssistReadiness&);
     void revoke(AssistState, uint64_t, bool require_begin);

@@ -21,11 +21,17 @@ class ProductPipeline {
     N::Pipeline* self() { return reinterpret_cast<N::Pipeline*>(storage_); }
 public:
     ProductPipeline() {
-        static_assert(std::is_trivially_destructible<N::Pipeline>::value,"Add product destruction if needed");
         assist_function<void(*)(N::Pipeline*)>(TEST_PIPELINE_CONSTRUCT)(self());
     }
+    ~ProductPipeline() { assist_function<void(*)(N::Pipeline*)>(TEST_PIPELINE_DESTRUCT)(self()); }
     bool init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
         return assist_function<bool(*)(N::Pipeline*,const mx5_dr_config&,mx5_dr_context)>(TEST_PIPELINE_INIT)(self(),c,x);
+    }
+    bool init_model(const N::ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias=false,bool gps_wheel=false) {
+        return assist_function<bool(*)(N::Pipeline*,const N::ModelProfile&,const mx5_dr_config&,mx5_dr_context,bool,bool)>(TEST_PIPELINE_MODEL_INIT)(self(),p,c,x,auto_bias,gps_wheel);
+    }
+    bool bind_qualified_revoker(N::Pipeline::QualifiedRevoker revoke,void* user) {
+        return assist_function<bool(*)(N::Pipeline*,N::Pipeline::QualifiedRevoker,void*)>(TEST_PIPELINE_BIND)(self(),revoke,user);
     }
     N::PipelineResult enqueue_anchor(const mx5_dr_anchor& a,uint64_t received) {
         return assist_function<N::PipelineResult(*)(N::Pipeline*,const mx5_dr_anchor&,uint64_t)>(TEST_PIPELINE_ANCHOR)(self(),a,received);
@@ -60,6 +66,7 @@ static bool dso_configure(SendFunction f,const Options& o) {
     return assist_function<bool(*)(SendFunction,const Options&)>(TEST_CONFIGURE)(f,o);
 }
 static bool dso_set_mode(Mode mode) { return assist_function<bool(*)(Mode)>(TEST_MODE)(mode); }
+static uint32_t dso_invalidate() { return assist_function<uint32_t(*)()>(TEST_INVALIDATE)(); }
 static bool dso_publish(const DrSnapshot& s) {
     return assist_function<bool(*)(const DrSnapshot&)>(TEST_PUBLISH)(s);
 }
@@ -74,6 +81,7 @@ static int32_t dso_send(void* storage,VehicleData* data) {
 #define mx5_dr_default_config dso_default_config
 #define configure dso_configure
 #define set_mode dso_set_mode
+#define invalidate dso_invalidate
 #define publish_snapshot dso_publish
 #define position_enter dso_position_enter
 #define position_leave dso_position_leave

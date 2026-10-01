@@ -20,7 +20,15 @@ bool nonfatal(navigation::PipelineResult r) {
 }
 AssistWorker::AssistWorker(const mx5_dr_config& config,const AssistSource& source)
     : config_(config),source_(source),status_(),binding_(),recovery_binding_(),last_now_ns_(0),
-      recovery_after_ns_(0),active_(false),stopped_(false) {}
+      recovery_after_ns_(0),published_generation_(0),active_(false),stopped_(false),
+      begun_(false),publication_live_(false) {}
+AssistWorker::~AssistWorker() { stop(); }
+uint64_t AssistWorker::revoke_candidate(void* user) {
+    AssistWorker& worker=*static_cast<AssistWorker*>(user);
+    const uint64_t owned=worker.pipeline_.context().generation;
+    return owned&&owned<=UINT32_MAX?
+        adapter::invalidate_if_generation(static_cast<uint32_t>(owned)):0;
+}
 
 bool AssistWorker::readiness(uint64_t now,AssistReadiness* out) {
     *out=AssistReadiness();
@@ -42,13 +50,20 @@ void AssistWorker::withdraw() {
     if(adapter::publish_snapshot(empty))++status_.withdrawn;
 }
 void AssistWorker::revoke(AssistState state,uint64_t now,bool require_begin) {
-    if(require_begin&&active_) {
+    // An independent GPS/mode transition has already invalidated the last
+    // published generation. Keep the calculator alive for a delayed verified
+    // anchor; a source or clock fault still ends the lifetime.
+    const bool already_revoked=publication_live_&&
+        adapter::generation()>published_generation_;
+    if((require_begin||(publication_live_&&!already_revoked))&&active_) {
+        pipeline_.retire_qualified();
         active_=false;
         if(!same_epochs(binding_,recovery_binding_)) {
             recovery_binding_=binding_;recovery_after_ns_=0;
         }
         if(now>recovery_after_ns_)recovery_after_ns_=now;
     }
+    publication_live_=false;
     status_.state=state;withdraw();
 }
 bool AssistWorker::consume(const AssistInput& in,uint64_t now,const AssistReadiness& ready) {
@@ -61,11 +76,20 @@ bool AssistWorker::consume(const AssistInput& in,uint64_t now,const AssistReadin
         // first notices the transition; do not fabricate later receipt times.
         if(!in.received_ns||in.received_ns>now||
            (same_epochs(in.context,recovery_binding_)&&in.received_ns<recovery_after_ns_))return false;
-        if(!pipeline_.init_qualified(config_,in.context))return false;
+        if(active_) {
+            if(!pipeline_.retire_qualified())return false;
+            active_=false;publication_live_=false;
+        }
+        if(!begun_) {
+            if(!pipeline_.init_qualified(config_,in.context)||
+               !pipeline_.bind_qualified_revoker(revoke_candidate,this))return false;
+            begun_=true;
+        } else if(!pipeline_.rearm_qualified(config_,in.context))return false;
         binding_=in.context;active_=true;++status_.begins;return true;
     }
     if(!active_) { ++status_.ignored;return true; }
     if(!same_epochs(in.context,binding_))return false;
+    if(in.context.generation<binding_.generation)return false;
     navigation::PipelineResult result=navigation::PIPELINE_BAD_INPUT;
     if(in.kind==ASSIST_POSITION) {
         const adapter::Observation& o=in.observation;
@@ -147,6 +171,7 @@ void AssistWorker::tick(adapter::MonotonicClock clock,void* clock_user) {
         final.requested_until_ns,&output);
     if(status_.bridge_result!=CORE_BRIDGE_OK) { revoke(ASSIST_WAITING_INPUT,after,false);return; }
     if(!adapter::publish_snapshot(output)) { revoke(ASSIST_CONTEXT_CHANGED,after,false);return; }
+    publication_live_=true;published_generation_=output.prediction_generation;
     status_.last_publication=output;++status_.published;status_.state=ASSIST_PUBLISHED;
 }
 void AssistWorker::stop() {

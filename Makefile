@@ -131,7 +131,7 @@ test-build-deps:
 	$(PYTHON) -m unittest discover -s tests/build -v
 test-integration: $(BUILD)/test_pipeline $(BUILD)/test_assist_publication
 	$(BUILD)/test_pipeline
-	@set -e; for scenario in straight quality_gap quality_cycle turn reverse expiry reacquire native_return stale_control unverified continuous_reacquire anchor_first_reacquire separate_reacquire native_reacquire quality_reacquire; do $(BUILD)/test_assist_publication $$scenario; done
+	@set -e; for scenario in straight quality_gap quality_cycle turn reverse expiry reacquire native_return stale_control fault_recovery core_reject reinit failed_reinit failed_model_reinit owner_exit unverified continuous_reacquire anchor_first_reacquire separate_reacquire native_reacquire quality_reacquire single_gap_reacquire ready_quality_reanchor; do $(BUILD)/test_assist_publication $$scenario; done
 
 $(BUILD)/test_assist_publication: tests/adapter/assist_publication_test.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp src/runtime/core_bridge.h $(ADAPTER) src/adapter/adapter.h $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -lm -o $@

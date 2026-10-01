@@ -978,8 +978,8 @@ class Auditor:
                 strings=("event", "reason"), bools=("model_valid",)):
             return
         event = row["event"]
-        if (event not in ("BEGIN", "COMPARED", "END", "ABORT") or
-                not bounded_int(row["window_id"], 0 if event == "ABORT" else 1, 2**64-1) or
+        if (event not in ("BEGIN", "COMPARED", "END", "ABORT", "SKIPPED") or
+                not bounded_int(row["window_id"], 0 if event in ("ABORT", "SKIPPED") else 1, 2**64-1) or
                 any(not bounded_int(row[key], 0, 2**64-1) for key in
                     ("anchor_ns", "reference_ns", "frontier_ns", "calibration_version")) or
                 not bounded_number(row.get("yaw_zero"), 0, 4093)):
@@ -1000,6 +1000,23 @@ class Auditor:
         if not envelope:
             return
         anchor, reference, frontier = row["anchor_ns"], row["reference_ns"], row["frontier_ns"]
+        if event == "SKIPPED":
+            if (row["reason"] != "stale_reference" or row["window_id"] != 0 or
+                    anchor or frontier or not reference or reference >= row["mono_ns"] or
+                    row["model_valid"] or row["position_error_m"] is not None or
+                    row["heading_error_rad"] is not None or
+                    any(row[key] is not None for key in ("lat", "lon", "ref_lat", "ref_lon"))):
+                self.issue("invalid_holdout_time", source, "SKIPPED must identify one stale pre-window reference")
+                return
+            if self.session["holdout_window"] is not None:
+                self.issue("invalid_holdout_boundary", source, "SKIPPED cannot belong to an open holdout window")
+                return
+            if any(row["mono_ns"] < boundary["mono_ns"] for boundary in
+                   (s for s in (self.session["model_bus"], self.session["model_session"]) if s is not None)):
+                self.issue("invalid_holdout_boundary", source, "SKIPPED predates the current MODEL boundary", True)
+                return
+            self.issue("holdout_reference_stale", source, "GPS reference expired before holdout submission")
+            return
         warmup_abort = event == "ABORT" and row["window_id"] == 0
         if ((not anchor and not warmup_abort) or max(anchor, reference, frontier) > row["mono_ns"] or
                 (warmup_abort and (anchor or reference or frontier))):

@@ -133,12 +133,16 @@ def main():
         names = {
             'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
             'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+            'INVALIDATE': '_ZN3mx57adapter10invalidateEv',
             'GENERATION': '_ZN3mx57adapter10generationEv',
             'PUBLISH': '_ZN3mx57adapter16publish_snapshotERKNS0_10DrSnapshotE',
             'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
             'VEHICLE_SEND': 'mx5_send_vehicle_data', 'DEFAULT_CONFIG': 'mx5_dr_default_config',
             'PIPELINE_CONSTRUCT': '_ZN3mx510navigation8PipelineC1Ev',
+            'PIPELINE_DESTRUCT': '_ZN3mx510navigation8PipelineD1Ev',
             'PIPELINE_INIT': '_ZN3mx510navigation8Pipeline14init_qualifiedERK13mx5_dr_config14mx5_dr_context',
+            'PIPELINE_MODEL_INIT': '_ZN3mx510navigation8Pipeline10init_modelERKNS0_12ModelProfileERK13mx5_dr_config14mx5_dr_contextbb',
+            'PIPELINE_BIND': '_ZN3mx510navigation8Pipeline22bind_qualified_revokerEPFyPvES2_',
             'PIPELINE_ANCHOR': '_ZN3mx510navigation8Pipeline14enqueue_anchorERK13mx5_dr_anchory',
             'PIPELINE_POSITION': '_ZN3mx510navigation8Pipeline16enqueue_positionERKNS_7adapter11ObservationE',
             'PIPELINE_SPEED': '_ZN3mx510navigation8Pipeline13enqueue_speedERK15mx5_dr_evidenced',
@@ -149,8 +153,10 @@ def main():
             'PIPELINE_PUBLICATION': '_ZNK3mx510navigation8Pipeline21qualified_publicationEyRKNS_7runtime23CoreBridgeQualificationEyPNS_7adapter10DrSnapshotE',
         }
         cases = ('straight', 'quality_gap', 'quality_cycle', 'turn', 'reverse', 'expiry', 'reacquire',
-                 'native_return', 'stale_control', 'unverified', 'continuous_reacquire',
-                 'anchor_first_reacquire', 'separate_reacquire', 'native_reacquire', 'quality_reacquire')
+                 'native_return', 'stale_control', 'fault_recovery', 'core_reject',
+                 'reinit', 'failed_reinit', 'failed_model_reinit', 'owner_exit', 'unverified', 'continuous_reacquire',
+                 'anchor_first_reacquire', 'separate_reacquire', 'native_reacquire', 'quality_reacquire',
+                 'single_gap_reacquire', 'ready_quality_reanchor')
         fixture, access = 'assist_publication', 'assist_dso_access.h'
         macro, marker = '-DMX5_ASSIST_DSO_TEST', 'PASS assist publication '
     elif args.suite == 'runtime-assist':
@@ -161,6 +167,7 @@ def main():
             'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
             'VEHICLE_SEND': 'mx5_send_vehicle_data', 'DEFAULT_CONFIG': 'mx5_dr_default_config',
             'ASSIST_CONSTRUCT': '_ZN3mx57runtime12AssistWorkerC1ERK13mx5_dr_configRKNS0_12AssistSourceE',
+            'ASSIST_DESTRUCT': '_ZN3mx57runtime12AssistWorkerD1Ev',
             'RUN_WORKER': '_ZN3mx57runtime10run_workerEPKcS2_PNS0_12AssistWorkerE',
             'RUNTIME_CONFIG': '_ZN12_GLOBAL__N_16configE',
             'HOOK_INSTALLED': '_ZN12_GLOBAL__N_114hook_installedE',

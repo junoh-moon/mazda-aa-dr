@@ -20,42 +20,139 @@ ModelProfile research_model_profile() {
 }
 Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     last_yaw_time_(0), interval_seq_(0), position_seq_(0), wheel_conflict_since_(0), position_mode_(-1),
-    configured_(false), model_(false), have_fix_(false) {
+    configured_(false), model_(false), have_fix_(false),
+    qualified_retired_(false), retired_from_generation_(0),
+    qualified_revoker_(0), qualified_revoker_user_(0), qualified_owner_(0) {
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
+    fault_calibration_=FaultCalibration();
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
     clear_history();
     profile_=research_model_profile();
 }
+Pipeline::~Pipeline() {
+    // A worker may be replaced while its last bounded publication remains
+    // selectable. Retire that candidate before releasing the owner.
+    if(configured_&&!model_&&owns_qualified_revoker()&&!qualified_retired_)
+        qualified_revoker_(qualified_revoker_user_);
+}
 bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias,bool gps_wheel) {
-    if (!finite(p.yaw_zero)||!finite(p.yaw_rad_per_count)||p.yaw_rad_per_count==0 ||
-        !finite(p.wheel_kmh_per_count)||p.wheel_kmh_per_count<=0 ||
-        !finite(p.wheel_zero_kmh)||p.reorder_ns>c.sample_age_max_ns ||
-        !finite(p.anchor_error_m)||p.anchor_error_m<0 ||
-        !finite(p.heading_error_rad)||p.heading_error_rad<0) return false;
-    model_=true; profile_=p;
+    const bool valid_profile=finite(p.yaw_zero)&&finite(p.yaw_rad_per_count)&&p.yaw_rad_per_count!=0 &&
+        finite(p.wheel_kmh_per_count)&&p.wheel_kmh_per_count>0 &&
+        finite(p.wheel_zero_kmh)&&p.reorder_ns<=c.sample_age_max_ns &&
+        finite(p.anchor_error_m)&&p.anchor_error_m>=0 &&
+        finite(p.heading_error_rad)&&p.heading_error_rad>=0;
+    if(configured_&&!model_&&owns_qualified_revoker()) {
+        const uint64_t previous=context().generation;
+        const uint64_t next=qualified_revoker_(qualified_revoker_user_);
+        if(!next||next>UINT32_MAX||next<=previous) {
+            mx5_dr_context terminal=context();terminal.generation=UINT64_MAX;
+            reset_state(terminal);configured_=false;
+            status_.result=PIPELINE_BAD_INPUT;
+            qualified_revoker_=0;qualified_revoker_user_=0;qualified_owner_=0;
+            return false;
+        }
+        x.generation=next;
+        if(!valid_profile) {
+            reset_state(x);configured_=false;
+            status_.result=PIPELINE_BAD_INPUT;
+            qualified_revoker_=0;qualified_revoker_user_=0;qualified_owner_=0;
+            return false;
+        }
+    }
+    if(!valid_profile)return false;
+    model_=true; profile_=p; qualified_retired_=false;retired_from_generation_=0;
+    qualified_revoker_=0; qualified_revoker_user_=0;
+    qualified_owner_=0;
     gyro_bias_.configure(auto_bias,p.yaw_zero,c.sample_age_max_ns);
     gps_wheel_.configure(gps_wheel,c.sample_age_max_ns);
     configured_=mx5_dr_init_model(&core_,&c,x)==MX5_DR_OK;
-    if (configured_) reset(x);
+    if (configured_) reset_state(x);
+    else status_.result=PIPELINE_BAD_INPUT;
     return configured_;
 }
 bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
-    model_=false; gyro_bias_.configure(false,profile_.yaw_zero,c.sample_age_max_ns);
+    if(configured_&&!model_&&owns_qualified_revoker()) {
+        const uint64_t previous=context().generation;
+        const uint64_t next=qualified_revoker_(qualified_revoker_user_);
+        if(!next||next>UINT32_MAX||next<=previous) {
+            mx5_dr_context terminal=context();terminal.generation=UINT64_MAX;
+            reset_state(terminal);configured_=false;
+            status_.result=PIPELINE_BAD_INPUT;
+            qualified_revoker_=0;qualified_revoker_user_=0;qualified_owner_=0;
+            return false;
+        }
+        x.generation=next;
+    }
+    model_=false; qualified_retired_=false;retired_from_generation_=0;
+    qualified_revoker_=0; qualified_revoker_user_=0;qualified_owner_=0;
+    // MODEL assumptions cannot remain attached to a new qualified domain.
+    status_.uncertainties=0;
+    gyro_bias_.configure(false,profile_.yaw_zero,c.sample_age_max_ns);
     gps_wheel_.configure(false,c.sample_age_max_ns);
     configured_=mx5_dr_init(&core_,&c,x)==MX5_DR_OK;
-    if (configured_) reset(x);
+    if (configured_) reset_state(x);
+    else status_.result=PIPELINE_BAD_INPUT;
     return configured_;
 }
-void Pipeline::reset(mx5_dr_context x) {
+bool Pipeline::bind_qualified_revoker(QualifiedRevoker revoke,void* user) {
+    if(!configured_||model_||qualified_revoker_||!revoke||
+       !context().generation||context().generation>UINT32_MAX)return false;
+    qualified_revoker_=revoke;qualified_revoker_user_=user;qualified_owner_=this;return true;
+}
+bool Pipeline::retire_qualified() {
+    if(!configured_||model_||!owns_qualified_revoker())return false;
+    if(qualified_retired_)return true;
+    const uint64_t previous=context().generation;
+    const uint64_t next=qualified_revoker_(qualified_revoker_user_);
+    if(!next||next>UINT32_MAX||next<=previous) {
+        mx5_dr_context terminal=context();terminal.generation=UINT64_MAX;
+        reset_state(terminal);configured_=false;status_.result=PIPELINE_BAD_INPUT;
+        return false;
+    }
+    mx5_dr_context x=context();x.generation=next;
+    reset_state(x);qualified_retired_=true;retired_from_generation_=previous;
+    return true;
+}
+bool Pipeline::rearm_qualified(const mx5_dr_config& c,mx5_dr_context x) {
+    if(!configured_||model_||!owns_qualified_revoker()||!qualified_retired_||
+       !x.source_epoch||!x.session_epoch||x.generation<=retired_from_generation_||
+       x.generation>UINT32_MAX)return false;
+    // The old lifetime was invalidated before this call. The incoming BEGIN
+    // may precede a later captured GAP, so retain its original generation.
+    if(mx5_dr_init(&core_,&c,x)!=MX5_DR_OK) {
+        configured_=false;status_.result=PIPELINE_BAD_INPUT;return false;
+    }
+    reset_state(x);qualified_retired_=false;retired_from_generation_=0;
+    return true;
+}
+void Pipeline::reset_state(mx5_dr_context x) {
     if (!configured_) return;
     mx5_dr_reset(&core_,x); gyro_bias_.reset(); gps_wheel_.reset(); size_=0; watermark_=0; raw_epoch_=0;
+    fault_calibration_.valid=false;
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
     last_yaw_time_=0; interval_seq_=0; position_seq_=0; position_mode_=-1;
     wheel_conflict_since_=0;clear_history();
     have_fix_=false; status_.have_speed=status_.have_yaw=status_.have_reverse=false;
     status_.result=PIPELINE_WAITING; status_.core_result=MX5_DR_E_NO_SEED;
+}
+void Pipeline::reset(mx5_dr_context x) {
+    if(!configured_)return;
+    if(!model_&&owns_qualified_revoker()&&qualified_retired_) {
+        x.generation=context().generation;reset_state(x);return;
+    }
+    if(!model_&&owns_qualified_revoker()) {
+        const uint64_t previous=context().generation;
+        const uint64_t next=qualified_revoker_(qualified_revoker_user_);
+        if(!next||next>UINT32_MAX||next<=previous) {
+            x.generation=UINT64_MAX;reset_state(x);configured_=false;
+            status_.result=PIPELINE_BAD_INPUT;return;
+        }
+        x.generation=next;
+        qualified_retired_=true;retired_from_generation_=previous;
+    }
+    reset_state(x);
 }
 bool Pipeline::restart_model_prediction(mx5_dr_context x) {
     if (!configured_ || !model_) return false;
@@ -72,14 +169,31 @@ bool Pipeline::restart_model_prediction(mx5_dr_context x) {
     return true;
 }
 PipelineResult Pipeline::fault(PipelineResult r) {
+    FaultCalibration before=FaultCalibration();
+    before.valid=configured_;
+    if(before.valid) { before.gyro=gyro_bias_.status();before.wheel=gps_wheel_.status(); }
     mx5_dr_context x=context();
-    const bool exhausted=x.generation==UINT64_MAX;
-    if (!exhausted) ++x.generation;
-    if (configured_) reset(x);
+    bool exhausted=x.generation==UINT64_MAX;
+    if(configured_&&!model_&&owns_qualified_revoker()&&!qualified_retired_) {
+        const uint64_t next=qualified_revoker_(qualified_revoker_user_);
+        if(!next||next>UINT32_MAX||next<=x.generation) exhausted=true;
+        else { retired_from_generation_=x.generation;x.generation=next;qualified_retired_=true; }
+    } else if (!exhausted && (model_||!owns_qualified_revoker())) ++x.generation;
+    if(exhausted)x.generation=UINT64_MAX;
+    if (configured_) reset_state(x);
+    fault_calibration_=before;
     // Clearing estimate flags alone is insufficient: a later snapshot query
     // recomputes validity from the still-seeded core. Reset before disabling.
     if (exhausted) configured_=false;
     ++status_.resets; ++status_.rejected; status_.result=r;
+    return r;
+}
+PipelineResult Pipeline::reject_core(PipelineResult r) {
+    if(!model_&&owns_qualified_revoker()) {
+        const mx5_dr_result cause=status_.core_result;
+        fault(r);
+        status_.core_result=cause;
+    } else status_.result=r;
     return r;
 }
 PipelineResult Pipeline::insert(const Event& e) {
@@ -184,11 +298,22 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
 }
 PipelineResult Pipeline::enqueue_position(const adapter::Observation& o) {
     if (o.kind!=adapter::Observation::POSITION) return PIPELINE_BAD_INPUT;
+    // The adapter can have captured this callback before an independent
+    // worker fault invalidated its generation. Drop that old observation;
+    // revoking again would chase a backlog of stale callbacks indefinitely.
+    if(!model_&&owns_qualified_revoker()&&o.prediction_generation&&
+       o.prediction_generation<context().generation) {
+        ++status_.rejected;status_.result=PIPELINE_BAD_INPUT;return PIPELINE_BAD_INPUT;
+    }
     Event e=Event(); e.kind=POSITION_EVENT; e.time=e.received=o.mono_ns; e.observation=o;
     return insert(e);
 }
 PipelineResult Pipeline::enqueue_anchor(const mx5_dr_anchor& a,uint64_t received) {
     if (model_) return PIPELINE_BAD_INPUT;
+    if(owns_qualified_revoker()&&a.context.generation&&
+       a.context.generation<context().generation) {
+        ++status_.rejected;status_.result=PIPELINE_BAD_INPUT;return PIPELINE_BAD_INPUT;
+    }
     Event e=Event(); e.kind=ANCHOR_EVENT; e.time=a.measured_ns; e.received=received; e.anchor=a;
     return insert(e);
 }
@@ -218,6 +343,10 @@ PipelineResult Pipeline::enqueue_reverse(const mx5_dr_evidence& v,int reverse) {
 PipelineResult Pipeline::control(mx5_dr_control_kind kind,uint64_t observed_generation) {
     mx5_dr_context x=context();
     if (x.generation==UINT64_MAX || position_seq_==UINT64_MAX) return fault(PIPELINE_BAD_INPUT);
+    // A bound qualified worker must use the adapter's observed generation.
+    // Local increments could later alias a real adapter transition.
+    if (!model_&&owns_qualified_revoker()&&!observed_generation)
+        return fault(PIPELINE_BAD_INPUT);
     if (!model_&&observed_generation) {
         // The adapter revokes on every raw mode transition, including GPS
         // quality changes which leave this calculator READY. Its captured
@@ -232,7 +361,12 @@ PipelineResult Pipeline::control(mx5_dr_control_kind kind,uint64_t observed_gene
     ++position_seq_;
     status_.core_result=mx5_dr_control(&core_,kind,x,position_seq_);
     clear_history();
-    return status_.core_result==MX5_DR_OK?PIPELINE_OK:PIPELINE_NO_ANCHOR;
+    // GAP before the first qualified anchor is an expected absence of a
+    // solution. The core has accepted and recorded the newer generation; no
+    // candidate exists to retire again.
+    if (!model_&&kind==MX5_DR_GAP&&status_.core_result==MX5_DR_E_NO_SEED)
+        return PIPELINE_NO_ANCHOR;
+    return status_.core_result==MX5_DR_OK?PIPELINE_OK:reject_core(PIPELINE_NO_ANCHOR);
 }
 void Pipeline::clear_history() {
     wheel_history_.size=wheel_history_.next=reverse_history_.size=reverse_history_.next=0;
@@ -300,6 +434,13 @@ bool Pipeline::can_keep_stationary_heading(const adapter::Observation& o) const 
 }
 PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     const int mode=o.position.mode;
+    // After invalidate(), the adapter keeps its new generation through
+    // same-mode callbacks. A reset qualified calculator is already unseeded;
+    // do not ask the core for another transition with that same generation.
+    if (!model_&&owns_qualified_revoker()&&!core_.seeded&&position_mode_==-1&&
+        (mode==0||mode==3)&&o.prediction_generation==context().generation) {
+        position_mode_=mode;return PIPELINE_OK;
+    }
     if (mode==3) {
         gps_wheel_.unavailable(); have_fix_=false;
         if (position_mode_!=3) {
@@ -346,6 +487,10 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
         }
         have_fix_=false; gps_wheel_.unavailable();
     }
+    // A GPS quality-only 1<->2 transition can advance the adapter generation
+    // without a new verified anchor. Keep the old core generation: adapter
+    // publication then remains unavailable until a qualified anchor arrives.
+    // Retagging this seed from receipt alone would bypass that qualification.
     position_mode_=mode;
     if (!model_) return PIPELINE_OK;
     if (!good_fix(o)) {
@@ -433,7 +578,10 @@ PipelineResult Pipeline::advance(uint64_t end) {
             return fault(PIPELINE_BAD_INPUT);
     } else wheel_conflict_since_=0;
     while (begin<end) {
-        if (interval_seq_==UINT64_MAX) return PIPELINE_CORE_REJECTED;
+        if (interval_seq_==UINT64_MAX) {
+            status_.core_result=MX5_DR_E_SEQUENCE;
+            return reject_core(PIPELINE_CORE_REJECTED);
+        }
         mx5_dr_interval i=mx5_dr_interval(); i.context=context(); i.interval_seq=++interval_seq_;
         i.start_ns=begin; i.end_ns=min64(end,add(begin,core_.config.interval_max_ns));
         i.received_ns=max64(i.end_ns,max64(speed_.received,max64(yaw_.received,reverse_.received)));
@@ -448,7 +596,7 @@ PipelineResult Pipeline::advance(uint64_t end) {
         i.reverse_active=int(reverse_.value); i.raw_yaw=yaw_.raw; i.yaw_count=yaw_.count;
         i.yaw_is_mean=1; i.yaw_window_start_ns=yaw_.time; i.yaw_window_end_ns=yaw_.window_end;
         status_.core_result=mx5_dr_step(&core_,&i);
-        if (status_.core_result!=MX5_DR_OK) return PIPELINE_CORE_REJECTED;
+        if (status_.core_result!=MX5_DR_OK) return reject_core(PIPELINE_CORE_REJECTED);
         ++status_.intervals; begin=i.end_ns;
     }
     return PIPELINE_OK;
@@ -458,22 +606,25 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
     if (watermark<watermark_) return fault(PIPELINE_CLOCK_RESET);
     while (size_ && queue_[0].time<=watermark) {
         Event e=queue_[0];
-        // Before an anchor exists, advance() has no estimate to hold at the
-        // last closed mean window. Do not consume wheel/GPS events beyond
-        // that boundary and make the next fresh yaw window appear late.
-        // Retain original times and the existing sensor-age limit.
-        if(model_ && !core_.seeded && last_yaw_time_ && e.time>last_yaw_time_) {
-            bool position_pending=false;
-            for(size_t j=0;j<size_&&queue_[j].time<=watermark;++j)
-                if(queue_[j].kind==POSITION_EVENT)position_pending=true;
-            // GPS mode changes/reacquisition must still drain past absent
-            // coverage. Their existing control path withdraws old anchors.
-            if(!position_pending) {
-                if(watermark>last_yaw_time_ &&
-                   watermark-last_yaw_time_>core_.config.sample_age_max_ns)
-                    return fault(PIPELINE_MISSING_SENSOR);
-                break;
-            }
+        // The first yaw callback supplies only the opening boundary. Until
+        // it arrives, even an unseeded model cannot safely commit later raw
+        // or GPS times: the next callback may create an earlier mean window.
+        if(model_&&!last_yaw_time_) {
+            if(watermark>e.time&&
+               watermark-e.time>core_.config.sample_age_max_ns)
+                return fault(PIPELINE_MISSING_SENSOR);
+            break;
+        }
+        // A mean yaw callback closes the window that began at the previous
+        // callback. Keep later wheel/GPS events, including mode transitions,
+        // queued until that window arrives. This boundary also applies to a
+        // seeded model: a pending GPS revocation must not commit later input
+        // before an earlier yaw window. Pending non-gap positions hide the
+        // old output; an ACTIVE model's repeated GAP is already mode 0.
+        if(model_ && last_yaw_time_ && e.time>last_yaw_time_) {
+            if(!core_.seeded && sensor_timeout_due(watermark))
+                return fault(PIPELINE_MISSING_SENSOR);
+            break;
         }
         const uint64_t faults=status_.resets;
         PipelineResult r=advance(e.time);
@@ -533,6 +684,8 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
                 mx5_dr_result cr=mx5_dr_control(&core_,MX5_DR_GPS_RETURN,e.anchor.context,
                     e.anchor.position_seq?e.anchor.position_seq-1:0);
                 if (cr!=MX5_DR_OK) {
+                    status_.core_result=cr;
+                    if(!model_&&owns_qualified_revoker())return reject_core(PIPELINE_CORE_REJECTED);
                     control(MX5_DR_DISABLE);
                     if (status_.resets!=faults) return status_.result;
                     status_.core_result=cr;
@@ -543,7 +696,13 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
             status_.core_result=mx5_dr_seed(&core_,&e.anchor);
             position_seq_=max64(position_seq_,e.anchor.position_seq);
             if (status_.core_result!=MX5_DR_OK) {
-                status_.result=PIPELINE_CORE_REJECTED; return status_.result;
+                return reject_core(PIPELINE_CORE_REJECTED);
+            }
+            // A directly owned qualified Pipeline may recover through a new
+            // verified anchor after a fault. It owns the new candidate again,
+            // so its next fault/destructor must revoke that generation.
+            if(!model_&&qualified_retired_) {
+                qualified_retired_=false;retired_from_generation_=0;
             }
             break;
         case POSITION_EVENT:
@@ -555,8 +714,12 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
     uint64_t through=watermark;
     if (status_.have_yaw) through=min64(through,yaw_.window_end);
     PipelineResult r=advance(through);
-    if (core_.seeded && watermark>core_.estimate.frontier_ns &&
-        watermark-core_.estimate.frontier_ns>core_.config.sample_age_max_ns)
+    // An unseeded MODEL has no core frontier. Silence after a closed yaw
+    // window still needs a bounded source-fault reason even with an empty
+    // queue; otherwise warmup can appear healthy indefinitely.
+    if (model_ && !core_.seeded && sensor_timeout_due(watermark))
+        return fault(PIPELINE_MISSING_SENSOR);
+    if (core_.seeded && sensor_timeout_due(watermark))
         return fault(PIPELINE_MISSING_SENSOR);
     // A future mean window may begin at the current frontier. Do not commit
     // unused wall time as a measurement watermark.
@@ -576,19 +739,34 @@ Diagnostic Pipeline::diagnostic(uint64_t now) const {
     }
     return d;
 }
+bool Pipeline::pending_position(uint64_t mono_ns) const {
+    for(size_t i=0;i<size_;++i)
+        if(queue_[i].kind==POSITION_EVENT&&queue_[i].time==mono_ns)return true;
+    return false;
+}
+bool Pipeline::sensor_timeout_due(uint64_t watermark_ns) const {
+    if(!configured_)return false;
+    const uint64_t last=core_.seeded?core_.estimate.frontier_ns:
+        (model_?last_yaw_time_:0);
+    return last&&watermark_ns>last&&
+        watermark_ns-last>core_.config.sample_age_max_ns;
+}
+bool Pipeline::yaw_source_timeout_due(uint64_t observed_ns) const {
+    return configured_&&model_&&last_yaw_time_&&observed_ns>last_yaw_time_&&
+        observed_ns-last_yaw_time_>core_.config.sample_age_max_ns;
+}
 runtime::CoreBridgeResult Pipeline::qualified_snapshot(uint64_t now,
         const runtime::CoreBridgeQualification& q,adapter::DrSnapshot* out) const {
-    Diagnostic d=diagnostic(now);
-    if (out) std::memset(out,0,sizeof *out);
-    if (model_||d.result!=MX5_DR_OK||q.now_mono_ns!=now) return runtime::CORE_BRIDGE_UNQUALIFIED;
-    return runtime::map_core_snapshot(d.snapshot,q,out);
+    // Never expose the core sensor lease as an adapter-ready snapshot. The
+    // caller may publish this result directly, so it is valid only now.
+    return qualified_publication(now,q,now,out);
 }
 runtime::CoreBridgeResult Pipeline::qualified_publication(uint64_t now,
         const runtime::CoreBridgeQualification& q,uint64_t requested_until,
         adapter::DrSnapshot* out) const {
     if (!out) return runtime::CORE_BRIDGE_NO_OUTPUT;
     std::memset(out,0,sizeof *out);
-    if (model_||q.now_mono_ns!=now||diagnostic(now).result!=MX5_DR_OK)
+    if (model_||!owns_qualified_revoker()||q.now_mono_ns!=now||diagnostic(now).result!=MX5_DR_OK)
         return runtime::CORE_BRIDGE_UNQUALIFIED;
     for (size_t i=0;i<size_;++i) {
         if ((queue_[i].kind==POSITION_EVENT&&queue_[i].observation.position.mode!=0)||

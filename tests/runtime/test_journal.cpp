@@ -411,14 +411,19 @@ static int run() {
   emit("active_stale",time_at(500),p.diagnostic(time_at(500)));
   emit("active_time_error",time_at(199),p.diagnostic(time_at(199)));
   assert(p.enqueue_raw(raw(N::REVERSE,350,4))==N::PIPELINE_OK);
-  assert(p.drain(time_at(350))==N::PIPELINE_WAITING);
+  // The reverse callback waits behind the open yaw window. The prior closed
+  // interval remains valid; no future event is committed to force WAITING.
+  assert(p.drain(time_at(350))==N::PIPELINE_OK);
   assert(p.diagnostic(time_at(350)).snapshot.model_valid);
-  emit("active_valid_waiting",time_at(350),p.diagnostic(time_at(350)));
+  emit("active_valid_pending",time_at(350),p.diagnostic(time_at(350)));
   seeded(p);assert(p.enqueue_position(position(310,1,4))==N::PIPELINE_OK);
   emit("active_queued_gps",time_at(310),p.diagnostic(time_at(310)));
   seeded(p);assert(p.enqueue_position(position(310,3,4))==N::PIPELINE_OK);
   emit("active_queued_native",time_at(310),p.diagnostic(time_at(310)));
-  p.drain(time_at(310));emit("native",time_at(310),p.diagnostic(time_at(310)));
+  p.drain(time_at(310));
+  assert(p.enqueue_raw(raw(N::YAW,400,5))==N::PIPELINE_OK);
+  assert(p.drain(time_at(400))==N::PIPELINE_OK);
+  emit("native",time_at(400),p.diagnostic(time_at(400)));
   seeded(p,10000);emit("active_near_zero_not_stopped",time_at(300),p.diagnostic(time_at(300)));
   for(unsigned ms=400;ms<=2100;ms+=100) {
     assert(p.enqueue_raw(raw(N::REVERSE,ms,ms/100+1))==N::PIPELINE_OK);feed(p,ms,ms/100+1,10000);

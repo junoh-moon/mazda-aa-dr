@@ -85,8 +85,8 @@ static void estimator_gates() {
     CHECK(b.status().candidate_ready);b.wheels(T(39000),T(39000),false,zero);
     CHECK(!b.status().candidate_ready);
 }
-static void freeze_reanchor_reset() {
-    Pipeline p;init(p);train(p);
+static void prepare_second_candidate(Pipeline& p) {
+    init(p);train(p);
     for(unsigned ms=3500;ms<=7300;ms+=100) {
         // Learn a second stationary zero while GPS is withheld.
         feed(p,ms,ms<3800?13600:10000,ms<3800?2067:2077);
@@ -96,7 +96,10 @@ static void freeze_reanchor_reset() {
     }
     CHECK(p.calibration().active_zero==2067);CHECK(p.calibration().candidate_ready);
     CHECK(p.calibration().candidate_zero==2077);CHECK(p.calibration().calibration_version==1);
-    Pipeline completed=p;
+}
+static void freeze_reanchor_reset() {
+    Pipeline p;prepare_second_candidate(p);
+    Pipeline completed;prepare_second_candidate(completed);
     CHECK(completed.restart_model_prediction(completed.context()));
     CHECK(completed.calibration().active_zero==2067);
     CHECK(completed.calibration().calibration_version==1);
@@ -105,7 +108,9 @@ static void freeze_reanchor_reset() {
     // Prediction restart retains source, sequence, effective time and clock
     // identity guards, so old calibration cannot cross evidence discontinuity.
     for(unsigned bad_kind=0;bad_kind<4;++bad_kind) {
-        Pipeline guarded=completed;RawEvent bad=raw(WHEELS,7400);
+        Pipeline guarded;prepare_second_candidate(guarded);
+        CHECK(guarded.restart_model_prediction(guarded.context()));
+        RawEvent bad=raw(WHEELS,7400);
         PipelineResult expected=PIPELINE_BAD_INPUT;
         if(bad_kind==0) {bad.epoch=2;expected=PIPELINE_SOURCE_RESET;}
         if(bad_kind==1) {bad.received_ns=T(7200);expected=PIPELINE_CLOCK_RESET;}

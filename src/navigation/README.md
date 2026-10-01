@@ -66,6 +66,11 @@ observations supply mode controls, not physical qualification. A successful
 adapter send-time provenance/deployment gates. There is no configuration switch
 that upgrades raw model assumptions into verified evidence.
 
+The qualified worker must bind a revoker before publication. Faults, resets,
+reinitialization and destruction retire an adapter candidate. A point-in-time
+`qualified_snapshot()` expires at its requested `now`; future publication uses
+`qualified_publication()` and the core-derived bounded lease.
+
 A queued qualified anchor suppresses output immediately. Replacing an ACTIVE or
 NATIVE solution requires the caller to supply a newer context generation and
 reserve `position_seq-1` for GPS_RETURN; both sequence numbers must exceed the
@@ -82,6 +87,10 @@ measured before the observation's receipt time; neither timestamp is rewritten.
 An ACTIVE estimate, a different generation, and untagged or MODEL input do not
 take this path. A later GAP still needs a newer observed generation. Sensor
 windows must arrive before their chronological watermark as usual.
+An adapter GPS quality change from mode 1 to 2 or back invalidates the adapter
+generation even if the core remains READY. Without a new verified anchor the
+old core generation cannot publish; the next observed GAP can advance it to
+ACTIVE. Receipt time alone never retags the old READY seed.
 
 `tests/navigation/test_navigation.cpp` exercises the actual core and bridge with
 synthetic input: straight/turn/reverse/stop motion, timestamp and queue failures,

@@ -93,7 +93,7 @@ static void startup(Source& s,bool begin=true) {
     R::AssistInput i=input(R::ASSIST_BEGIN);i.received_ns=start;if(begin)s.add(i);
     i=input(R::ASSIST_POSITION);i.observation=gps;s.add(i);
     i=input(R::ASSIST_ANCHOR);i.received_ns=start;i.anchor.context=context();
-    i.anchor.anchor_id=gps.call_sequence;i.anchor.position_seq=gps.call_sequence;
+    i.anchor.anchor_id=gps.call_sequence;i.anchor.position_seq=uint64_t(gps.call_sequence)*4;
     i.anchor.measured_ns=start;i.anchor.utc_ns=1700000000000000000ULL;
     i.anchor.latitude_deg=37;i.anchor.longitude_deg=127;
     i.anchor.position_error_m=1;i.anchor.heading_error_rad=0.01;
@@ -126,7 +126,7 @@ static void publication_and_stop() {
     CHECK(w.status().last_publication.frontier_mono_ns==original_snapshot.frontier_mono_ns);
     CHECK(w.status().last_publication.derived_utc_ns==original_snapshot.derived_utc_ns);
     CHECK(w.status().last_publication.valid_until_mono_ns==original_snapshot.valid_until_mono_ns);
-    const uint32_t generation=A::generation();w.stop();CHECK(A::generation()==generation);
+    const uint32_t generation=A::generation();w.stop();CHECK(A::generation()==generation+1);
     CHECK(w.status().state==R::ASSIST_STOPPED);expect_withdrawn(original_snapshot.valid_until_mono_ns);
     const unsigned polls=s.polls;w.tick(clock_fn,0);CHECK(s.polls==polls);
 }
@@ -161,6 +161,31 @@ static void healthy_reacquisition_keeps_the_same_worker() {
     // recovery is not simulated by reconstructing the worker or BEGIN.
     startup(s,false);expect_ready(w);CHECK(w.status().begins==1);
     CHECK(w.status().published==2);w.stop();
+}
+static void delayed_anchor_after_gps_return_keeps_the_worker() {
+    Source s;R::AssistWorker w(mx5_dr_default_config(),s.api());startup(s);expect_ready(w);
+    now_ns+=10000000ULL;const A::Observation gps=callback(1);
+    R::AssistInput position=input(R::ASSIST_POSITION);position.observation=gps;s.add(position);
+    // Complete-through cannot cross the GPS measurement until its matching
+    // verified anchor arrives, even though POSITION is already owned.
+    s.watermark=gps.mono_ns-1;
+    const uint32_t generation=A::generation();w.tick(clock_fn,0);
+    CHECK(w.status().state==R::ASSIST_CONTEXT_CHANGED);
+    CHECK(A::generation()==generation);
+    R::AssistInput anchor=input(R::ASSIST_ANCHOR);anchor.received_ns=gps.mono_ns;
+    anchor.anchor.context=anchor.context;anchor.anchor.anchor_id=gps.call_sequence;
+    anchor.anchor.position_seq=uint64_t(gps.call_sequence)*4;
+    anchor.anchor.measured_ns=gps.mono_ns;
+    anchor.anchor.utc_ns=1700000000000000000ULL;
+    anchor.anchor.latitude_deg=37;anchor.anchor.longitude_deg=127;
+    anchor.anchor.position_error_m=1;anchor.anchor.heading_error_rad=.01;
+    anchor.anchor.validated=anchor.anchor.heading_valid=anchor.anchor.calibration_verified=1;
+    anchor.anchor.quality=MX5_DR_VALID;s.add(anchor);
+    now_ns+=10000000ULL;position=input(R::ASSIST_POSITION);
+    position.observation=callback(0);position.context=context();s.add(position);
+    motion(s,gps.mono_ns,gps.mono_ns+100000000ULL,2);
+    now_ns=s.watermark=gps.mono_ns+100000000ULL;
+    expect_ready(w);CHECK(w.status().begins==1);w.stop();
 }
 static void verified_epoch_rollover_uses_its_original_begin_time() {
     for(unsigned changed=0;changed<2;++changed) {
@@ -227,7 +252,7 @@ static void invalid_identity_and_time_withdraw_immediately() {
         if(scenario==5)now_ns-=20000000;
         const uint32_t generation=A::generation();w.tick(clock_fn,0);
         CHECK(w.status().state==(scenario<4?R::ASSIST_INPUT_FAULT:R::ASSIST_CLOCK_FAULT));
-        CHECK(A::generation()==generation);
+        CHECK(A::generation()==generation+1);
         if(scenario>=4)now_ns=until-100000000;
         expect_withdrawn(until);w.stop();
     }
@@ -242,10 +267,10 @@ static void bounded_batch_does_not_publish_across_unread_inputs() {
     const unsigned before=s.polls;w.tick(clock_fn,0);
     CHECK(s.polls-before==R::AssistWorker::INPUT_BUDGET);
     CHECK(w.status().state==R::ASSIST_BACKLOG);expect_withdrawn(until);
-    // EMPTY confirms the complete batch; the unchanged producer watermark
-    // cannot advance either the original measurement or its publication lease.
-    w.tick(clock_fn,0);CHECK(w.status().state==R::ASSIST_PUBLISHED);
-    CHECK(w.status().last_publication.valid_until_mono_ns==until);w.stop();
+    // Bounded backlog withdraws a ready candidate across the send race.
+    // EMPTY alone cannot revive the old seed or refresh its lease.
+    w.tick(clock_fn,0);CHECK(w.status().state==R::ASSIST_WAITING_BEGIN);
+    expect_withdrawn(until);s.index=s.count;startup(s);expect_ready(w);w.stop();
 }
 static void null_source_is_explicitly_unimplemented() {
     R::AssistSource absent=R::AssistSource();R::AssistWorker w(mx5_dr_default_config(),absent);
@@ -259,7 +284,8 @@ int main() {
     CHECK(A::configure(endpoint,options));CHECK(A::set_mode(A::ASSIST));
     publication_and_stop();loss_withdraws_and_requires_new_begin(true,false);
     loss_withdraws_and_requires_new_begin(false,false);loss_withdraws_and_requires_new_begin(false,true);
-    generation_changes_are_not_retagged();healthy_reacquisition_keeps_the_same_worker();clock_is_rechecked_after_calculation();
+    generation_changes_are_not_retagged();healthy_reacquisition_keeps_the_same_worker();
+    delayed_anchor_after_gps_return_keeps_the_worker();clock_is_rechecked_after_calculation();
     verified_epoch_rollover_uses_its_original_begin_time();
     events_arriving_during_tick_keep_their_actual_timestamps();
     missing_begin_and_model_inputs_stay_unqualified();bounded_batch_does_not_publish_across_unread_inputs();

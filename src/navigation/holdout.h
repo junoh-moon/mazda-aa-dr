@@ -4,12 +4,13 @@
 
 namespace mx5 { namespace navigation {
 enum HoldoutPhase { HOLDOUT_WARMUP, HOLDOUT_RUNNING, HOLDOUT_COOLDOWN };
-enum HoldoutEvent { HOLDOUT_BEGIN, HOLDOUT_COMPARED, HOLDOUT_END, HOLDOUT_ABORT };
+enum HoldoutEvent { HOLDOUT_BEGIN, HOLDOUT_COMPARED, HOLDOUT_END, HOLDOUT_ABORT, HOLDOUT_SKIPPED };
 enum HoldoutReason {
     HOLDOUT_NONE, HOLDOUT_COMPLETE, HOLDOUT_BAD_GPS, HOLDOUT_GPS_TIMEOUT,
     HOLDOUT_REAL_GAP, HOLDOUT_NATIVE, HOLDOUT_SOURCE_FAULT, HOLDOUT_AUDIT_RESET,
     HOLDOUT_REFERENCE_OVERFLOW, HOLDOUT_OUTPUT_OVERFLOW, HOLDOUT_TIME_ORDER,
-    HOLDOUT_PREDICTION_INVALID, HOLDOUT_CAPTURE_STOP, HOLDOUT_SESSION_RESET, HOLDOUT_BUS_RESET
+    HOLDOUT_PREDICTION_INVALID, HOLDOUT_CAPTURE_STOP, HOLDOUT_SESSION_RESET, HOLDOUT_BUS_RESET,
+    HOLDOUT_STALE_REFERENCE
 };
 struct HoldoutConfig {
     uint64_t duration_ns, cooldown_ns, gps_timeout_ns;
@@ -53,7 +54,8 @@ private:
     size_t reference_count_, result_head_, result_count_;
     uint64_t window_id_, anchor_ns_, end_ns_, cooldown_until_, last_gps_ns_;
     uint64_t latest_received_ns_, watermark_, utc_progress_ns_, sample_age_ns_;
-    bool configured_, have_previous_;
+    bool configured_, have_previous_, reference_submitted_, cooldown_fault_reported_;
+    HoldoutReason cooldown_fault_reason_;
     bool eligible(const adapter::Observation&, bool moving) const;
     bool consistent(const adapter::Observation&) const;
     void abort(HoldoutReason, uint64_t);
