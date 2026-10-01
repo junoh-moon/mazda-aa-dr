@@ -599,7 +599,9 @@ static void stationary_pending_window() {
                 const Diagnostic d=p.diagnostic(T(ms));
                 CHECK(!d.snapshot.model_valid&&!d.snapshot.valid);
                 if(scenario<5) {
-                    CHECK(r==PIPELINE_WAITING&&d.snapshot.state==MX5_DR_READY);
+                    // The open yaw window now holds queued input without
+                    // calling advance() into a WAITING state.
+                    CHECK(r==PIPELINE_OK&&d.snapshot.state==MX5_DR_READY);
                     CHECK(d.snapshot.frontier_ns==T(2050));
                     runtime::CoreBridgeQualification q=runtime::CoreBridgeQualification();
                     q.expected_context=p.context();q.now_mono_ns=T(ms);
@@ -612,11 +614,16 @@ static void stationary_pending_window() {
                 if(scenario==0) {
                     CHECK(r==PIPELINE_OK);
                     CHECK(p.diagnostic(T(ms)).snapshot.frontier_ns==T(2100));
-                } else if(scenario>=2&&scenario<=4)
-                    CHECK(p.diagnostic(T(ms)).snapshot.state!=MX5_DR_READY);
+                } else if(scenario>=2&&scenario<=4) {
+                    // The new position waits behind the open mean window,
+                    // but its pending control already hides the old output.
+                    const Diagnostic pending=p.diagnostic(T(ms));
+                    CHECK(pending.snapshot.state==MX5_DR_READY);
+                    CHECK(!pending.snapshot.model_valid);
+                }
             }
             if(scenario==1&&ms==2400) {
-                CHECK(r==PIPELINE_WAITING&&!p.status().resets);
+                CHECK(r==PIPELINE_OK&&!p.status().resets);
                 CHECK(p.status().events>waiting_events); // Raw ingestion continues during the wait.
                 CHECK(p.diagnostic(T(ms)).snapshot.frontier_ns==T(2050));
             }
@@ -632,6 +639,15 @@ static void stationary_pending_window() {
                 scenario,unsigned(d.snapshot.state),mx5_dr_result_name(d.result),
                 static_cast<unsigned long long>(p.status().resets));
         CHECK(bool(d.snapshot.model_valid)==(scenario<2));CHECK(!d.snapshot.valid);
+        if(scenario>=2&&scenario<=4) {
+            RawEvent yaw=raw(YAW,2250);
+            yaw.source_mono_ms=int64_t(T(2250)/1000000);
+            yaw.received_ns=T(2300);yaw.receive_seq=2301;
+            CHECK(p.enqueue_raw(yaw)==PIPELINE_OK);
+            CHECK(p.drain(T(2300))==PIPELINE_OK);
+            CHECK(!p.status().resets);
+            CHECK(p.diagnostic(T(2300)).snapshot.state!=MX5_DR_READY);
+        }
         if(scenario==0)CHECK(std::fabs(d.snapshot.elapsed_s-2.1)<1e-9);
         if(scenario==1) {
             CHECK(p.context().generation>initial_generation);

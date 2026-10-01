@@ -22,7 +22,7 @@ HoldoutConfig default_holdout_config() {
 GpsHoldout::GpsHoldout() : phase_(HOLDOUT_WARMUP), reference_count_(0),
     result_head_(0), result_count_(0), window_id_(0), anchor_ns_(0), end_ns_(0),
     cooldown_until_(0), last_gps_ns_(0), latest_received_ns_(0), watermark_(0), utc_progress_ns_(0), sample_age_ns_(0),
-    configured_(false), have_previous_(false) { config_=default_holdout_config(); }
+    configured_(false), have_previous_(false), reference_submitted_(false) { config_=default_holdout_config(); }
 bool GpsHoldout::init_model(const ModelProfile& p,const mx5_dr_config& c,
                             mx5_dr_context x,const HoldoutConfig& h) {
     if(!h.duration_ns||h.duration_ns>60000000000ULL||!h.cooldown_ns||
@@ -31,7 +31,7 @@ bool GpsHoldout::init_model(const ModelProfile& p,const mx5_dr_config& c,
     if(!configured_)return false;
     config_=h;sample_age_ns_=c.sample_age_max_ns;phase_=HOLDOUT_WARMUP;reference_count_=result_head_=result_count_=0;
     window_id_=anchor_ns_=end_ns_=cooldown_until_=last_gps_ns_=0;
-    latest_received_ns_=watermark_=utc_progress_ns_=0;have_previous_=false;return true;
+    latest_received_ns_=watermark_=utc_progress_ns_=0;have_previous_=reference_submitted_=false;return true;
 }
 bool GpsHoldout::eligible(const adapter::Observation& o,bool moving) const {
     const adapter::PositionInput& p=o.position;
@@ -59,7 +59,7 @@ void GpsHoldout::restart(uint64_t now,bool complete) {
     ++x.generation;
     if(complete)pipeline_.restart_model_prediction(x);
     else pipeline_.reset(x);
-    reference_count_=0;have_previous_=false;
+    reference_count_=0;have_previous_=reference_submitted_=false;
     last_gps_ns_=0;phase_=HOLDOUT_COOLDOWN;cooldown_until_=add(now,config_.cooldown_ns);
 }
 void GpsHoldout::emit(HoldoutEvent event,HoldoutReason reason,
@@ -91,13 +91,20 @@ void GpsHoldout::emit(HoldoutEvent event,HoldoutReason reason,
     results_[(result_head_+result_count_)%RESULT_CAPACITY]=r;++result_count_;
 }
 void GpsHoldout::abort(HoldoutReason reason,uint64_t now) {
-    if(phase_!=HOLDOUT_COOLDOWN)emit(HOLDOUT_ABORT,reason,0,0);
+    const bool stale_cooldown=phase_==HOLDOUT_COOLDOWN&&reason==HOLDOUT_STALE_REFERENCE;
+    const uint64_t original_cooldown=cooldown_until_;
+    if(phase_!=HOLDOUT_COOLDOWN||stale_cooldown||
+       (reason==HOLDOUT_SOURCE_FAULT&&reference_submitted_))
+        emit(HOLDOUT_ABORT,reason,0,0);
     restart(now);
+    // Clear a stale submitted reference from the pipeline, but a delayed
+    // worker turn must not extend the original cooldown deadline.
+    if(stale_cooldown)cooldown_until_=original_cooldown;
 }
 void GpsHoldout::reset(mx5_dr_context x,HoldoutReason reason) {
     if(!configured_)return;
     if(phase_!=HOLDOUT_COOLDOWN)emit(HOLDOUT_ABORT,reason,0,0);
-    pipeline_.reset(x);reference_count_=0;have_previous_=false;last_gps_ns_=0;
+    pipeline_.reset(x);reference_count_=0;have_previous_=reference_submitted_=false;last_gps_ns_=0;
     phase_=HOLDOUT_WARMUP;anchor_ns_=end_ns_=cooldown_until_=watermark_=latest_received_ns_=0;
 }
 PipelineResult GpsHoldout::enqueue_raw(const RawEvent& r) {
@@ -134,7 +141,7 @@ PipelineResult GpsHoldout::enqueue_position(const adapter::Observation& o) {
 }
 void GpsHoldout::remove_reference() {
     for(size_t i=1;i<reference_count_;++i)references_[i-1]=references_[i];
-    --reference_count_;
+    --reference_count_;reference_submitted_=false;
 }
 void GpsHoldout::drain(uint64_t watermark) {
     if(!configured_)return;
@@ -142,6 +149,24 @@ void GpsHoldout::drain(uint64_t watermark) {
     watermark_=watermark;
     while(reference_count_&&references_[0].mono_ns<=watermark) {
         const adapter::Observation o=references_[0];
+        const uint64_t observed_now=maximum(latest_received_ns_,watermark);
+        // A late worker turn must not turn an old GPS receipt into a new
+        // holdout anchor, even if the missing yaw window has since arrived.
+        // An unsubmitted reference was never a pipeline source fault: discard
+        // it without extending cooldown or clearing the applied calibration.
+        if(phase_!=HOLDOUT_RUNNING&&observed_now>o.mono_ns&&
+           observed_now-o.mono_ns>sample_age_ns_) {
+            if(reference_submitted_) {
+                abort(pipeline_.yaw_source_timeout_due(observed_now)?
+                      HOLDOUT_SOURCE_FAULT:HOLDOUT_STALE_REFERENCE,observed_now);
+                return;
+            }
+            remove_reference();
+            // A skipped reference is diagnostic and never restarts cooldown.
+            // Keep its original time so the trial can explain absent BEGIN.
+            emit(HOLDOUT_SKIPPED,HOLDOUT_STALE_REFERENCE,&o,0);
+            continue;
+        }
         // A delayed drain may contain older cooldown fixes. The reference's
         // time, not the later worker watermark, determines eligibility.
         if(phase_==HOLDOUT_COOLDOWN&&o.mono_ns>=cooldown_until_)phase_=HOLDOUT_WARMUP;
@@ -150,12 +175,23 @@ void GpsHoldout::drain(uint64_t watermark) {
             // Stationary fixes remain references only; a moving pair is needed
             // to establish the unverified GPS travel-heading/body model.
             if(!eligible(o,true)) { remove_reference();continue; }
-            if(!source_ok(pipeline_.enqueue_position(o))) {
-                abort(HOLDOUT_SOURCE_FAULT,watermark);return;
+            if(!reference_submitted_) {
+                if(!source_ok(pipeline_.enqueue_position(o))) {
+                    abort(HOLDOUT_SOURCE_FAULT,watermark);return;
+                }
+                reference_submitted_=true;
             }
         }
         PipelineResult result=pipeline_.drain(o.mono_ns);
         if(!source_ok(result)) { abort(HOLDOUT_SOURCE_FAULT,watermark);return; }
+        if(phase_!=HOLDOUT_RUNNING&&pipeline_.pending_position(o.mono_ns)) {
+            // The position is still behind an open yaw window. Keep the one
+            // submitted reference and its original time until that window
+            // closes; never enqueue a duplicate on the next worker turn.
+            if(pipeline_.sensor_timeout_due(observed_now))
+                abort(HOLDOUT_SOURCE_FAULT,observed_now);
+            return;
+        }
         // A completed mean yaw window may arrive after the reference. Query at
         // actual receipt frontier, while retaining the EXACT prediction time.
         Diagnostic d=pipeline_.diagnostic(maximum(latest_received_ns_,watermark));
@@ -215,12 +251,12 @@ bool GpsHoldout::pop(HoldoutResult* out) {
     *out=results_[result_head_];result_head_=(result_head_+1)%RESULT_CAPACITY;--result_count_;return true;
 }
 const char* holdout_event_name(HoldoutEvent e) {
-    static const char* const n[]={"BEGIN","COMPARED","END","ABORT"};
+    static const char* const n[]={"BEGIN","COMPARED","END","ABORT","SKIPPED"};
     return unsigned(e)<sizeof n/sizeof n[0]?n[e]:"unknown";
 }
 const char* holdout_reason_name(HoldoutReason r) {
     static const char* const n[]={"none","complete","bad_gps","gps_timeout","real_gap","native",
-        "source_fault","audit_reset","reference_overflow","output_overflow","time_order","prediction_invalid","capture_stop","session_reset","bus_reset"};
+        "source_fault","audit_reset","reference_overflow","output_overflow","time_order","prediction_invalid","capture_stop","session_reset","bus_reset","stale_reference"};
     return unsigned(r)<sizeof n/sizeof n[0]?n[r]:"unknown";
 }
 } }

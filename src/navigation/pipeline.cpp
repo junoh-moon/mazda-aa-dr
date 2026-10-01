@@ -458,22 +458,25 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
     if (watermark<watermark_) return fault(PIPELINE_CLOCK_RESET);
     while (size_ && queue_[0].time<=watermark) {
         Event e=queue_[0];
-        // Before an anchor exists, advance() has no estimate to hold at the
-        // last closed mean window. Do not consume wheel/GPS events beyond
-        // that boundary and make the next fresh yaw window appear late.
-        // Retain original times and the existing sensor-age limit.
-        if(model_ && !core_.seeded && last_yaw_time_ && e.time>last_yaw_time_) {
-            bool position_pending=false;
-            for(size_t j=0;j<size_&&queue_[j].time<=watermark;++j)
-                if(queue_[j].kind==POSITION_EVENT)position_pending=true;
-            // GPS mode changes/reacquisition must still drain past absent
-            // coverage. Their existing control path withdraws old anchors.
-            if(!position_pending) {
-                if(watermark>last_yaw_time_ &&
-                   watermark-last_yaw_time_>core_.config.sample_age_max_ns)
-                    return fault(PIPELINE_MISSING_SENSOR);
-                break;
-            }
+        // The first yaw callback supplies only the opening boundary. Until
+        // it arrives, even an unseeded model cannot safely commit later raw
+        // or GPS times: the next callback may create an earlier mean window.
+        if(model_&&!last_yaw_time_) {
+            if(watermark>e.time&&
+               watermark-e.time>core_.config.sample_age_max_ns)
+                return fault(PIPELINE_MISSING_SENSOR);
+            break;
+        }
+        // A mean yaw callback closes the window that began at the previous
+        // callback. Keep later wheel/GPS events, including mode transitions,
+        // queued until that window arrives. This boundary also applies to a
+        // seeded model: a pending GPS revocation must not commit later input
+        // before an earlier yaw window. Pending non-gap positions hide the
+        // old output; an ACTIVE model's repeated GAP is already mode 0.
+        if(model_ && last_yaw_time_ && e.time>last_yaw_time_) {
+            if(!core_.seeded && sensor_timeout_due(watermark))
+                return fault(PIPELINE_MISSING_SENSOR);
+            break;
         }
         const uint64_t faults=status_.resets;
         PipelineResult r=advance(e.time);
@@ -555,8 +558,12 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
     uint64_t through=watermark;
     if (status_.have_yaw) through=min64(through,yaw_.window_end);
     PipelineResult r=advance(through);
-    if (core_.seeded && watermark>core_.estimate.frontier_ns &&
-        watermark-core_.estimate.frontier_ns>core_.config.sample_age_max_ns)
+    // An unseeded MODEL has no core frontier. Silence after a closed yaw
+    // window still needs a bounded source-fault reason even with an empty
+    // queue; otherwise warmup can appear healthy indefinitely.
+    if (model_ && !core_.seeded && sensor_timeout_due(watermark))
+        return fault(PIPELINE_MISSING_SENSOR);
+    if (core_.seeded && sensor_timeout_due(watermark))
         return fault(PIPELINE_MISSING_SENSOR);
     // A future mean window may begin at the current frontier. Do not commit
     // unused wall time as a measurement watermark.
@@ -575,6 +582,22 @@ Diagnostic Pipeline::diagnostic(uint64_t now) const {
         }
     }
     return d;
+}
+bool Pipeline::pending_position(uint64_t mono_ns) const {
+    for(size_t i=0;i<size_;++i)
+        if(queue_[i].kind==POSITION_EVENT&&queue_[i].time==mono_ns)return true;
+    return false;
+}
+bool Pipeline::sensor_timeout_due(uint64_t watermark_ns) const {
+    if(!configured_)return false;
+    const uint64_t last=core_.seeded?core_.estimate.frontier_ns:
+        (model_?last_yaw_time_:0);
+    return last&&watermark_ns>last&&
+        watermark_ns-last>core_.config.sample_age_max_ns;
+}
+bool Pipeline::yaw_source_timeout_due(uint64_t observed_ns) const {
+    return configured_&&model_&&last_yaw_time_&&observed_ns>last_yaw_time_&&
+        observed_ns-last_yaw_time_>core_.config.sample_age_max_ns;
 }
 runtime::CoreBridgeResult Pipeline::qualified_snapshot(uint64_t now,
         const runtime::CoreBridgeQualification& q,adapter::DrSnapshot* out) const {

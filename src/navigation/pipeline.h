@@ -84,6 +84,15 @@ public:
     // retain applied zero/scale and raw source/time guards. Faults must use reset().
     bool restart_model_prediction(mx5_dr_context);
     Diagnostic diagnostic(uint64_t now_ns) const;
+    // Holdout warmup may need to retry a reference after a yaw mean closes.
+    // This is queue state only, never a freshness or validity claim.
+    bool pending_position(uint64_t mono_ns) const;
+    // Shared sensor-age deadline; seeded paths use the core frontier in both
+    // domains, and unseeded MODEL uses the open yaw boundary. Read-only.
+    bool sensor_timeout_due(uint64_t watermark_ns) const;
+    // MODEL yaw callback silence only. The seeded core frontier may lag even
+    // while newer yaw callbacks are safely queued behind an open window.
+    bool yaw_source_timeout_due(uint64_t observed_ns) const;
     runtime::CoreBridgeResult qualified_snapshot(uint64_t now_ns,
         const runtime::CoreBridgeQualification&, adapter::DrSnapshot*) const;
     // Worker-side asynchronous handoff. Original prediction timestamps stay

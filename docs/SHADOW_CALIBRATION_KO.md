@@ -59,7 +59,10 @@ GPS 참조는 고정 큐에서 대기한다. yaw 평균 구간이 나중에 도�
 
 - `shadow_calibration`: 1초 주기로 상태, 적용 영점, 후보, 분산, 근거 시각·개수, 적용 버전을 기록한다.
 - 기존 `shadow`: 각 위치에 적용된 `yaw_zero`, `calibration_version`을 추가한다.
-- `shadow_holdout`: BEGIN / COMPARED / END / ABORT, 구간 ID, 기준점·참조·예측 시각, 비교 차이와 적용 영점을 기록한다. 준비 단계의 중단은 구간 ID 0이다.
+- `shadow_holdout`: BEGIN / COMPARED / END / ABORT와 오래된 미제출 GPS
+  참조의 SKIPPED를 기록한다. 구간 ID, 기준점·참조·예측 시각, 비교 차이와
+  적용 영점도 포함한다. 준비 단계의 중단과 SKIPPED는 구간 ID 0이며
+  SKIPPED는 cooldown을 재시작하지 않는다.
 
 모두 `domain=model`, `assist_ready=false`다. COMPARED가 아닌 이벤트에는 위치 차이 숫자를 넣지 않는다. 원본 `motion_batch`의 센서 필드와 순서는 유지한다.
 

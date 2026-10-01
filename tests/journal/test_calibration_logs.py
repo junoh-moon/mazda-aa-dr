@@ -52,6 +52,13 @@ def holdout(event_name='BEGIN', **changes):
     return row
 
 
+def skipped_reference(**changes):
+    row = holdout('SKIPPED', mono_ns=351, reason='stale_reference', window_id=0,
+                  anchor_ns=0, reference_ns=100, frontier_ns=0)
+    row.update(changes)
+    return row
+
+
 def wheel_calibration(**changes):
     row = calibration(wheel_enabled=True, wheel_candidate_ready=True, wheel_scale=1,
                       wheel_candidate_scale=1.02, wheel_scale_version=0, wheel_segments=3,
@@ -397,6 +404,26 @@ class CalibrationLogs(unittest.TestCase):
         self.assertIsNotNone(a.session['holdout_window'])
         self.assertIn('invalid_holdout_time', codes(consume([
             holdout('ABORT', window_id=0, anchor_ns=0, frontier_ns=1)])))
+
+    def test_stale_reference_skip_is_visible_without_ending_a_window(self):
+        emitted = json.loads(subprocess.check_output(FIXTURE + ['--emit-skipped'], text=True))
+        self.assertEqual(emitted['event'], 'SKIPPED')
+        self.assertEqual(emitted['reason'], 'stale_reference')
+        self.assertEqual(codes(consume([emitted], health_ns=2**64-1)), ['holdout_reference_stale'])
+        a = consume([skipped_reference(), skipped_reference(mono_ns=500, reference_ns=200)])
+        self.assertEqual(codes(a), ['holdout_reference_stale'] * 2)
+        self.assertEqual(a.report()['status'], 'inconclusive')
+        self.assertEqual(a.report()['shadow_holdout']['events'], {'SKIPPED': 2})
+        self.assertEqual(a.report()['shadow_holdout']['aborted_windows'], 0)
+        for changes in (dict(window_id=1), dict(anchor_ns=100), dict(reference_ns=0),
+                        dict(reference_ns=351), dict(frontier_ns=100), dict(reason='none'),
+                        dict(model_valid=True), dict(ref_lat=35)):
+            with self.subTest(changes=changes):
+                self.assertIn('invalid_holdout_time', codes(consume([skipped_reference(**changes)])))
+        self.assertIn('invalid_holdout_boundary', codes(consume([holdout(), skipped_reference()])))
+        stale_abort = holdout('ABORT', reason='stale_reference', window_id=0,
+                              anchor_ns=0, reference_ns=0, frontier_ns=0)
+        self.assertEqual(codes(consume([stale_abort])), ['holdout_aborted'])
 
     def test_abort_after_pipeline_reset_may_report_reset_calibration(self):
         a = consume([holdout(), holdout('ABORT', calibration_version=0, yaw_zero=2047)])

@@ -37,6 +37,14 @@ struct Fixture {
         N::PipelineResult result=h.enqueue_raw(r);
         CHECK(result==N::PIPELINE_OK||result==N::PIPELINE_WAITING);
     }
+    void wheel_reverse(int ms) {
+        N::RawEvent r=N::RawEvent();r.epoch=1;r.received_ns=T(ms);
+        r.kind=N::WHEELS;r.receive_seq=++seq;
+        for(unsigned i=0;i<4;++i)r.raw[i]=13600;
+        CHECK(h.enqueue_raw(r)==N::PIPELINE_OK);
+        r.kind=N::REVERSE;r.receive_seq=++seq;r.reverse=0;
+        CHECK(h.enqueue_raw(r)==N::PIPELINE_OK);
+    }
     void prime() {
         // Give the production GPS gate a full second/10m of moving evidence.
         // Keep later scenario times unchanged, with the anchor still at 100ms.
@@ -55,6 +63,118 @@ struct Fixture {
         CHECK(r.anchor_ns==T(100)&&r.reference_ns==T(100));CHECK(!h.pop(&r));
     }
 };
+static void warmup_waits_for_delayed_yaw() {
+    Fixture f;f.prime();
+    CHECK(f.h.enqueue_position(gps(0))==N::PIPELINE_OK);
+    f.raw(0);f.h.drain(T(-100));
+    CHECK(f.h.enqueue_position(gps(100))==N::PIPELINE_OK);
+    f.wheel_reverse(100);f.h.drain(T(100));
+    N::HoldoutResult result;CHECK(!f.h.pop(&result));
+    f.h.drain(T(150));CHECK(!f.h.pop(&result));
+    f.raw(200);f.h.drain(T(200));
+    CHECK(f.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_BEGIN);
+    CHECK(result.anchor_ns==T(100));
+    CHECK(f.h.phase()==N::HOLDOUT_RUNNING);
+
+    // The timeout belongs to the last yaw boundary, not to the later GPS
+    // reference. A reference at 200 ms cannot defer a missing 0 ms window.
+    Fixture missing;missing.raw(0);
+    CHECK(missing.h.enqueue_position(gps(200))==N::PIPELINE_OK);
+    missing.wheel_reverse(200);missing.h.drain(T(200));
+    CHECK(!missing.h.pop(&result));
+    missing.h.drain(T(250));CHECK(!missing.h.pop(&result));
+    missing.h.drain(T(251));
+    CHECK(missing.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_SOURCE_FAULT);
+
+    Fixture delayed;delayed.raw(0);
+    CHECK(delayed.h.enqueue_position(gps(100))==N::PIPELINE_OK);
+    delayed.wheel_reverse(100);delayed.h.drain(T(100));
+    delayed.raw(200);delayed.h.drain(T(351));
+    CHECK(delayed.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_STALE_REFERENCE);
+
+    // A worker may drain an older watermark after later raw receipt. Do not
+    // turn that stale GPS into a retrospective holdout BEGIN.
+    Fixture future;future.prime();
+    CHECK(future.h.enqueue_position(gps(0))==N::PIPELINE_OK);
+    future.raw(0);future.h.drain(T(-100));
+    CHECK(future.h.enqueue_position(gps(100))==N::PIPELINE_OK);
+    future.raw(100);future.raw(200);
+    future.wheel_reverse(600);
+    future.h.drain(T(100));
+    CHECK(future.h.phase()==N::HOLDOUT_WARMUP);
+    bool skipped_zero=false,skipped_hundred=false;
+    while(future.h.pop(&result)) {
+        CHECK(result.event==N::HOLDOUT_SKIPPED);
+        if(result.reference_ns==T(0))skipped_zero=true;
+        if(result.reference_ns==T(100))skipped_hundred=true;
+    }
+    CHECK(skipped_zero&&skipped_hundred);
+}
+static void stale_unsubmitted_reference_does_not_extend_cooldown() {
+    Fixture warm;
+    CHECK(warm.h.enqueue_position(gps(100))==N::PIPELINE_OK);
+    warm.h.drain(T(351));
+    CHECK(warm.h.phase()==N::HOLDOUT_WARMUP);
+    N::HoldoutResult result;
+    CHECK(warm.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_SKIPPED&&result.reason==N::HOLDOUT_STALE_REFERENCE);
+    CHECK(result.reference_ns==T(100)&&!warm.h.pop(&result));
+
+    Fixture pending_limit;
+    CHECK(pending_limit.h.enqueue_position(gps(100))==N::PIPELINE_OK);
+    pending_limit.h.drain(T(350));
+    CHECK(!pending_limit.h.pop(&result));
+    pending_limit.h.drain(T(351));
+    CHECK(pending_limit.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_STALE_REFERENCE);
+
+    Fixture cooldown;
+    A::Observation gap=gps(1000);gap.position.mode=0;
+    CHECK(cooldown.h.enqueue_position(gap)==N::PIPELINE_NO_ANCHOR);
+    CHECK(cooldown.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    CHECK(cooldown.h.phase()==N::HOLDOUT_COOLDOWN);
+    CHECK(cooldown.h.enqueue_position(gps(1100))==N::PIPELINE_OK);
+    cooldown.h.drain(T(1500));
+    CHECK(cooldown.h.phase()==N::HOLDOUT_COOLDOWN);
+    CHECK(cooldown.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_SKIPPED&&result.reason==N::HOLDOUT_STALE_REFERENCE);
+    CHECK(result.reference_ns==T(1100)&&!cooldown.h.pop(&result));
+    CHECK(cooldown.h.enqueue_position(gps(1600))==N::PIPELINE_OK);
+    cooldown.h.drain(T(1600));
+    CHECK(cooldown.h.phase()==N::HOLDOUT_WARMUP);
+    CHECK(!cooldown.h.pop(&result));
+
+    Fixture submitted;
+    A::Observation submitted_gap=gps(1000);submitted_gap.position.mode=0;
+    CHECK(submitted.h.enqueue_position(submitted_gap)==N::PIPELINE_NO_ANCHOR);
+    CHECK(submitted.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    submitted.raw(1000);
+    CHECK(submitted.h.enqueue_position(gps(1100))==N::PIPELINE_OK);
+    submitted.wheel_reverse(1100);submitted.h.drain(T(1100));
+    CHECK(!submitted.h.pop(&result));
+    submitted.raw(1200);submitted.h.drain(T(1360));
+    CHECK(submitted.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_STALE_REFERENCE);
+    CHECK(!submitted.h.pop(&result));
+    CHECK(submitted.h.phase()==N::HOLDOUT_COOLDOWN);
+    CHECK(submitted.h.enqueue_position(gps(1600))==N::PIPELINE_OK);
+    submitted.h.drain(T(1600));
+    CHECK(submitted.h.phase()==N::HOLDOUT_WARMUP);
+
+    Fixture repeated_faults;
+    A::Observation repeated_gap=gps(1000);repeated_gap.position.mode=0;
+    CHECK(repeated_faults.h.enqueue_position(repeated_gap)==N::PIPELINE_NO_ANCHOR);
+    CHECK(repeated_faults.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    for(unsigned i=0;i<N::GpsHoldout::RESULT_CAPACITY+2;++i) {
+        N::RawEvent bad=N::RawEvent();bad.kind=N::YAW;bad.epoch=1;
+        bad.receive_seq=i+1;bad.received_ns=T(1001+int(i));bad.count=0;
+        CHECK(repeated_faults.h.enqueue_raw(bad)==N::PIPELINE_BAD_INPUT);
+    }
+    CHECK(!repeated_faults.h.pop(&result));
+}
 static void independent_and_exact() {
     Fixture a,b;unsigned compared=0,ended=0;bool turned=false,reversed=false,stopped=false;
     a.prime();b.prime();
@@ -248,7 +368,9 @@ static void wheel_training_outside_holdout_only() {
     CHECK(learned_begins==1&&learned_comparisons>0);
 }
 int main() {
-    independent_and_exact();aborts_and_reset();future_input_and_output_bound();calibration_survives_complete_only();
+    warmup_waits_for_delayed_yaw();stale_unsubmitted_reference_does_not_extend_cooldown();
+    independent_and_exact();aborts_and_reset();
+    future_input_and_output_bound();calibration_survives_complete_only();
     wheel_training_outside_holdout_only();
     std::printf("MODEL GPS holdout: %u synthetic checks\n",checks);return 0;
 }

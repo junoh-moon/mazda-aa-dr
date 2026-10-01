@@ -7,6 +7,7 @@ using namespace mx5;
 int main(int argc,char** argv) {
     char line[2200];
     const bool emit=argc==2 && !std::strcmp(argv[1],"--emit");
+    const bool emit_skipped=argc==2 && !std::strcmp(argv[1],"--emit-skipped");
     navigation::GyroBiasStatus s=navigation::GyroBiasStatus();
     s.enabled=true; s.state=navigation::GYRO_BIAS_APPLIED;
     s.active_zero=s.candidate_zero=2050; s.samples=40;
@@ -43,7 +44,13 @@ int main(int argc,char** argv) {
     r.event=navigation::HOLDOUT_COMPARED; r.position_error_m=std::numeric_limits<double>::quiet_NaN();
     assert(runtime::format_shadow_holdout(line,sizeof line,16000000000ULL,r));
     assert(std::strstr(line,"\"position_error_m\":null"));
-    if(!emit) {
+    r=navigation::HoldoutResult();r.event=navigation::HOLDOUT_SKIPPED;
+    r.reason=navigation::HOLDOUT_STALE_REFERENCE;r.reference_ns=1000000000ULL;
+    r.applied_yaw_zero=2050;r.applied_wheel_scale=1.02;
+    assert(runtime::format_shadow_holdout(line,sizeof line,16000000000ULL,r));
+    assert(std::strstr(line,"\"event\":\"SKIPPED\""));
+    if(emit_skipped)puts(line);
+    if(!emit&&!emit_skipped) {
         puts("SHADOW log formatter: bounds, MODEL labels, finite/null fields passed");
         printf("Worker MODEL storage: Pipeline=%lu bytes, GpsHoldout=%lu bytes\n",
                (unsigned long)sizeof(navigation::Pipeline),(unsigned long)sizeof(navigation::GpsHoldout));

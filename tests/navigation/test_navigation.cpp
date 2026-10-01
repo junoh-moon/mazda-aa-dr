@@ -83,6 +83,80 @@ static void model_waits_for_closed_yaw_window() {
         CHECK(!stopped.diagnostic(T(351)).snapshot.model_valid);
     }
 }
+static void model_position_waits_for_closed_yaw_window() {
+    // A fresh GPS pair can be queued while a bounded yaw mean remains open.
+    // Processing the position must not commit past that mean's start time and
+    // reject its later arrival as LATE.
+    const int transitions[]={-1,0,3};
+    for (unsigned scenario=0;scenario<3;++scenario) {
+        const int transition=transitions[scenario];
+        Pipeline p;init(p);
+        RawEvent reverse=raw(REVERSE,0,1);
+        CHECK(p.enqueue_raw(reverse)==PIPELINE_OK);
+        feed(p,0,1);
+        CHECK(p.enqueue_position(pos(0,1,1))==PIPELINE_OK);
+        reverse=raw(REVERSE,100,2);
+        CHECK(p.enqueue_raw(reverse)==PIPELINE_OK);
+        feed(p,100,2);
+        CHECK(p.drain(T(100))==PIPELINE_OK);
+        CHECK(p.enqueue_raw(raw(WHEELS,120,3))==PIPELINE_OK);
+        CHECK(p.enqueue_position(pos(130,1,2))==PIPELINE_OK);
+        if (transition>=0)
+            CHECK(p.enqueue_position(pos(140,transition,3))==PIPELINE_OK);
+        const PipelineResult waiting=p.drain(T(transition>=0?140:130));
+        CHECK(waiting==PIPELINE_OK);
+        CHECK(p.enqueue_raw(raw(YAW,220,3))==PIPELINE_OK);
+        CHECK(p.drain(T(220))==PIPELINE_OK);
+        CHECK(!p.status().resets);
+        const Diagnostic d=p.diagnostic(T(220));
+        CHECK(d.snapshot.state==(transition==3?MX5_DR_NATIVE:
+                 transition==0?MX5_DR_ACTIVE:MX5_DR_READY));
+        if (transition==0) CHECK(d.snapshot.model_valid);
+        if (transition!=3) CHECK(d.snapshot.frontier_ns==T(220));
+    }
+    // During a GPS gap, repeated mode-0 callbacks are not fresh revocations.
+    // Their 100 ms reorder residence must not continuously hide active DR.
+    Pipeline gap;seeded(gap);
+    CHECK(gap.enqueue_position(pos(310,0,4))==PIPELINE_OK);
+    CHECK(gap.enqueue_position(pos(320,0,5))==PIPELINE_OK);
+    CHECK(gap.drain(T(220))==PIPELINE_OK);
+    CHECK(gap.diagnostic(T(320)).snapshot.model_valid);
+    CHECK(gap.enqueue_raw(raw(YAW,400,5))==PIPELINE_OK);
+    CHECK(gap.drain(T(400))==PIPELINE_OK);
+    CHECK(!gap.status().resets);
+    CHECK(gap.diagnostic(T(400)).snapshot.state==MX5_DR_ACTIVE);
+
+    Pipeline missing;seeded(missing);
+    CHECK(missing.enqueue_raw(raw(WHEELS,400,5))==PIPELINE_OK);
+    CHECK(missing.drain(T(550))==PIPELINE_OK);
+    CHECK(missing.drain(T(551))==PIPELINE_MISSING_SENSOR);
+    CHECK(missing.status().resets==1);
+
+    Pipeline queued_yaw;seeded(queued_yaw);
+    CHECK(queued_yaw.enqueue_raw(raw(YAW,400,5))==PIPELINE_OK);
+    CHECK(queued_yaw.enqueue_raw(raw(YAW,500,6))==PIPELINE_OK);
+    CHECK(queued_yaw.sensor_timeout_due(T(551)));
+    CHECK(!queued_yaw.yaw_source_timeout_due(T(551)));
+    CHECK(queued_yaw.yaw_source_timeout_due(T(751)));
+
+    Pipeline first;init(first);
+    CHECK(first.enqueue_raw(raw(WHEELS,120,1))==PIPELINE_OK);
+    CHECK(first.enqueue_position(pos(130,1,1))==PIPELINE_OK);
+    CHECK(first.drain(T(130))==PIPELINE_OK);
+    CHECK(first.pending_position(T(130)));
+    RawEvent opening=raw(YAW,100,1);opening.received_ns=T(150);
+    CHECK(first.enqueue_raw(opening)==PIPELINE_WAITING);
+    CHECK(first.enqueue_raw(raw(YAW,220,2))==PIPELINE_OK);
+    CHECK(first.drain(T(220))==PIPELINE_OK);
+    CHECK(!first.pending_position(T(130))&&!first.status().resets);
+
+    Pipeline silent;init(silent);
+    CHECK(silent.enqueue_raw(raw(YAW,0,1))==PIPELINE_WAITING);
+    CHECK(silent.enqueue_raw(raw(YAW,100,2))==PIPELINE_OK);
+    CHECK(silent.drain(T(350))==PIPELINE_OK);
+    CHECK(silent.drain(T(351))==PIPELINE_MISSING_SENSOR);
+    CHECK(silent.status().resets==1);
+}
 static void model_motion() {
     Pipeline p; seeded(p);
     Diagnostic d=p.diagnostic(T(300));
@@ -111,9 +185,14 @@ static void model_motion() {
     CHECK(native.enqueue_position(pos(310,3,4))==PIPELINE_OK);
     CHECK(!native.diagnostic(T(310)).snapshot.model_valid);
     native.drain(T(310));
-    CHECK(native.diagnostic(T(310)).snapshot.state==MX5_DR_NATIVE);
+    CHECK(!native.diagnostic(T(310)).snapshot.model_valid);
+    CHECK(native.enqueue_raw(raw(YAW,400,5))==PIPELINE_OK);
+    CHECK(native.drain(T(400))==PIPELINE_OK);
+    CHECK(native.diagnostic(T(400)).snapshot.state==MX5_DR_NATIVE);
     CHECK(native.enqueue_position(pos(320,0,5))==PIPELINE_OK);
-    native.drain(T(320)); CHECK(!native.diagnostic(T(320)).snapshot.model_valid);
+    CHECK(native.drain(T(320))==PIPELINE_OK);
+    CHECK(!native.status().resets);
+    CHECK(!native.diagnostic(T(320)).snapshot.model_valid);
 }
 static void turning_reverse_stop() {
     Pipeline turning; seeded(turning,0,13600,2199);
@@ -222,13 +301,22 @@ static void receipt_worker_and_reacquisition() {
             CHECK((d.status.uncertainties&TRANSPORT_TIME_MODEL)==0);
         }
     }
-    // Missing yaw leaves speed at 800 queued before a GPS return. Reacquisition
-    // must get past it and cannot use the pre-gap GPS fix as its first fix.
-    CHECK(p.enqueue_raw(raw(WHEELS,900,10))==PIPELINE_OK);
+    // A delayed yaw mean leaves later speed/GPS and GAP queued. Pending GPS
+    // immediately hides the old output; the mean must close before those
+    // events can advance the watermark or establish a new sequence.
+    RawEvent late_wheel=raw(WHEELS,900,10);late_wheel.source_mono_ms=0;
+    CHECK(p.enqueue_raw(late_wheel)==PIPELINE_OK);
     CHECK(p.enqueue_position(pos(910,1,1000))==PIPELINE_OK);
     p.drain(T(910)); CHECK(p.diagnostic(T(910)).snapshot.model_valid==0);
     CHECK(p.enqueue_position(pos(920,0,1001))==PIPELINE_OK);
     p.drain(T(920)); CHECK(!p.diagnostic(T(920)).snapshot.model_valid);
+    RawEvent closing=raw(YAW,950,11);closing.source_mono_ms=0;
+    CHECK(p.enqueue_raw(closing)==PIPELINE_OK);
+    CHECK(p.drain(T(950))==PIPELINE_OK);
+    CHECK(!p.status().resets);
+    const Diagnostic after_gap=p.diagnostic(T(950));
+    CHECK(!after_gap.snapshot.model_valid);
+    CHECK(after_gap.snapshot.state==MX5_DR_REACQUIRING);
     CHECK(p.status().core_result==MX5_DR_E_NO_SEED);
 
     // Cross-stream delivery jitter is sorted by retained timestamps, not by
@@ -352,6 +440,11 @@ static void qualified() {
     CHECK(p.enqueue_position(pos(10,0,2))==PIPELINE_OK);
     CHECK(p.drain(T(100))==PIPELINE_OK);
     Diagnostic d=p.diagnostic(T(100)); CHECK(d.result==MX5_DR_OK); CHECK(d.snapshot.valid==1);
+    Pipeline missing=p;
+    CHECK(missing.drain(T(350))==PIPELINE_OK);
+    CHECK(missing.drain(T(351))==PIPELINE_MISSING_SENSOR);
+    CHECK(missing.status().resets==1);
+    CHECK(!missing.diagnostic(T(351)).snapshot.valid);
     runtime::CoreBridgeQualification q=runtime::CoreBridgeQualification(); q.expected_context=d.snapshot.context;
     q.now_mono_ns=T(100); q.max_snapshot_age_ns=150000000;
     q.limits_verified_until_mono_ns=T(100); q.duration_max_s=60;
@@ -563,9 +656,10 @@ int main(int argc,char** argv) {
     else if(argc==2&&!std::strcmp(argv[1],"exhausted_position"))exhausted_qualified(2);
     else if(argc==2&&!std::strcmp(argv[1],"exhausted_anchor"))exhausted_anchor_replacement();
     else if(argc==2&&!std::strcmp(argv[1],"exhausted_sequence"))exhausted_position_sequence();
+    else if(argc==2&&!std::strcmp(argv[1],"open_yaw_position"))model_position_waits_for_closed_yaw_window();
     else if(argc==2&&!std::strncmp(argv[1],"yaw_accumulator_",16))
         raw_yaw_accumulator_rejection(unsigned(std::atoi(argv[1]+16)));
-    else { model_waits_for_closed_yaw_window();model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
+    else { model_waits_for_closed_yaw_window();model_position_waits_for_closed_yaw_window();model_motion(); turning_reverse_stop(); rejection(); receipt_worker_and_reacquisition();
         for(unsigned i=0;i<6;++i)raw_yaw_accumulator_rejection(i);
         raw_yaw_accumulator_boundaries();
         rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();
