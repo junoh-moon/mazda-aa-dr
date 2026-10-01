@@ -17,7 +17,7 @@ from fetch_m3_toolchain import COMMIT, matches, wanted
 
 REPO = Path(__file__).resolve().parents[1]
 TARGET = 'arm-cortexa9_neon-linux-gnueabi'
-ARTIFACTS = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'mx5dr-collector',
+ARTIFACTS = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so', 'mx5dr-collector',
              'mx5dr-guard', 'mx5dr-sha256')
 RECORD = 'arm-build.json'
 

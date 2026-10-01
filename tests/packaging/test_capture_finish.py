@@ -116,7 +116,7 @@ class TrialBundleTests(unittest.TestCase):
             root = Path(tmp)
             build = root / 'build'
             build.mkdir()
-            for name in ('libmx5dr.so', 'libmx5dr-vimtap.so', 'mx5dr-guard', 'mx5dr-collector', 'mx5dr-sha256'):
+            for name in ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so', 'mx5dr-guard', 'mx5dr-collector', 'mx5dr-sha256'):
                 (build / name).write_bytes(b'never executed fixture')
             for args, expected in (([], 'OBSERVE'), (['--default-mode=SHADOW'], 'SHADOW')):
                 dest = root / expected
@@ -125,7 +125,8 @@ class TrialBundleTests(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertEqual((dest / 'bundle-default-mode').read_text(), expected + '\n')
                 for name in ('trial', 'trial_status.sh', 'trial_status.awk', 'finish_capture.sh',
-                             'mx5dr-sha256', 'mx5dr-sha256.sha256', 'js/run.js', 'INSTALL_KO.md'):
+                             'mx5dr-sha256', 'mx5dr-sha256.sha256', 'libmx5dr-ldstap.so',
+                             'libmx5dr-ldstap.so.sha256', 'js/run.js', 'INSTALL_KO.md'):
                     self.assertTrue((dest / name).is_file())
                 for letter in 'abcd':
                     mp3 = (dest / 'mp3' / (letter + '.mp3')).read_bytes()

@@ -624,12 +624,12 @@ def main():
             if line.split()[1] != '/tmp/mnt/sda1'))
         require_mounts_link(root)
         require(not usb.exists(), 'Installation USB was not detached')
-        # Exercise both experimental DSOs with the stock dynamic loader/libc.
+        # Exercise all three experimental DSOs with the stock dynamic loader/libc.
         # glibc returns success even when it ignores a missing LD_PRELOAD DSO.
         # Require positive initialization evidence, not just /bin/true's status.
         missing = run('LD_PRELOAD=/missing-mx5dr.so /bin/true')
         require('cannot be preloaded' in missing.stderr, 'Missing DSO negative control failed')
-        for name in ('libmx5dr.so', 'libmx5dr-vimtap.so'):
+        for name in ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so'):
             path = '/data_persist/mx5-aa-dr/' + name
             loaded = run('LD_DEBUG=libs LD_PRELOAD=' + path + ' /bin/true')
             require('cannot be preloaded' not in loaded.stderr and
@@ -644,6 +644,12 @@ def main():
                 'Trial preload depends on the installation USB')
         require(('/libmx5dr-vimtap.so' in initial_trial) == (default_mode == 'SHADOW'),
                 'Initial trial VBS tap differs from the bundle default mode')
+        require('/data_persist/mx5-aa-dr/libmx5dr-ldstap.so' in initial_trial,
+                'Initial trial lacks LDS observation preload')
+        consumed = (base / 'guard/consumed').read_text().splitlines()
+        require(len(consumed) == 9 and consumed[0] == 'mx5dr-one-boot-v3' and
+                consumed[8] == hashlib.sha256((base / 'libmx5dr-ldstap.so').read_bytes()).hexdigest(),
+                'Consumed arm did not bind the exact installed LDS product')
         print('PASS: ' + default_mode + ' bundle default and initial trial preload selection', flush=True)
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
         put(root, '/proc/sys/kernel/random/boot_id', '11234567-1234-1234-1234-0123456789ab\n')
@@ -654,7 +660,8 @@ def main():
         result = run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf')
         shadow_trial = root / result.stdout.strip().lstrip('/')
         require('mode=SHADOW' in (base / 'mx5dr.conf').read_text().splitlines() and
-                TOUCH in shadow_trial.read_text() and '/libmx5dr-vimtap.so' in shadow_trial.read_text(),
+                TOUCH in shadow_trial.read_text() and '/libmx5dr-vimtap.so' in shadow_trial.read_text() and
+                '/libmx5dr-ldstap.so' in shadow_trial.read_text(),
                 'Explicit SHADOW rearm did not prepare the status fixture mode')
         # Actual collector executes with guest NSS and drops UID to service. Missing
         # vehicle DBus/SMDB is expected here; it must still start/stop its journal.

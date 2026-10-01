@@ -15,7 +15,8 @@ esac
 '''.replace('2) taskset','2)\n taskset').replace('*) taskset','*)\n taskset')
 TOKEN='/data_persist/mx5-aa-dr/libmx5dr.so'
 TAP_TOKEN='/data_persist/mx5-aa-dr/libmx5dr-vimtap.so'
-CFG='''<sm_config><services><service type="jci_service" name="jciAAPA" path="/jci/aapa/blmjciaapa.so" args="new_hw"><environ_var env_name="LD_PRELOAD" env_value="/data_persist/touch.so"/></service><service type="jci_service" name="jciVBS" path="/jci/vbs/svcjcivbs.so" args=""><environ_var env_name="LD_PRELOAD" env_value="/data_persist/vbs.so"/></service></services></sm_config>\n'''
+LDS_TOKEN='/data_persist/mx5-aa-dr/libmx5dr-ldstap.so'
+CFG='''<sm_config><services><service type="jci_service" name="jciAAPA" path="/jci/aapa/blmjciaapa.so" args="new_hw"><environ_var env_name="LD_PRELOAD" env_value="/data_persist/touch.so"/></service><service type="jci_service" name="jciVBS" path="/jci/vbs/svcjcivbs.so" args=""><environ_var env_name="LD_PRELOAD" env_value="/data_persist/vbs.so"/></service><service type="jci_service" name="jciLDS" path="/jci/lds/svcjcilds.so" args=""><environ_var env_name="LD_PRELOAD" env_value="/data_persist/lds-existing.so"/></service></services></sm_config>\n'''
 class Gate(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
@@ -25,7 +26,9 @@ class Gate(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.root=pathlib.Path(self.tmp.name);self.env=dict(os.environ,MX5DR_GUARD_ROOT=str(self.root));(self.root/'.mx5dr-fixture').touch()
   for p in [BASE+'/guard','jci/sm','proc/sys/kernel/random','tmp']:(self.root/p).mkdir(parents=True,exist_ok=True)
-  self.put(BASE+'/libmx5dr.so',b'author-fixture-payload');self.put(BASE+'/libmx5dr-vimtap.so',b'author-fixture-tap');self.put(BASE+'/mx5dr.conf',b'mode=OBSERVE\n')
+  # Match installer-owned directory permissions independently of host umask.
+  for p in [BASE,BASE+'/guard']:(self.root/p).chmod(0o755)
+  self.put(BASE+'/libmx5dr.so',b'author-fixture-payload');self.put(BASE+'/libmx5dr-vimtap.so',b'author-fixture-tap');self.put(BASE+'/libmx5dr-ldstap.so',b'author-fixture-lds-tap');self.put(BASE+'/mx5dr.conf',b'mode=OBSERVE\n')
   for p in ['jci/sm/sm.conf','jci/sm/sm_WCP.conf']:self.put(p,CFG.encode())
   trial=CFG.replace('/data_persist/touch.so','/data_persist/mx5-aa-dr/libmx5dr.so:/data_persist/touch.so').encode()
   for p in ['normal.trial','wcp.trial']:self.put(BASE+'/guard/'+p,trial)
@@ -97,14 +100,71 @@ class Gate(unittest.TestCase):
   self.arm();self.put(BASE+'/libmx5dr.so',b'corruption');self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
  def test_tap_change_declines(self):
   self.arm();self.put(BASE+'/libmx5dr-vimtap.so',b'changed tap');self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_lds_manifest_v3_binds_the_sixth_artifact(self):
+  self.arm();lines=(self.root/BASE/'guard/arm').read_text().splitlines()
+  self.assertEqual(lines[0],'mx5dr-one-boot-v3')
+  paths=[BASE+'/libmx5dr.so',BASE+'/mx5dr.conf','jci/sm/sm.conf',BASE+'/guard/normal.trial','jci/sm/sm_WCP.conf',BASE+'/guard/wcp.trial',BASE+'/libmx5dr-vimtap.so',BASE+'/libmx5dr-ldstap.so']
+  self.assertEqual(lines[1:],[hashlib.sha256((self.root/path).read_bytes()).hexdigest() for path in paths])
+ def test_lds_change_declines_both_startup_modes_without_consuming_arm(self):
+  self.arm();arm=(self.root/BASE/'guard/arm').read_bytes()
+  self.put(BASE+'/libmx5dr-ldstap.so',b'changed lds tap')
+  results=[self.call('select','/jci/sm/'+mode) for mode in ['sm.conf','sm_WCP.conf']]
+  self.assertTrue(all(result.returncode!=0 for result in results),[(result.returncode,result.stdout) for result in results])
+  self.assertTrue(all(result.stdout=='' for result in results))
+  self.assertEqual((self.root/BASE/'guard/arm').read_bytes(),arm)
+  self.assertFalse((self.root/BASE/'guard/consumed').exists())
+  self.assertEqual(list((self.root/'tmp').glob('mx5dr-trial-*')),[])
+ def test_missing_symlink_or_unsafe_lds_tap_declines(self):
+  path=self.root/BASE/'libmx5dr-ldstap.so';saved=path.with_suffix('.saved')
+  self.arm();arm=(self.root/BASE/'guard/arm').read_bytes();path.rename(saved)
+  for state in ['missing','symlink','group_writable','world_writable']:
+   with self.subTest(state=state):
+    if state=='symlink':path.symlink_to(saved)
+    elif state=='group_writable':path.unlink();saved.rename(path);path.chmod(0o620)
+    elif state=='world_writable':path.chmod(0o602)
+    for action in [('check',),('arm',),('select','/jci/sm/sm.conf'),('select','/jci/sm/sm_WCP.conf')]:
+     result=self.call(*action);self.assertNotEqual(result.returncode,0);self.assertEqual(result.stdout,'')
+    self.assertEqual((self.root/BASE/'guard/arm').read_bytes(),arm)
+ def test_lds_persistent_token_declines_even_when_baseline_hash_is_current(self):
+  for stem,name in [('normal','sm.conf'),('wcp','sm_WCP.conf')]:
+   with self.subTest(mode=name):
+    updated=CFG.replace('/data_persist/lds-existing.so',LDS_TOKEN+':/data_persist/lds-existing.so').encode()
+    self.put('jci/sm/'+name,updated)
+    self.put(BASE+'/guard/'+stem+'.source.sha256',(hashlib.sha256(updated).hexdigest()+'\n').encode())
+    for action in [('check',),('arm',),('select','/jci/sm/'+name)]:
+     result=self.call(*action);self.assertNotEqual(result.returncode,0);self.assertEqual(result.stdout,'')
+    self.assertFalse((self.root/BASE/'guard/arm').exists())
+    self.put('jci/sm/'+name,CFG.encode())
+    self.put(BASE+'/guard/'+stem+'.source.sha256',(hashlib.sha256(CFG.encode()).hexdigest()+'\n').encode())
  def test_missing_symlink_or_unsafe_tap_declines(self):
   p=self.root/BASE/'libmx5dr-vimtap.so';saved=p.with_suffix('.saved')
   self.arm();p.rename(saved);self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
   p.symlink_to(saved);self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
   p.unlink();saved.rename(p);p.chmod(0o666);self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
  def test_old_manifest_does_not_authorize_new_guard(self):
-  self.arm();p=self.root/BASE/'guard/arm';lines=p.read_text().splitlines();self.assertEqual(lines[0],'mx5dr-one-boot-v2')
-  self.put(BASE+'/guard/arm',('\n'.join(['mx5dr-one-boot-v1']+lines[1:-1])+'\n').encode());self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  self.arm();p=self.root/BASE/'guard/arm';lines=p.read_text().splitlines();self.assertEqual(lines[0],'mx5dr-one-boot-v3')
+  for schema,count in [('mx5dr-one-boot-v1',6),('mx5dr-one-boot-v2',7)]:
+   with self.subTest(schema=schema):
+    old=('\n'.join([schema]+lines[1:1+count])+'\n').encode();self.put(BASE+'/guard/arm',old)
+    for mode in ['sm.conf','sm_WCP.conf']:
+     result=self.call('select','/jci/sm/'+mode);self.assertNotEqual(result.returncode,0);self.assertEqual(result.stdout,'')
+     self.assertEqual(p.read_bytes(),old)
+ def test_shadow_three_services_keep_exact_trial_and_share_consumed_arm(self):
+  self.put(BASE+'/mx5dr.conf',b'mode=SHADOW\n')
+  for name in ['normal.trial','wcp.trial']:
+   p=self.root/BASE/'guard'/name
+   trial=p.read_bytes().replace(b'/data_persist/vbs.so',(TAP_TOKEN+':/data_persist/vbs.so').encode()).replace(b'/data_persist/lds-existing.so',(LDS_TOKEN+':/data_persist/lds-existing.so').encode())
+   self.put(BASE+'/guard/'+name,trial)
+  originals={name:(self.root/'jci/sm'/name).read_bytes() for name in ['sm.conf','sm_WCP.conf']}
+  self.arm();arm=(self.root/BASE/'guard/arm').read_bytes()
+  result=self.call('select','/jci/sm/sm_WCP.conf');self.assertEqual(result.returncode,0,result.stderr)
+  self.assertEqual(pathlib.Path(result.stdout.strip()).read_bytes(),(self.root/BASE/'guard/wcp.trial').read_bytes())
+  self.assertEqual((self.root/BASE/'guard/consumed').read_bytes(),arm)
+  self.assertFalse((self.root/BASE/'guard/arm').exists())
+  self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  self.put('proc/sys/kernel/random/boot_id',b'11234567-1234-1234-1234-0123456789ab\n')
+  self.assertNotEqual(self.call('select','/jci/sm/sm_WCP.conf').returncode,0)
+  for name,data in originals.items():self.assertEqual((self.root/'jci/sm'/name).read_bytes(),data)
  def test_shadow_two_services_share_consumed_arm(self):
   self.put(BASE+'/mx5dr.conf',b'mode=SHADOW\n')
   for name in ['normal.trial','wcp.trial']:

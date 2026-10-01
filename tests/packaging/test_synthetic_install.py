@@ -19,6 +19,8 @@ CONFIG = '''<sm_config><services>
 </service>
 <service type="jci_service" name="jciVBS" path="/jci/vbs/svcjcivbs.so" args="">
 </service>
+<service type="jci_service" name="jciLDS" path="/jci/lds/svcjcilds.so" args="">
+</service>
 </services></sm_config>
 '''
 AUTOSTART = '''#!/bin/sh

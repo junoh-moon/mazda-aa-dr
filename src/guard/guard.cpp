@@ -16,9 +16,10 @@
 
 namespace {
 std::string prefix;
-const char *const names[]={"/data_persist/mx5-aa-dr/libmx5dr.so", "/data_persist/mx5-aa-dr/mx5dr.conf", "/jci/sm/sm.conf", "/data_persist/mx5-aa-dr/guard/normal.trial", "/jci/sm/sm_WCP.conf", "/data_persist/mx5-aa-dr/guard/wcp.trial", "/data_persist/mx5-aa-dr/libmx5dr-vimtap.so"};
+const char *const names[]={"/data_persist/mx5-aa-dr/libmx5dr.so", "/data_persist/mx5-aa-dr/mx5dr.conf", "/jci/sm/sm.conf", "/data_persist/mx5-aa-dr/guard/normal.trial", "/jci/sm/sm_WCP.conf", "/data_persist/mx5-aa-dr/guard/wcp.trial", "/data_persist/mx5-aa-dr/libmx5dr-vimtap.so", "/data_persist/mx5-aa-dr/libmx5dr-ldstap.so"};
 const char *const token="/data_persist/mx5-aa-dr/libmx5dr.so";
 const char *const tap_token="/data_persist/mx5-aa-dr/libmx5dr-vimtap.so";
+const char *const lds_token="/data_persist/mx5-aa-dr/libmx5dr-ldstap.so";
 int gd=-1;
 uid_t expected_owner(){
 #ifdef MX5DR_GUARD_TESTING
@@ -85,7 +86,7 @@ bool sync_dir(int fd,const char*stage){
 }
 bool atomic_file(const char*name,const std::string&s){char temp[96];snprintf(temp,sizeof temp,".%s.%ld",name,(long)getpid());int fd=openat(gd,temp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return false;bool ok=write_all(fd,s)&&fsync(fd)==0;int e=close(fd);ok=ok&&e==0;if(ok)ok=renameat(gd,temp,gd,name)==0&&sync_dir(gd,name);if(!ok)unlinkat(gd,temp,0);return ok;}
 bool manifest(std::string&s){
- s="mx5dr-one-boot-v2\n";
+ s="mx5dr-one-boot-v3\n";
  for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){
   std::string h;if(!digest(prefix+names[i],h))return false;
   if(i==2||i==4){
@@ -101,7 +102,7 @@ bool manifest(std::string&s){
 }
 bool boot_id(std::string&s){std::string p=prefix+"/proc/sys/kernel/random/boot_id";int fd=open(p.c_str(),O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return false;bool ok=read_fd(fd,s,80);close(fd);if(!ok)return false;if(!s.empty()&&s[s.size()-1]=='\n')s.resize(s.size()-1);if(s.size()!=36)return false;for(size_t i=0;i<s.size();i++){if(i==8||i==13||i==18||i==23){if(s[i]!='-')return false;}else if(!((s[i]>='0'&&s[i]<='9')||(s[i]>='a'&&s[i]<='f')))return false;}s+='\n';return true;}
 bool owned_read(const char*name,std::string&s){int fd=openat(gd,name,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return false;bool ok=safe_stat(fd,false)&&read_fd(fd,s,1024);close(fd);return ok;}
-bool baseline_clean(){for(unsigned i=2;i<=4;i+=2){std::string s;if(!read_file(prefix+names[i],s,1024*1024)||s.find(token)!=std::string::npos||s.find(tap_token)!=std::string::npos)return false;}return true;}
+bool baseline_clean(){for(unsigned i=2;i<=4;i+=2){std::string s;if(!read_file(prefix+names[i],s,1024*1024)||s.find(token)!=std::string::npos||s.find(tap_token)!=std::string::npos||s.find(lds_token)!=std::string::npos)return false;}return true;}
 int run(int argc,char**argv){if(geteuid()!=expected_owner()||argc<2)return 2;
 #ifdef MX5DR_GUARD_TESTING
  const char*p=getenv("MX5DR_GUARD_ROOT");if(!p||p[0]!='/'||!p[1])return 2;prefix=p;struct stat marker;if(lstat((prefix+"/.mx5dr-fixture").c_str(),&marker)||!S_ISREG(marker.st_mode))return 2;

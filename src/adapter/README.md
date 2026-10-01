@@ -5,7 +5,7 @@ backend. It is not evidence that the package has run on a CMU.
 
 ## Integration
 
-Build `adapter.cpp`, `v74_install.cpp`, `request_hooks.cpp`, `session_hooks.cpp`,
+Build `adapter.cpp`, `arm_entry.cpp`, `v74_install.cpp`, `request_hooks.cpp`, `session_hooks.cpp`,
 `bus_hooks.cpp`, and the runtime
 `request_trace.cpp`/`request_observer.cpp`. ARM32 softfp also uses
 `arm_veneer.S` and `request_veneer.S`. The Makefile enables exception cleanup
@@ -129,6 +129,23 @@ ring may drop telemetry; loss of estimator input must separately call
 
 ## DR extension (disabled by default)
 
+The separate `libmx5dr-ldstap.so` observes the original LDS process. Its loader
+targets `/jci/lds/svcjcilds.so`; `install_lds_v74` checks the exact six-module
+dependency scope, callback routes, cache/descriptor sites and 25 live GOT slots
+before a cold data-only transaction. It keeps original code and the descriptor
+unchanged, retains prepared original targets until exit and forwards unchanged
+when observational metadata is unavailable. This DSO contains no AA worker or
+position veneer. `arm_entry.cpp` keeps the AA-specific entry in the AA product;
+shared adapter invalidation is the real implementation in both products.
+
+Callback assignment lineage and the exact D-Bus response identity travel over a
+nonblocking sideband to the existing bounded AA journal. They describe observed
+cache ownership, not physical measurement time or receiver qualification. The
+installer's original-library tests are described in
+[the cold installation record](../../validation/LDS_COLD_INSTALL_2026-10-02.md).
+Direct installation tests, automatic product loading and whole SM startup are
+different execution scopes. Missing sideband data cannot authorize ASSIST.
+
 `Options.allow_assist` must remain false until the deployment's profile,
 source ownership/provenance, sensor quality/timing and lifecycle gates are
 verified. The application supplies a `ProvenanceReader` for the exact original
@@ -203,7 +220,7 @@ Example host command:
 
 ```
 g++ -std=c++11 -Wall -Wextra -Werror -pthread -I src \
-  src/adapter/adapter.cpp src/adapter/v74_install.cpp \
+  src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp \
   tests/adapter/adapter_test.cpp -o adapter_test
 ```
 

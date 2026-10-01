@@ -8,7 +8,7 @@ C_WARN = -std=c99 -O2 -Wall -Wextra -Werror -pedantic
 CXX_WARN = -std=c++11 -O2 -Wall -Wextra -Werror -Isrc
 CORE = src/core/dr_core.c
 REQUEST = src/adapter/request_hooks.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp
-ADAPTER = src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $(REQUEST)
+ADAPTER = src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $(REQUEST)
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
 NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
@@ -17,6 +17,8 @@ RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
 LDS_SIDEBAND = src/runtime/lds_sideband.cpp
 LDS_HEADERS = src/runtime/lds_sideband.h src/sensors/lds_lineage.h
 LDS_HOOKS = src/adapter/lds_hooks.cpp src/sensors/lds_lineage.cpp
+LDS_TAP = $(LDS_HOOKS) $(LDS_SIDEBAND) $(RUNTIME_SUPPORT) src/sensors/lds_tap.cpp src/adapter/lds_install.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/runtime/loader.cpp
+LDS_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm-lds/%.o,$(LDS_TAP))
 STORAGE_HEADERS = src/runtime/storage.h src/runtime/boot_id.h
 HOST_DBUS_FLAGS = $(shell pkg-config --cflags dbus-1)
 HOST_DBUS_LIBS = $(shell pkg-config --libs dbus-1)
@@ -32,7 +34,7 @@ ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src
 COLLECTOR_OBJECTS = $(BUILD)/arm/src/collector/collector.o $(BUILD)/arm/src/runtime/config.o
 GUARD_OBJECTS = $(BUILD)/arm/src/guard/guard.o $(BUILD)/arm/src/runtime/sha256.o
 HASH_OBJECTS = $(BUILD)/arm/src/tools/sha256_main.o $(BUILD)/arm/src/runtime/sha256.o
-ALL_ARM_OBJECTS = $(sort $(ARM_OBJECTS) $(SENSOR_OBJECTS) $(COLLECTOR_OBJECTS) $(GUARD_OBJECTS) $(HASH_OBJECTS))
+ALL_ARM_OBJECTS = $(sort $(ARM_OBJECTS) $(SENSOR_OBJECTS) $(COLLECTOR_OBJECTS) $(GUARD_OBJECTS) $(HASH_OBJECTS) $(LDS_OBJECTS))
 
 .PHONY: all test test-build-deps test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-lds test-request-publication test-journal-boundaries test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
 all: test
@@ -188,9 +190,9 @@ $(BUILD)/arm/src/runtime/runtime.o: src/runtime/motion_batch.h
 
 # Only wrappers that surround OEM calls need C++ cleanup/unwind tables.
 # A caller's exception or deferred cancellation must cross the shim intact.
-$(BUILD)/arm/src/adapter/adapter.o $(BUILD)/arm/src/adapter/request_hooks.o $(BUILD)/arm/src/adapter/bus_hooks.o $(BUILD)/arm/src/adapter/session_hooks.o $(BUILD)/arm/src/adapter/lds_hooks.o $(BUILD)/arm/src/runtime/request_observer.o: override ARM_CXXFLAGS += -fexceptions
+$(BUILD)/arm/src/adapter/adapter.o $(BUILD)/arm/src/adapter/arm_entry.o $(BUILD)/arm/src/adapter/request_hooks.o $(BUILD)/arm/src/adapter/bus_hooks.o $(BUILD)/arm/src/adapter/session_hooks.o $(BUILD)/arm/src/adapter/lds_hooks.o $(BUILD)/arm/src/runtime/request_observer.o: override ARM_CXXFLAGS += -fexceptions
 
-arm: $(BUILD)/libmx5dr-vimtap.so $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $(BUILD)/mx5dr-guard $(BUILD)/mx5dr-sha256
+arm: $(BUILD)/libmx5dr-vimtap.so $(BUILD)/libmx5dr-ldstap.so $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $(BUILD)/mx5dr-guard $(BUILD)/mx5dr-sha256
 $(BUILD)/arm/%.o: %.cpp
 	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo 'Set ARM_PREFIX and ARM_SYSROOT'; exit 1; }
 	mkdir -p $(dir $@)
@@ -221,6 +223,19 @@ $(BUILD)/mx5dr-sha256: $(HASH_OBJECTS) | $(BUILD)
 
 $(BUILD)/libmx5dr-vimtap.so: $(SENSOR_OBJECTS)
 	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr-vimtap.so -static-libstdc++ -static-libgcc $^ -ldl -lpthread -lrt -o $@
+
+# The LDS process has its own loader and immutable hook state. The AA ARM
+# veneer entry is excluded; real shared adapter invalidation remains available.
+# Pinned binutils 2.22 has an ARM unwind assertion with section GC here.
+$(LDS_OBJECTS): override ARM_CXXFLAGS += -fexceptions
+$(BUILD)/arm-lds/src/runtime/loader.o: override ARM_CPPFLAGS += -DMX5_LOADER_TARGET='"/jci/lds/svcjcilds.so"'
+$(BUILD)/arm-lds/%.o: %.cpp
+	@test -n "$(ARM_PREFIX)" -a -n "$(ARM_SYSROOT)" || { echo "Set ARM_PREFIX and ARM_SYSROOT"; exit 1; }
+	mkdir -p $(dir $@)
+	$(ARM_PREFIX)g++ $(ARM_CXXFLAGS) $(ARM_CPPFLAGS) $(ARM_DEPFLAGS) -c $< -o $@
+	mv $(@:.o=.d).tmp $(@:.o=.d)
+$(BUILD)/libmx5dr-ldstap.so: $(LDS_OBJECTS)
+	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr-ldstap.so -static-libstdc++ -static-libgcc $^ -ldl -lpthread -lrt -o $@
 
 $(BUILD)/test_vim_tap: tests/sensors/test_vim_tap.cpp src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp $(RUNTIME_SUPPORT) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out src/sensors/vim_tap.cpp,$^) -ldl -pthread -lrt -o $@
@@ -287,9 +302,15 @@ $(BUILD)/test_lds_sideband: tests/runtime/test_lds_sideband.cpp $(LDS_SIDEBAND) 
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -lrt -o $@
 $(BUILD)/test_worker_lds: tests/runtime/test_worker_lds.cpp src/runtime/runtime.cpp src/runtime/worker.h $(ASSIST_WORKER) src/runtime/assist_worker.h $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_HEADERS) $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) src/runtime/loader.cpp $(BUILD)/core_host.o $(STORAGE_HEADERS)
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/runtime/runtime.cpp,$^) -ldl -pthread -lrt -lm -o $@
+$(BUILD)/test_lds_install: tests/adapter/lds_install_test.cpp src/adapter/lds_install.cpp src/adapter/lds_install.h src/adapter/data_patch.h src/adapter/lds_hooks.h $(LDS_HEADERS) | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -o $@
+$(BUILD)/test_lds_tap: tests/sensors/test_lds_tap.cpp src/sensors/lds_tap.cpp $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) src/adapter/lds_install.h src/runtime/loader.h src/runtime/config.h src/runtime/sha256.h $(LDS_HEADERS) | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h src/sensors/lds_tap.cpp,$^) -pthread -lrt -o $@
 
-test-lds: $(BUILD)/test_data_patch $(BUILD)/test_lds_hooks $(BUILD)/test_lds_sideband $(BUILD)/test_worker_lds
+test-lds: $(BUILD)/test_data_patch $(BUILD)/test_lds_hooks $(BUILD)/test_lds_sideband $(BUILD)/test_worker_lds $(BUILD)/test_lds_install $(BUILD)/test_lds_tap
 	$(BUILD)/test_data_patch
 	$(BUILD)/test_lds_sideband
+	$(BUILD)/test_lds_install
+	@set -e; for scenario in off invalid missing_mode missing_config disabled marker_symlink marker_error observe scrub install_failed rollback_failed cold_lost normal late_receiver sender_failed unrequested null_handle repeated; do $(BUILD)/test_lds_tap $$scenario; done
 	@set -e; for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind; do $(BUILD)/test_lds_hooks $$scenario; done
 	@set -e; for scenario in capture occupied pre_stopped bounded malformed wrong_uid; do $(BUILD)/test_worker_lds $$scenario; done

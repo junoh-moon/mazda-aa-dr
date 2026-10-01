@@ -60,7 +60,7 @@ marker() {
     kind_of "$mk_file"
     if [ "$kind" = missing ]; then printf '%s.status=missing\n' "$mk_key"; return; fi
     if [ "$kind" != file ]; then printf '%s.status=not_regular\n' "$mk_key"; partial=1; return; fi
-    case "$mk_format" in boot) mk_cap=37;; sha) mk_cap=65;; manifest) mk_cap=473;; esac
+    case "$mk_format" in boot) mk_cap=37;; sha) mk_cap=65;; manifest) mk_cap=538;; esac
     if ! mk_size=$(stat -c %s "$mk_file" 2>/dev/null); then mk_size=invalid; fi
     case "$mk_size" in ''|*[!0-9]*) printf '%s.status=unreadable\n' "$mk_key"; partial=1; return;; esac
     if [ "$mk_size" -gt "$mk_cap" ]; then printf '%s.status=oversized\n' "$mk_key"; partial=1; return; fi
@@ -69,7 +69,10 @@ marker() {
     fi
     # Real proc boot_id reports st_size=0. Ordinary marker files must match the
     # bytes read as well, so NUL removal in a shell cannot validate a bad file.
-    if [ "${#small}" != "$mk_cap" ] || { [ "$mk_size" != 0 ] && [ "$mk_size" != "${#small}" ]; }; then
+    mk_expected=$mk_cap
+    # Recover old v2 arm/consumed files as well as the new eight-input v3.
+    if [ "$mk_format" = manifest ] && [ "${#small}" = 473 ]; then mk_expected=473; fi
+    if [ "${#small}" != "$mk_expected" ] || { [ "$mk_size" != 0 ] && [ "$mk_size" != "${#small}" ]; }; then
         printf '%s.status=malformed\n' "$mk_key"; partial=1; return
     fi
     if mk_value=$(printf '%s' "$small" | awk -v fmt="$mk_format" '
@@ -77,9 +80,10 @@ marker() {
         {v[NR]=$0}
         END {
             if(fmt=="manifest") {
-                if(NR!=8 || v[1]!="mx5dr-one-boot-v2")exit 1
-                for(i=2;i<=8;i++)if(!sha(v[i]))exit 1
-                for(i=2;i<=8;i++)print v[i]
+                if(!((NR==8 && v[1]=="mx5dr-one-boot-v2") ||
+                     (NR==9 && v[1]=="mx5dr-one-boot-v3")))exit 1
+                for(i=2;i<=NR;i++)if(!sha(v[i]))exit 1
+                for(i=2;i<=NR;i++)print v[i]
             } else if(fmt=="sha") {if(NR!=1 || !sha(v[1]))exit 1; print v[1]}
             else {
                 s=v[1]; if(NR!=1 || length(s)!=36 || substr(s,9,1)!="-" || substr(s,14,1)!="-" || substr(s,19,1)!="-" || substr(s,24,1)!="-")exit 1
@@ -247,7 +251,7 @@ hash_item() {
         else printf 'hash.%s.status=changed_during_read\n' "$hi_key"; partial=1; fi
     else printf 'hash.%s.status=hash_failed\n' "$hi_key"; partial=1; fi
 }
-# The order below is the guard v2 manifest order. Bodies are never output.
+# The first seven inputs retain the v2 order; v3 appends the LDS tap.
 hash_item libmx5dr "$BASE/libmx5dr.so" 33554432 "$base_ok"
 hash_item config "$BASE/mx5dr.conf" 1024 "$base_ok"
 hash_item sm_normal "$ROOT/jci/sm/sm.conf" 1048576 1
@@ -255,6 +259,7 @@ hash_item template_normal "$BASE/guard/normal.trial" 1048576 "$guard_ok"
 hash_item sm_wcp "$ROOT/jci/sm/sm_WCP.conf" 1048576 1
 hash_item template_wcp "$BASE/guard/wcp.trial" 1048576 "$guard_ok"
 hash_item vimtap "$BASE/libmx5dr-vimtap.so" 33554432 "$base_ok"
+hash_item ldstap "$BASE/libmx5dr-ldstap.so" 33554432 "$base_ok"
 hash_item autostart "$ROOT/usr/bin/autostart" 1048576 1
 hash_item collector "$BASE/mx5dr-collector" 33554432 "$base_ok"
 hash_item guard "$BASE/guard/mx5dr-guard" 33554432 "$guard_ok"

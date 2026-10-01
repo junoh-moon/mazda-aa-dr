@@ -138,6 +138,25 @@ class ArmDependencyTests(unittest.TestCase):
         self.assertTrue((self.root / self.config).with_suffix('.d').is_file())
         self.assertEqual(self.make('-q', self.config).returncode, 0)
 
+    def test_lds_loader_has_its_own_target_and_header_dependencies(self):
+        aa = 'build/arm/src/runtime/loader.o'
+        lds = 'build/arm-lds/src/runtime/loader.o'
+        install = 'build/arm-lds/src/adapter/lds_install.o'
+        self.make(aa, lds, install)
+        self.assertIn(b'/jci/aapa/blmjciaapa.so', (self.root / aa).read_bytes())
+        self.assertNotIn(b'/jci/lds/svcjcilds.so', (self.root / aa).read_bytes())
+        self.assertIn(b'/jci/lds/svcjcilds.so', (self.root / lds).read_bytes())
+        self.assertNotIn(b'/jci/aapa/blmjciaapa.so', (self.root / lds).read_bytes())
+        before = (self.root / aa).stat().st_mtime_ns
+        self.older_object(install)
+        header = self.root / 'src/adapter/lds_install.h'
+        header.write_text(header.read_text() + '\n// LDS dependency regression\n')
+        changed = self.make(aa, lds, install)
+        self.assertIn('-c src/adapter/lds_install.cpp', changed.stdout)
+        self.assertNotIn('-c src/runtime/loader.cpp', changed.stdout)
+        self.assertEqual((self.root / aa).stat().st_mtime_ns, before)
+        self.assertEqual(self.make('-q', aa, lds, install).returncode, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

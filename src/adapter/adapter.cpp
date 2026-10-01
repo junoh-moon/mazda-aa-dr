@@ -291,25 +291,6 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
 
 extern "C" void mx5_position_enter(void* m, const void* p) { mx5::adapter::position_enter(m, p); }
 extern "C" void mx5_position_leave() { mx5::adapter::position_leave(); }
-#if defined(__arm__) && !defined(__ARM_PCS_VFP)
-// The ASM caller/invoker carry EHABI unwind records; this C++ frame performs
-// scope cleanup for both C++ exceptions and deferred pthread cancellation.
-// Compile this translation unit with exceptions enabled. Do not catch an
-// OEM exception or convert cancellation into a successful OEM return.
-#if !defined(__EXCEPTIONS)
-#error "ARM adapter requires exception cleanup support"
-#endif
-extern "C" void* mx5_position_trampoline;
-extern "C" void mx5_arm_invoke(uint32_t* registers, void* target);
-extern "C" void mx5_position_call(uint32_t* registers) {
-    struct PositionScope {
-        ~PositionScope() { mx5::adapter::position_leave(); }
-    } scope;
-    mx5::adapter::position_enter(reinterpret_cast<void*>(registers[0]),
-                                 reinterpret_cast<void*>(registers[1]));
-    mx5_arm_invoke(registers, mx5_position_trampoline);
-}
-#endif
 extern "C" int32_t mx5_send_vehicle_data(void* s, mx5::adapter::VehicleData* d) {
     return mx5::adapter::send_vehicle_data(s, d);
 }

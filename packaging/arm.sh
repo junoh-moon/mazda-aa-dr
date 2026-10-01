@@ -14,6 +14,7 @@ prepare_collector_storage
 [ -d "$BASE/guard" ] && [ ! -L "$BASE/guard" ] || fail 'Missing guard directory'
 regular "$BASE/guard/mx5dr-guard"
 regular "$BASE/libmx5dr-vimtap.so"
+regular "$BASE/libmx5dr-ldstap.so"
 # Disarm first: interrupted template refresh must not retain a previous authorization.
 rm -f "$BASE/guard/arm"
 clear_capture_markers
@@ -25,6 +26,7 @@ for pair in 'sm.conf normal.trial' 'sm_WCP.conf wcp.trial'; do
     # Any old persistent experimental token is an installation error, not silently accepted.
     ! grep -F "$TOKEN" "$ROOT/jci/sm/$1" >/dev/null || fail 'Persistent preload token remains; reinstall one-boot package'
     ! grep -F "$TAP_TOKEN" "$ROOT/jci/sm/$1" >/dev/null || fail 'Persistent VBS tap token remains; reinstall one-boot package'
+    ! grep -F "$LDS_TOKEN" "$ROOT/jci/sm/$1" >/dev/null || fail 'Persistent LDS tap token remains; reinstall one-boot package'
     snapshot=$BASE/guard/$1.source.new.$$
     cp -p "$ROOT/jci/sm/$1" "$snapshot"
     trial_to "$snapshot" "$BASE/guard/$2.new.$$"

@@ -114,6 +114,26 @@ class StartupDiagnosticsTests(unittest.TestCase):
         self.assertEqual(values['guard.arm.status'], 'valid')  # format only
         self.assertEqual((self.guard / 'arm').stat().st_mode & 0o777, 0o666)
 
+    def test_v3_eighth_lds_input_is_collected_without_losing_v2_receipt(self):
+        manifest = 'mx5dr-one-boot-v3\n' + ''.join(f'{i:064x}\n' for i in range(1, 9))
+        (self.guard / 'arm').write_text(manifest)
+        result, values = self.run_diagnostics()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(values['guard.arm.status'], 'valid')
+        self.assertEqual(values['guard.arm.input_8'], f'{8:064x}')
+        self.assertEqual(values['guard.consumed.status'], 'valid')
+        self.assertNotIn('guard.consumed.input_8', values)
+        tap = self.base / 'libmx5dr-ldstap.so'
+        self.assertEqual(values['hash.ldstap.sha256'], hashlib.sha256(tap.read_bytes()).hexdigest())
+
+    def test_v3_marker_rejects_missing_or_extra_digests(self):
+        for count in (7, 9):
+            (self.guard / 'arm').write_text('mx5dr-one-boot-v3\n' + '0' * 64 + '\n' +
+                ''.join(f'{i:064x}\n' for i in range(1, count)))
+            result, values = self.run_diagnostics()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(values['guard.arm.status'], ('malformed', 'oversized'))
+
     def test_no_flash_mount_reports_actual_tmpfs_ancestor_without_claiming_persistence(self):
         self.mountinfo.write_text('1 0 0:1 / / rw - rootfs rootfs rw\n'
             '2 1 0:2 / /tmp rw,noexec - tmpfs tmpfs rw\n')

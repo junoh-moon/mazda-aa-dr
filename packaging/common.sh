@@ -12,6 +12,7 @@ fi
 BASE=$ROOT/data_persist/mx5-aa-dr
 TOKEN=/data_persist/mx5-aa-dr/libmx5dr.so
 TAP_TOKEN=/data_persist/mx5-aa-dr/libmx5dr-vimtap.so
+LDS_TOKEN=/data_persist/mx5-aa-dr/libmx5dr-ldstap.so
 LOCK=$ROOT/data_persist/.mx5dr-install-lock
 MOUNT_LOCK=$ROOT/tmp/.mx5dr-mount.lock
 MOUNT_LOCKED=0
@@ -73,7 +74,8 @@ cleanup() {
         for staged in "$ROOT/usr/bin/autostart.mx5dr-new.$$" "$ROOT/usr/bin/autostart.mx5dr-remove.$$" \
             "$ROOT/jci/sm/sm.conf.mx5dr-remove.$$" "$ROOT/jci/sm/sm_WCP.conf.mx5dr-remove.$$" \
             "$BASE"/*.new.$$ "$BASE/guard"/*.new.$$ "$BASE/tools"/*.new.$$ \
-            "$ROOT/jci/sm"/*.mx5dr-remove.$$.tap.$$ "$BASE/guard"/*.new.$$.tap.$$; do
+            "$ROOT/jci/sm"/*.mx5dr-remove.$$.tap.$$ "$BASE/guard"/*.new.$$.tap.$$ \
+            "$ROOT/jci/sm"/*.mx5dr-remove.$$.lds.$$ "$BASE/guard"/*.new.$$.lds.$$; do
             [ ! -f "$staged" ] || rm -f "$staged" || rc=1
         done
         rm -f "$LOCK/pid" || rc=1
@@ -244,10 +246,20 @@ edit_to() {
         cat "$2.tap.$$" > "$2"
         rm -f "$2.tap.$$"
     fi
+    if [ "$3" = remove ] && grep -F "$LDS_TOKEN" "$2" >/dev/null; then
+        awk -v action=remove -v target_service=jciLDS -v token="$LDS_TOKEN" -f "$HERE/edit_service.awk" "$2" > "$2.lds.$$" || fail "Unsupported LDS service configuration: $1"
+        cat "$2.lds.$$" > "$2"
+        rm -f "$2.lds.$$"
+    fi
 }
 trial_to() {
     regular "$1"
     awk -v action=add -v token="$TOKEN" -f "$HERE/edit_service.awk" "$1" > "$2" || fail "Unsupported AA service configuration: $1"
+    if [ "$MODE" != OFF ]; then
+        awk -v action=add -v target_service=jciLDS -v token="$LDS_TOKEN" -f "$HERE/edit_service.awk" "$2" > "$2.lds.$$" || fail "Unsupported LDS service configuration: $1"
+        cat "$2.lds.$$" > "$2"
+        rm -f "$2.lds.$$"
+    fi
     if [ "$MODE" = SHADOW ]; then
         awk -v action=add -v target_service=jciVBS -v token="$TAP_TOKEN" -f "$HERE/edit_service.awk" "$2" > "$2.tap.$$" || fail "Unsupported VBS service configuration: $1"
         cat "$2.tap.$$" > "$2"

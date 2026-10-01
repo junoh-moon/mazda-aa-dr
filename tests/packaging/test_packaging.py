@@ -17,6 +17,7 @@ PACK = REPO / 'packaging'
 STOCK = Path(os.environ.get('MX5DR_STOCK_ROOT', str(REPO.parent / 'design_inputs/evidence/stock_reference')))
 TOKEN = '/data_persist/mx5-aa-dr/libmx5dr.so'
 TAP_TOKEN = '/data_persist/mx5-aa-dr/libmx5dr-vimtap.so'
+LDS_TOKEN = '/data_persist/mx5-aa-dr/libmx5dr-ldstap.so'
 TOUCH = '/data_persist/oem-aa-mod/libpatch-blmjciaapa.so'
 
 
@@ -39,6 +40,9 @@ class PackagingTests(unittest.TestCase):
         (self.bundle / 'libmx5dr-vimtap.so').write_bytes(fake)
         (self.bundle / 'libmx5dr-vimtap.so.sha256').write_text(
             hashlib.sha256(fake).hexdigest() + '  libmx5dr-vimtap.so\n')
+        (self.bundle / 'libmx5dr-ldstap.so').write_bytes(fake)
+        (self.bundle / 'libmx5dr-ldstap.so.sha256').write_text(
+            hashlib.sha256(fake).hexdigest() + '  libmx5dr-ldstap.so\n')
         fake[16] = 2  # Separate test-only ARM ET_EXEC header; never run.
         (self.bundle / 'mx5dr-collector').write_bytes(fake)
         digest = hashlib.sha256(fake).hexdigest()
@@ -118,9 +122,9 @@ class PackagingTests(unittest.TestCase):
 
     def test_release_payload_with_existing_touch(self):
         release = Path(os.environ.get('MX5DR_RELEASE_BUNDLE', str(REPO / 'bundle'))) / 'libmx5dr.so'
-        if not release.exists() or not (release.parent / 'libmx5dr-vimtap.so').exists():
-            self.skipTest('Current five-artifact release bundle has not been built')
-        artifacts = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'mx5dr-collector',
+        if not release.exists() or not (release.parent / 'libmx5dr-ldstap.so').exists():
+            self.skipTest('Current six-artifact release bundle has not been built')
+        artifacts = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so', 'mx5dr-collector',
                      'mx5dr-guard', 'mx5dr-sha256')
         for name in artifacts:
             artifact = release.parent / name
@@ -335,6 +339,144 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual((dest / tap.name).read_bytes(), data)
         self.assertEqual((dest / (tap.name + '.sha256')).read_text().split()[0],
                          hashlib.sha256(data).hexdigest())
+
+    def test_lds_observation_in_each_active_mode_preserves_other_preloads(self):
+        other = '/data_persist/lds-existing.so'
+        for path in (self.sm, self.wcp):
+            value = path.read_text()
+            end = value.index('</service>', value.index('name="jciLDS"'))
+            path.write_text(value[:end] + '<environ_var env_name="LD_PRELOAD" env_value="' +
+                            other + '"/>' + value[end:])
+        baseline = [path.read_bytes() for path in (self.sm, self.wcp)]
+        for index, mode in enumerate(('OBSERVE', 'SCRUB', 'SHADOW')):
+            self.run_script('install.sh' if index == 0 else 'arm.sh', '--mode=' + mode)
+            for path in (self.trial, self.trial.with_name('wcp.trial')):
+                self.assertEqual(self.preload(path, 'jciLDS'), [LDS_TOKEN + ':' + other])
+                self.assertEqual(self.preload(path), [TOKEN])
+                self.assertEqual(self.preload(path, 'jciVBS'), [TAP_TOKEN] if mode == 'SHADOW' else [])
+        installed = self.root / LDS_TOKEN.lstrip('/')
+        self.assertEqual(installed.read_bytes(), (self.bundle / installed.name).read_bytes())
+        self.run_script('uninstall.sh')
+        self.assertEqual([p.read_bytes() for p in (self.sm, self.wcp)], baseline)
+        self.assertTrue(installed.exists())
+
+    def test_lds_off_template_has_no_observation_preload(self):
+        self.run_script('install.sh', '--mode=OFF')
+        for path in (self.trial, self.trial.with_name('wcp.trial')):
+            self.assertEqual(self.preload(path, 'jciLDS'), [])
+
+    def test_lds_wrong_service_identity_rejected_before_startup(self):
+        self.wcp.write_text(self.wcp.read_text().replace(
+            'path="/jci/lds/svcjcilds.so"', 'path="/jci/lds/different.so"'))
+        self.run_script('install.sh', '--mode=OBSERVE', ok=False)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+        self.assertFalse((self.root / LDS_TOKEN.lstrip('/')).exists())
+
+    def test_lds_payload_checksum_arch_and_absence_checked_before_writes(self):
+        tap = self.bundle / 'libmx5dr-ldstap.so'
+        original = tap.read_bytes()
+        for data in (original + b'wrong checksum', b'missing'):
+            tap.write_bytes(data)
+            if data == b'missing':
+                tap.unlink()
+            self.run_script('install.sh', ok=False)
+        data = bytearray(original)
+        data[18] = 3
+        tap.write_bytes(data)
+        tap.with_name(tap.name + '.sha256').write_text(hashlib.sha256(data).hexdigest() + '\n')
+        self.run_script('install.sh', ok=False)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+        self.assertFalse((self.root / 'data_persist/mx5-aa-dr').exists())
+
+    def test_lds_persistent_token_removal_preserves_unowned_similar_names(self):
+        other = LDS_TOKEN + '.backup:/data_persist/lds-existing.so'
+        value = self.sm.read_text()
+        end = value.index('</service>', value.index('name="jciLDS"'))
+        self.sm.write_text(value[:end] + '<environ_var env_name="LD_PRELOAD" env_value="' +
+                           LDS_TOKEN + ':' + other + '"/>' + value[end:])
+        before = self.sm.read_bytes()
+        tap = self.root / LDS_TOKEN.lstrip('/')
+        tap.parent.mkdir()
+        tap.write_bytes(b'mapped original tap')
+        self.run_script('install.sh', ok=False)
+        self.assertEqual(self.sm.read_bytes(), before)
+        self.run_script('uninstall.sh')
+        self.assertEqual(self.preload(self.sm, 'jciLDS'), [other])
+        self.assertEqual(tap.read_bytes(), b'mapped original tap')
+
+    def test_lds_missing_installed_payload_cannot_rearm(self):
+        self.run_script('install.sh')
+        tap = self.root / LDS_TOKEN.lstrip('/')
+        if tap.exists():
+            tap.unlink()
+        self.run_script('arm.sh', ok=False)
+
+    def test_lds_bundle_requires_and_hashes_product(self):
+        tap = self.bundle / 'libmx5dr-ldstap.so'
+        original = tap.read_bytes()
+        tap.unlink()
+        dest = Path(self.tmp.name) / 'lds-bundle'
+        command = ['sh', str(PACK / 'make_bundle.sh'), str(self.bundle / 'libmx5dr.so'), str(dest)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(dest.exists())
+        tap.write_bytes(original)
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((dest / tap.name).read_bytes(), original)
+        self.assertEqual((dest / (tap.name + '.sha256')).read_text().split()[0],
+                         hashlib.sha256(original).hexdigest())
+
+    def test_lds_factory_libdbus_link_allows_install_and_rearm(self):
+        alias = self.root / 'usr/lib/libdbus-1.so.3'
+        target = alias.with_name('libdbus-1.so.3.7.2')
+        if hasattr(self, 'synthetic_manifest'):
+            # The authored fixture has only manifest inputs. Recreate the same
+            # alias shape without treating its bytes as original firmware.
+            if not target.exists():
+                alias.rename(target)
+            if alias.exists() or alias.is_symlink():
+                alias.unlink()
+            alias.symlink_to(target.name)
+        else:
+            # setUp's copyfile follows links; restore the actual factory alias
+            # and target here so it cannot hide a SONAME regular-file rejection.
+            stock_alias = STOCK / 'usr/lib/libdbus-1.so.3'
+            self.assertTrue(stock_alias.is_symlink())
+            self.assertEqual(os.readlink(stock_alias), target.name)
+            if alias.exists() or alias.is_symlink():
+                alias.unlink()
+            shutil.copy2(stock_alias, alias, follow_symlinks=False)
+            shutil.copy2(stock_alias.with_name(target.name), target, follow_symlinks=False)
+        self.assertTrue(alias.is_symlink())
+        self.assertTrue(target.is_file())
+        self.assertFalse(target.is_symlink())
+        before = target.read_bytes()
+        self.run_script('install.sh', '--mode=SHADOW')
+        self.run_script('arm.sh', '--mode=SHADOW')
+        for trial in (self.trial, self.trial.with_name('wcp.trial')):
+            self.assertEqual(self.preload(trial, 'jciLDS'), [LDS_TOKEN])
+        self.assertTrue(alias.is_symlink())
+        self.assertEqual(os.readlink(alias), target.name)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_lds_original_dependency_changes_are_rejected_before_writes(self):
+        paths = ('jci/lds/svcjcilds.so', 'jci/lib/libjcilds-dbus.so',
+                 'jci/lib/libjcilds-driver.so', 'jci/lib/libjcidbus.so',
+                 'jci/lib/libjcicommon.so', 'usr/lib/libdbus-1.so.3.7.2')
+        for relative in paths:
+            with self.subTest(relative=relative):
+                path = self.root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                original = path.read_bytes() if path.exists() else None
+                path.write_bytes(b'replaced original LDS dependency')
+                self.run_script('install.sh', ok=False)
+                self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
+                self.assertFalse((self.root / 'data_persist/mx5-aa-dr').exists())
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(original)
 
 
 if __name__ == '__main__':

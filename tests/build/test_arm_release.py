@@ -89,6 +89,17 @@ class ArmReleaseTests(unittest.TestCase):
     def test_matching_record_and_bytes(self):
         self.assertEqual(build_arm.verify_build(self.repo, self.build), self.record)
 
+    def test_lds_product_is_recorded_and_shipped_with_its_checksum(self):
+        name = 'libmx5dr-ldstap.so'
+        self.assertIn(name, build_arm.ARTIFACTS)
+        self.prepare_packaging()
+        output = self.root / 'lds.zip'
+        self.package(output)
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(archive.read(name), (self.build / name).read_bytes())
+            self.assertIn(name + '.sha256', archive.namelist())
+            self.assertIn('  ' + name + '\n', archive.read('SHA256SUMS').decode())
+
     def test_build_environment_removes_ld_run_path(self):
         with mock.patch.dict(os.environ, {'LD_RUN_PATH': '/unexpected/library/path'}, clear=True):
             self.assertFalse('LD_RUN_PATH' in build_arm.build_environment())

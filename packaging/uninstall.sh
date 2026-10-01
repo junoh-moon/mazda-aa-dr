@@ -18,7 +18,7 @@ awk -v action=remove -f "$HERE/edit_autostart.awk" "$file" > "$file.mx5dr-remove
 sh -n "$file.mx5dr-remove.$$" || fail 'Invalid autostart shell'
 TARGETS=''
 # Recovery is allowed after firmware changes: removal has no firmware gate.
-# Inspect both pinned files, removing exact owned tokens in jciAAPA/jciVBS.
+# Inspect both pinned files, removing exact owned tokens in jciAAPA/jciVBS/jciLDS.
 for name in sm.conf sm_WCP.conf; do
     file=$ROOT/jci/sm/$name
     [ -e "$file" ] || continue

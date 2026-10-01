@@ -14,7 +14,7 @@
 - 이 절차 작성 시점(2026-09-29)의 master는 PR #12의 실제 센서 기반 SHADOW 계산을 포함한다. 기존 `v0.2.0-observe.2` 설치 파일은 이 변경을 포함하지 않는다. 새 릴리즈는 선택한 커밋의 전체 변경 범위를 설명해야 한다.
 - 현재 설치 기본값은 OBSERVE, live ASSIST는 코드에서 차단된 상태다. SHADOW 지원 코드가 포함돼도 기본 설치에서 SHADOW가 켜지는 것은 아니다. 릴리즈 생성 과정에서 설정이나 차단 조건을 바꾸지 않는다.
 - 예외적으로 [드문 실차 기회의 통합 시험](FIELD_TRIAL_KO.md)을 준비할 때는 의도적으로 선택한 `--default-mode=SHADOW` 묶음을 만들 수 있다. 일반 묶음의 OBSERVE 기본값은 유지한다. 이 경우 `bundle-default-mode`, build-info의 `default_mode`, 설치 안내와 릴리즈 노트가 모두 SHADOW로 일치해야 한다. 아래 일반 OBSERVE 예시를 그대로 복사해 잘못 표시하지 않는다. ASSIST 차단은 그대로다.
-- 아래 명령은 **PR #12 이후의 다섯 바이너리 구성** 기준이다. 예전 태그를 재현할 때는 그 태그의 Makefile/packaging을 사용하며, 현재 스크립트나 바이너리를 섞지 않는다.
+- 아래 명령은 **LDS 관측기를 포함한 여섯 바이너리 구성** 기준이다. 예전 태그를 재현할 때는 그 태그의 Makefile/packaging을 사용하며, 현재 스크립트나 바이너리를 섞지 않는다.
 - 실차 미검증 개발판은 pre-release로 발행한다. 빌드·호스트·QEMU 성공을 실제 차량 복구, 위치 정확도, 폰/지도 앱 수용 검증으로 표현하지 않는다. [현재 상태](STATUS_KO.md)가 기능·실차 시험 범위를 정한다.
 
 ## 1. 환경과 배포 대상 고정
@@ -73,30 +73,32 @@ python3 tools/build_arm.py --toolchain "$MX5_TOOLCHAIN" --build-dir "$RELEASE_BU
 sh packaging/make_bundle.sh "$RELEASE_BUILD/libmx5dr.so" "$RELEASE_BUNDLE"
 ```
 
-묶음에는 같은 빌드의 `libmx5dr.so`, `libmx5dr-vimtap.so`, `mx5dr-collector`, `mx5dr-guard`, 정적 `mx5dr-sha256`, 각각의 `.sha256`, 설치·제거·로그 회수 helper와 기본 설정이 들어간다. `make_bundle.sh`는 ZIP, 전체 파일 manifest, 릴리즈 노트, GitHub Release를 생성하지 않는다. 출력 디렉터리가 이미 있으면 실패하므로 기존 묶음 위에 덮어쓰지 않는다.
+묶음에는 같은 빌드의 `libmx5dr.so`, `libmx5dr-vimtap.so`, `libmx5dr-ldstap.so`, `mx5dr-collector`, `mx5dr-guard`, 정적 `mx5dr-sha256`, 각각의 `.sha256`, 설치·제거·로그 회수 helper와 기본 설정이 들어간다. `make_bundle.sh`는 ZIP, 전체 파일 manifest, 릴리즈 노트, GitHub Release를 생성하지 않는다. 출력 디렉터리가 이미 있으면 실패하므로 기존 묶음 위에 덮어쓰지 않는다.
 
 릴리즈 빌더는 새 디렉터리에서만 컴파일하고 도구체인 blob, 컴파일 전후 입력,
-실제 ARM ELF와 의존성, 다섯 결과물 해시를 `arm-build.json`에 기록한다.
+실제 ARM ELF와 의존성, 여섯 결과물 해시를 `arm-build.json`에 기록한다.
 ZIP 빌더는 이 기록과 현재 소스·바이너리를 대조한다. 과거 빌드 디렉터리에
 새 소스의 정보를 덧붙여 릴리즈로 표시하지 않는다. 개발용 `make arm`은
 계속 사용할 수 있지만 릴리즈 기록을 대신하지 않는다.
 
 ## 3. 실제 배포 바이너리와 테스트 확인
 
-독립적으로 확보한 해당 펌웨어 fixture를 저장소 밖에 둔다. `packaging/firmware.sha256`에 나열된 파일 외에 `jci/version.ini`, `jci/sm/sm.conf`, `jci/sm/sm_WCP.conf`, `usr/bin/autostart`가 필요하다. 이 파일들은 호스트 fixture로만 읽고 복사하며 OEM 실행 파일은 실행하지 않는다.
+독립적으로 확보한 해당 펌웨어 fixture를 저장소 밖에 둔다. `packaging/firmware.sha256`에 나열된 파일 외에 `jci/version.ini`, `jci/sm/sm.conf`, `jci/sm/sm_WCP.conf`, `usr/bin/autostart`가 필요하다. 심볼릭 링크는 원본 형태로 보존한다. 호스트 packaging 검사는 파일을 읽고 복사한다. 별도의 LDS ARM 설치 검사는 원본 loader·공유 runtime과 LDS 의존성을 QEMU에서 실제 실행한다. 이 원본 runtime은 빌드 sysroot와 구분하며 [LDS 검사 runner](../validation/LDS_COLD_INSTALL_2026-10-02.md)의 필수 파일을 갖춰야 한다.
 
 ```bash
 MX5DR_STOCK_ROOT='/absolute/path/to/private/stock_reference'
+MX5DR_LDS_STOCK='/absolute/path/to/private/original_runtime'
 test -d "$MX5DR_STOCK_ROOT"
+test -d "$MX5DR_LDS_STOCK"
 MX5DR_STOCK_ROOT="$MX5DR_STOCK_ROOT" \
 MX5DR_RELEASE_BUNDLE="$RELEASE_BUNDLE" \
   make test 2>&1 | tee "$RELEASE_WORK/evidence/host-tests.txt"
 
 CROSS_COMPILE="$RELEASE_ARM_PREFIX" QEMU_SYSROOT="$RELEASE_SYSROOT" \
-MX5DR_ARM_BUILD="$RELEASE_BUILD" \
+MX5DR_ARM_BUILD="$RELEASE_BUILD" MX5DR_LDS_STOCK="$MX5DR_LDS_STOCK" \
   sh tests/run_arm_all.sh 2>&1 | tee "$RELEASE_WORK/evidence/arm-tests.txt"
 
-for artifact in libmx5dr.so libmx5dr-vimtap.so mx5dr-collector mx5dr-guard mx5dr-sha256; do
+for artifact in libmx5dr.so libmx5dr-vimtap.so libmx5dr-ldstap.so mx5dr-collector mx5dr-guard mx5dr-sha256; do
   file "$RELEASE_BUILD/$artifact"
   "${RELEASE_ARM_PREFIX}readelf" -h -A -d -V "$RELEASE_BUILD/$artifact"
 done > "$RELEASE_WORK/evidence/elf.txt"
@@ -105,9 +107,10 @@ done > "$RELEASE_WORK/evidence/elf.txt"
 확인 사항:
 
 - `set -o pipefail`로 `tee` 성공이 빌드/테스트 실패를 가리지 않게 한다.
-- `make test` 종료 코드만으로 판정하지 않는다. fixture 누락에 따른 packaging skip과 소켓 금지 환경의 exit 77은 전체 명령에서 성공처럼 보일 수 있다. 실제 PASS/FAIL/SKIP과 이유를 기록한다. 이번 다섯 바이너리를 사용하는 packaging 시험이 생략된 채 차량용 설치 ZIP의 검증이 끝났다고 하지 않는다.
+- `make test` 종료 코드만으로 판정하지 않는다. fixture 누락에 따른 packaging skip과 소켓 금지 환경의 exit 77은 전체 명령에서 성공처럼 보일 수 있다. 실제 PASS/FAIL/SKIP과 이유를 기록한다. 이번 여섯 바이너리를 사용하는 packaging 시험이 생략된 채 차량용 설치 ZIP의 검증이 끝났다고 하지 않는다.
 - ELF32 little-endian ARM, softfp 호출 규약, TEXTREL 부재, GLIBC 버전/의존성을 확인한다. 현재 기대값은 GLIBC_2.4만 필요하고 동적 libstdc++ 의존성이 없는 것이다. D-Bus는 collector에 필요하며 AA preload로 돌아가면 안 된다. 과거 elf.txt를 새 바이너리의 결과로 재사용하지 않는다.
-- ARM 로그 처음과 끝의 `ARM_TEST_INPUTS`에서 `release_verified=true`, 다섯 artifact 해시, 도구체인과 sysroot를 확인한다. 릴리즈 검사는 `MX5DR_ARM_BUILD`가 필수다. 개발용 `MX5DR_ARM_LIBRARY` 검사에는 입력 해시만 기록하며 릴리즈 검증으로 표시하지 않는다.
+- ARM 로그 처음과 끝의 `ARM_TEST_INPUTS`에서 `release_verified=true`, 여섯 artifact 해시, 도구체인과 sysroot를 확인한다. 릴리즈 검사는 `MX5DR_ARM_BUILD`가 필수다. 개발용 `MX5DR_ARM_LIBRARY` 검사에는 입력 해시만 기록하며 릴리즈 검증으로 표시하지 않는다.
+- `MX5DR_LDS_STOCK` 누락은 원본 LDS 설치 검사의 명시적인 생략이다. 필수 원본 파일 누락은 종료 77이며 릴리즈 통과로 세지 않는다. 원본 설치기 71개 사례와 실제 제품 DSO의 자동 기동·원본 입력부터 AA 기록까지의 검증을 구분하여 기록한다.
 - ARM runner는 명시한 compiler/sysroot/preload를 사용한다. 상속된 GCC 검색 경로와 `LD_LIBRARY_PATH`, `LD_PRELOAD`, QEMU guest 환경 덮어쓰기는 제거하고 실제 loader 시험에서 지정한 preload만 적용한다.
 - 변경 부분에 따른 추가 ARM 로더/guard 시험은 [통합 검증](../validation/INTEGRATION_2026-09-28.md), SHADOW 범위는 [기능 검증](../validation/LIVE_SHADOW_2026-09-29.md)을 참고한다.
 - 원본 펌웨어, 개인 경로, 실차 위치 로그를 공개하지 않는다. 실행 로그는 먼저 비공개 evidence에 보관하고, 공개 검증 요약에 실행 환경·커밋·생략·미검증을 적는다.

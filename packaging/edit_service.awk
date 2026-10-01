@@ -63,6 +63,7 @@ END {
     if(target_service=="") target_service="jciAAPA"
     if(target_service=="jciAAPA") target_path="/jci/aapa/blmjciaapa.so"
     else if(target_service=="jciVBS") target_path="/jci/vbs/svcjcivbs.so"
+    else if(target_service=="jciLDS") target_path="/jci/lds/svcjcilds.so"
     else die("unsupported target service")
     if(token=="" || token ~ /[^A-Za-z0-9_.\/+-]/) die("unsupported token")
     if(index(all,"\r")) die("CRLF configuration unsupported")
