@@ -19,6 +19,7 @@ function reset_runtime() {
     computation=""; position=""; position_mode=""; shadow=""; processed=""
     solution=""; pipeline=""; result=""; anchor=""; rejected_raw=0
     position_rejection="none_observed"; motion_rejection="none_observed"
+    pipeline_reset="none_observed"; reset_operation=""; reset_sequence=""; reset_time=""
     for (i=1;i<=3;i++) sensor[i]=""
 }
 function report(name, ok, detail) {
@@ -58,6 +59,10 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
             computation=field("computation_active")
         }
         if (kind=="shadow_disabled") computation="false"
+        if (kind=="shadow_pipeline_reset" && not_future(field("mono_ns"))) {
+            pipeline_reset=field("reason"); reset_operation=field("operation")
+            reset_sequence=field("receive_seq"); reset_time=field("mono_ns")
+        }
         if (kind=="position") {position=field("mono_ns"); position_mode=field("mode")}
         if (kind=="shadow") {
             # A worker heartbeat is insufficient: require its actual MODEL
@@ -122,6 +127,7 @@ END {
         solution=="true" && result=="OK" && pipeline=="OK" && audit=="0" && dropped=="0"
     print "model_solution=" (usable ? "observed" : "not_observed") " domain=model assist_ready=false"
     print "gps_anchor_gate=" anchor " position_rejection=" position_rejection " motion_rejection=" motion_rejection " rejected_raw_seen=" (rejected_raw ? "true" : "false")
+    print "last_pipeline_reset=" pipeline_reset " operation=" reset_operation " receive_seq=" reset_sequence " mono_ns=" reset_time
     if (bad) print "Startup or collection evidence incomplete. Keep/export existing logs; missing/rotated boot markers cannot be reconstructed by this check."
     else print "Startup evidence only. Check model_solution and recorded reasons; this is not a completed navigation trial."
     exit bad

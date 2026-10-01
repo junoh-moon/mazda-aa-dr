@@ -74,6 +74,19 @@ class AnalyzeTests(unittest.TestCase):
         (self.root / "collector.0.jsonl").write_bytes(encode(current))
         return module.analyze([self.root])
 
+    def test_primary_pipeline_reset_remains_an_explicit_inconclusive_reason(self):
+        reset = dict(kind='shadow_pipeline_reset', mono_ns=35, domain='model',
+                     assist_ready=False, reason='LATE', operation='raw', input_ns=20,
+                     receive_seq=45, sensor=2, call=0, resets=1)
+        rows = records()
+        rows.insert(-1, reset)
+        report = self.audit(rows)
+        self.assertEqual(report['status'], 'inconclusive')
+        self.assertIn('shadow_pipeline_reset', self.codes(report))
+        self.assertNotIn('unknown_record_kind', self.codes(report))
+        reset['receive_seq'] = -1
+        self.assertIn('partial_record', self.codes(self.audit(rows)))
+
     def test_original_pass_scope_is_local(self):
         report = self.audit()
         self.assertEqual(report["status"], "local_checks_pass")

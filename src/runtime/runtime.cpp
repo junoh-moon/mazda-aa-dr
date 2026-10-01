@@ -250,6 +250,24 @@ void journal_model_motion_excluded(Journal& j,const N::RawEvent& raw,
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
 }
 
+void journal_pipeline_reset(Journal& j,const N::Pipeline& navigation,uint64_t before,
+                            const char* operation,uint64_t input_ns,
+                            uint64_t receive_seq=0,unsigned sensor=0,unsigned call=0) {
+  const N::Status& s=navigation.status();
+  if(s.resets==before)return;
+  // A following accepted input replaces status.result. Preserve the primary
+  // MODEL reset at the operation boundary, while leaving raw capture active.
+  char line[600];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"shadow_pipeline_reset\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"reason\":\"%s\",\"operation\":\"%s\","
+      "\"input_ns\":%llu,\"receive_seq\":%llu,\"sensor\":%u,\"call\":%u,\"resets\":%llu}",
+      (unsigned long long)clock_ns(0),N::pipeline_result_name(s.result),operation,
+      (unsigned long long)input_ns,(unsigned long long)receive_seq,sensor,call,
+      (unsigned long long)s.resets);
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+
 // One bounded worker receive turn. Capture survives model/AA audit failure;
 // rejected input is separate evidence and can never enter either estimator.
 template<class Receiver>
@@ -301,7 +319,10 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
         continue;
       }
       if(enabled) {
-        navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);
+        const uint64_t resets=navigation.status().resets;
+        navigation.enqueue_raw(raw);
+        journal_pipeline_reset(j,navigation,resets,"raw",raw.received_ns,raw.receive_seq,unsigned(raw.kind));
+        holdout.enqueue_raw(raw);
       }
       journal_motion(j,batch,raw);
     }
@@ -558,7 +579,12 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
           const char* reason=model_session.reject(o);
           if(!reason)reason=model_bus.reject(o);
           if(reason)rejected_model_position(j,o,reason,model_session,model_bus);
-          else { navigation.enqueue_position(o);holdout.enqueue_position(o); }
+          else {
+            const uint64_t resets=navigation.status().resets;
+            navigation.enqueue_position(o);
+            journal_pipeline_reset(j,navigation,resets,"position",o.mono_ns,0,0,o.call_sequence);
+            holdout.enqueue_position(o);
+          }
         }
       }
     }
@@ -582,7 +608,11 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
     now=clock_ns(0);
     if(shadow && !j.failed && !__sync_fetch_and_add(&audit_fault,0) && model_tick.due(now)) {
         sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
-        if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
+        if(now>navigation.reorder_ns()) {
+          const uint64_t resets=navigation.status().resets,watermark=now-navigation.reorder_ns();
+          navigation.drain(watermark);
+          journal_pipeline_reset(j,navigation,resets,"drain",watermark);
+        }
         if(now>navigation.reorder_ns())holdout.drain(now-navigation.reorder_ns());
         // A lifecycle can complete while this worker computes. A coherent
         // recheck clears queued predictions before its next diagnostic snapshot.

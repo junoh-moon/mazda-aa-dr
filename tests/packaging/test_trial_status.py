@@ -124,6 +124,15 @@ class TrialStatusTests(unittest.TestCase):
         self.assertIn('position_rejection=request_session_unavailable', r.stdout)
         self.assertIn('motion_rejection=stale_receipt', r.stdout)
 
+    def test_pipeline_reset_reason_survives_a_later_successful_input(self):
+        self.trace.insert(3, dict(kind='shadow_pipeline_reset', mono_ns=98000000000,
+                                 reason='LATE', operation='raw', receive_seq=45))
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        row['pipeline'] = 'OK'
+        r = self.run_status()
+        self.assertIn('last_pipeline_reset=LATE operation=raw receive_seq=45', r.stdout)
+        self.assertIn('capture_active=observed', r.stdout)
+
     def test_rejected_raw_is_still_capture_evidence(self):
         self.trace[-1]['events'] = self.trace[-1]['events'][:2]
         self.trace.append(dict(kind='motion_rejected', authenticated_decoded=True,
