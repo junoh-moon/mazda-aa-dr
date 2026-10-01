@@ -25,7 +25,7 @@ struct Fixture {
             plan.entries[plan.entry_count++]=e;
         }
         permissions[4]=RW;
-        for(unsigned i=0;i<16;++i) {
+        for(unsigned i=0;i<C::Plan::SLOT_CAPACITY;++i) {
             uintptr_t* slot=reinterpret_cast<uintptr_t*>(got)+i;*slot=0x2000+16*i;
             C::Slot s={reinterpret_cast<uintptr_t>(slot),*slot,0x3000+16*i};
             plan.slots[plan.slot_count++]=s;
@@ -97,9 +97,11 @@ struct Fixture {
 };
 const uint8_t Fixture::bytes[16]={0x10,0x48,0x2d,0xe9,8,0xb0,0x8d,0xe2,1,2,3,4,5,6,7,8};
 int main() {
+    // Raw reply observation adds four pointer slots to the existing sixteen.
+    assert(sizeof(C::Plan().slots)/sizeof(C::Slot)>=20);
     unsigned calls=0;
     { Fixture f;assert(f.run()==A::INSTALL_OK);f.restored(true);assert(f.prepared==1 && !f.released);calls=f.calls; }
-    assert(calls==25);
+    assert(calls==29);
     for(unsigned i=1;i<=calls;++i) {
         Fixture f;f.fail1=i;assert(f.run()==A::MEMORY_PROTECTION_FAILED);f.restored();
         if(f.prepared)assert(!f.released);
@@ -107,19 +109,19 @@ int main() {
     { Fixture f;f.allocation_fail=true;assert(f.run()==A::TRAMPOLINE_ALLOCATION_FAILED);f.restored(); }
     { Fixture f;f.prepare_fail=true;assert(f.run()==A::CONFIGURATION_FAILED);f.restored();assert(f.released==1); }
     { Fixture f;f.changed_code=true;assert(f.run()==A::ORIGINAL_BYTES_MISMATCH);assert(!f.prepared);f.code[32]^=1;f.restored(); }
-    for(unsigned i=0;i<16;++i) {
+    for(unsigned i=0;i<C::Plan::SLOT_CAPACITY;++i) {
         Fixture f;f.changed_slot=true;f.changed_slot_index=i;
         assert(f.run()==A::NEXT_CHAIN_MISMATCH && !f.prepared && f.released==1);
         reinterpret_cast<uintptr_t*>(f.got)[i]=f.plan.slots[i].expected;f.restored();
     }
-    for(unsigned second=26;second<=32;second+=3) {
-        Fixture f;f.fail1=22;f.fail2=second;assert(f.run()==A::RESTORE_FAILED_FATAL);
+    for(unsigned second=30;second<=36;second+=3) {
+        Fixture f;f.fail1=26;f.fail2=second;assert(f.run()==A::RESTORE_FAILED_FATAL);
         assert(!f.released); // Patched or non-executable OEM page: stop the service.
         for(unsigned i=0;i<f.plan.slot_count;++i)assert(*reinterpret_cast<uintptr_t*>(f.plan.slots[i].address)==f.plan.slots[i].expected);
     }
     // The doWork and destructor may share a page under a different page size.
     { Fixture f;f.plan.entries[3].address=f.plan.entries[2].address+32;
       memcpy(reinterpret_cast<void*>(f.plan.entries[3].address),Fixture::bytes,16);
-      assert(f.run()==A::INSTALL_OK);assert(f.calls==23);f.restored(true); }
-    puts("PASS cold transaction: 25 protection failures, rechecks, preparation/allocation and fatal rollback");
+      assert(f.run()==A::INSTALL_OK);assert(f.calls==27);f.restored(true); }
+    puts("PASS cold transaction: 29 protection failures, rechecks, preparation/allocation and fatal rollback");
 }

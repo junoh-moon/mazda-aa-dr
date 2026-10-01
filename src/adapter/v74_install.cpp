@@ -96,7 +96,19 @@ const ApiEntry kBusApi[]={
     {"JCIDBUS_conn_connect",0xb360,{0xe92d4800,0xe28db004,0xe24dd028,0xe50b0010}},
     {"JCIDBUS_conn_disconnect",0xac54,{0xe92d4800,0xe28db004,0xe24dd040,0xe50b0030}},
     {"JCIDBUS_conn_free",0xb930,{0xe92d4800,0xe28db004,0xe24dd020,0xe50b0010}},
-    {"JCIDBUS_signal_handler",0x2098c,{0xe92d4800,0xe28db004,0xe24dd038,0xe50b0028}}
+    {"JCIDBUS_signal_handler",0x2098c,{0xe92d4800,0xe28db004,0xe24dd038,0xe50b0028}},
+    {"create_method_msg",0x19ff0,{0xe92d4800,0xe28db004,0xe24dd010,0xe50b0010}},
+    {"JCIDBUS_pending_msg_handler",0xeebc,{0xe92d4800,0xe28db004,0xe24dd048,0xe50b0038}}
+};
+struct RawApiEntry { const char* name; uintptr_t offset; size_t size; uint32_t words[4]; };
+const RawApiEntry kRawApi[]={
+    {"dbus_connection_send_with_reply",0xb8bc,16,{0xe92d45f8,0xe2526000,0xe1a07003,0x13a03000}},
+    {"dbus_pending_call_steal_reply",0x166d8,16,{0xe92d4038,0xe1a04000,0xe5900010,0xebffcd39}},
+    {"dbus_message_get_serial",0x13298,8,{0xe2800004,0xeaffede7,0,0}},
+    {"dbus_message_get_reply_serial",0x132c8,16,{0xe52de004,0xe3a01005,0xe24dd00c,0xe3a02075}},
+    {"dbus_message_get_type",0x1353c,8,{0xe2800004,0xeaffed31,0,0}},
+    {"dbus_message_get_sender",0x14344,16,{0xe52de004,0xe3a02000,0xe24dd00c,0xe3a01007}},
+    {"dbus_message_get_error_name",0x142c4,16,{0xe52de004,0xe3a02000,0xe24dd00c,0xe3a01004}}
 };
 A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::RequestBindings& bindings,A::BusBindings& connection) {
     if(!in.blm_handle)return A::INVALID_INSTALL_ARGUMENT;
@@ -128,6 +140,13 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
        !segment(lb,pa,16,PROT_READ|PROT_EXEC))return A::MODULE_MISMATCH;
     const uint32_t predicate_bytes[]={0xe1a0c001,0xe1a03002,0xe3a01004,0xe1a0200c};
     if(std::memcmp(predicate,predicate_bytes,16))return A::ORIGINAL_BYTES_MISMATCH;
+    for(unsigned i=0;i<sizeof kRawApi/sizeof kRawApi[0];++i) {
+        const RawApiEntry& e=kRawApi[i];const uintptr_t address=lb+e.offset;
+        if(dlsym(in.blm_handle,e.name)!=reinterpret_cast<void*>(address) ||
+           !matches_module(address,lb,dbus.dli_fname) ||
+           !segment(lb,address,e.size,PROT_READ|PROT_EXEC))return A::MODULE_MISMATCH;
+        if(std::memcmp(reinterpret_cast<void*>(address),e.words,e.size))return A::ORIGINAL_BYTES_MISMATCH;
+    }
     if(data_entry!=reinterpret_cast<void*>(db+0x27e0) ||
        !segment(db,db+0x2228,16,PROT_READ|PROT_EXEC) ||
        std::memcmp(reinterpret_cast<void*>(db+0x2228),kNotify,16))return A::ORIGINAL_BYTES_MISMATCH;
@@ -184,6 +203,21 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
         if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return A::NEXT_CHAIN_MISMATCH;
         plan.slots[plan.slot_count++]=s;
     }
+    // Observe raw headers using data pointers only. JCIDBUS's notify callback
+    // pointer is a GLOB_DAT relocation, not a patch to running handler code.
+    // All support is reachable before the LDS submit wrapper is published.
+    const C::Slot wire_slots[]={
+        {bb+0x3449c,lb+0x166d8,reinterpret_cast<uintptr_t>(&mx5_request_steal)},
+        {bb+0x346ec,bb+0xeebc,reinterpret_cast<uintptr_t>(&mx5_request_pending)},
+        {bb+0x344dc,lb+0xb8bc,reinterpret_cast<uintptr_t>(&mx5_request_wire_send)},
+        {bb+0x34230,bb+0x19ff0,reinterpret_cast<uintptr_t>(&mx5_request_message)}
+    };
+    for(unsigned i=0;i<4;++i) {
+        const C::Slot& s=wire_slots[i];
+        if(!segment(bb,s.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
+        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return A::NEXT_CHAIN_MISMATCH;
+        plan.slots[plan.slot_count++]=s;
+    }
     plan.slots[plan.slot_count++]=submit;
     connection.create=reinterpret_cast<A::BusCreate>(bb+0xb8c4);
     connection.connect=reinterpret_cast<A::BusConnect>(bb+0xb360);
@@ -205,6 +239,15 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
     bindings.free_method=reinterpret_cast<A::RequestFree>(bb+0x19494);
     bindings.free_method_only=reinterpret_cast<A::RequestFree>(bb+0x195e8);
     bindings.position_vptr=blm+0xf7140;
+    bindings.wire.build=reinterpret_cast<decltype(bindings.wire.build)>(bb+0x19ff0);
+    bindings.wire.pending=reinterpret_cast<decltype(bindings.wire.pending)>(bb+0xeebc);
+    bindings.wire.send=reinterpret_cast<decltype(bindings.wire.send)>(lb+0xb8bc);
+    bindings.wire.steal=reinterpret_cast<decltype(bindings.wire.steal)>(lb+0x166d8);
+    bindings.wire.serial=reinterpret_cast<decltype(bindings.wire.serial)>(lb+0x13298);
+    bindings.wire.reply_serial=reinterpret_cast<decltype(bindings.wire.reply_serial)>(lb+0x132c8);
+    bindings.wire.type=reinterpret_cast<decltype(bindings.wire.type)>(lb+0x1353c);
+    bindings.wire.sender=reinterpret_cast<decltype(bindings.wire.sender)>(lb+0x14344);
+    bindings.wire.error=reinterpret_cast<decltype(bindings.wire.error)>(lb+0x142c4);
     return A::INSTALL_OK;
 }
 A::InstallResult session_plan(const A::InstallOptions& in,C::Plan& plan,A::SessionBindings& bindings) {

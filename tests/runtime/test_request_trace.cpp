@@ -673,7 +673,127 @@ static void forwarding_and_errno() {
     puts("PASS synthetic exactly-once original callback/userdata/payload/return/errno for OK/busy/full/conflict");
 }
 
+static rt::WireIssue wire_issue(uint32_t serial,uint64_t when=100) {
+    rt::WireIssue value=rt::WireIssue();value.known=true;value.serial=serial;value.observed_ns=when;
+    return value;
+}
+static rt::WireReply wire_reply(uint32_t serial,uint32_t reply_serial) {
+    rt::WireReply value=rt::WireReply();value.known=true;value.serial=serial;
+    value.reply_serial=reply_serial;value.type=2;value.observed_ns=200;
+    value.sender=rt::copy_text(":1.raw");return value;
+}
+static void raw_wire_identity_out_of_order() {
+    rt::Ledger ledger;int methods[2]={},workers[2]={};unsigned char positions[2][72]={};
+    rt::Token requests[2],delivered;
+    for(unsigned n=0;n<2;++n) {
+        assert(ledger.request_begin(&methods[n],issue(n),&requests[n])==rt::OK);
+        errno=EDOM;
+        assert(ledger.wire_issue(requests[n],wire_issue(41+n,110+n))==rt::OK&&errno==EDOM);
+    }
+    for(int n=1;n>=0;--n) {
+        rt::Reply response=reply(":1.public");response.wire=wire_reply(81+unsigned(n),41+unsigned(n));
+        assert(ledger.reply_enter(&methods[n],response,&delivered)==rt::OK);
+        response.wire=rt::WireReply(); // No borrowed raw metadata survives.
+        post(ledger,&workers[n],positions[n],delivered);
+        assert(ledger.request_end(&methods[n])==rt::OK);
+    }
+    for(unsigned n=0;n<2;++n) {
+        const rt::Trace trace=take(ledger,&workers[n],positions[n]);
+        assert(trace.request.id==requests[n].id&&trace.issue.wire.known&&!trace.issue.wire.conflict);
+        assert(trace.issue.wire.serial==41+n&&trace.issue.wire.observed_ns==110+n);
+        assert(trace.reply.wire.known&&trace.reply.wire.serial==81+n&&trace.reply.wire.reply_serial==41+n);
+        assert(trace.reply.wire.type==2&&!strcmp(trace.reply.wire.sender.bytes,":1.raw"));
+        assert(!trace.reply.wire_serial_known&&trace.reply.wire_serial==0);
+        assert(!strcmp(trace.reply.sender.bytes,":1.public"));
+    }
+    assert(status(ledger).loss_epoch==1&&!status(ledger).loss_reasons);
+    puts("PASS raw wire identity survives identical in-flight payloads and reversed reply/work order");
+}
+static void raw_wire_duplicate_conflict_and_lifetime() {
+    rt::Ledger ledger;int method=0,worker=0,position=0;rt::Token token,returned;
+    assert(ledger.request_begin(&method,issue(1),&token)==rt::OK);
+    assert(ledger.wire_issue(token,wire_issue(21,110))==rt::OK);
+    assert(ledger.wire_issue(token,wire_issue(21,999))==rt::OK);
+    assert(ledger.wire_issue(token,wire_issue(22,1000))==rt::CONFLICT);
+    assert(ledger.wire_issue(token,wire_issue(21,1001))==rt::CONFLICT);
+    assert(status(ledger).loss_epoch==1&&!status(ledger).loss_reasons);
+    rt::Reply response=reply();response.wire=wire_reply(2,21);
+    assert(ledger.reply_enter(&method,response,&returned)==rt::OK);
+    assert(ledger.wire_issue(token,wire_issue(23))==rt::USED); // Already frozen.
+    post(ledger,&worker,&position,returned);
+    assert(ledger.request_end(&method)==rt::OK);
+    rt::Token fresh;assert(ledger.request_begin(&method,issue(2),&fresh)==rt::OK);
+    assert(ledger.wire_issue(token,wire_issue(99))==rt::NOT_FOUND);
+    const rt::Trace old=take(ledger,&worker,&position);
+    assert(old.issue.wire.known&&old.issue.wire.conflict&&old.issue.wire.serial==21);
+    assert(old.issue.wire.observed_ns==110); // Repeated reads never retime it.
+    assert(ledger.wire_issue(fresh,wire_issue(24))==rt::OK);
+    assert(ledger.reply_enter(&method,reply(),&returned)==rt::OK);
+    post(ledger,&worker,&position,returned);assert(ledger.request_end(&method)==rt::OK);
+    const rt::Trace current=take(ledger,&worker,&position);
+    assert(current.request.id==fresh.id&&current.issue.wire.serial==24&&!current.issue.wire.conflict);
+    assert(!current.reply.wire.known&&!current.reply.wire.serial);
+    assert(status(ledger).loss_epoch==1&&!status(ledger).loss_reasons);
+    puts("PASS raw wire duplicate capture, sticky conflict, frozen reply and method address reuse");
+}
+static void raw_wire_contention_does_not_lose_lifetimes() {
+    rt::Ledger ledger;int method=0,worker=0,position=0;rt::Token token,returned;
+    assert(ledger.request_begin(&method,issue(1),&token)==rt::OK);
+    rt::RequestTraceTestAccess::lock(ledger);errno=ERANGE;
+    assert(ledger.wire_issue(token,wire_issue(31))==rt::BUSY&&errno==ERANGE);
+    const rt::Status during=status(ledger);
+    assert(during.loss_epoch==1&&!during.loss_reasons&&during.requests==1);
+    rt::RequestTraceTestAccess::unlock(ledger);
+    assert(ledger.reply_enter(&method,reply(),&returned)==rt::OK);
+    post(ledger,&worker,&position,returned);assert(ledger.request_end(&method)==rt::OK);
+    const rt::Trace trace=take(ledger,&worker,&position);
+    assert(trace.request.id==token.id&&!trace.issue.wire.known);
+    // An actual lost lifetime event still revokes the normal Ledger epoch.
+    assert(ledger.request_begin(&method,issue(2),&token)==rt::OK);
+    assert(ledger.request_begin(&method,issue(3),&returned)==rt::CONFLICT);
+    const rt::Status lost=status(ledger);
+    assert(ledger.wire_issue(token,wire_issue(32))==rt::STALE);
+    assert(status(ledger).loss_epoch==lost.loss_epoch&&status(ledger).loss_reasons==lost.loss_reasons);
+    assert(ledger.request_end(&method)==rt::OK);
+    puts("PASS supplemental wire contention preserves request lifetimes and rejects a truly stale token");
+}
+static void raw_wire_unknown_and_local_error() {
+    rt::Ledger ledger;int method=0,worker=0,position=0;rt::Token token,returned;
+    rt::Issue request=issue(1);request.wire=wire_issue(77);request.wire.known=false;
+    request.wire.conflict=true;
+    assert(ledger.request_begin(&method,request,&token)==rt::OK);
+    rt::Reply response=reply();response.wire=wire_reply(88,77);response.wire.known=false;
+    response.wire.error_name=rt::copy_text("stale-error");
+    assert(ledger.reply_enter(&method,response,&returned)==rt::OK);
+    post(ledger,&worker,&position,returned);assert(ledger.request_end(&method)==rt::OK);
+    const rt::Trace unknown=take(ledger,&worker,&position);
+    assert(!unknown.issue.wire.known&&unknown.issue.wire.conflict&&!unknown.issue.wire.serial&&!unknown.issue.wire.observed_ns);
+    assert(!unknown.reply.wire.known&&!unknown.reply.wire.observed_ns&&!unknown.reply.wire.serial&&
+        !unknown.reply.wire.reply_serial&&!unknown.reply.wire.type&&!unknown.reply.wire.sender.known&&
+        !unknown.reply.wire.sender.complete&&!unknown.reply.wire.sender.bytes[0]&&
+        !unknown.reply.wire.error_name.known&&!unknown.reply.wire.error_name.bytes[0]);
+    assert(ledger.request_begin(&method,issue(2),&token)==rt::OK);
+    rt::WireIssue no_serial=wire_issue(0);
+    assert(ledger.wire_issue(token,no_serial)==rt::NOT_READY);
+    assert(ledger.wire_issue(token,wire_issue(42,0))==rt::OK); // Missing observation clock is separate.
+    response=reply();response.wire=wire_reply(0,42);response.wire.type=3;
+    response.wire.sender=rt::Text();response.wire.error_name=rt::copy_text("org.freedesktop.DBus.Error.NoReply");
+    assert(ledger.reply_enter(&method,response,&returned)==rt::OK);
+    post(ledger,&worker,&position,returned);assert(ledger.request_end(&method)==rt::OK);
+    const rt::Trace timeout=take(ledger,&worker,&position);
+    assert(timeout.issue.wire.known&&timeout.issue.wire.serial==42&&!timeout.issue.wire.observed_ns);
+    assert(timeout.reply.wire.known&&!timeout.reply.wire.serial&&timeout.reply.wire.reply_serial==42&&
+        timeout.reply.wire.type==3&&!timeout.reply.wire.sender.known);
+    assert(!strcmp(timeout.reply.wire.error_name.bytes,"org.freedesktop.DBus.Error.NoReply"));
+    assert(!timeout.reply.wire_serial_known); // Original getter result unchanged.
+    puts("PASS unknown raw metadata normalization and locally created NoReply remain distinct");
+}
+
 int main() {
+    raw_wire_identity_out_of_order();
+    raw_wire_duplicate_conflict_and_lifetime();
+    raw_wire_contention_does_not_lose_lifetimes();
+    raw_wire_unknown_and_local_error();
     identical_out_of_order();
     pointer_reuse_and_scope();
     pending_and_real_cleanup();
@@ -686,6 +806,6 @@ int main() {
     cross_thread_and_early_work();
     concurrency_stress();
     forwarding_and_errno();
-    puts("PASS 12 request-trace regression groups; synthetic only, OEM integration remains TODO");
+    puts("PASS 16 request-trace regression groups; synthetic only, OEM integration remains TODO");
     return 0;
 }

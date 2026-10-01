@@ -206,6 +206,9 @@ static A::Observation long_route_event() {
   A::R::Trace& t=event.request_trace;
   t.issue.route.destination=t.issue.route.path=t.issue.route.interface_name=t.issue.route.member=text;
   t.reply.sender=t.reply.error_name=text;
+  t.issue.wire.serial=1;t.issue.wire.known=true;
+  t.reply.wire.serial=2;t.reply.wire.reply_serial=1;t.reply.wire.type=3;t.reply.wire.known=true;
+  t.reply.wire.sender=t.reply.wire.error_name=text;
   return event;
 }
 static void route_capture_tail(const char* root,const std::string& logs) {
@@ -257,10 +260,15 @@ static void request_journal(bool emit) {
   const A::S::Snapshot session={A::S::OBSERVED,8,2,-7,true,12};
   t.issue.session_context=session;o.send_session=session;
   t.reply.sender=R::copy_text(":1.42");t.reply.error_name=R::copy_text("org.freedesktop.DBus.Error.ServiceUnknown");
+  t.issue.wire.observed_ns=101;t.issue.wire.serial=23;t.issue.wire.known=true;
+  t.reply.wire.observed_ns=102;t.reply.wire.serial=41;t.reply.wire.reply_serial=23;
+  t.reply.wire.type=3;t.reply.wire.known=true;
+  t.reply.wire.sender=t.reply.sender;t.reply.wire.error_name=t.reply.error_name;
   t.issue.route.destination=R::copy_text("com.jci.lds.data");
   t.issue.route.path=R::copy_text("/com/jci/lds/data");
   t.issue.route.interface_name=R::copy_text("com.jci.lds.data");
   t.issue.route.member=R::copy_text("GetPosition");
+  const A::Observation baseline=o;
   char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
   o.kind=A::Observation::SEND;o.type=1;o.length=48;o.has_payload=true;
@@ -270,11 +278,15 @@ static void request_journal(bool emit) {
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
   o.request_result=R::OK;
   t.reply.sender=R::copy_text("quote\"\\\n\001\377");
+  t.reply.wire.sender=t.reply.sender;
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
   // Worst bounded names and integers still fit the actual worker buffer.
-  memset(t.reply.sender.bytes,1,sizeof t.reply.sender.bytes);t.reply.sender.bytes[63]=0;
+  memset(t.reply.sender.bytes,1,sizeof t.reply.sender.bytes);
   t.reply.sender.complete=false;t.reply.error_name=t.reply.sender;
   t.issue.route.destination=t.issue.route.path=t.issue.route.interface_name=t.issue.route.member=t.reply.sender;
+  t.reply.wire.sender=t.reply.wire.error_name=t.reply.sender;
+  t.issue.wire.observed_ns=t.reply.wire.observed_ns=UINT64_MAX;
+  t.issue.wire.serial=t.reply.wire.serial=t.reply.wire.reply_serial=UINT32_MAX;
   t.request.id=t.request.epoch=t.worker.id=t.worker.epoch=UINT64_MAX;
   t.issue.observed_ns=t.reply.observed_ns=UINT64_MAX;
   t.issue.bus_lifetime=t.issue.session_lifetime=t.issue.session_event=UINT64_MAX;
@@ -285,7 +297,15 @@ static void request_journal(bool emit) {
   t.issue.session_context.revision=UINT64_MAX;
   t.issue.session_context.state=INT32_MIN;o.send_session=t.issue.session_context;
   t.reply.wire_serial_known=true;t.reply.wire_serial=UINT32_MAX;
+  o.call_sequence=o.prediction_generation=o.type=o.length=UINT32_MAX;
+  o.mono_ns=UINT64_MAX;o.original_mode=o.result=INT32_MIN;
+  char measured_request[16384];
+  assert(mx5::runtime::format_request_trace(measured_request,sizeof measured_request,R::OK,t));
+  if(!emit)fprintf(stderr,"maximum escaped request JSON: %zu bytes; capacity %u\n",strlen(measured_request)+1,
+      unsigned(mx5::runtime::REQUEST_JSON_CAPACITY));
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
+  if(!emit)fprintf(stderr,"maximum escaped observation JSON: %zu bytes; capacity %u\n",strlen(line)+1,
+      unsigned(mx5::runtime::OBSERVATION_JSON_CAPACITY));
   // Exact-size success, one byte short failure, and adjacent bytes untouched.
   char request[mx5::runtime::REQUEST_JSON_CAPACITY];assert(mx5::runtime::format_request_trace(request,sizeof request,R::OK,t));
   const size_t required=strlen(request)+1;
@@ -296,6 +316,16 @@ static void request_journal(bool emit) {
   assert(!mx5::runtime::format_request_trace(bounds+1,required-1,R::OK,t));
   assert(!bounds[1] && bounds[0]==0x5a && bounds[required]==0x5a);
   assert(!mx5::runtime::format_request_trace(0,0,R::OK,t));
+  // A locally generated timeout still has a copied raw header; zero response
+  // serial/unknown sender must not erase its reply_serial, type or error name.
+  A::Observation local=baseline;
+  R::Reply& local_reply=local.request_trace.reply;
+  local_reply.type_known=false;local_reply.wire_serial_known=false;
+  local_reply.sender=local_reply.error_name=R::Text();
+  local.request_trace.issue.wire.observed_ns=0;local_reply.wire.observed_ns=0;
+  local_reply.wire.serial=0;local_reply.wire.sender=R::Text();
+  local_reply.wire.error_name=R::copy_text("org.freedesktop.DBus.Error.NoReply");
+  assert(format_observation(line,sizeof line,local));if(emit)puts(line);
 }
 // Authored producer controls for the Python result auditor. Pipeline rows use
 // actual status counters; direct core rows have a different kind and must not

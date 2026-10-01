@@ -15,6 +15,94 @@ spec.loader.exec_module(audit)
 
 class RequestJournal(unittest.TestCase):
     @staticmethod
+    def wire_record():
+        return dict(issue=dict(known=True, observed_ns=101, serial=23, conflict=False),
+                    reply=dict(known=True, observed_ns=102, serial=41, reply_serial=23, type=3,
+                               sender=dict(value=':1.42', complete=True),
+                               error=dict(value='org.freedesktop.DBus.Error.ServiceUnknown', complete=True)))
+
+    @staticmethod
+    def unknown_wire():
+        return dict(issue=dict(known=False, observed_ns=None, serial=None, conflict=False),
+                    reply=dict(known=False, observed_ns=None, serial=None, reply_serial=None, type=None,
+                               sender=dict(value=None, complete=False), error=dict(value=None, complete=False)))
+
+    def test_wire_formatter_and_legacy_compatibility(self):
+        command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+        rows = [json.loads(s) for s in subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()]
+        self.assertEqual(len(rows), 6)
+        p, send, failed, escaped, longest, local = rows
+        self.assertEqual(p['request'].get('wire'), self.wire_record())
+        self.assertEqual(send['request']['wire'], p['request']['wire'])
+        self.assertEqual(failed['request']['wire'], self.unknown_wire())
+        self.assertEqual(escaped['request']['wire']['reply']['sender']['value'], 'quote"\\\n\x01\xff')
+        self.assertEqual(longest['request']['wire']['issue']['serial'], 2**32-1)
+        self.assertEqual(longest['request']['wire']['reply']['reply_serial'], 2**32-1)
+        self.assertEqual(longest['request']['wire']['reply']['sender'], dict(value='\x01'*64, complete=False))
+        self.assertEqual(longest['request']['wire']['reply']['error'], dict(value='\x01'*64, complete=False))
+        expected_local = self.wire_record()
+        expected_local['issue']['observed_ns'] = None
+        expected_local['reply'].update(observed_ns=None, serial=0,
+                                       sender=dict(value=None, complete=False),
+                                       error=dict(value='org.freedesktop.DBus.Error.NoReply', complete=True))
+        self.assertEqual(local['request']['wire'], expected_local)
+        self.assertIsNone(local['request']['reply_type'])
+        self.assertIsNone(local['request']['wire_serial'])
+        self.assertIsNone(local['request']['sender']['value'])
+        for trace in (p['request'], {k: v for k, v in p['request'].items() if k != 'wire'}):
+            a = audit.Auditor()
+            a.consume(dict(p, request=trace), 'old-or-new-wire')
+            self.assertNotIn('request_record_malformed', [i['code'] for i in a.issues])
+
+    def test_wire_optional_schema_contract(self):
+        p, _ = self.bus_rows()
+        wire = self.wire_record()
+        valid = [wire, self.unknown_wire(),
+                 dict(wire, issue=dict(wire['issue'], observed_ns=None),
+                      reply=dict(wire['reply'], observed_ns=None, serial=0, reply_serial=0,
+                                 sender=dict(value=None, complete=False)))]
+        for value in valid:
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(p['request'], wire=value)), 'valid-wire')
+            self.assertNotIn('request_record_malformed', [i['code'] for i in a.issues])
+        invalid = [None, {}, dict(issue=wire['issue']),
+                   dict(wire, issue=dict(wire['issue'], known=1)),
+                   dict(wire, issue=dict(wire['issue'], serial=0)),
+                   dict(wire, issue=dict(wire['issue'], conflict=1)),
+                   dict(wire, issue=dict(wire['issue'], known=False)),
+                   dict(wire, reply=dict(wire['reply'], known=False)),
+                   dict(wire, reply=dict(wire['reply'], serial=True)),
+                   dict(wire, reply=dict(wire['reply'], reply_serial=2**32)),
+                   dict(wire, reply=dict(wire['reply'], type=0)),
+                   dict(wire, reply=dict(wire['reply'], observed_ns=True)),
+                   dict(wire, reply=dict(wire['reply'], sender=dict(value=None, complete=True)))]
+        for value in invalid:
+            with self.subTest(wire=value):
+                a = audit.Auditor()
+                a.consume(dict(p, request=dict(p['request'], wire=value)), 'invalid-wire')
+                self.assertIn('request_record_malformed', [i['code'] for i in a.issues])
+
+    def test_wire_diagnostics_do_not_qualify_provenance(self):
+        p, _ = self.bus_rows()
+        wire = self.wire_record()
+        for value, code in ((dict(wire, issue=dict(wire['issue'], conflict=True)), 'request_wire_issue_conflict'),
+                            (dict(wire, reply=dict(wire['reply'], reply_serial=24)), 'request_wire_reply_mismatch')):
+            a = audit.Auditor()
+            a.consume(dict(p, request=dict(p['request'], wire=value)), 'wire-contradiction')
+            self.assertIn(code, [i['code'] for i in a.issues])
+        local = dict(wire, reply=dict(wire['reply'], serial=0, reply_serial=0,
+                                     sender=dict(value=None, complete=False),
+                                     error=dict(value='org.freedesktop.DBus.Error.NoReply', complete=True)))
+        a = audit.Auditor()
+        a.consume(dict(p, request=dict(p['request'], wire=local)), 'local-error')
+        self.assertNotIn('request_wire_reply_mismatch', [i['code'] for i in a.issues])
+        summary = a.report()['request_observation']
+        self.assertEqual(summary['qualification'], 'not_established')
+        self.assertEqual(summary['wire_headers']['reply_known'], 1)
+        self.assertEqual(summary['wire_headers']['reply_without_remote_serial'], 1)
+        self.assertEqual(summary['wire_complete_error_names'], {'org.freedesktop.DBus.Error.NoReply': 1})
+
+    @staticmethod
     def bus_rows():
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
         p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
@@ -224,7 +312,7 @@ class RequestJournal(unittest.TestCase):
     def test_text_fields_match_the_bytewise_encoder(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
         p = json.loads(subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()[0])
-        for field in ('destination', 'path', 'interface', 'member', 'sender', 'error'):
+        for field in ('destination', 'path', 'interface', 'member', 'sender', 'error', 'wire_sender', 'wire_error'):
             for value, complete, valid in (
                     ('\0', True, False), ('a\0b', False, False),
                     ('\u0100', True, False), ('\ud800', False, False),
@@ -233,8 +321,12 @@ class RequestJournal(unittest.TestCase):
                     ('\xff' * 64, False, True), ('\xff' * 64, True, False)):
                 with self.subTest(field=field, value=repr(value), complete=complete):
                     trace = dict(p['request'], route=dict(p['request']['route']))
-                    target = trace['route'] if field in trace['route'] else trace
-                    target[field] = dict(value=value, complete=complete)
+                    if field.startswith('wire_'):
+                        trace['wire'] = dict(trace['wire'], reply=dict(trace['wire']['reply']))
+                        trace['wire']['reply'][field[5:]] = dict(value=value, complete=complete)
+                    else:
+                        target = trace['route'] if field in trace['route'] else trace
+                        target[field] = dict(value=value, complete=complete)
                     a = audit.Auditor()
                     a.consume(dict(p, request=trace), 'byte-contract')
                     malformed = 'request_record_malformed' in [i['code'] for i in a.issues]
@@ -243,8 +335,8 @@ class RequestJournal(unittest.TestCase):
     def test_production_records_and_bounds(self):
         command = shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
         rows = [json.loads(s) for s in subprocess.check_output(command + ['--emit-requests'], text=True).splitlines()]
-        self.assertEqual(len(rows), 5)
-        p, s, failed, escaped, longest = rows
+        self.assertEqual(len(rows), 6)
+        p, s, failed, escaped, longest, local = rows
         self.assertEqual(p['request'], s['request'])
         trace = p['request']
         self.assertEqual(trace['result'], 'observed')
@@ -277,8 +369,8 @@ class RequestJournal(unittest.TestCase):
         self.assertEqual(longest['request']['session_state'], -2**31)
         self.assertEqual(longest['request']['session_context']['revision'], 2**64-1)
         self.assertFalse(longest['request']['sender']['complete'])
-        self.assertEqual(longest['request']['sender']['value'], '\x01'*63)
-        self.assertTrue(all(v == dict(value='\x01'*63, complete=False) for v in longest['request']['route'].values()))
+        self.assertEqual(longest['request']['sender']['value'], '\x01'*64)
+        self.assertTrue(all(v == dict(value='\x01'*64, complete=False) for v in longest['request']['route'].values()))
         a = audit.Auditor()
         a.consume(p, 'position')
         a.consume(s, 'send')

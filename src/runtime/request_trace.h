@@ -68,6 +68,26 @@ Text copy_text(const char* text);
 struct Route {
     Text destination, path, interface_name, member;
 };
+// Supplemental observations from the exact raw transport calls. Neither
+// identity nor successful submission establishes provider/sensor qualification.
+struct WireIssue {
+    uint64_t observed_ns; // Receipt/inspection clock only; zero is unknown.
+    uint32_t serial;      // Assigned request serial, scoped to its connection.
+    // A known request serial must be nonzero. Unknown clears serial/time but
+    // retains an observed conflict; an absent clock alone does not erase it.
+    bool known, conflict;
+};
+struct WireReply {
+    uint64_t observed_ns; // Header inspection time, never measurement time.
+    uint32_t serial, reply_serial;
+    int32_t type;        // Raw DBus type, distinct from the JCIDBUS type below.
+    // known means the raw message header was copied, not that a remote packet
+    // arrived. A local NoReply error may have serial=0 and no sender while its
+    // type, reply_serial and error name remain observable. Unknown clears the
+    // whole raw record, including its owned text.
+    bool known;
+    Text sender, error_name;
+};
 struct Issue {
     // bus_lifetime records the process-local successful connect epoch below.
     // Qualified request/session ownership is still unknown, not inferred from
@@ -83,6 +103,7 @@ struct Issue {
     // Original method's routing fields, copied BEFORE async submission.
     // A well-known destination is not the provider identity or bus lifetime.
     Route route;
+    WireIssue wire;
 };
 
 struct Reply {
@@ -92,6 +113,7 @@ struct Reply {
     uint32_t wire_serial;
     bool type_known, wire_serial_known;
     Text sender, error_name;
+    WireReply wire; // Separate from the original public-getter fields above.
 };
 
 struct Trace {
@@ -133,6 +155,11 @@ public:
     // Register the real method before calling the original async submit:
     // a reply may arrive before submit returns. No numeric position is a key.
     Result request_begin(const void* method, const Issue&, Token* out);
+    // Supplement an in-flight request before reply_enter freezes the trace.
+    // Equal repeated serials preserve the first observation; differing serials
+    // mark a sticky wire conflict. Metadata contention never invalidates the
+    // request/worker lifetime epoch. A failed submit does not end the request.
+    Result wire_issue(Token request, const WireIssue&);
     Result reply_enter(const void* method, const Reply&, Token* out);
 
     // Only an actually observed method end/destruction permits reclamation.
