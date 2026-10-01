@@ -256,6 +256,21 @@ NMEA 공급을 수정한 뒤 기본 QEMU의 여러 실행은 WFI 정지 또는 S
 수신·진단용 GPIO 보정·부분 SM과 바뀐 CPU 부하의 관측이며 실제
 수신기/차량·폰이나 제품 ASSIST 검증이 아닙니다.
 
+[진단용 CPU 루프 제거 재실행](../validation/LDS_WFI_REPLAY_2026-10-01.md)에서는
+같은 수정 fixture의 한 이미지로 `pass`/`mirror`를 각각 두 번 더
+실행했습니다. 네 실행 모두 질의 3·25·9·6 이후 완료하지 못했고, 한
+실행의 두 vCPU가 앞서 본 커널 WFI 경로에 있었습니다. 질의 중단 시점이
+달라 원인은 미분리입니다. 앞선 루프 포함 완주를 기본 QEMU의 재현성이나
+제품·실차 검증으로 승격하지 않습니다. 후속 QMP도 두 vCPU의 WFI 지점을
+반복 관찰했고, 단일 스레드 TCG만으로는 완주하지 못했습니다. 반면 원본
+커널에 진단용 `nohlt` 인자를 준 동일 이미지 `pass`/`mirror`는 30/37개
+질의와 완료 표식까지 진행했습니다. `mirror`의 mode 1·UTC 0 응답과
+두 좌표/UTC 경계 혼합을 별도로 제외했습니다. `nohlt`는 CPU 부하와 idle
+경로를 바꾸므로 WFI/인터럽트 원인 확정이나 ASSIST 자격 근거가 아닙니다.
+후속 동일 VM trace의 진행 3초에는 GIC set/acknowledge가 1,286/1,172건,
+질의 중단 뒤 8초에는 선택한 GIC 이벤트가 0건이었습니다. 마지막 timer
+예약 상태를 보지 못해 가상 인터럽트가 멈춘 선행 원인은 미확정입니다.
+
 [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)는
 외부 [원본 함수 정적 분석](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)의
 입력 해시와 공개 D-Bus 출력 형식·별도 cache mutex를 root가 직접 대조했습니다.
