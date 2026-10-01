@@ -228,7 +228,7 @@ int main(int argc,char** argv) {
     unsigned positions=0,begins=0,reset_aborts=0,invalid=0,recovered=0,stale_valid=0;
     unsigned pre_ready=0,pre_begin=0,pre_valid=0,bus_boundary=0;size_t raw_rows=0;
     unsigned excluded_receipt=0,excluded_transport=0,late_request_rejected=0;
-    uint64_t reset_since=0;
+    uint64_t reset_since=0,last_drain_calls=0;
     while(std::getline(f,line)) {
         if(line.find("\"kind\":\"shadow_motion_excluded\"")!=std::string::npos) {
             const uint64_t seq=number(line,"receive_seq");
@@ -264,6 +264,8 @@ int main(int argc,char** argv) {
             if(line.find(bus_case?"\"reason\":\"bus_reset\"":"\"reason\":\"session_reset\"")!=std::string::npos)++reset_aborts;
         }
         if(line.find("\"kind\":\"shadow\"")==std::string::npos)continue;
+        const uint64_t drain_calls=number(line,"drain_calls_total");
+        assert(drain_calls>last_drain_calls);last_drain_calls=drain_calls;
         const uint64_t t=number(line,"mono_ns")-start;
         const bool valid=line.find("\"model_valid\":true")!=std::string::npos;
         if(t<2000000000ULL&&number(line,"state")==MX5_DR_READY&&number(line,"frontier_ns"))++pre_ready;

@@ -131,6 +131,27 @@ class TrialStatusTests(unittest.TestCase):
             self.assertIn('model_solution=not_observed', result.stdout)
             self.assertIn('gps_anchor_gate=none_observed', result.stdout)
 
+    def test_primary_pipeline_reset_retracts_old_solution_and_shows_reason(self):
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        row.update(model_valid=True, result='OK', pipeline='OK')
+        reset = dict(kind='shadow_pipeline_reset', mono_ns=99000000000,
+                     domain='model', assist_ready=False, reason='BAD_INPUT',
+                     operation='raw', input_ns=99000000000,
+                     receive_seq=45, sensor=1, call=0, resets=1)
+        result = self.run_status(trace=self.trace + [reset])
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('model_solution=not_observed', result.stdout)
+        self.assertIn('last_pipeline_reset_this_boot=BAD_INPUT operation=raw receive_seq=45', result.stdout)
+
+    def test_drain_counter_is_a_separate_calculation_attempt_not_a_solution(self):
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        row['drain_calls_total'] = 3
+        row['events'] = 0
+        result = self.run_status()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('calculation_attempt_recent=observed drain_calls_total=3 intervals_total=0', result.stdout)
+        self.assertIn('model_solution=not_observed', result.stdout)
+
     def test_missing_stale_future_or_malformed_model_diagnostic_is_not_observed(self):
         row = next(row for row in self.trace if row['kind'] == 'shadow')
         for change in ({'mono_ns': 1000000000}, {'mono_ns': 101000000000},

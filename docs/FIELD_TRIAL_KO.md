@@ -69,6 +69,14 @@ sh /data_persist/mx5-aa-dr/tools/trial_status.sh
 `model_solution`은 별도 진단이며, 수집 성공이나 ASSIST 자격으로 합치지
 않습니다. `events_queued_total`에는 위치 입력도 포함되고 이전 MODEL
 경계의 누적값이 남을 수 있으므로 실제 계산 완료 횟수가 아닙니다.
+`calculation_attempt_recent`의 `drain_calls_total`은 worker가 MODEL의
+`drain()`을 호출한 누적 횟수입니다. 빈 큐를 검사한 호출도 포함하므로 센서
+처리 횟수나 유효 위치 생성 횟수가 아닙니다. `intervals_total`은 별도로
+완료된 모델 적분 구간의 누적값입니다. `last_pipeline_reset_this_boot`는
+현재 부팅에서 마지막으로 기록한 주 MODEL 초기화 사유·입력 경로를
+표시합니다. `raw`의 `input_ns`는 수신 시각, `position`은 관측 시각,
+`drain`은 처리 watermark이며 생산자 측정 시각으로 읽으면 안 됩니다.
+초기화가 기록되면 앞선 MODEL 해는 현재 해로 표시되지 않습니다.
 계산이나 위치 관측이 `unavailable`이어도 이미 수집한 원시 자료를
 보존하고, 주차 상태에서 원인을 확인합니다. 상태 명령의 성공만으로
 전체 주행 시험을 완료했다고 판단하지 않습니다.

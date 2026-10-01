@@ -70,15 +70,16 @@ static void arm_test_mode() {
 }
 struct FakeReceiver {
   unsigned calls,limit;
-  bool gap;
+  bool gap,bad_model;
   N::MotionCursor cursor;
-  FakeReceiver(unsigned n,bool missing=false):calls(0),limit(n),gap(missing) {}
+  FakeReceiver(unsigned n,bool missing=false,bool invalid_model=false):
+    calls(0),limit(n),gap(missing),bad_model(invalid_model) {}
   N::ReceiveResult receive(N::RawEvent* out,N::ReceiveDiagnostic* d) {
     if(calls==limit)return N::CHANNEL_EMPTY;
     const uint64_t now=clock_ns(0);
     N::RawEvent e=N::RawEvent();e.kind=N::WHEELS;e.epoch=1;
     ++calls;e.receive_seq=calls+(gap && calls>1?1:0);e.received_ns=now;
-    for(unsigned i=0;i<4;++i)e.raw[i]=10000;
+    for(unsigned i=0;i<4;++i)e.raw[i]=bad_model&&calls==1?50000:10000;
     unsigned char bytes[N::MOTION_RECORD_SIZE];assert(N::encode_motion(e,bytes));
     const N::MotionDatagram packet={bytes,sizeof bytes,false,true,42,0};
     return N::inspect_motion_datagram(packet,0,now,cursor,out,d);
@@ -119,6 +120,28 @@ static void receive_turn_tests(const char* root,const std::string& logs) {
   Journal j(root);mx5::runtime::MotionBatch batch;FakeReceiver receiver(300);
   drain_motion(j,batch,receiver,navigation,holdout,false);
   assert(receiver.calls==256 && batch.empty() && !j.failed);
+}
+static void pipeline_fault_capture(const char* root,const std::string& logs) {
+  arm_test_mode();config.max_log_bytes=65536;
+  N::Pipeline navigation;N::GpsHoldout holdout;const mx5_dr_context context={1,1,1};
+  assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+  assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+  {
+    Journal j(root);mx5::runtime::MotionBatch batch;FakeReceiver receiver(3,false,true);
+    drain_motion(j,batch,receiver,navigation,holdout,true);j.flush();
+    assert(navigation.status().resets==1 && navigation.status().result==N::PIPELINE_OK);
+    assert(!j.failed && batch.empty() && receiver.calls==3 && !audit_fault);
+  }
+  std::ifstream f((logs+"/trace.0.jsonl").c_str());
+  const std::string saved((std::istreambuf_iterator<char>(f)),std::istreambuf_iterator<char>());
+  assert(saved.find("\"kind\":\"shadow_pipeline_reset\"")!=std::string::npos);
+  assert(saved.find("\"reason\":\"BAD_INPUT\"")!=std::string::npos);
+  assert(saved.find("\"operation\":\"raw\"")!=std::string::npos);
+  assert(saved.find("\"receive_seq\":1")!=std::string::npos);
+  assert(saved.find(",50000,50000,50000,50000,")!=std::string::npos);
+  assert(saved.find("\"kind\":\"motion_batch\"")!=std::string::npos);
+  assert(saved.find(",50000,50000,50000,50000,")<
+         saved.find("\"kind\":\"shadow_pipeline_reset\""));
 }
 static void stop_tests(const char* root,const std::string& logs) {
   const char* boot="12345678-1234-1234-1234-123456789abc";
@@ -505,6 +528,7 @@ int main(int argc,char** argv) {
   assert(!queue.dropped() && A::mode() == A::SCRUB_STALE);
   assert(pop(&read));
   receive_turn_tests(tmp,logs);
+  pipeline_fault_capture(tmp,logs);
   route_capture_tail(tmp,logs);
   stop_tests(tmp,logs);
   route_general_worker(tmp,logs);

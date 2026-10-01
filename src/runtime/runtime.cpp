@@ -244,6 +244,24 @@ void journal_model_motion_excluded(Journal& j,const N::RawEvent& raw,
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
 }
 
+void journal_pipeline_reset(Journal& j,const N::Pipeline& navigation,uint64_t before,
+                            const char* operation,uint64_t input_ns,
+                            uint64_t receive_seq=0,unsigned sensor=0,unsigned call=0) {
+  const N::Status& status=navigation.status();
+  if(status.resets==before)return;
+  // The next accepted input can overwrite status.result in the same receive
+  // turn. Record the primary MODEL fault while its cause is still available.
+  char line[600];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"shadow_pipeline_reset\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"reason\":\"%s\",\"operation\":\"%s\","
+      "\"input_ns\":%llu,\"receive_seq\":%llu,\"sensor\":%u,\"call\":%u,\"resets\":%llu}",
+      (unsigned long long)clock_ns(0),N::pipeline_result_name(status.result),operation,
+      (unsigned long long)input_ns,(unsigned long long)receive_seq,sensor,call,
+      (unsigned long long)status.resets);
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+
 // One bounded worker receive turn. Capture survives model/AA audit failure;
 // rejected input is separate evidence and can never enter either estimator.
 template<class Receiver>
@@ -294,10 +312,16 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
                 (bus_boundary?"transport_before_bus":"transport_before_session"));
         continue;
       }
-      if(enabled) {
-        navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);
-      }
+      const uint64_t resets=navigation.status().resets;
+      if(enabled) {navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);}
       journal_motion(j,batch,raw);
+      if(enabled && navigation.status().resets!=resets) {
+        // Flush the offending raw input before its diagnostic, so the causal
+        // evidence survives even if the journal fails on the next record.
+        flush_motion(j,batch);
+        journal_pipeline_reset(j,navigation,resets,"raw",raw.received_ns,
+                               raw.receive_seq,unsigned(raw.kind));
+      }
     }
   }
   // No batch crosses the worker sleep, including a capped or failed turn.
@@ -523,6 +547,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
   uint64_t last_shadow_log=0;
   uint64_t last_calibration_log=0;
   uint64_t last_stop_check=0;
+  uint64_t drain_calls=0;
   mx5::runtime::WorkerTick model_tick;
   for (;;) {
     const uint64_t cutoff=clock_ns(0);
@@ -552,7 +577,12 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
           const char* reason=model_session.reject(o);
           if(!reason)reason=model_bus.reject(o);
           if(reason)rejected_model_position(j,o,reason,model_session,model_bus);
-          else { navigation.enqueue_position(o);holdout.enqueue_position(o); }
+          else {
+            const uint64_t resets=navigation.status().resets;
+            navigation.enqueue_position(o);
+            journal_pipeline_reset(j,navigation,resets,"position",o.mono_ns,0,0,o.call_sequence);
+            holdout.enqueue_position(o);
+          }
         }
       }
     }
@@ -576,7 +606,12 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
     now=clock_ns(0);
     if(shadow && !j.failed && !__sync_fetch_and_add(&audit_fault,0) && model_tick.due(now)) {
         sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
-        if(now>navigation.reorder_ns())navigation.drain(now-navigation.reorder_ns());
+        if(now>navigation.reorder_ns()) {
+          const uint64_t resets=navigation.status().resets,watermark=now-navigation.reorder_ns();
+          navigation.drain(watermark);
+          if(drain_calls!=UINT64_MAX)++drain_calls;
+          journal_pipeline_reset(j,navigation,resets,"drain",watermark);
+        }
         if(now>navigation.reorder_ns())holdout.drain(now-navigation.reorder_ns());
         // A lifecycle can complete while this worker computes. A coherent
         // recheck clears queued predictions before its next diagnostic snapshot.
@@ -600,13 +635,14 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
           uint8_t bytes[48];
           const bool encoded=mx5::runtime::encode_model_location_preview(d.snapshot,bytes);
           if(encoded)hex48(bytes,preview);
-          snprintf(line,sizeof line,
+          const int formatted=snprintf(line,sizeof line,
               "{\"kind\":\"shadow\",\"mono_ns\":%llu,\"domain\":\"model\","
               "\"model_session_epoch\":%llu,\"session_revision\":%llu,"
               "\"model_bus_epoch\":%llu,\"bus_revision\":%llu,"
               "\"model_valid\":%s,\"assist_ready\":false,\"state\":%u,"
               "\"result\":\"%s\",\"pipeline\":\"%s\",\"uncertainties\":%u,"
               "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
+              "\"drain_calls_total\":%llu,"
               "\"frontier_ns\":%llu,\"lat\":%s,\"lon\":%s,\"heading_rad\":%s,"
               "\"speed_mps\":%s,\"error_model_m\":%s,\"stopped\":%s,"
               "\"yaw_zero\":%.17g,\"calibration_version\":%llu,\"wheel_scale\":%.17g,"
@@ -618,12 +654,13 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
               mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
               (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
               (unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
+              (unsigned long long)drain_calls,
               (unsigned long long)d.snapshot.frontier_ns,lat,lon,heading,speed,error,
               d.snapshot.stopped?"true":"false",navigation.calibration().active_zero,
               (unsigned long long)navigation.calibration().calibration_version,
               navigation.wheel_calibration().active_scale,
               (unsigned long long)navigation.wheel_calibration().calibration_version,encoded?"true":"false",preview);
-          j.line(line);
+          if(formatted>0 && size_t(formatted)<sizeof line)j.line(line);else j.fail();
         }
     }
     if (now - last_flush >= 1000000000ULL) {
