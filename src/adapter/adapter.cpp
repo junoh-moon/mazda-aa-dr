@@ -203,9 +203,12 @@ void position_enter(void* manager, const void* input) {
     const int before = previous_mode.exchange(ctx.original_mode, std::memory_order_acq_rel);
     if (before != ctx.original_mode) invalidate();
     ctx.generation = generation();
-    if (ctx.decoded && options.provenance &&
-        !options.provenance(manager, &event.position, &ctx.provenance, options.user))
-        ctx.provenance.exact_request = false;
+    if (ctx.decoded && options.provenance) {
+        const PositionContext input_context={event.position,ctx.request_result,
+            ctx.request_trace,ctx.sequence,ctx.generation};
+        if (!options.provenance(manager, input_context, &ctx.provenance, options.user))
+            ctx.provenance.exact_request = false;
+    }
     event.call_sequence = ctx.sequence; event.prediction_generation = ctx.generation;
     event.original_mode = ctx.original_mode; event.provenance = ctx.provenance;
     event.mono_ns = now();

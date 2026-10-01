@@ -22,7 +22,7 @@ static int32_t fake_oem(void* session,adapter::VehicleData* data) {
     return -731;
 }
 static uint64_t clock_fn(void*) { return now_ns; }
-static bool provenance(void*,const adapter::PositionInput*,adapter::Provenance* p,void*) {
+static bool provenance(void*,const adapter::PositionContext&,adapter::Provenance* p,void*) {
     p->source_epoch=11;p->session_epoch=12;
     p->exact_request=p->verified_lds=p->legacy_receiver=true; // fixture only
     return true;

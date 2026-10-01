@@ -350,7 +350,7 @@ static void prediction_session_reader(const void* storage,S::Snapshot* out,void*
     }
     errno=saved_errno;
 }
-static bool prediction_provenance(void*,const A::PositionInput*,A::Provenance* p,void*) {
+static bool prediction_provenance(void*,const A::PositionContext&,A::Provenance* p,void*) {
     p->source_epoch=11;p->session_epoch=12;
     p->exact_request=p->verified_lds=p->legacy_receiver=true;return true;
 }

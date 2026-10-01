@@ -88,7 +88,7 @@ static unsigned sends,replacements;
 static uint8_t original[48],sent[48];
 static A::VehicleData* borrowed;
 static bool used_original;
-static bool authored_provenance(void*,const A::PositionInput*,A::Provenance* out,void*) {
+static bool authored_provenance(void*,const A::PositionContext&,A::Provenance* out,void*) {
     *out=A::Provenance{11,12,true,true,true};return true;
 }
 static void observe(const A::Observation* o,void*) {

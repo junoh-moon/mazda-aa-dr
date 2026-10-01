@@ -17,7 +17,7 @@ static uint32_t source_epoch=11,session_epoch=12;
 static A::Observation last_position, last_send;
 static uint8_t original[48], forwarded[48];
 static uint64_t clock_fn(void*) { return now_ns; }
-static bool provenance(void*,const A::PositionInput*,A::Provenance* p,void*) {
+static bool provenance(void*,const A::PositionContext&,A::Provenance* p,void*) {
     p->source_epoch=source_epoch;p->session_epoch=session_epoch;
     p->exact_request=p->verified_lds=p->legacy_receiver=true;return true;
 }

@@ -57,7 +57,7 @@ static void sink(const Observation* e, void*) {
     errno = EBUSY; // The shim must hide this side effect from OEM code.
 }
 static uint64_t clock_fn(void*) { errno = EAGAIN; return clock_ns; }
-static bool provenance(void*, const PositionInput*, Provenance* out, void*) {
+static bool provenance(void*, const PositionContext&, Provenance* out, void*) {
     out->source_epoch = 11; out->session_epoch = 12;
     out->exact_request = out->verified_lds = out->legacy_receiver = true; return true;
 }

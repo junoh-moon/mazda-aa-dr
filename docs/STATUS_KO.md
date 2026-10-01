@@ -99,6 +99,11 @@ provenance도 바꾸지 않습니다. live ASSIST와 v1.0은 계속 미완료입
 부분 초기화 조건을 보존합니다. 제품 preload·AA worker 결합과 물리 입력
 자격은 이 실행에 포함하지 않았습니다.
 
+[현재 callback의 요청 문맥 전달](../validation/PROVENANCE_CONTEXT_2026-10-02.md)은
+one-shot으로 확보한 Trace·호출·세대를 inline 출처 검증 함수에 직접 넘깁니다.
+새 host·ARM 일곱 회귀와 기존 host 집중 검사를 통과했습니다. 물리 자격
+공급부는 계속 미구현이며 실제 제품 DSO 검증은 별도로 진행합니다.
+
 아래는 `.2` 회수와 검증의 기록이며 새판의 실행 횟수로 바꾸지 않습니다.
 실차에서 v0.3.9-shadow.1의 메뉴3이 정상 `/proc/mounts` 링크를 거부했습니다.
 이후 핫픽스로 archive 회수는 성공했지만 trace·collector 기록 파일이 모두

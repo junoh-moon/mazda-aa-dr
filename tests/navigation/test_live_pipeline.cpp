@@ -27,7 +27,7 @@ static uint32_t get32(const unsigned char* p) {
     return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);
 }
 static uint64_t clock_fn(void*) { return clock_value; }
-static bool provenance(void*,const A::PositionInput*,A::Provenance* p,void*) {
+static bool provenance(void*,const A::PositionContext&,A::Provenance* p,void*) {
     // Explicit synthetic provenance, never a runtime default.
     p->source_epoch=11;p->session_epoch=12;
     p->exact_request=p->verified_lds=p->legacy_receiver=true;return true;

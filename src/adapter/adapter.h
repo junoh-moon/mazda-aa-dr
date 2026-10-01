@@ -61,7 +61,19 @@ struct Observation {
 // allocation-free, noexcept, and never retain borrowed input pointers.
 typedef void (*ObservationSink)(const Observation*, void* user);
 typedef uint64_t (*MonotonicClock)(void* user);
-typedef bool (*ProvenanceReader)(void* manager, const PositionInput*,
+// Borrowed only for this provenance callback. The adapter has already consumed
+// the one-shot request reader and captured this call's post-mode-change
+// generation. Do not repeat that lookup, retain these references, or replace
+// them with a later global/session/sideband observation. Nested calls have
+// separate frames. A non-OK request_result always accompanies an empty trace.
+// These are observation identities, not provider/receiver or sensor evidence.
+struct PositionContext {
+    const PositionInput& position;
+    runtime::request_trace::Result request_result;
+    const runtime::request_trace::Trace& request_trace;
+    uint32_t call_sequence,prediction_generation;
+};
+typedef bool (*ProvenanceReader)(void* manager, const PositionContext&,
                                  Provenance*, void* user);
 typedef runtime::request_trace::Result (*RequestReader)(const void* oem_position,
                                   runtime::request_trace::Trace*, void* user);

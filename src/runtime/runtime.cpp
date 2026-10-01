@@ -68,7 +68,7 @@ bool pop(A::Observation *out) { return queue.pop(out); }
 
 // No live provenance or sensor freshness is fabricated from polling. SCRUB
 // uses only the original request mode; custom DR remains a separate gate.
-bool provenance(void *, const A::PositionInput *, A::Provenance *out, void *) {
+bool provenance(void *, const A::PositionContext&, A::Provenance *out, void *) {
   memset(out, 0, sizeof *out);
   return false;
 }

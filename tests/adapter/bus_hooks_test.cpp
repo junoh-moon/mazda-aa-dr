@@ -170,7 +170,7 @@ static A::VehicleData* input_wrapper;
 static unsigned sends;
 static bool original_wrapper;
 static uint64_t clock_fn(void*) { return sample_time; }
-static bool provenance(void*,const A::PositionInput*,A::Provenance* out,void*) {
+static bool provenance(void*,const A::PositionContext&,A::Provenance* out,void*) {
     out->source_epoch=123;out->session_epoch=456;
     out->exact_request=out->verified_lds=out->legacy_receiver=true;return true;
 }

@@ -72,7 +72,7 @@ static A::VehicleData* borrowed;
 static bool expect_original;
 static uint8_t sent[48],original[48];
 static uint64_t clock_fn(void*) { return now_ns; }
-static bool provenance(void*,const A::PositionInput*,A::Provenance* out,void*) {
+static bool provenance(void*,const A::PositionContext&,A::Provenance* out,void*) {
     out->source_epoch=11;out->session_epoch=12;
     out->exact_request=out->verified_lds=out->legacy_receiver=true; // synthetic only
     return true;
