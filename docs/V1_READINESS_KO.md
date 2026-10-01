@@ -167,6 +167,10 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   독립 ARM 검토에서 찾은 64비트 load 후행 장벽 문제도 수정했습니다.
   최종 원본 VM 두 실행(raw 936·855건)은 journal/요청 loss 0과 합성식 대조를
   완료했습니다. 과거 drop의 정확한 원인과 물리 입력 자격은 확정하지 않았습니다.
+  [후속 양성 입력 통합 VM](../validation/INTEGRATED_POSITIVE_VM_2026-10-01.md)은
+  같은 로컬 제품 DSO에 원본 LDS·VIM 경유 합성 입력을 동시에 주어 약 5초
+  no-fix 동안 연속 MODEL 유효 47건과 복귀 뒤 철회를 관측했습니다. 물리 센서의
+  생산 시각·주기·품질, 완료된 GPS holdout, 차량 정확도는 여전히 미확인입니다.
 - [x] 원본 직렬 읽기·GPS 파서의 유효 응답으로 단절·복귀와 제품 MODEL을 검사합니다.
   [LDS 입력 기동 조사](../validation/LDS_INPUT_STARTUP_2026-09-30.md)의 여섯 VM에서
   SYSTEM 응답·USB 목록 요청까지 진행했지만 mode 0·READ_NOT_READY입니다.

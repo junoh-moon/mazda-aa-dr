@@ -71,6 +71,16 @@ AA session이 없어 위치 poll 22건은 모두 mode 0, 완전 LOCATION payload
 0건입니다. 분석은 종료 2·`inconclusive`이고 runner는 240초 제한
 `observation_only`입니다. 정상 전체 차량 기동·실차·폰 자격을 추가하지 않습니다.
 
+후속 [양성 입력 통합 VM](../validation/INTEGRATED_POSITIVE_VM_2026-10-01.md)은
+**같은 로컬 제품 DSO**를 원본 LDS의 합성 NMEA와 원본 VIM·VBS의 합성 센서에
+연결했습니다. r7에서 정차 영점 후보를 이동 GPS 기준점에 적용하고, 원본
+mode 0 약 5초 동안 MODEL 유효 snapshot 47건을 얻었습니다. 별도 WGS84
+계산은 작성한 10 m/s 휠 입력과 4.844초·48.440 m에서 일치했고 이동
+mode 1 복귀 뒤 유효 결과가 철회됐습니다. LOCATION 48바이트 쌍 20건은
+제품 기록에서 원본과 동일했습니다. 초기 입력 공백·중단된 holdout을
+보존한 전체 PC 판정은 여전히 `inconclusive`입니다. 이는 부분 SM·가상
+GPIO·합성 수신 시각 시험이며 차량·폰 검증이나 live ASSIST 자격이 아닙니다.
+
 [원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
 실제 NMEA parser→callback→잠금 cache 쓰기→원본 service snapshot→serializer와
 공개 v0.3.5 제품 token을 연결했습니다. GGA 좌표·고도가 갱신돼도 이전 RMC의
