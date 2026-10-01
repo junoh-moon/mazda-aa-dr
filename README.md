@@ -2,7 +2,7 @@
 
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
-**The current USB bundle is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. No vehicle or phone validation has been performed. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
+**The current USB bundle is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. A vehicle trial was attempted, but its recovered archive contains no capture journals; startup and storage remain under investigation. Sensor operation and phone acceptance are unverified. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
 
 On 2026-10-01 the user authorized one combined vehicle installation/test before
 v1.0, after feasible firmware and offline verification. This updates the earlier
@@ -28,6 +28,11 @@ transport remain incomplete, so **ASSIST stays disabled**.
 hotfix and choose `3` after the command below, including after uninstalling.
 No reinstall or new drive is needed. The old menu incorrectly rejected the
 normal `/proc/mounts` symlink; see the [failure and fix](validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md).
+
+The subsequent [vehicle recovery result](validation/EMPTY_CAPTURE_2026-10-02.md)
+confirms retrieval but contains no trace or collector journals. The user confirmed
+a reboot and drive with a wireless AA dongle and S25. Missing guard/mount diagnostics
+prevent determining why no journals remain; successful export is not successful capture.
 
 The [original release record](validation/RELEASE_V039_2026-10-01.md) contains the source pin,
 ZIP hash, final host/ARM and stock BusyBox checks, published-download verification,

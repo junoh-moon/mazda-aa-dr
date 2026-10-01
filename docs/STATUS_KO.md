@@ -14,8 +14,13 @@
 
 현재 공개판은 [v0.3.9-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)입니다.
 실차에서 v0.3.9-shadow.1의 메뉴3이 정상 `/proc/mounts` 링크를 거부했습니다.
-설치 완료·제거 완료 사진은 받았지만 원시 주행 로그는 아직 없으므로 센서·계산
-결과는 미판정입니다. [회수 핫픽스](../validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)는
+이후 핫픽스로 archive 회수는 성공했지만 trace·collector 기록 파일이 모두
+없었습니다. 사용자는 설치·재부팅·무선 AA 동글과 S25 연결·주행을 확인했습니다.
+공개판 분석기 결과는 종료 2·`inconclusive`입니다.
+[빈 기록 조사](../validation/EMPTY_CAPTURE_2026-10-02.md)에 원본 영구 저장장치
+마운트 경로와 빠진 기동 진단을 구분했습니다. 실제 자동 기동·저장 실패의
+원인은 아직 확정하지 못했으며 센서·계산 결과는 미판정입니다.
+[회수 핫픽스](../validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)는
 그 결함과 잘못된 시험 fixture를 수정했습니다. USB 파일을 교체하고 기존 한 줄과
 `3`만 사용하며 제거 후에도 재설치·재주행 없이 보존 파일을 회수합니다.
 실제 Linux procfs와 순정 BusyBox의 회수 경로를 구분해 검사했습니다. 새 host
