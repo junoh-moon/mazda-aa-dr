@@ -2,10 +2,10 @@
 
 이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 설치 가능 판단보다 우선한다. 현재 USB는 SHADOW 시험 후보이며 OFF·폴링 분리·일회성 기동 보호를 구현했다. 호스트·ARM·부분 OEM 실행과 실제 차량 검증을 구분한다. 소스 커밋과 공개 릴리즈는 별개다.
 
-[v0.3.2-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)을
-커밋 `af1a24aafaf401f1b648b5af5d21b0d611f6f71a`에서 빌드하여 게시했습니다.
+[v0.3.3-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)을
+커밋 `260528c751739c0afb59153f7a5cfa3585eb6048`에서 빌드하여 게시했습니다.
 전체 host/ARM·순정 BusyBox 설치 검사와 공개 ZIP 재다운로드 검증을 완료했습니다.
-[이번 릴리즈 검증](../validation/RELEASE_2026-10-01.md)에 파일 해시와 실행 범위를
+[이번 릴리즈 검증](../validation/RELEASE_V033_2026-10-01.md)에 파일 해시와 실행 범위를
 고정했습니다. 기본 모드는 SHADOW이며 ASSIST는 비활성입니다. 실차 센서 callback,
 위치 정확도, 정상 전체 차량 기동·복구와 폰 수용은 미검증입니다. 아래 문단의
 `공개 ZIP 미갱신` 표현은 당시 조사 이력이며 이 릴리즈 이전 시점을 가리킵니다.
@@ -16,7 +16,8 @@
 `drain()` 호출 횟수를 분리해 표시하며, 이 수치를 센서 처리나 ASSIST
 자격으로 승격하지 않습니다. 전체 host·고정 ARM과 원본 ARM BusyBox의
 상태 표시·설치 에뮬레이션이 통과했습니다. 이 문단은 해당 소스 변경의
-기록이며 위 v0.3.2 ZIP 자체에 포함된 기능으로 읽으면 안 됩니다.
+기록이며 이번 v0.3.3 ZIP에도 포함됩니다. 이전 v0.3.2 ZIP의 검증은
+[별도 기록](../validation/RELEASE_2026-10-01.md)에 남겨 두었습니다.
 
 아래 조사 이력의 미구현·미검증 범위는 각 기록 시점의 상태입니다. 요청 관측은
 후속 제품 설치·journal까지 연결했습니다. [제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)과
