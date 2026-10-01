@@ -18,6 +18,16 @@
 전체 host/ARM 검사를 통과한 제품과 새 빌드의 동일성, 최종 ZIP의 순정 BusyBox
 설치 검사와 게시 후 다운로드 대조를 기록합니다. live ASSIST는 계속 비활성입니다.
 
+[평탄화 전 요청·응답 연결](../validation/WIRE_REQUEST_2026-10-01.md)을
+`3812fe6`·`fe052be`에서 구현했습니다. 원본 builder와 pending의 실제 수명 안에서
+raw serial·reply_serial·sender·오류를 제품 token에 연결하며 기존 공개 getter도
+별도로 보존합니다. 원본 라이브러리의 29요청·역순 응답·주소 재사용·timeout·취소,
+실제 제품 cold 설치와 원본 data-client 네 요청을 검사했습니다. 서버와 worker
+소비는 작성한 fixture이며 전체 SM/LDS·차량 검증은 아닙니다. 전체 host 374개
+Python·C/C++와 고정 ARM 검사를 생략 없이 통과했습니다. producer/snapshot 자격과
+폰 수용은 여전히 남아 있고 ASSIST는 비활성입니다. 이 변경의 공개 ZIP 발행은
+아직 별도 단계입니다.
+
 [실제 runtime worker의 ASSIST 연결](../validation/ASSIST_RUNTIME_2026-10-01.md)은
 `2313373`에서 검증된 외부 입력의 소비·계산·발행·철회를 연결했습니다.
 정상 동시 입력과 새 source/session은 원본 시각을 보존하며, 자격 상실 뒤에는

@@ -76,6 +76,10 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   [통합본 검사](../validation/BUS_CLOCK_MERGE_2026-09-30.md)에서 이전 소스의
   두 실패, 수정 후 host/ARM 전체 검사와 원본 LDS 요청 17건을 확인했습니다.
   이 항목은 관측·계산 경계의 회귀 검사이며 실제 ASSIST 적용 완료가 아닙니다.
+- [x] 평탄화 전 raw 요청·응답 헤더를 실제 product token에 연결합니다.
+  [wire 연결 검증](../validation/WIRE_REQUEST_2026-10-01.md)에서 원본 라이브러리의
+  역순·재사용·timeout·취소, 제품 cold 설치와 원본 data-client 연결을 확인했습니다.
+  작성 서버/worker fixture이며 producer snapshot 자격이나 폰 수용을 뜻하지 않습니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
   [LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
   위치·진단 캐시의 별도 갱신과 공통 snapshot 식별자의 부재를 확인했습니다.
