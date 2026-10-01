@@ -174,6 +174,8 @@ class Auditor:
         self.request_results = Counter()
         self.request_reply_types = Counter()
         self.request_errors = Counter()
+        self.request_wire_headers = Counter()
+        self.request_wire_errors = Counter()
         self.owners = Counter()
         self.receivers = Counter()
         self.runtime_modes = Counter()
@@ -1138,6 +1140,33 @@ class Auditor:
                      (isinstance(value.get("value"), str) and len(value["value"]) <= 64 and
                       all(0 < ord(c) <= 255 for c in value["value"]) and
                       (not value["complete"] or len(value["value"]) < 64))))
+        def wire_record(value):
+            if not isinstance(value, dict):
+                return False
+            issue, reply = value.get("issue"), value.get("reply")
+            if not (isinstance(issue, dict) and isinstance(reply, dict) and
+                    isinstance(issue.get("known"), bool) and isinstance(issue.get("conflict"), bool) and
+                    isinstance(reply.get("known"), bool) and
+                    all(k in issue for k in ("observed_ns", "serial")) and
+                    all(k in reply for k in ("observed_ns", "serial", "reply_serial", "type")) and
+                    all(text(reply.get(k)) for k in ("sender", "error"))):
+                return False
+            for header in (issue, reply):
+                clock = header["observed_ns"]
+                if clock is not None and not (unsigned(clock) and clock > 0):
+                    return False
+            if issue["known"]:
+                if not (unsigned(issue["serial"], 32) and issue["serial"] > 0):
+                    return False
+            elif issue["observed_ns"] is not None or issue["serial"] is not None:
+                return False
+            if reply["known"]:
+                # These are raw DBus types (not the older JCIDBUS enum). A local
+                # NoReply header may have serial/reply_serial zero and no sender.
+                return (unsigned(reply["serial"], 32) and unsigned(reply["reply_serial"], 32) and
+                        integer(reply["type"]) and reply["type"] in (1, 2, 3, 4))
+            return (all(reply[k] is None for k in ("observed_ns", "serial", "reply_serial", "type")) and
+                    all(reply[k]["value"] is None for k in ("sender", "error")))
         valid = (isinstance(t, dict) and t.get("association_only") is True and
                  isinstance(t.get("result"), str) and t["result"] in results and
                  all(unsigned(t.get(k)) for k in ids) and
@@ -1155,6 +1184,11 @@ class Auditor:
             valid = isinstance(route, dict) and all(text(route.get(k)) for k in fields)
             if valid and t["result"] != "observed":
                 valid = all(route[k]["value"] is None for k in fields)
+        if valid and "wire" in t:
+            valid = wire_record(t["wire"])
+            if valid and t["result"] != "observed":
+                valid = (not t["wire"]["issue"]["known"] and not t["wire"]["issue"]["conflict"] and
+                         not t["wire"]["reply"]["known"])
         if valid:
             if "session_context" in t:
                 valid = session_snapshot(t["session_context"], "unique_live_context")
@@ -1182,6 +1216,24 @@ class Auditor:
             self.request_reply_types[str(t["reply_type"])] += 1
             if t["error"]["complete"]:
                 self.request_errors[t["error"]["value"]] += 1
+            if "wire" in t:
+                wire_issue, wire_reply = t["wire"]["issue"], t["wire"]["reply"]
+                self.request_wire_headers["records"] += 1
+                self.request_wire_headers["issue_known"] += int(wire_issue["known"])
+                self.request_wire_headers["reply_known"] += int(wire_reply["known"])
+                self.request_wire_headers["issue_conflicts"] += int(wire_issue["conflict"])
+                self.request_wire_headers["reply_without_remote_serial"] += int(
+                    wire_reply["known"] and wire_reply["serial"] == 0)
+                if wire_reply["known"] and wire_reply["error"]["complete"]:
+                    self.request_wire_errors[wire_reply["error"]["value"]] += 1
+        if "wire" in t:
+            wire_issue, wire_reply = t["wire"]["issue"], t["wire"]["reply"]
+            if wire_issue["conflict"]:
+                self.issue("request_wire_issue_conflict", source, "One request has conflicting raw submission observations")
+            if (wire_issue["known"] and not wire_issue["conflict"] and wire_reply["known"] and
+                    wire_reply["reply_serial"] > 0 and wire_reply["reply_serial"] != wire_issue["serial"]):
+                self.issue("request_wire_reply_mismatch", source,
+                           "Raw reply_serial differs from the associated request's submitted serial", True)
         if t["result"] not in ("observed", "not_observed", "reply_not_observed"):
             self.issue("request_observation_failed", source, t["result"])
         if ("session_context" in t and
@@ -1435,6 +1487,8 @@ class Auditor:
                     request_observation=dict(position_results=dict(self.request_results),
                                              reply_types=dict(self.request_reply_types),
                                              complete_error_names=dict(self.request_errors),
+                                             wire_headers=dict(self.request_wire_headers),
+                                             wire_complete_error_names=dict(self.request_wire_errors),
                                              qualification="not_established"),
                     stream_correlation=dict(aa_boot_ids=aa_boot_ids, collector_boot_ids=collector_boot_ids,
                                             shared_kernel_boot_ids=sorted(set(aa_boot_ids) & set(collector_boot_ids)),

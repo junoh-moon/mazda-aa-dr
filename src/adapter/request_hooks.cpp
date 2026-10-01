@@ -13,6 +13,8 @@ R::Observer* observer;
 A::RequestBindings original = A::RequestBindings();
 std::atomic<unsigned> prepared(0), abi_fault(0);
 bool attempted;
+R::ObservationClock wire_clock;
+void* wire_clock_user;
 void ready() {
     // Pointers are published only after preparation. The acquire also pairs
     // with initialization for JCIDBUS threads that predate the BLM load.
@@ -23,9 +25,55 @@ struct PreserveErrno {
     PreserveErrno() : value(errno) {}
     ~PreserveErrno() { errno=value; }
 };
+struct SubmitFrame;
+struct PendingFrame;
+__thread SubmitFrame* submit_frame __attribute__((tls_model("initial-exec")));
+__thread PendingFrame* pending_frame __attribute__((tls_model("initial-exec")));
+struct SubmitFrame {
+    SubmitFrame* previous;
+    void* method;
+    R::Token token;
+    void* message;
+    unsigned builds,sends;
+    explicit SubmitFrame(void* value) : previous(submit_frame),method(value),token(),message(0),builds(0),sends(0) { submit_frame=this; }
+    ~SubmitFrame() { const PreserveErrno saved;submit_frame=previous; }
+};
+struct PendingFrame {
+    PendingFrame* previous;
+    void *method,*pending;
+    R::WireReply reply;
+    bool consumed;
+    PendingFrame(void* value,void* node) : previous(pending_frame),method(0),pending(value),reply(),consumed(false) {
+        // Exact NA 74.00.324A original callback node; read the same fields as
+        // its handler, before calling it. Never write node storage or refs.
+        if(node) {
+            uint32_t stored_pending=0,stored_method=0;
+            memcpy(&stored_pending,static_cast<char*>(node)+24,4);
+            if(uintptr_t(stored_pending)==uintptr_t(value)) {
+                memcpy(&stored_method,static_cast<char*>(node)+4,4);
+                method=reinterpret_cast<void*>(uintptr_t(stored_method));
+            }
+        }
+        pending_frame=this; // Mask outer replies, including unobserved nodes.
+    }
+    ~PendingFrame() { const PreserveErrno saved;pending_frame=previous; }
+};
+uint64_t wire_now() { return wire_clock?wire_clock(wire_clock_user):0; }
+bool wire_complete(const A::RequestWireApi& api) {
+    return api.build && api.send && api.pending && api.steal && api.serial &&
+        api.reply_serial && api.type && api.sender && api.error;
+}
+bool wire_present(const A::RequestWireApi& api) {
+    return api.build || api.send || api.pending || api.steal || api.serial ||
+        api.reply_serial || api.type || api.sender || api.error;
+}
 void notify(void* connection, void* method, void* context) {
     ready();
-    R::ReplyScope scope(*observer, method,A::read_bus_connection(connection));
+    R::WireReply wire=R::WireReply();
+    if(pending_frame && pending_frame->method==method && !pending_frame->consumed) {
+        wire=pending_frame->reply;pending_frame->consumed=true;
+    }
+    R::ReplyScope scope(*observer, method,A::read_bus_connection(connection),wire);
     original.notify(connection, method, context);
     // RAII runs on normal return and unwinding; it preserves original errno.
 }
@@ -46,12 +94,14 @@ bool prepare_request_hooks(const RequestBindings& bindings, R::ObservationClock 
        !bindings.method.get_interface || !bindings.method.get_name ||
        !bindings.post_trampoline || !bindings.work_trampoline || !bindings.destroy_trampoline)
         return false;
+    if(wire_present(bindings.wire) && !wire_complete(bindings.wire))return false;
     attempted=true;
     alignas(R::Observer) static unsigned char storage[sizeof(R::Observer)];
     observer=new(storage) R::Observer(bindings.reply, clock, user, bindings.method);
     R::Status status;
     if(!observer->valid() || observer->status(&status)!=R::OK) return false;
     original=bindings;
+    wire_clock=clock;wire_clock_user=user;
     mx5_request_post_trampoline=bindings.post_trampoline;
     mx5_request_work_trampoline=bindings.work_trampoline;
     mx5_request_destroy_trampoline=bindings.destroy_trampoline;
@@ -78,11 +128,11 @@ RequestHookHealth request_hook_health() {
 extern "C" int32_t mx5_request_submit(void* connection, void* method,
                                       A::RequestNotify callback, void* context, int timeout) {
     ready();
+    SubmitFrame frame(method); // Unobserved/nested submissions mask the outer token.
     if(callback!=original.notify)
         return original.submit(connection,method,callback,context,timeout);
     A::observe_position_bus(connection);
-    R::Token token;
-    observer->request_begin(method,&token,A::read_issue_session(),A::read_bus_connection(connection));
+    observer->request_begin(method,&frame.token,A::read_issue_session(),A::read_bus_connection(connection));
     // Register before submission; another thread can notify before it returns.
     // Neither a failure status nor elapsed time substitutes for method end.
     return original.submit(connection,method,notify,context,timeout);
@@ -96,6 +146,59 @@ extern "C" int32_t mx5_request_free_only(void* method) {
     ready();
     observer->request_end(method);
     return original.free_method_only(method);
+}
+
+extern "C" void* mx5_request_message(void* method) {
+    ready();
+    void* result=original.wire.build(method);
+    const PreserveErrno saved;
+    if(submit_frame && submit_frame->token.id && submit_frame->method==method) {
+        submit_frame->message=result;++submit_frame->builds;
+    }
+    return result;
+}
+extern "C" int32_t mx5_request_wire_send(void* connection,void* message,void** pending,int timeout) {
+    ready();
+    SubmitFrame* frame=submit_frame;
+    const bool matched=frame && frame->token.id && message && frame->message==message;
+    if(matched)++frame->sends;
+    const int32_t result=original.wire.send(connection,message,pending,timeout);
+    const PreserveErrno saved;
+    // The original registers notify only after this returns. Read the live
+    // builder result, never a later method address or coincident routing text.
+    if(matched) {
+        R::WireIssue issue=R::WireIssue();
+        if(result && pending && *pending) {
+            issue.serial=original.wire.serial(message);
+            issue.known=issue.serial!=0;issue.observed_ns=wire_now();
+        }
+        issue.conflict=frame->builds!=1 || frame->sends!=1;
+        // A second send attempt is ambiguous even when it fails. Preserve the
+        // first header as diagnostic evidence but never present it as unique.
+        if(issue.known || issue.conflict)observer->wire_issue(frame->token,issue);
+    }
+    return result;
+}
+extern "C" void mx5_request_pending(void* pending,void* node) {
+    ready();PendingFrame frame(pending,node);
+    original.wire.pending(pending,node);
+}
+extern "C" void* mx5_request_steal(void* pending) {
+    ready();
+    void* result=original.wire.steal(pending);
+    const PreserveErrno saved;
+    if(result && pending_frame && pending_frame->method &&
+       pending_frame->pending==pending && !pending_frame->consumed) {
+        R::WireReply& reply=pending_frame->reply;
+        reply=R::WireReply();reply.observed_ns=wire_now();
+        reply.serial=original.wire.serial(result);
+        reply.reply_serial=original.wire.reply_serial(result);
+        reply.type=original.wire.type(result);
+        reply.sender=R::copy_text(original.wire.sender(result));
+        reply.error_name=R::copy_text(original.wire.error(result));
+        reply.known=true;
+    }
+    return result; // Original message ownership/reference count is unchanged.
 }
 
 #if defined(__arm__) && !defined(__ARM_PCS_VFP)

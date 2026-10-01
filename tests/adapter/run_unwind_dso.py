@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request', 'session', 'bus', 'assist', 'runtime-assist'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'session', 'bus', 'assist', 'runtime-assist'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -69,6 +69,19 @@ def main():
                  'throw_getter', 'cancel_getter', 'session_transition')
         fixture, access = 'request_hooks_arm', 'request_dso_access.h'
         macro, marker = '-DMX5_REQUEST_DSO_TEST', 'PASS ARM request wrappers '
+    elif args.suite == 'request-wire':
+        names = {
+            'PREPARE': '_ZN3mx57adapter21prepare_request_hooksERKNS0_15RequestBindingsEPFyPvES4_',
+            'HEALTH': '_ZN3mx57adapter19request_hook_healthEv',
+            'READ': '_ZN3mx57adapter18read_request_traceEPKvPNS_7runtime13request_trace5TraceEPv',
+            'SUBMIT': 'mx5_request_submit', 'FREE': 'mx5_request_free', 'FREE_ONLY': 'mx5_request_free_only',
+            'MESSAGE': 'mx5_request_message', 'WIRE_SEND': 'mx5_request_wire_send',
+            'PENDING': 'mx5_request_pending', 'STEAL': 'mx5_request_steal',
+            'POST_ENTER': 'mx5_request_post_enter', 'WORK_CALL': 'mx5_request_work_call',
+        }
+        cases = ('contract',)
+        fixture, access = 'request_wire', 'request_wire_dso_access.h'
+        macro, marker = '-DMX5_REQUEST_WIRE_DSO_TEST', 'PASS raw request wrappers '
     elif args.suite == 'session':
         names = {
             'PREPARE': '_ZN3mx57adapter21prepare_session_hooksERKNS0_15SessionBindingsE',
@@ -171,7 +184,7 @@ def main():
     (build / 'unwind_offsets.h').write_text(''.join(
         '#define TEST_' + label + ' 0x%xu\n' % offset for label, offset in offsets.items()))
     names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
-    if args.suite not in ('session', 'bus', 'assist', 'runtime-assist'):
+    if args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
     for root, directories, files in os.walk(repo / 'src'):
@@ -189,7 +202,7 @@ def main():
                '-D_GNU_SOURCE', macro, '-mcpu=cortex-a9', '-mfpu=neon',
                '-mfloat-abi=softfp', '-marm', '-I' + str(build / 'source/src'), '-I' + str(build),
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
-    if args.suite not in ('session', 'bus', 'assist', 'runtime-assist'):
+    if args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
     if args.suite == 'runtime-assist':
         # The pinned glibc provides the real monotonic fixture clock in librt.
