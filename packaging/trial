@@ -16,11 +16,61 @@ require_usb() {
         fail 'Run trial from the mounted USB root; keep that USB connected.'
 }
 
+boot_boundary() {
+    reboot_check=unavailable
+    receipt=$HERE/reboot-request.txt
+    boot_file=$ROOT/proc/sys/kernel/random/boot_id
+    # A saved request is not a completed reboot. Compare only bounded, valid
+    # boot UUIDs; neither missing diagnostics nor a failed check rearms a trial.
+    if [ -f "$receipt" ] && [ ! -L "$receipt" ] &&
+       [ "$(wc -c < "$receipt")" -le 512 ] && [ -r "$boot_file" ]; then
+        requested_boot=$(awk -F= '$1=="boot_id" {v=$2;n++} END{if(n==1)print v}' "$receipt")
+        current_boot=$(head -c 38 "$boot_file")
+        if printf '%s\n%s\n' "$requested_boot" "$current_boot" | awk '
+            length($0)!=36 || $0 !~ /^[0-9a-fA-F-]+$/ ||
+            substr($0,9,1)!="-" || substr($0,14,1)!="-" ||
+            substr($0,19,1)!="-" || substr($0,24,1)!="-" {bad=1}
+            {if(gsub(/-/,"-")!=4)bad=1}
+            END{exit (bad || NR!=2)}'; then
+            if [ "$requested_boot" = "$current_boot" ]; then reboot_check=same_boot
+            else reboot_check=new_boot_observed; fi
+        fi
+    fi
+    echo "reboot_check=$reboot_check (boot ID comparison; capture is checked separately)"
+}
+
+current_status() {
+    boundary_output=$(boot_boundary)
+    if status_output=$(sh "$HERE/trial_status.sh" 2>&1); then last_rc=0; else last_rc=$?; fi
+    printf '%s\n%s\nstatus_exit=%s\n' "$boundary_output" "$status_output" "$last_rc"
+    # Save the parked startup check before the single USB port changes to AA.
+    # A separate subshell releases its remount lock before another menu action.
+    if (
+        . "$HERE/common.sh"
+        require_usb
+        ALLOW_REMOUNT=1
+        mount_rw "$HERE"
+        cd -P -- "$HERE"
+        require_usb
+        report=$HERE/startup-result.txt
+        if [ -e "$report" ] || [ -L "$report" ]; then regular "$report"; fi
+        printf 'scope=parked_startup_check\n%s\n%s\nstatus_exit=%s\n' \
+            "$boundary_output" "$status_output" "$last_rc" > startup-result.txt
+        sync
+    ); then echo 'Startup check saved: startup-result.txt'
+    else echo 'Startup check could not be saved; the displayed status remains valid.'; fi
+}
+
 finish_and_export() {
     require_usb
-    echo 'Saving current status, finishing capture (up to 15 seconds), then exporting to this USB.'
+    echo 'Saving startup diagnostics and current status, finishing capture (up to 15 seconds), then exporting to this USB.'
     scope_notice='Current status is not a verdict on the retained trial. A nonzero finish_exit leaves current-boot completion unconfirmed; export_exit reports retrieval separately.'
     echo "$scope_notice"
+    # Snapshot installed state before finish creates its stop markers. Missing
+    # or partial diagnostics must never prevent recovery of retained raw logs.
+    # The detailed report stays on this USB, not in accumulating CMU storage.
+    if diagnostics_output=$(sh "$HERE/startup_diagnostics.sh" 2>&1); then diagnostics_rc=0; else diagnostics_rc=$?; fi
+    echo "diagnostics_exit=$diagnostics_rc (current recovery boot; details saved in trial-result.txt)"
     if status_output=$(sh "$HERE/trial_status.sh" 2>&1); then status_rc=0; else status_rc=$?; fi
     if finish_output=$(sh "$HERE/finish_capture.sh" 2>&1); then finish_rc=0; else finish_rc=$?; fi
     printf 'status_scope=current_boot\n%s\nstatus_exit=%s\nfinish_scope=current_boot\n%s\nfinish_exit=%s\n' "$status_output" "$status_rc" "$finish_output" "$finish_rc"
@@ -34,35 +84,41 @@ finish_and_export() {
     # Acquire the remount lock only after child helpers release theirs.
     ALLOW_REMOUNT=1
     mount_rw "$HERE"
+    cd -P -- "$HERE"
+    require_usb
     report=$HERE/trial-result.txt
     if [ -e "$report" ] || [ -L "$report" ]; then regular "$report"; fi
-    printf '%s\nstatus_scope=current_boot\n%s\nstatus_exit=%s\nfinish_scope=current_boot\n%s\nfinish_exit=%s\nexport_scope=all_retained_boots\n%s\nexport_exit=%s\n' \
-        "$scope_notice" "$status_output" "$status_rc" "$finish_output" "$finish_rc" \
-        "$export_output" "$export_rc" > "$report" || fail 'Cannot save USB report; retain the displayed result.'
+    printf '%s\ndiagnostics_scope=current_recovery_boot\n%s\ndiagnostics_exit=%s\nstatus_scope=current_boot\n%s\nstatus_exit=%s\nfinish_scope=current_boot\n%s\nfinish_exit=%s\nexport_scope=all_retained_boots\n%s\nexport_exit=%s\n' \
+        "$scope_notice" "$diagnostics_output" "$diagnostics_rc" \
+        "$status_output" "$status_rc" "$finish_output" "$finish_rc" \
+        "$export_output" "$export_rc" > trial-result.txt || fail 'Cannot save USB report; retain the displayed result.'
     sync
     echo "Result saved: $report"
     [ "$export_rc" = 0 ] || return "$export_rc"
     [ "$finish_rc" = 0 ] || return "$finish_rc"
-    echo 'Capture finish acknowledged and available logs exported. Power off normally without reinstalling or rearming.'
+    echo 'Capture finish acknowledged and available files exported. After this menu exits, disconnect the USB while parked; the engine may then be stopped if you are finished.'
 }
 
 last_rc=0
 while :; do
     printf '\n%s\n' 'Parked USB trial menu' \
         '1 Install for the next boot' \
-        '2 Optional current status and retained record summary' \
-        '3 Finish capture and save logs to this USB' \
+        '2 Check CMU reboot, current capture and retained records' \
+        '3 Finish capture and save logs plus startup diagnostics to this USB' \
         '4 Uninstall (keeps collected logs)' \
+        '5 Reboot CMU now through the original system reboot command' \
         '0 Exit'
-    echo 'Capture starts automatically on the armed boot; menu 2 is not required. With one USB port, disconnect AA while parked, reconnect this USB, then choose 3.'
+    echo 'After install choose 5; keep this USB connected. After restart reopen this menu and choose 2 before switching to AA. For recovery choose 3 without reinstalling or rearming.'
+    echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
     printf 'Number, then Enter: '
     if ! IFS= read -r choice; then exit "$last_rc"; fi
     case "$choice" in
-        1) sh "$HERE/install.sh"; exit 0;;
-        2) if sh "$HERE/trial_status.sh"; then last_rc=0; else last_rc=$?; fi
-           echo "status_exit=$last_rc";;
+        1) sh "$HERE/install.sh"; last_rc=0
+           echo 'Installation finished. Choose 5 to request a CMU reboot; ignition off/on is not a reboot check.';;
+        2) current_status;;
         3) finish_and_export; exit 0;;
         4) sh "$HERE/uninstall.sh"; exit 0;;
+        5) require_usb; sh "$HERE/reboot_cmu.sh"; exit 0;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac

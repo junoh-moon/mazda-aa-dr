@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -154,6 +155,117 @@ def execute_guest(root, script):
         print(result.stderr, end='')
     require_mounts_link(root)
     return result
+
+
+def export_command_baselines(root):
+    """Read actual stock command results without inventing a process/proc tree."""
+    commands = {'uname': 'uname -a', 'processes': 'ps', 'kernel-log': 'dmesg',
+                'usb-space': 'df -Pk /tmp/mnt/sda1',
+                'persist-space': 'df -Pk /tmp/mnt/data_persist'}
+    results = {}
+    for key, command in commands.items():
+        require_mounts_link(root)
+        result = subprocess.run(['/usr/sbin/chroot', str(root), '/bin/sh', '-c', command],
+                                env=guest_environment(), stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=15)
+        results[key] = (result.returncode, result.stdout)
+        print('Stock diagnostic baseline: ' + json.dumps(
+            dict(command=key, exit=result.returncode, bytes=len(result.stdout),
+                 scope='authored_proc_and_host_kernel'), sort_keys=True), flush=True)
+    for key in ('uname', 'usb-space', 'persist-space'):
+        require(results[key][0] == 0 and results[key][1],
+                key + ': stock diagnostic positive control failed')
+    require_mounts_link(root)
+    return results
+
+
+def check_full_export(root, archive, command_baselines):
+    """Check a quiescent authored guest; real live exports are not atomic."""
+    base = root / 'tmp/mnt/data_persist/mx5-aa-dr'
+    with tarfile.open(archive) as exported:
+        members = {}
+        for item in exported.getmembers():
+            name = item.name.rstrip('/')
+            require(not name.startswith('/') and '..' not in Path(name).parts and
+                    name not in members, 'Ambiguous archive member: ' + name)
+            members[name] = item
+
+        def body(name):
+            require(name in members and members[name].isfile(),
+                    'Missing regular archive member: ' + name)
+            return exported.extractfile(members[name]).read()
+
+        def compare_source(path):
+            name = path.relative_to(root).as_posix()
+            require(name in members, 'Whole-source archive omitted ' + name)
+            item, source = members[name], path.lstat()
+            require((item.uid, item.gid, item.mode) ==
+                    (source.st_uid, source.st_gid, stat.S_IMODE(source.st_mode)),
+                    'Archive changed source UID/GID/mode: ' + name)
+            if stat.S_ISREG(source.st_mode):
+                require(body(name) == path.read_bytes(), 'Archive changed source bytes: ' + name)
+            elif stat.S_ISDIR(source.st_mode):
+                require(item.isdir(), 'Archive changed directory type: ' + name)
+            elif stat.S_ISLNK(source.st_mode):
+                require(item.issym() and item.linkname == os.readlink(path),
+                        'Archive followed or changed source symlink: ' + name)
+            else:
+                raise RuntimeError('Unexpected authored source type: ' + name)
+
+        # Preserve numeric ownership and permissions directly, including the
+        # service-owned collector journal and root-owned guard/backups/tools.
+        pending = [(base, 0)]
+        while pending:
+            path, depth = pending.pop()
+            compare_source(path)
+            if path.is_dir() and not path.is_symlink():
+                require(depth < 8, 'Unexpected fixture installation depth')
+                pending.extend((child, depth + 1) for child in path.iterdir())
+        for name in ('usr/bin/autostart', 'jci/sm/sm.conf', 'jci/sm/sm_WCP.conf', 'jci/version.ini'):
+            compare_source(root / name)
+
+        reports = [name for name in members if Path(name).name == 'collection.txt' and
+                   Path(name).parent.parent.as_posix() == 'tmp/mnt/sda1' and
+                   Path(name).parent.name.startswith('mx5dr-diagnostics-')]
+        require(len(reports) == 1, 'Expected one full-export diagnostic collection')
+        stage = str(Path(reports[0]).parent)
+        report = body(reports[0]).decode('utf-8')
+        for line in ('export_schema=2', 'scope=current_recovery_boot',
+                     'retained_scope=all_retained_boots', 'snapshot=sequential_nonatomic',
+                     'installation=whole_tree'):
+            require(line in report.splitlines(), 'Missing collection contract: ' + line)
+        require(not (root / stage).exists(), 'Successful export left its USB staging directory')
+
+        # The backing mount table is authored; /proc/mounts is still the actual
+        # Linux-shaped alias. Export captures bytes while its USB is writable.
+        writable_mounts = []
+        for line in (root / 'proc/self/mounts').read_text().splitlines():
+            fields = line.split()
+            if fields[1] == '/tmp/mnt/sda1':
+                fields[3] = ','.join('rw' if x == 'ro' else x for x in fields[3].split(','))
+            writable_mounts.append(' '.join(fields) + '\n')
+        require(body(stage + '/proc/mounts.txt') == ''.join(writable_mounts).encode(),
+                'Export lost the proc alias target bytes or copied link text')
+        for name in ('proc/sys/kernel/random/boot_id', 'proc/uptime'):
+            require(body(stage + '/' + name + '.txt') == (root / name).read_bytes(),
+                    'Export changed authored current proc data: ' + name)
+        # Do not fabricate the absent proc data or interpret a ps header as
+        # evidence of running OEM processes. dmesg can legitimately fail here.
+        for name in ('proc/self/mountinfo', 'proc/version', 'proc/cmdline', 'proc/meminfo',
+                     'proc/partitions', 'proc/1/status', 'proc/1/cmdline'):
+            require(name + '=unavailable' in report.splitlines(),
+                    'Absent authored proc source was reported as captured: ' + name)
+        for key, (expected_exit, expected_output) in command_baselines.items():
+            output = body(stage + '/' + key + '.txt')
+            exit_text = body(stage + '/' + key + '.exit').decode('ascii').strip()
+            require(exit_text == str(expected_exit), 'Command exit was lost: ' + key)
+            require(len(output) <= 131072, 'Unbounded command capture: ' + key)
+            require(not expected_output or output,
+                    'Nonempty stock command output was lost: ' + key)
+            if key == 'uname':
+                require(output == expected_output, 'Stock uname output changed during export')
+        print('PASS: whole BASE and current startup/SM bytes/UID/GID/mode, proc alias '
+              'contents and stock command outputs/exits; synthetic proc and host kernel only', flush=True)
 
 
 def account_regressions(stock, bundle):
@@ -585,6 +697,7 @@ def main():
                 'AA reset lost retained MODEL rows or promoted them to current readiness')
         (base / 'logs/capture.done').write_text(current_boot + '\n')
         journal.write_bytes(original_collector)
+        command_baselines = export_command_baselines(root)
         run("printf '3\\n' | sh /tmp/mnt/sda1/trial")
         report = (usb / 'trial-result.txt').read_text()
         require('finish_exit=0' in report and 'export_exit=0' in report,
@@ -592,6 +705,7 @@ def main():
         archive = next(usb.glob('mx5dr-logs-*.tar'))
         require(archive.with_suffix('.tar.sha256').read_text().split()[0] ==
                 hashlib.sha256(archive.read_bytes()).hexdigest(), 'Export checksum mismatch')
+        check_full_export(root, archive, command_baselines)
         require((root / 'mount.calls').read_text().splitlines()[-2:] ==
                 ['-o remount,rw /tmp/mnt/sda1', '-o remount,ro /tmp/mnt/sda1'], 'USB mount not restored')
         # Authored rebooted USB return: no menu2, reinstall or arm. Previous
@@ -624,10 +738,7 @@ def main():
             archive = exports.pop()
             require(archive.with_suffix('.tar.sha256').read_text().split()[0] ==
                     hashlib.sha256(archive.read_bytes()).hexdigest(), 'Previous-boot export checksum mismatch')
-            with tarfile.open(archive) as exported:
-                require(exported.extractfile('logs/trace.0.jsonl').read() == raw and
-                        exported.extractfile('logs/collector.0.jsonl').read() == original_collector,
-                        'Previous-boot archive changed raw bytes')
+            check_full_export(root, archive, command_baselines)
             require((base / 'logs/trace.0.jsonl').read_bytes() == raw and
                     (base / 'mx5dr.conf').read_bytes() == config and
                     (root / 'usr/bin/autostart').read_bytes() == startup and
@@ -668,10 +779,7 @@ def main():
         require(archive.with_suffix('.tar.sha256').read_text().split()[0] ==
                 hashlib.sha256(archive.read_bytes()).hexdigest(),
                 'Post-uninstall export checksum mismatch')
-        with tarfile.open(archive) as exported:
-            require(exported.extractfile('logs/trace.0.jsonl').read() == raw and
-                    exported.extractfile('logs/collector.0.jsonl').read() == original_collector,
-                    'Post-uninstall archive changed retained raw bytes')
+        check_full_export(root, archive, command_baselines)
         require((base / 'logs/trace.0.jsonl').read_bytes() == raw and
                 (base / 'mx5dr.conf').read_bytes() == removed_config and
                 not (base / 'guard/arm').exists(), 'Retrieval changed removed state or raw files')

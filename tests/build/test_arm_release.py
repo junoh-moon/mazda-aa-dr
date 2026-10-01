@@ -70,6 +70,22 @@ class ArmReleaseTests(unittest.TestCase):
                                                '--output', str(output)]):
             make_usb_zip.main()
 
+    def test_zip_carries_usb_startup_diagnostic_helper(self):
+        self.prepare_packaging()
+        # This fixture tests shipping the helper, not its diagnostic behavior.
+        helper = self.repo / 'packaging/startup_diagnostics.sh'
+        helper.write_text('#!/bin/sh\necho diagnostic_schema=1\n')
+        reboot = self.repo / 'packaging/reboot_cmu.sh'
+        reboot.write_text('#!/bin/sh\necho reboot_fixture_only\n')
+        output = self.root / 'diagnostic.zip'
+        self.package(output)
+        with zipfile.ZipFile(output) as archive:
+            self.assertIn('startup_diagnostics.sh', archive.namelist())
+            self.assertEqual(archive.read('startup_diagnostics.sh'), helper.read_bytes())
+            self.assertIn('  startup_diagnostics.sh\n', archive.read('SHA256SUMS').decode())
+            self.assertEqual(archive.read('reboot_cmu.sh'), reboot.read_bytes())
+            self.assertIn('  reboot_cmu.sh\n', archive.read('SHA256SUMS').decode())
+
     def test_matching_record_and_bytes(self):
         self.assertEqual(build_arm.verify_build(self.repo, self.build), self.record)
 

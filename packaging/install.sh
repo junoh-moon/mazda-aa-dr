@@ -128,7 +128,7 @@ set_config
 mkdir -p "$BASE/tools"
 chmod 0755 "$BASE/tools"
 if [ -z "$ROOT" ]; then chown 0 "$BASE/tools"; fi
-for name in common.sh edit_service.awk edit_autostart.awk arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk firmware.sha256 mx5dr-sha256; do
+for name in common.sh edit_service.awk edit_autostart.awk arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk startup_diagnostics.sh firmware.sha256 mx5dr-sha256; do
     cp "$HERE/$name" "$BASE/tools/$name.new.$$"
     chmod 0644 "$BASE/tools/$name.new.$$"
     if [ -z "$ROOT" ]; then chown 0 "$BASE/tools/$name.new.$$"; fi
@@ -165,6 +165,8 @@ fi
 echo "Staged $MODE for one guarded boot. Persistent service configs retain existing touch only. No processes restarted."
 if [ -z "$ROOT" ] && [ "$MODE" != OFF ]; then
     echo 'Install steps finished. A vehicle ignition cycle alone does not prove a new CMU Linux boot.'
+    echo 'Remain parked with the engine actually running and this USB connected. Choose trial menu 5 to request CMU reboot; do not press the engine start/stop button.'
     echo "The next guarded CMU startup requests automatic $MODE capture; no driving-time commands are needed."
-    echo 'Before moving, while parked, use trial menu 2 to check one_boot=consumed_this_boot, retained_bytes>0 and collector_poll_recent=observed.'
+    echo 'After CMU restart reopen the USB shell and trial menu 2: check reboot_check=new_boot_observed, one_boot=consumed_this_boot, retained_bytes>0 and collector_poll_recent=observed.'
+    echo 'Then exit the menu and replace the USB with the AA dongle while parked, keeping the same engine/CMU boot.'
 fi
