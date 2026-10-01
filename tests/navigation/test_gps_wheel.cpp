@@ -31,6 +31,11 @@ static void helper_train(GpsWheel& g,unsigned end,double scale=1.03,int conditio
 }
 static void learning() {
     GpsWheel g; g.configure(true,250000000ULL);
+    helper_train(g,2000);
+    CHECK(g.status().segments==0&&!g.status().candidate_ready);
+    CHECK(g.status().partial_training_distance_m>0);
+    g.unavailable();CHECK(g.status().partial_training_distance_m==0);
+    g.configure(true,250000000ULL);
     helper_train(g,9000); CHECK(!g.status().candidate_ready); CHECK(g.status().segments==3);
     for(unsigned ms=9100;ms<=12000;ms+=100) {
         helper_feed(g,ms); if(ms%1000==0) CHECK(g.fix(fix(ms,1.03)));

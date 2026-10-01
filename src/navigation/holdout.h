@@ -54,7 +54,7 @@ private:
     size_t reference_count_, result_head_, result_count_;
     uint64_t window_id_, anchor_ns_, end_ns_, cooldown_until_, last_gps_ns_;
     uint64_t latest_received_ns_, watermark_, utc_progress_ns_, sample_age_ns_;
-    bool configured_, have_previous_, reference_submitted_;
+    bool configured_, have_previous_, reference_submitted_, cooldown_fault_reported_;
     bool eligible(const adapter::Observation&, bool moving) const;
     bool consistent(const adapter::Observation&) const;
     void abort(HoldoutReason, uint64_t);

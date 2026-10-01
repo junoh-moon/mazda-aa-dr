@@ -137,6 +137,7 @@ static mx5_dr_evidence evidence(unsigned id,unsigned seq,unsigned ms) {
     e.measured_ns=e.received_ns=T(ms);e.lease_until_ns=T(ms+250);
     e.quality=MX5_DR_VALID;e.freshness=MX5_DR_PRODUCER_TIME;return e;
 }
+static uint64_t revoke_candidate(void*) { return A::invalidate(); }
 static void qualified_case(bool stopped) {
     // This side deliberately starts from qualified synthetic contracts. Parsed
     // raw data above is never upgraded into this evidence or this pipeline.
@@ -148,6 +149,7 @@ static void qualified_case(bool stopped) {
     mx5_dr_config config=mx5_dr_default_config();
     if(stopped)config.stop_hold_s=0.1; // explicit fast stationary fixture
     CHECK(p.init_qualified(config,context));
+    CHECK(p.bind_qualified_revoker(revoke_candidate,0));
     mx5_dr_anchor a=mx5_dr_anchor();a.context=context;a.anchor_id=a.position_seq=1;
     a.measured_ns=T(3000);a.utc_ns=1700000000000000000ULL;a.latitude_deg=35;a.longitude_deg=135;
     a.position_error_m=1;a.heading_error_rad=0.01;
@@ -157,7 +159,7 @@ static void qualified_case(bool stopped) {
     CHECK(p.enqueue_reverse(evidence(3,1,3000),1)==N::PIPELINE_OK);
     CHECK(p.enqueue_yaw(evidence(2,1,3100),0,2047,1,T(3000),T(3100))==N::PIPELINE_OK);
     A::Observation gap=A::Observation();gap.kind=A::Observation::POSITION;
-    gap.mono_ns=T(3000);gap.position.mode=0;
+    gap.mono_ns=T(3000);gap.position.mode=0;gap.prediction_generation=generation;
     CHECK(p.enqueue_position(gap)==N::PIPELINE_OK);CHECK(p.drain(T(3100))==N::PIPELINE_OK);
     clock_value=T(3100);N::Diagnostic d=p.diagnostic(clock_value);
     CHECK(d.result==MX5_DR_OK&&d.snapshot.valid&&!d.snapshot.model_valid);

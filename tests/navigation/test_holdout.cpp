@@ -173,7 +173,58 @@ static void stale_unsubmitted_reference_does_not_extend_cooldown() {
         bad.receive_seq=i+1;bad.received_ns=T(1001+int(i));bad.count=0;
         CHECK(repeated_faults.h.enqueue_raw(bad)==N::PIPELINE_BAD_INPUT);
     }
-    CHECK(!repeated_faults.h.pop(&result));
+    CHECK(repeated_faults.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_SOURCE_FAULT);
+    CHECK(result.window_id==0&&!repeated_faults.h.pop(&result));
+    // Repeated cooldown faults must not silently postpone its original end.
+    CHECK(repeated_faults.h.enqueue_position(gps(1600))==N::PIPELINE_OK);
+    repeated_faults.h.drain(T(1600));
+    CHECK(repeated_faults.h.phase()==N::HOLDOUT_WARMUP);
+
+    Fixture completed(100000000ULL);
+    completed.warm();completed.raw(300);completed.h.drain(T(200));
+    CHECK(completed.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_END&&result.reason==N::HOLDOUT_COMPLETE);
+    CHECK(completed.h.phase()==N::HOLDOUT_COOLDOWN);
+    A::Observation bad_fix=gps(210);bad_fix.position.mode=9;
+    CHECK(completed.h.enqueue_position(bad_fix)==N::PIPELINE_BAD_INPUT);
+    CHECK(completed.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_BAD_GPS);
+    CHECK(result.window_id==0&&result.anchor_ns==0);
+    bad_fix.mono_ns=T(220);
+    CHECK(completed.h.enqueue_position(bad_fix)==N::PIPELINE_BAD_INPUT);
+    CHECK(!completed.h.pop(&result));
+
+    Fixture expired;
+    A::Observation expired_gap=gps(1000);expired_gap.position.mode=0;
+    CHECK(expired.h.enqueue_position(expired_gap)==N::PIPELINE_NO_ANCHOR);
+    CHECK(expired.h.pop(&result)&&result.reason==N::HOLDOUT_REAL_GAP);
+    N::RawEvent expired_bad=N::RawEvent();expired_bad.kind=N::YAW;expired_bad.epoch=1;
+    expired_bad.receive_seq=1;expired_bad.received_ns=T(1001);expired_bad.count=0;
+    CHECK(expired.h.enqueue_raw(expired_bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(expired.h.pop(&result)&&result.reason==N::HOLDOUT_SOURCE_FAULT);
+    expired_bad.receive_seq=2;expired_bad.received_ns=T(1600);
+    CHECK(expired.h.enqueue_raw(expired_bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(expired.h.pop(&result)&&result.reason==N::HOLDOUT_SOURCE_FAULT);
+    CHECK(!expired.h.pop(&result));
+    A::Observation before_deadline=gps(1800);before_deadline.position.velocity_kmh=0;
+    CHECK(expired.h.enqueue_position(before_deadline)==N::PIPELINE_OK);
+    expired.h.drain(T(1800));CHECK(expired.h.phase()==N::HOLDOUT_COOLDOWN);
+    CHECK(expired.h.enqueue_position(gps(2200))==N::PIPELINE_OK);
+    expired.h.drain(T(2200));CHECK(expired.h.phase()==N::HOLDOUT_WARMUP);
+
+    Fixture boundary;
+    A::Observation boundary_gap=gps(1000);boundary_gap.position.mode=0;
+    CHECK(boundary.h.enqueue_position(boundary_gap)==N::PIPELINE_NO_ANCHOR);
+    CHECK(boundary.h.pop(&result)&&result.reason==N::HOLDOUT_REAL_GAP);
+    expired_bad.receive_seq=1;expired_bad.received_ns=T(1001);
+    CHECK(boundary.h.enqueue_raw(expired_bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(boundary.h.pop(&result)&&result.reason==N::HOLDOUT_SOURCE_FAULT);
+    const mx5_dr_context next_session={1,2,1};
+    boundary.h.reset(next_session,N::HOLDOUT_BUS_RESET);
+    CHECK(boundary.h.pop(&result));
+    CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_BUS_RESET);
+    CHECK(!boundary.h.pop(&result)&&boundary.h.phase()==N::HOLDOUT_WARMUP);
 }
 static void independent_and_exact() {
     Fixture a,b;unsigned compared=0,ended=0;bool turned=false,reversed=false,stopped=false;
@@ -325,6 +376,77 @@ static void calibration_survives_complete_only() {
     }
     CHECK(false);
 }
+static void cooldown_relearned_calibration_fault_is_recorded() {
+    for(unsigned cause=0;cause<3;++cause) {
+        Fixture f(500000000ULL,10000000000ULL);
+        A::Observation bad=gps(1000);bad.position.mode=9;
+        CHECK(f.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+        N::HoldoutResult result;
+        CHECK(f.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+        CHECK(result.reason==N::HOLDOUT_BAD_GPS&&result.calibration_version==0);
+        for(unsigned ms=1100;ms<=6500;ms+=100) {
+            if(ms>=4700)CHECK(f.h.enqueue_position(gps(ms))==N::PIPELINE_OK);
+            f.raw(ms,ms<4700?10000:13600,2050);
+            f.h.drain(T(ms)-100000000ULL);
+            CHECK(!f.h.pop(&result));
+        }
+        if(cause==0) {
+            bad=gps(6600);bad.position.mode=9;
+            CHECK(f.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+        } else if(cause==1) {
+            N::RawEvent malformed=N::RawEvent();malformed.kind=N::YAW;
+            malformed.epoch=1;malformed.receive_seq=++f.seq;
+            malformed.received_ns=T(6600);malformed.count=0;
+            CHECK(f.h.enqueue_raw(malformed)==N::PIPELINE_BAD_INPUT);
+        } else {
+            f.h.drain(T(7000));
+        }
+        bool aborted=false;
+        while(f.h.pop(&result)) {
+            if(result.event==N::HOLDOUT_SKIPPED)continue;
+            CHECK(result.event==N::HOLDOUT_ABORT&&!aborted);
+            CHECK(result.reason==(cause==0?N::HOLDOUT_BAD_GPS:N::HOLDOUT_SOURCE_FAULT));
+            CHECK(result.calibration_version==1&&result.applied_yaw_zero==2050);
+            aborted=true;
+        }
+        CHECK(aborted);
+    }
+    Fixture partial(500000000ULL,10000000000ULL);
+    A::Observation bad=gps(1000);bad.position.mode=9;
+    CHECK(partial.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    N::HoldoutResult result;CHECK(partial.h.pop(&result));
+    for(unsigned ms=1100;ms<=2000;ms+=100) {
+        partial.raw(ms,10000,2050);partial.h.drain(T(ms)-100000000ULL);
+        CHECK(!partial.h.pop(&result));
+    }
+    bad=gps(2100);bad.position.mode=9;
+    CHECK(partial.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(partial.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    CHECK(result.reason==N::HOLDOUT_BAD_GPS&&!partial.h.pop(&result));
+
+    // A moving wheel-calibration attempt can be partway through its first
+    // segment while both completed segments and gyro collection remain zero.
+    Fixture wheel_partial(500000000ULL,10000000000ULL);
+    bad=gps(1000);bad.position.mode=9;
+    CHECK(wheel_partial.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(wheel_partial.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    for(unsigned ms=1100;ms<=3200;ms+=100) {
+        CHECK(wheel_partial.h.enqueue_position(gps(ms))==N::PIPELINE_OK);
+        wheel_partial.raw(ms);wheel_partial.h.drain(T(ms)-100000000ULL);
+        while(wheel_partial.h.pop(&result))CHECK(result.event!=N::HOLDOUT_ABORT);
+    }
+    N::RawEvent malformed=N::RawEvent();malformed.kind=N::YAW;
+    malformed.epoch=1;malformed.receive_seq=++wheel_partial.seq;
+    malformed.received_ns=T(3300);malformed.count=0;
+    CHECK(wheel_partial.h.enqueue_raw(malformed)==N::PIPELINE_BAD_INPUT);
+    bool wheel_abort=false;
+    while(wheel_partial.h.pop(&result)) {
+        if(result.event==N::HOLDOUT_SKIPPED)continue;
+        CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_SOURCE_FAULT);
+        wheel_abort=true;
+    }
+    CHECK(wheel_abort);
+}
 static void wheel_training_outside_holdout_only() {
     Fixture a(2000000000ULL,30000000000ULL),b(2000000000ULL,30000000000ULL);
     a.warm();b.warm();
@@ -371,6 +493,7 @@ int main() {
     warmup_waits_for_delayed_yaw();stale_unsubmitted_reference_does_not_extend_cooldown();
     independent_and_exact();aborts_and_reset();
     future_input_and_output_bound();calibration_survives_complete_only();
+    cooldown_relearned_calibration_fault_is_recorded();
     wheel_training_outside_holdout_only();
     std::printf("MODEL GPS holdout: %u synthetic checks\n",checks);return 0;
 }

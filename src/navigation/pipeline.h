@@ -50,6 +50,11 @@ struct Diagnostic {
     Status status;
     mx5_dr_result result;
 };
+struct FaultCalibration {
+    bool valid;
+    GyroBiasStatus gyro;
+    WheelScaleStatus wheel;
+};
 
 // Single worker, fixed capacity, no allocation/I/O. Raw ingestion ONLY enters
 // MODEL domain. A separate qualified Pipeline requires externally verified
@@ -57,18 +62,33 @@ struct Diagnostic {
 class Pipeline {
 public:
     static const size_t CAPACITY=128;
+    // Must atomically invalidate an already published adapter candidate and
+    // return the newly issued adapter generation. Worker callback: no I/O,
+    // blocking lock, or reentry into this Pipeline.
+    typedef uint64_t (*QualifiedRevoker)(void*);
     Pipeline();
+    ~Pipeline();
+    // A copy could alias publication ownership or overwrite its revoker.
+    Pipeline(const Pipeline&) = delete;
+    Pipeline& operator=(const Pipeline&) = delete;
     // Opt-in MODEL bias/scale learning changes math only at a new GPS seed.
     // gps_wheel also enables fresh-wheel and GPS travel-course anchor gates.
     bool init_model(const ModelProfile&, const mx5_dr_config&, mx5_dr_context,
                     bool auto_bias=false, bool gps_wheel=false);
     bool init_qualified(const mx5_dr_config&, mx5_dr_context);
+    // Required before qualified_snapshot()/qualified_publication(). Unbound
+    // qualified instances cannot publish; the bound object owns revocation
+    // and retires its candidate on reset/reinit/destruction.
+    bool bind_qualified_revoker(QualifiedRevoker, void*);
     PipelineResult enqueue_raw(const RawEvent&);
     PipelineResult enqueue_position(const adapter::Observation&);
     // Qualified external adapter API: evidence and normalized windows retained
     // exactly. Pending anchors immediately suppress output. To replace ACTIVE
     // or NATIVE, supply a newer generation and reserve position_seq-1 for the
-    // GPS_RETURN control (both sequences must exceed the prior position seq).
+    // GPS_RETURN control (both sequences must exceed all prior anchor/control
+    // sequences). A raw adapter callback count alone may lack this headroom
+    // after a one-callback GAP; the qualified worker must allocate a separate
+    // monotonic core sequence while retaining the raw count as provenance.
     // A stale-context replacement revokes old output and rejects the anchor.
     PipelineResult enqueue_anchor(const mx5_dr_anchor&, uint64_t received_ns);
     PipelineResult enqueue_speed(const mx5_dr_evidence&, double speed_mps);
@@ -79,6 +99,8 @@ public:
     // Process only events whose effective time <= watermark. Runtime normally
     // passes now-profile.reorder_ns; actual receipt clock is never rewritten.
     PipelineResult drain(uint64_t watermark_ns);
+    // Bound qualified resets revoke an adapter candidate and take the returned
+    // generation; the supplied context contributes only source/session epochs.
     void reset(mx5_dr_context);
     // Normal MODEL holdout completion only: clear prediction and candidates,
     // retain applied zero/scale and raw source/time guards. Faults must use reset().
@@ -93,6 +115,8 @@ public:
     // MODEL yaw callback silence only. The seeded core frontier may lag even
     // while newer yaw callbacks are safely queued behind an open window.
     bool yaw_source_timeout_due(uint64_t observed_ns) const;
+    // Point-in-time result: its lease ends at now_ns even if the core's sensor
+    // lease is longer. Use qualified_publication for a bounded future lease.
     runtime::CoreBridgeResult qualified_snapshot(uint64_t now_ns,
         const runtime::CoreBridgeQualification&, adapter::DrSnapshot*) const;
     // Worker-side asynchronous handoff. Original prediction timestamps stay
@@ -103,6 +127,7 @@ public:
     const Status& status() const { return status_; }
     const GyroBiasStatus& calibration() const { return gyro_bias_.status(); }
     const WheelScaleStatus& wheel_calibration() const { return gps_wheel_.status(); }
+    const FaultCalibration& fault_calibration() const { return fault_calibration_; }
     GpsAnchorGate anchor_gate() const { return gps_wheel_.gate(); }
     mx5_dr_context context() const { return core_.estimate.context; }
     uint64_t reorder_ns() const { return profile_.reorder_ns; }
@@ -126,6 +151,7 @@ private:
     GyroBias gyro_bias_;
     GpsWheel gps_wheel_;
     Status status_;
+    FaultCalibration fault_calibration_;
     Event queue_[CAPACITY], speed_, yaw_, reverse_;
     SensorHistory wheel_history_,reverse_history_;
     size_t size_;
@@ -134,9 +160,17 @@ private:
     uint64_t last_yaw_time_, interval_seq_, position_seq_, wheel_conflict_since_;
     int position_mode_;
     bool configured_, model_, have_fix_;
+    QualifiedRevoker qualified_revoker_;
+    void* qualified_revoker_user_;
+    const Pipeline* qualified_owner_;
     adapter::Observation previous_fix_;
     PipelineResult insert(const Event&);
     PipelineResult fault(PipelineResult);
+    PipelineResult reject_core(PipelineResult);
+    void reset_state(mx5_dr_context);
+    bool owns_qualified_revoker() const {
+        return qualified_revoker_ && qualified_owner_==this;
+    }
     PipelineResult advance(uint64_t);
     PipelineResult apply_position(const adapter::Observation&);
     PipelineResult control(mx5_dr_control_kind, uint64_t observed_generation=0);
