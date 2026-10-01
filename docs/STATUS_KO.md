@@ -93,6 +93,12 @@ C/C++, 전체 ARM·실제 AA DSO 145사례·원본 설치기 71사례가 생략 
 이 연결은 아직 qualified 기준점·센서 입력이 아니고, 이미 끝난 callback의
 provenance도 바꾸지 않습니다. live ASSIST와 v1.0은 계속 미완료입니다.
 
+[후속 원본 reader 실행](../validation/LDS_DRIVER_READ_2026-10-02.md)은
+작성한 PTY 문장 다섯 개를 원본 reader·parser·callback·cache에 직접 넣고
+원본 Close와 프로세스 정상 종료를 확인했습니다. 초기 세 실패와 작성한
+부분 초기화 조건을 보존합니다. 제품 preload·AA worker 결합과 물리 입력
+자격은 이 실행에 포함하지 않았습니다.
+
 아래는 `.2` 회수와 검증의 기록이며 새판의 실행 횟수로 바꾸지 않습니다.
 실차에서 v0.3.9-shadow.1의 메뉴3이 정상 `/proc/mounts` 링크를 거부했습니다.
 이후 핫픽스로 archive 회수는 성공했지만 trace·collector 기록 파일이 모두
