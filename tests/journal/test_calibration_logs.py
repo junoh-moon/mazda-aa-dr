@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import tarfile
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -99,19 +101,319 @@ def codes(a):
     return [issue['code'] for issue in a.issues]
 
 
+def reference_position(call=101, generation=7, mono_ns=100, **changes):
+    row = dict(kind='position', call=call, generation=generation, mono_ns=mono_ns,
+               mode=1, utc_s=1, lat=35.123456790, lon=129.987654322, heading=0, kmh=0)
+    row.update(changes)
+    return row
+
+
+def identified_holdout(event_name='BEGIN', **changes):
+    pair = ((101, 7) if event_name == 'BEGIN' else
+            (202, 8) if event_name == 'COMPARED' else (None, None))
+    row = holdout(event_name, reference_call=pair[0], reference_generation=pair[1])
+    row.update(changes)
+    return row
+
+
+class HoldoutReferences(unittest.TestCase):
+    def links(self, auditor):
+        return auditor.report()['shadow_holdout'].get('reference_links', {})
+
+    def test_exact_identity_is_separate_from_model_difference_statistics(self):
+        rows = [reference_position(), identified_holdout(),
+                reference_position(202, 8, 200), identified_holdout('COMPARED'),
+                identified_holdout('END')]
+        report = consume(rows).report()
+        summary = report['shadow_holdout']
+        self.assertEqual(summary.get('reference_links'), {'matched': 2, 'no_reference': 1})
+        self.assertEqual(summary.get('reference_link_scope'),
+                         'same_trace_group_and_recorded_session')
+        self.assertEqual(report['status'], 'local_checks_pass')
+        self.assertEqual(summary['position_difference_m']['count'], 1)
+        self.assertEqual(summary['completed_windows'], 1)
+        self.assertFalse(summary['gps_is_ground_truth'])
+        self.assertEqual(summary['reference_exclusion'], 'not_provable_from_journal')
+        self.assertEqual(summary['time_basis'], 'receipt_model')
+
+    def test_time_and_coordinates_cannot_replace_call_and_generation(self):
+        for call, generation in ((303, 8), (202, 9)):
+            with self.subTest(call=call, generation=generation):
+                a = consume([holdout(), reference_position(call, generation, 200),
+                             identified_holdout('COMPARED'), identified_holdout('END')])
+                self.assertEqual(self.links(a), {'legacy_without_identity': 1,
+                                                'raw_missing': 1, 'no_reference': 1})
+                self.assertIn('holdout_reference_missing', codes(a))
+                self.assertEqual(a.holdout_position['count'], 1)
+                self.assertEqual(a.holdout_completed, 1)
+
+    def test_same_call_other_generation_cannot_displace_exact_reference(self):
+        a = consume([holdout(), reference_position(202, 8, 200),
+                     reference_position(202, 9, 200, lat=0),
+                     identified_holdout('COMPARED'), identified_holdout('END')])
+        self.assertEqual(self.links(a).get('matched'), 1)
+        self.assertNotIn('holdout_reference_mismatch', codes(a))
+
+    def test_uint32_zero_and_max_are_real_reference_values(self):
+        for call, generation in ((0, 2**32-1), (2**32-1, 0)):
+            with self.subTest(call=call, generation=generation):
+                a = consume([reference_position(call, generation),
+                             identified_holdout(reference_call=call, reference_generation=generation)])
+                self.assertEqual(self.links(a).get('matched'), 1)
+                self.assertNotIn('partial_record', codes(a))
+
+    def test_legacy_and_null_reference_are_distinct(self):
+        a = consume([holdout(), holdout('COMPARED'), holdout('END'),
+                     identified_holdout('ABORT', window_id=0, anchor_ns=0)])
+        self.assertEqual(self.links(a), {'legacy_without_identity': 3, 'no_reference': 1})
+        self.assertEqual(a.holdout_position['count'], 1)
+
+    def test_invalid_identity_is_diagnostic_without_dropping_comparison(self):
+        invalid = [dict(reference_call=202), dict(reference_generation=8),
+                   dict(reference_call=None, reference_generation=8),
+                   dict(reference_call=202, reference_generation=None),
+                   dict(reference_call=None, reference_generation=None)]
+        for value in (True, -1, 2**32, 1.0, '202'):
+            invalid += [dict(reference_call=value, reference_generation=8),
+                        dict(reference_call=202, reference_generation=value)]
+        for fields in invalid:
+            with self.subTest(fields=fields):
+                a = consume([holdout(), holdout('COMPARED', **fields), holdout('END')])
+                self.assertEqual(self.links(a), {'legacy_without_identity': 2, 'malformed': 1})
+                self.assertIn('partial_record', codes(a))
+                self.assertEqual(a.holdout_position['count'], 1)
+                self.assertEqual(a.holdout_completed, 1)
+
+    def test_reference_events_require_identity_when_new_fields_are_present(self):
+        for row in (identified_holdout(reference_call=None, reference_generation=None),
+                    skipped_reference(reference_call=None, reference_generation=None)):
+            with self.subTest(event=row['event']):
+                a = consume([row])
+                self.assertEqual(self.links(a).get('malformed'), 1)
+                self.assertIn('partial_record', codes(a))
+
+    def test_terminal_events_cannot_invent_reference_except_output_overflow(self):
+        for event in ('END', 'ABORT'):
+            with self.subTest(event=event):
+                a = consume([holdout(), reference_position(202, 8, 200),
+                             identified_holdout('COMPARED'),
+                             identified_holdout(event, reference_call=202, reference_generation=8)])
+                self.assertEqual(self.links(a), {'legacy_without_identity': 1, 'matched': 1, 'malformed': 1})
+                self.assertIn('partial_record', codes(a))
+                self.assertEqual(a.holdout_position['count'], 1)
+
+    def test_overflow_abort_can_retain_real_reference(self):
+        a = consume([holdout(), reference_position(202, 8, 200),
+                     identified_holdout('ABORT', reason='output_overflow', reference_ns=200,
+                                        reference_call=202, reference_generation=8)])
+        self.assertEqual(self.links(a), {'legacy_without_identity': 1, 'matched': 1})
+        self.assertEqual(a.holdout_aborted, 1)
+        self.assertNotIn('partial_record', codes(a))
+
+    def test_same_identity_in_next_boot_cannot_reuse_old_raw_row(self):
+        a = consume([reference_position(), identified_holdout(), identified_holdout('END'),
+                     boot(), identified_holdout(), identified_holdout('END')])
+        self.assertEqual(self.links(a), {'matched': 1, 'no_reference': 2, 'raw_missing': 1})
+        self.assertIn('holdout_reference_missing', codes(a))
+
+    def test_malformed_boot_still_breaks_reference_identity(self):
+        malformed = boot(); del malformed['pid']
+        a = consume([reference_position(), malformed, identified_holdout()])
+        self.assertEqual(self.links(a), {'raw_missing': 1})
+        self.assertIn('partial_record', codes(a))
+
+    def test_duplicate_before_or_after_reference_is_ambiguous(self):
+        for duplicate_at in ('before', 'after'):
+            with self.subTest(duplicate_at=duplicate_at):
+                raw = reference_position(202, 8, 200)
+                rows = [holdout(), raw, identified_holdout('COMPARED'), identified_holdout('END')]
+                rows.insert(2 if duplicate_at == 'before' else len(rows), dict(raw))
+                a = consume(rows)
+                self.assertEqual(self.links(a), {'legacy_without_identity': 1,
+                                                'ambiguous': 1, 'no_reference': 1})
+                self.assertIn('holdout_reference_ambiguous', codes(a))
+                self.assertEqual(a.holdout_position['count'], 1)
+
+    def test_late_duplicates_reclassify_all_matches_once(self):
+        raw = reference_position()
+        a = consume([raw, identified_holdout(), identified_holdout('END'),
+                     identified_holdout(window_id=2), identified_holdout('END', window_id=2),
+                     dict(raw), dict(raw)])
+        self.assertEqual(self.links(a), {'ambiguous': 2, 'no_reference': 2})
+
+    def test_reference_consistency_is_checked_only_after_identity_match(self):
+        for changes in (dict(mono_ns=199), dict(lat=0), dict(lon=0), dict(lat=None)):
+            with self.subTest(changes=changes):
+                raw = reference_position(202, 8, 200)
+                raw.update(changes)
+                a = consume([holdout(), raw, identified_holdout('COMPARED'), identified_holdout('END')])
+                report = a.report()
+                self.assertEqual(report['shadow_holdout'].get('reference_links'),
+                                 {'legacy_without_identity': 1, 'mismatch': 1, 'no_reference': 1})
+                self.assertIn('holdout_reference_mismatch', codes(a))
+                self.assertEqual(report['status'], 'violation')
+                self.assertEqual(a.holdout_position['count'], 1)
+
+    def encode(self, rows):
+        return ''.join(json.dumps(row) + '\n' for row in rows).encode()
+
+    def test_trace_rotations_share_reference_group_for_directory_and_file_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            older, newer = root / 'trace.2.jsonl', root / 'trace.0.jsonl'
+            older.write_bytes(self.encode([boot(), reference_position()]))
+            newer.write_bytes(self.encode([identified_holdout(), identified_holdout('END')]))
+            for inputs in ([root], [older, newer]):
+                with self.subTest(inputs=inputs):
+                    report = audit.analyze(inputs)
+                    self.assertEqual(report['shadow_holdout'].get('reference_links'),
+                                     {'matched': 1, 'no_reference': 1})
+                    self.assertNotIn('missing_boot', [i['code'] for i in report['issues']])
+
+    def test_collector_and_storage_files_do_not_split_aa_rotations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            older, newer = root / 'trace.1.jsonl', root / 'trace.0.jsonl'
+            collector = root / 'collector.0.jsonl'
+            storage = root / 'trace.storage.json'
+            older.write_bytes(self.encode([boot(), reference_position()]))
+            newer.write_bytes(self.encode([identified_holdout(), identified_holdout('END')]))
+            collector.write_bytes(self.encode([dict(kind='collector_boot', stream='collector',
+                collector_pid=456, observed_at_mono_ns=50, producer_mono_ns=None,
+                producer_time_status='unknown', schema=1, sample_ms=1000, session_seconds=10,
+                boot_id='12345678-1234-1234-1234-123456789abc')]))
+            storage.write_bytes(self.encode([dict(kind='storage_stop', stream='trace', pid=123,
+                mono_ns=150, reserve_bytes=0, margin_bytes=0, syscall_errno=5,
+                boot_id='12345678-1234-1234-1234-123456789abc', reason='space_query_failed',
+                available_bytes=None)]))
+            report = audit.analyze([older, collector, storage, newer])
+            self.assertEqual(report['shadow_holdout'].get('reference_links'),
+                             {'matched': 1, 'no_reference': 1})
+            self.assertIn('storage_stopped', [i['code'] for i in report['issues']])
+            self.assertNotIn('missing_boot', [i['code'] for i in report['issues']])
+
+    def test_independent_directories_and_plain_files_cannot_share_missing_boot_identity(self):
+        for plain_files in (False, True):
+            with self.subTest(plain_files=plain_files), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                if plain_files:
+                    first, second = root / 'first.jsonl', root / 'second.jsonl'
+                else:
+                    (root / 'first').mkdir(); (root / 'second').mkdir()
+                    first = root / 'first' / 'trace.0.jsonl'
+                    second = root / 'second' / 'trace.0.jsonl'
+                first.write_bytes(self.encode([boot(), reference_position()]))
+                second.write_bytes(self.encode([identified_holdout(), identified_holdout('END')]))
+                report = audit.analyze([first, second])
+                self.assertEqual(report['shadow_holdout'].get('reference_links'),
+                                 {'raw_missing': 1, 'no_reference': 1})
+                self.assertIn('missing_boot', [i['code'] for i in report['issues']])
+
+    def write_tar(self, path, entries):
+        with tarfile.open(path, 'w') as archive:
+            for name, rows in entries:
+                raw = self.encode(rows)
+                member = tarfile.TarInfo(name); member.size = len(raw)
+                archive.addfile(member, io.BytesIO(raw))
+
+    def test_archive_rotations_share_group_but_separate_exports_do_not(self):
+        for separate_export in (False, True):
+            with self.subTest(separate_export=separate_export), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                first, second = root / 'first.tar', root / 'second.tar'
+                old = ('logs/trace.2.jsonl', [boot(), reference_position()])
+                new = ('logs/trace.0.jsonl', [identified_holdout(), identified_holdout('END')])
+                self.write_tar(first, [old] if separate_export else [new, old])
+                inputs = [first]
+                if separate_export:
+                    self.write_tar(second, [new]); inputs.append(second)
+                report = audit.analyze(inputs)
+                self.assertEqual(report['shadow_holdout'].get('reference_links'),
+                                 {'raw_missing' if separate_export else 'matched': 1, 'no_reference': 1})
+
+    def test_separate_member_directories_cannot_share_reference_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'sessions.tar'
+            self.write_tar(path, [('first/trace.0.jsonl', [boot(), reference_position()]),
+                                  ('second/trace.0.jsonl', [identified_holdout(), identified_holdout('END')])])
+            report = audit.analyze([path])
+            self.assertEqual(report['shadow_holdout'].get('reference_links'),
+                             {'raw_missing': 1, 'no_reference': 1})
+
+    def test_bootless_same_group_can_pair_without_claiming_complete_session(self):
+        raw = self.encode([reference_position(), identified_holdout(), identified_holdout('END')])
+        a = audit.Auditor(); a.read_stream(io.BytesIO(raw), 'partial trace', len(raw))
+        report = a.report()
+        self.assertEqual(report['shadow_holdout'].get('reference_links'), {'matched': 1, 'no_reference': 1})
+        self.assertIn('missing_boot', [i['code'] for i in report['issues']])
+
+    def test_truncated_raw_is_missing_without_discarding_recorded_comparison(self):
+        raw = (self.encode([boot(), holdout()]) + b'{"kind":"position","call":202\n' +
+               self.encode([identified_holdout('COMPARED'), identified_holdout('END')]))
+        a = audit.Auditor(); a.read_stream(io.BytesIO(raw), 'partial trace', len(raw))
+        self.assertEqual(self.links(a), {'legacy_without_identity': 1, 'raw_missing': 1, 'no_reference': 1})
+        self.assertIn('malformed_json', codes(a))
+        self.assertEqual(a.holdout_position['count'], 1)
+
+
 class CalibrationLogs(unittest.TestCase):
+    def test_cpp_overflow_reference_legacy_remains_an_inconclusive_abort(self):
+        row = json.loads(subprocess.check_output(FIXTURE + ['--emit-overflow-reference'], text=True))
+        # Before nullable identity was added, this exact formatter event already
+        # existed. Remove only the two added keys to preserve the legacy shape.
+        del row['reference_call']; del row['reference_generation']
+        a = consume([row], health_ns=2**64-1)
+        self.assertEqual(codes(a), ['holdout_aborted'])
+        report = a.report()
+        self.assertEqual(report['status'], 'inconclusive')
+        self.assertEqual(report['shadow_holdout']['reference_links'], {'legacy_without_identity': 1})
+        self.assertEqual(report['shadow_holdout']['position_difference_m']['count'], 0)
+        for fields in (dict(reference_call=0), dict(reference_generation=2**32-1),
+                       dict(reference_call=None, reference_generation=None),
+                       dict(reference_call=True, reference_generation=2**32-1)):
+            with self.subTest(fields=fields):
+                self.assertIn('invalid_holdout_time', codes(consume([dict(row, **fields)])))
+
+    def test_cpp_overflow_reference_is_an_abort_with_real_identity(self):
+        row = json.loads(subprocess.check_output(FIXTURE + ['--emit-overflow-reference'], text=True))
+        self.assertEqual((row['event'], row['reason']), ('ABORT', 'output_overflow'))
+        self.assertEqual((row['window_id'], row['anchor_ns'], row['frontier_ns']), (0, 0, 0))
+        self.assertEqual((row['reference_call'], row['reference_generation']), (0, 2**32-1))
+        self.assertEqual((row['reference_ns'], row['mono_ns']), (1000000000, 1100000000))
+        a = consume([reference_position(0, 2**32-1, 1000000000), row], health_ns=2**64-1)
+        self.assertEqual(codes(a), ['holdout_aborted'])
+        report = a.report()
+        self.assertEqual(report['status'], 'inconclusive')
+        self.assertEqual(report['shadow_holdout']['reference_links'], {'matched': 1})
+        self.assertEqual(report['shadow_holdout']['aborted_windows'], 0)
+        self.assertEqual(report['shadow_holdout']['position_difference_m']['count'], 0)
+        for fields in (dict(reason='source_fault'), dict(reference_call=None, reference_generation=None),
+                       dict(frontier_ns=1), dict(anchor_ns=1), dict(model_valid=True), dict(lat=1),
+                       dict(reference_ns=1100000001)):
+            with self.subTest(fields=fields):
+                self.assertIn('invalid_holdout_time', codes(consume([dict(row, **fields)])))
+
     def test_cpp_production_formatter_roundtrip(self):
         emitted = subprocess.check_output(FIXTURE + ['--emit'], text=True)
         rows = [json.loads(line) for line in emitted.splitlines()]
         self.assertTrue(any(row['kind'] == 'shadow_calibration' for row in rows))
         self.assertEqual([r['event'] for r in rows if r['kind'] == 'shadow_holdout'],
                          ['BEGIN', 'COMPARED', 'END'])
-        a = consume(rows, health_ns=2**64-1)
+        self.assertEqual([(row.get('reference_call'), row.get('reference_generation'))
+                          for row in rows if row['kind'] == 'shadow_holdout'],
+                         [(101, 7), (202, 8), (None, None)])
+        self.assertTrue(all('reference_call' in row and 'reference_generation' in row
+                            for row in rows if row['kind'] == 'shadow_holdout'))
+        # Known authored fixture observations, independent of emitted IDs/time.
+        observed = [rows[0], reference_position(101, 7, 6000000000), rows[1],
+                    reference_position(202, 8, 7000000000, lat=35, lon=135), *rows[2:]]
+        a = consume(observed, health_ns=2**64-1)
         self.assertEqual(codes(a), [])
         report = a.report()
         self.assertEqual(report['status'], 'local_checks_pass')
         self.assertEqual(report['shadow_holdout']['position_difference_m'],
                          dict(count=1, min=3.0, max=3.0, mean=3.0))
+        self.assertEqual(report['shadow_holdout']['reference_links'], {'matched': 2, 'no_reference': 1})
         self.assertEqual(report['shadow_calibration']['wheel_scale'],
                          dict(count=1, min=1.02, max=1.02, mean=1.02))
         self.assertEqual(report['shadow_calibration']['wheel_versions'], {'1': 1})
@@ -409,7 +711,10 @@ class CalibrationLogs(unittest.TestCase):
         emitted = json.loads(subprocess.check_output(FIXTURE + ['--emit-skipped'], text=True))
         self.assertEqual(emitted['event'], 'SKIPPED')
         self.assertEqual(emitted['reason'], 'stale_reference')
-        self.assertEqual(codes(consume([emitted], health_ns=2**64-1)), ['holdout_reference_stale'])
+        self.assertEqual((emitted.get('reference_call'), emitted.get('reference_generation')), (0, 2**32-1))
+        linked = consume([reference_position(0, 2**32-1, 1000000000), emitted], health_ns=2**64-1)
+        self.assertEqual(codes(linked), ['holdout_reference_stale'])
+        self.assertEqual(linked.report()['shadow_holdout']['reference_links'], {'matched': 1})
         a = consume([skipped_reference(), skipped_reference(mono_ns=500, reference_ns=200)])
         self.assertEqual(codes(a), ['holdout_reference_stale'] * 2)
         self.assertEqual(a.report()['status'], 'inconclusive')

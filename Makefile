@@ -228,6 +228,7 @@ $(BUILD)/test_shadow_log: tests/runtime/test_shadow_log.cpp src/runtime/shadow_l
 
 $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: $(NAV_HEADERS)
 $(BUILD)/test_journal $(BUILD)/arm/src/runtime/runtime.o: src/runtime/shadow_log.h
+$(BUILD)/test_holdout $(BUILD)/test_worker_session: src/runtime/shadow_log.h
 $(BUILD)/test_journal $(BUILD)/test_collector_journal: tests/runtime/storage_fixture.h
 $(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_collector $(BUILD)/test_collector_journal $(BUILD)/mx5dr-collector-host: $(STORAGE_HEADERS)
 $(BUILD)/test_journal: src/runtime/request_log.h src/adapter/request_hooks.h

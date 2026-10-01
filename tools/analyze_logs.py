@@ -39,6 +39,7 @@ LIMITATIONS = [
     "SHADOW model diagnostics do not establish DR accuracy, ground truth, or ASSIST readiness.",
     "Yaw/wheel calibration and GPS holdout differences are receipt-time MODEL hypotheses only.",
     "Holdout journal structure cannot prove that GPS references were excluded from prediction inputs.",
+    "Holdout references match earlier raw rows within one trace group and recorded session; missing boot still leaves process identity unproven.",
     "Motion counts cover channel-accepted records; source measurement timing remains unknown.",
     "Collector stops carry no boot ID; matching uses ordered boot boundaries, PID, and monotonic receipt time.",
 ]
@@ -48,6 +49,12 @@ def rotation_key(name):
     p = PurePosixPath(name)
     m = re.fullmatch(r"(trace|collector)\.(\d+)\.jsonl", p.name)
     return (str(p.parent), m[1] if m else p.name, -int(m[2]) if m else 0, p.name)
+
+
+def trace_group(name):
+    """Only the actual trace.N.jsonl rotation family shares AA row identity."""
+    p = PurePosixPath(name)
+    return (str(p.parent), "trace" if re.fullmatch(r"trace\.\d+\.jsonl", p.name) else p.name)
 
 
 def strict_object(pairs):
@@ -189,6 +196,7 @@ class Auditor:
         self.ignored = []
         self.total_bytes = 0
         self.session = None
+        self.trace_group = None
         self.sessions = []
         self.positions = {}
         self.checked = 0
@@ -219,6 +227,7 @@ class Auditor:
         self.gps_anchor_gates = Counter()
         self.holdout_events = Counter()
         self.holdout_reasons = Counter()
+        self.holdout_reference_links = Counter()
         self.holdout_completed = 0
         self.holdout_aborted = 0
         self.motion_rejected_reasons = Counter()
@@ -241,6 +250,8 @@ class Auditor:
                             holdout_window=None, capture_end_ns=None, model_session=None, model_bus=None)
         self.sessions.append(self.session)
         self.positions = {}
+        self.ambiguous_positions = set()
+        self.matched_holdout_references = Counter()
         self.bus_lifetimes = {}
         self.bus_objects = {}
         self.bus_health_counts = {}
@@ -345,7 +356,7 @@ class Auditor:
         self.collector_continuation(row, source)
         return True
 
-    def consume(self, row, source):
+    def consume(self, row, source, group=None):
         if not isinstance(row, dict) or not isinstance(row.get("kind"), str):
             self.issue("partial_record", source, "Expected object with kind")
             return
@@ -374,6 +385,12 @@ class Auditor:
         collector = row.get("stream") == "collector"
         if collector and not self.collector_record(row, source):
             return
+        if not collector and group is not None and group != self.trace_group:
+            # Keep one current group, not a cache of independent exports. A
+            # missing boot starts a partial session and cannot borrow raw rows
+            # or health/window state from the previous directory/archive.
+            self.trace_group = group
+            self.session = None
         if kind == "boot":
             self.new_session(row)
             self.boots.append(row)
@@ -404,6 +421,16 @@ class Auditor:
             key = (row["call"], row["generation"])
             if key in self.positions:
                 self.issue("duplicate_position", source, "Ambiguous call/generation correlation")
+                self.ambiguous_positions.add(key)
+                matched = self.matched_holdout_references.pop(key, 0)
+                if matched:
+                    # A later duplicate also invalidates earlier unique joins.
+                    self.holdout_reference_links["matched"] -= matched
+                    if not self.holdout_reference_links["matched"]:
+                        del self.holdout_reference_links["matched"]
+                    self.holdout_reference_links["ambiguous"] += matched
+                    self.issue("holdout_reference_ambiguous", source,
+                               "Later duplicate invalidates %d prior reference matches" % matched)
             self.positions[key] = row
         elif kind == "send":
             self.send(row, source)
@@ -968,6 +995,46 @@ class Auditor:
         self.calibration_versions[str(row["calibration_version"])] += 1
         self.calibration_samples_max = max(self.calibration_samples_max, row["samples"])
 
+    def holdout_reference(self, row, source):
+        """Add diagnostics without removing otherwise valid MODEL comparisons."""
+        fields = ("reference_call", "reference_generation")
+        present = [key in row for key in fields]
+        counts = self.holdout_reference_links
+        if not any(present):
+            counts["legacy_without_identity"] += 1
+            return
+        values = tuple(row.get(key) for key in fields)
+        if all(present) and values == (None, None) and row["event"] not in ("BEGIN", "COMPARED", "SKIPPED"):
+            counts["no_reference"] += 1
+            return
+        terminal_without_reference = (row["event"] == "END" or
+                                      (row["event"] == "ABORT" and row["reason"] != "output_overflow"))
+        if (not all(present) or terminal_without_reference or
+                any(not bounded_int(value, 0, 2**32-1) for value in values)):
+            counts["malformed"] += 1
+            self.issue("partial_record", source, "Holdout reference requires two uint32 identifiers or an absent reference")
+            return
+        if values in self.ambiguous_positions:
+            counts["ambiguous"] += 1
+            self.issue("holdout_reference_ambiguous", source, "Reference call/generation has multiple raw rows")
+            return
+        position = self.positions.get(values)
+        if position is None:
+            counts["raw_missing"] += 1
+            self.issue("holdout_reference_missing", source, "No prior raw position for this reference in the recorded session")
+            return
+        # Time and coordinates check the already selected row; they are never
+        # fallback keys. No producer timing or held-out-input proof is implied.
+        if (position["mono_ns"] != row["reference_ns"] or
+                (row["event"] == "COMPARED" and any(
+                    not finite_number(position.get(raw)) or position[raw] != row[reference]
+                    for raw, reference in (("lat", "ref_lat"), ("lon", "ref_lon"))))):
+            counts["mismatch"] += 1
+            self.issue("holdout_reference_mismatch", source, "Reference identity disagrees with raw receipt time or coordinates", True)
+            return
+        counts["matched"] += 1
+        self.matched_holdout_references[values] += 1
+
     def holdout(self, row, source):
         envelope = self.model_diagnostic(row, source)
         if row.get("time_basis") != "receipt_model":
@@ -999,6 +1066,7 @@ class Auditor:
             return
         if not envelope:
             return
+        self.holdout_reference(row, source)
         anchor, reference, frontier = row["anchor_ns"], row["reference_ns"], row["frontier_ns"]
         if event == "SKIPPED":
             if (row["reason"] != "stale_reference" or row["window_id"] != 0 or
@@ -1018,8 +1086,17 @@ class Auditor:
             self.issue("holdout_reference_stale", source, "GPS reference expired before holdout submission")
             return
         warmup_abort = event == "ABORT" and row["window_id"] == 0
+        # A full result queue can rewrite a pre-window SKIPPED observation to
+        # ABORT/output_overflow. Its actual reference survives; it is still an
+        # inconclusive abort with no active window or prediction.
+        reference_keys = ("reference_call", "reference_generation")
+        overflow_reference_shape = (not any(key in row for key in reference_keys) or
+            all(bounded_int(row.get(key), 0, 2**32-1) for key in reference_keys))
+        warmup_reference_overflow = (warmup_abort and row["reason"] == "output_overflow" and
+            overflow_reference_shape and
+            not row["model_valid"] and all(row[key] is None for key in ("lat", "lon", "ref_lat", "ref_lon")))
         if ((not anchor and not warmup_abort) or max(anchor, reference, frontier) > row["mono_ns"] or
-                (warmup_abort and (anchor or reference or frontier))):
+                (warmup_abort and (anchor or frontier or (reference and not warmup_reference_overflow)))):
             self.issue("invalid_holdout_time", source, "Holdout timestamp exceeds diagnostic time or anchor is absent")
             return
         if row['reason'] == 'bus_reset' and event != 'ABORT':
@@ -1354,7 +1431,7 @@ class Auditor:
             if outgoing != bytes(expected):
                 self.issue("scrub_payload_mismatch", source, "Only bytes32,36..39,40,44..47 must be zeroed", True)
 
-    def read_stream(self, stream, name, size):
+    def read_stream(self, stream, name, size, group=None):
         if size > MAX_FILE_BYTES or self.total_bytes + size > MAX_TOTAL_BYTES:
             self.issue("input_limit", name, "File/total byte budget exceeded")
             return
@@ -1380,7 +1457,7 @@ class Auditor:
             except (ValueError, UnicodeError, RecursionError) as exc:
                 self.issue("malformed_json", source, str(exc))
                 continue
-            self.consume(row, source)
+            self.consume(row, source, group if group is not None else ("stream", name))
 
     def read_path(self, path):
         path = Path(path)
@@ -1403,7 +1480,8 @@ class Auditor:
                 self.read_tar(path)
             elif path.is_file():
                 with path.open("rb") as stream:
-                    self.read_stream(stream, str(path), path.stat().st_size)
+                    self.read_stream(stream, str(path), path.stat().st_size,
+                                     ("file", *trace_group(str(path.resolve()))))
             else:
                 self.issue("input_unavailable", str(path), "Not a regular file/directory")
         except (OSError, tarfile.TarError, EOFError) as exc:
@@ -1432,7 +1510,8 @@ class Auditor:
                     self.ignored.append(name)
             for member in sorted(members, key=lambda m: rotation_key(m.name)):
                 with archive.extractfile(member) as stream:
-                    self.read_stream(stream, str(path) + "!" + member.name, member.size)
+                    self.read_stream(stream, str(path) + "!" + member.name, member.size,
+                                     ("tar", str(path.resolve()), *trace_group(member.name)))
 
     def report(self):
         for index, session in enumerate(self.sessions):
@@ -1490,6 +1569,8 @@ class Auditor:
                                         position_difference_m=dict(self.holdout_position),
                                         heading_difference_rad=dict(self.holdout_heading),
                                         time_basis="receipt_model", gps_is_ground_truth=False,
+                                        reference_links=dict(self.holdout_reference_links),
+                                        reference_link_scope="same_trace_group_and_recorded_session",
                                         reference_exclusion="not_provable_from_journal",
                                         comparison_scope="recorded_compared_events_including_later_aborted_windows",
                                         scope="model_to_gps_differences_not_physical_accuracy"),

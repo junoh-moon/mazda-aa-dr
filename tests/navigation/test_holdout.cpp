@@ -1,8 +1,10 @@
 // Synthetic MODEL receipt-time holdout checks; no physical GPS accuracy claim.
 #include "navigation/holdout.h"
+#include "runtime/shadow_log.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 using namespace mx5;
 namespace N=mx5::navigation;
@@ -63,6 +65,96 @@ struct Fixture {
         CHECK(r.anchor_ns==T(100)&&r.reference_ns==T(100));CHECK(!h.pop(&r));
     }
 };
+static void reference_json(const N::HoldoutResult& result,bool present,
+                           uint32_t call=0,uint32_t generation=0) {
+    char line[2200];
+    CHECK(runtime::format_shadow_holdout(line,sizeof line,T(10000),result));
+    const char* names[]={"reference_call","reference_generation"};
+    const uint32_t values[]={call,generation};
+    for(unsigned i=0;i<2;++i) {
+        char expected[80];
+        if(present)::snprintf(expected,sizeof expected,"\"%s\":%u",names[i],values[i]);
+        else ::snprintf(expected,sizeof expected,"\"%s\":null",names[i]);
+        const char* field=std::strstr(line,expected);
+        if(!field)std::fprintf(stderr,"Expected %s in actual holdout JSON: %s\n",expected,line);
+        CHECK(field&&(field[std::strlen(expected)]==','||field[std::strlen(expected)]=='}'));
+    }
+}
+static void reference_identity_survives_delayed_queue() {
+    Fixture f;f.prime();
+    CHECK(f.h.enqueue_position(gps(0))==N::PIPELINE_OK);f.raw(0);f.h.drain(T(-100));
+    A::Observation anchor=gps(100);anchor.call_sequence=101;anchor.prediction_generation=7;
+    CHECK(f.h.enqueue_position(anchor)==N::PIPELINE_OK);
+    f.wheel_reverse(100);f.h.drain(T(100));
+    N::HoldoutResult result;CHECK(!f.h.pop(&result));
+    A::Observation first=gps(150);first.call_sequence=202;first.prediction_generation=8;
+    A::Observation second=gps(200);second.call_sequence=303;second.prediction_generation=9;
+    CHECK(f.h.enqueue_position(first)==N::PIPELINE_OK);
+    CHECK(f.h.enqueue_position(second)==N::PIPELINE_OK);
+    // Queued observations must own their original identity and values. The
+    // latest callback and the caller's reused storage cannot retag the anchor.
+    anchor=first=second=gps(900);
+    anchor.call_sequence=first.call_sequence=second.call_sequence=999;
+    anchor.prediction_generation=first.prediction_generation=second.prediction_generation=99;
+    f.h.drain(T(150));CHECK(!f.h.pop(&result));
+    f.raw(200);f.h.drain(T(200));
+    CHECK(f.h.pop(&result)&&result.event==N::HOLDOUT_BEGIN);
+    CHECK(result.reference_ns==T(100)&&result.reference.latitude_deg==gps(100).position.latitude_deg);
+    reference_json(result,true,101,7);
+    CHECK(f.h.pop(&result)&&result.event==N::HOLDOUT_COMPARED);
+    CHECK(result.reference_ns==T(150)&&result.prediction_frontier_ns==T(150));
+    CHECK(result.reference.latitude_deg==gps(150).position.latitude_deg);
+    reference_json(result,true,202,8);
+    CHECK(f.h.pop(&result)&&result.event==N::HOLDOUT_COMPARED);
+    CHECK(result.reference_ns==T(200)&&result.prediction_frontier_ns==T(200));
+    reference_json(result,true,303,9);CHECK(!f.h.pop(&result));
+}
+static void reference_identity_absence_and_overflow() {
+    // A zero/wrapped call and a maximal generation are still actual IDs.
+    Fixture skipped;A::Observation old=gps(100);
+    old.call_sequence=0;old.prediction_generation=UINT32_MAX;
+    CHECK(skipped.h.enqueue_position(old)==N::PIPELINE_OK);old=gps(900);
+    skipped.h.drain(T(351));N::HoldoutResult result;
+    CHECK(skipped.h.pop(&result)&&result.event==N::HOLDOUT_SKIPPED);
+    reference_json(result,true,0,UINT32_MAX);CHECK(!skipped.h.pop(&result));
+    Fixture reverse_ids;old=gps(100);old.call_sequence=UINT32_MAX;old.prediction_generation=0;
+    CHECK(reverse_ids.h.enqueue_position(old)==N::PIPELINE_OK);reverse_ids.h.drain(T(351));
+    CHECK(reverse_ids.h.pop(&result)&&result.event==N::HOLDOUT_SKIPPED);
+    reference_json(result,true,UINT32_MAX,0);
+    // Terminal results do not acquire a last-seen or triggering callback ID.
+    Fixture complete(100000000ULL);complete.warm();complete.raw(300);complete.h.drain(T(200));
+    CHECK(complete.h.pop(&result)&&result.event==N::HOLDOUT_END);reference_json(result,false);
+    Fixture fault;fault.warm();old=gps(250);old.position.mode=0;
+    old.call_sequence=444;old.prediction_generation=12;
+    CHECK(fault.h.enqueue_position(old)==N::PIPELINE_NO_ANCHOR);
+    CHECK(fault.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);reference_json(result,false);
+    const mx5_dr_context next={1,2,3};fault.h.reset(next);
+    CHECK(fault.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);reference_json(result,false);
+    // A full result queue rewrites the final event to output_overflow. Preserve
+    // the actual emit argument, which can be a skipped observation or null.
+    for(unsigned with_observation=0;with_observation<2;++with_observation) {
+        Fixture full;
+        const unsigned count=N::GpsHoldout::RESULT_CAPACITY+with_observation;
+        for(unsigned i=0;i<count;++i) {
+            A::Observation o=gps(100+int(i));o.call_sequence=17+i;o.prediction_generation=31+i;
+            CHECK(full.h.enqueue_position(o)==N::PIPELINE_OK);
+            full.h.drain(T(351+int(i)));
+        }
+        if(!with_observation)full.h.reset(next);
+        unsigned read=0;
+        while(full.h.pop(&result)) {
+            ++read;
+            if(read<N::GpsHoldout::RESULT_CAPACITY)CHECK(result.event==N::HOLDOUT_SKIPPED);
+            else {
+                CHECK(result.event==N::HOLDOUT_ABORT&&result.reason==N::HOLDOUT_OUTPUT_OVERFLOW);
+                CHECK(result.window_id==0&&result.anchor_ns==0&&result.prediction_frontier_ns==0);
+                CHECK(result.reference_ns==(with_observation?T(100+int(count)-1):0));
+                reference_json(result,with_observation!=0,17+count-1,31+count-1);
+            }
+        }
+        CHECK(read==N::GpsHoldout::RESULT_CAPACITY);
+    }
+}
 static void warmup_waits_for_delayed_yaw() {
     Fixture f;f.prime();
     CHECK(f.h.enqueue_position(gps(0))==N::PIPELINE_OK);
@@ -232,6 +324,8 @@ static void independent_and_exact() {
     for(unsigned ms=0;ms<=2300;ms+=50) {
         if(ms==0||ms==100|| (ms>=150&&ms%150==0)) {
             A::Observation oa=gps(ms),ob=oa;
+            oa.call_sequence=ms+101;oa.prediction_generation=7;
+            ob.call_sequence=ms+202;ob.prediction_generation=8;
             if(ms>=150) {
                 ob.position.latitude_deg+=1.0/111320.0;
                 ob.position.longitude_deg+=1.0/111320.0;
@@ -250,6 +344,11 @@ static void independent_and_exact() {
         while(a.h.pop(&ra)) {
             CHECK(b.h.pop(&rb));CHECK(ra.event==rb.event);CHECK(ra.reason==rb.reason);
             CHECK(ra.event!=N::HOLDOUT_ABORT);
+            if(ra.event==N::HOLDOUT_BEGIN||ra.event==N::HOLDOUT_COMPARED) {
+                const unsigned reference_ms=unsigned((ra.reference_ns-T(0))/1000000ULL);
+                reference_json(ra,true,reference_ms+101,7);
+                reference_json(rb,true,reference_ms+202,8);
+            } else {reference_json(ra,false);reference_json(rb,false);}
             if(ra.event==N::HOLDOUT_COMPARED) {
                 ++compared;CHECK(ra.reference_ns==ra.prediction_frontier_ns);
                 CHECK(ra.prediction_frontier_ns==rb.prediction_frontier_ns);
@@ -534,6 +633,7 @@ static void wheel_training_outside_holdout_only() {
     CHECK(learned_begins==1&&learned_comparisons>0);
 }
 int main() {
+    reference_identity_survives_delayed_queue();reference_identity_absence_and_overflow();
     warmup_waits_for_delayed_yaw();stale_unsubmitted_reference_does_not_extend_cooldown();
     independent_and_exact();aborts_and_reset();
     future_input_and_output_bound();calibration_survives_complete_only();

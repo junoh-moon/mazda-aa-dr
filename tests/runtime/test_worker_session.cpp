@@ -3,6 +3,7 @@
 #include "../../src/runtime/runtime.cpp"
 #include <assert.h>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 #include "model_bus_fixture.h"
@@ -230,6 +231,9 @@ int main(int argc,char** argv) {
     unsigned pre_ready=0,pre_begin=0,pre_valid=0,bus_boundary=0;size_t raw_rows=0;
     unsigned excluded_receipt=0,excluded_transport=0,late_request_rejected=0;
     uint64_t reset_since=0,last_drain_calls=0;
+    typedef std::pair<uint64_t,uint64_t> PositionKey;
+    std::map<PositionKey,uint64_t> recorded_positions;
+    unsigned linked_holdout_references=0;
     while(std::getline(f,line)) {
         if(line.find("\"kind\":\"shadow_motion_excluded\"")!=std::string::npos) {
             const uint64_t seq=number(line,"receive_seq");
@@ -261,8 +265,28 @@ int main(int argc,char** argv) {
         // may expire while the worker waits for its capture-stop check.
         if(slow_yaw&&line.find("\"kind\":\"shadow_pipeline_reset\"")!=std::string::npos)
             assert(number(line,"mono_ns")>=start+7500000000ULL);
-        if(line.find("\"kind\":\"position\"")!=std::string::npos)++positions;
+        if(line.find("\"kind\":\"position\"")!=std::string::npos) {
+            ++positions;
+            const PositionKey key(number(line,"call"),number(line,"generation"));
+            assert(recorded_positions.insert(std::make_pair(key,number(line,"mono_ns"))).second);
+        }
         if(line.find("\"kind\":\"shadow_holdout\"")!=std::string::npos) {
+            const bool has_reference=line.find("\"event\":\"BEGIN\"")!=std::string::npos||
+                line.find("\"event\":\"COMPARED\"")!=std::string::npos||
+                line.find("\"event\":\"SKIPPED\"")!=std::string::npos;
+            if(has_reference) {
+                assert(line.find("\"reference_call\":null")==std::string::npos);
+                assert(line.find("\"reference_generation\":null")==std::string::npos);
+                const PositionKey key(number(line,"reference_call"),number(line,"reference_generation"));
+                const std::map<PositionKey,uint64_t>::const_iterator p=recorded_positions.find(key);
+                assert(p!=recorded_positions.end()&&p->second==number(line,"reference_ns"));
+                ++linked_holdout_references;
+            } else {
+                // This authored worker run exercises ordinary reset/capture
+                // aborts, which have no single reference Observation.
+                assert(line.find("\"reference_call\":null")!=std::string::npos);
+                assert(line.find("\"reference_generation\":null")!=std::string::npos);
+            }
             if(line.find("\"event\":\"BEGIN\"")!=std::string::npos) {
                 ++begins;if(number(line,"mono_ns")<start+2000000000ULL)++pre_begin;
             }
@@ -285,6 +309,7 @@ int main(int argc,char** argv) {
     assert(positions==(pre_gap?10u:9u) && begins>=1 && recovered>=2); // Positive controls, including GAP continuation.
     printf("pre_boundary_ready=%u pre_boundary_begin=%u raw_rows=%zu accepted=%zu\n",pre_ready,pre_begin,raw_rows,raw_expected.size());fflush(stdout);
     assert(pre_ready>=2&&pre_begin>=1);
+    assert(linked_holdout_references>=begins);
     assert(raw_rows==raw_expected.size()&&raw_rows==sequence);
     assert(reset_since && reset_since<fresh_anchor_ns && !stale_valid && invalid>=10 && (pre_gap||reset_aborts>=1));
     printf("boundary checks: receipt_excluded=%u transport_excluded=%u late_request_rejected=%u pre_valid=%u bus_boundary=%u\n",excluded_receipt,excluded_transport,late_request_rejected,pre_valid,bus_boundary);fflush(stdout);

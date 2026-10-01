@@ -20,6 +20,10 @@ struct HoldoutResult {
     HoldoutEvent event;
     HoldoutReason reason;
     uint64_t window_id, anchor_ns, reference_ns, prediction_frontier_ns;
+    // Original adapter observation identity within its recorded process session.
+    // Presence is not qualification; zero and UINT32_MAX are valid IDs.
+    bool has_reference_observation;
+    uint32_t reference_call, reference_generation;
     adapter::PositionInput reference;
     mx5_dr_snapshot prediction;
     double position_error_m, heading_error_rad;
