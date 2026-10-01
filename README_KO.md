@@ -14,19 +14,20 @@
 [과거 첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
 USB 설치 ZIP의 내용물을 FAT32 USB 최상위에 복사하면 MP3/JS로 진단 셸에
-진입할 수 있습니다. 새 후보는 `sh /tmp/mnt/sda1/trial` 한 줄로 숫자 메뉴를
-엽니다. `1` 설치, `2` 상태 확인, `3` 종료·USB 회수를 주차 중에 선택합니다.
+진입할 수 있습니다. USB 디렉터리에서 `sh install.sh`로 설치하십시오.
+주차 중 `sh /tmp/mnt/sda1/trial`로 숫자 메뉴를 열어 `2` 상태 확인,
+`3` 종료·USB 회수, `4` 제거를 선택할 수 있습니다.
 Shift 키나 긴 회수 경로 입력이 필요하지 않습니다.
 [사용 안내](packaging/USB_START_KO.md) · [설치 수정과 검증](validation/USB_INSTALL_2026-09-29.md).
 현재 소스는 CMU의 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
 이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리한다.
-raw 요청 연결·지연 yaw/holdout 보완·qualified ASSIST worker 발행·철회를 포함한
-[v0.3.5-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.5-shadow.1)을
-게시했습니다. 실제 자격 입력 공급부는 미구현이므로 ASSIST는 계속 비활성입니다.
-숫자 메뉴와 저장 공간 정책은 유지합니다. [릴리즈 검증](validation/RELEASE_V035_2026-10-01.md)에
-새 제품의 host/ARM 전체, 최초 host 큐 막힘과 변경 없는 재실행 통과,
-최종 ZIP의 순정 BusyBox 설치 검사를 구분했습니다. 최초 지연 원인은 미확정입니다.
-공개 파일도 직접 내려받아 SHA-256·CRC·전체 manifest와 고정 커밋을 확인했습니다.
+오래된 ASSIST 기준점 재사용 결함을 수정한
+[v0.3.6-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.6-shadow.1)을
+게시했습니다. raw 요청 연결·지연 yaw/holdout·숫자 메뉴와 저장 공간 정책을
+유지합니다. 실제 자격 입력 공급부는 미구현이므로 ASSIST는 비활성입니다.
+[릴리즈 검증](validation/RELEASE_V036_2026-10-01.md)은 clean host/ARM 전체,
+원본 OEM VM cold 설치, 최종 ZIP의 순정 BusyBox 설치와 공개 파일 재다운로드를
+구분합니다. 기존 v0.3.5에는 비활성 계산 경로의 결함이 남아 있습니다.
 이전 v0.3.3과 a29f1b8 후보에는 숫자 메뉴가 없습니다.
 실제 차량과 ASSIST 적용은 아직 미검증입니다.
 기존 `v0.3.0-shadow.1` ZIP은 이 수정을 포함하지 않습니다.
