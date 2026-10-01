@@ -602,6 +602,17 @@ static void qualified_revoker_failure_is_terminal() {
         CHECK(!failed_model.diagnostic(T(110)).snapshot.valid);
         CHECK(failed_model.drain(T(110))==PIPELINE_BAD_INPUT);
     }
+    RevocationResponse failed_qualified_response={1,0};
+    Pipeline failed_qualified;seed_qualified(failed_qualified,1);
+    CHECK(failed_qualified.bind_qualified_revoker(fixed_revoke_generation,&failed_qualified_response));
+    mx5_dr_context qualified_context={1,1,1};
+    CHECK(!failed_qualified.init_qualified(mx5_dr_default_config(),qualified_context));
+    CHECK(failed_qualified_response.calls==1&&failed_qualified.status().result==PIPELINE_BAD_INPUT);
+    CHECK(failed_qualified.context().generation==UINT64_MAX);
+    Pipeline from_model;seeded(from_model);
+    CHECK(from_model.status().uncertainties!=0);
+    CHECK(from_model.init_qualified(mx5_dr_default_config(),qualified_context));
+    CHECK(from_model.status().uncertainties==0);
     for(unsigned cause=0;cause<2;++cause) {
         RevocationResponse failed_profile_response={3,0};
         Pipeline failed_profile;seed_qualified(failed_profile,1);

@@ -23,7 +23,9 @@ GpsHoldout::GpsHoldout() : phase_(HOLDOUT_WARMUP), reference_count_(0),
     result_head_(0), result_count_(0), window_id_(0), anchor_ns_(0), end_ns_(0),
     cooldown_until_(0), last_gps_ns_(0), latest_received_ns_(0), watermark_(0), utc_progress_ns_(0), sample_age_ns_(0),
     configured_(false), have_previous_(false), reference_submitted_(false),
-    cooldown_fault_reported_(false) { config_=default_holdout_config(); }
+    cooldown_fault_reported_(false),cooldown_fault_reason_(HOLDOUT_NONE) {
+    config_=default_holdout_config();
+}
 bool GpsHoldout::init_model(const ModelProfile& p,const mx5_dr_config& c,
                             mx5_dr_context x,const HoldoutConfig& h) {
     if(!h.duration_ns||h.duration_ns>60000000000ULL||!h.cooldown_ns||
@@ -33,7 +35,8 @@ bool GpsHoldout::init_model(const ModelProfile& p,const mx5_dr_config& c,
     config_=h;sample_age_ns_=c.sample_age_max_ns;phase_=HOLDOUT_WARMUP;reference_count_=result_head_=result_count_=0;
     window_id_=anchor_ns_=end_ns_=cooldown_until_=last_gps_ns_=0;
     latest_received_ns_=watermark_=utc_progress_ns_=0;
-    have_previous_=reference_submitted_=cooldown_fault_reported_=false;return true;
+    have_previous_=reference_submitted_=cooldown_fault_reported_=false;
+    cooldown_fault_reason_=HOLDOUT_NONE;return true;
 }
 bool GpsHoldout::eligible(const adapter::Observation& o,bool moving) const {
     const adapter::PositionInput& p=o.position;
@@ -63,7 +66,7 @@ void GpsHoldout::restart(uint64_t now,bool complete) {
     else pipeline_.reset(x);
     reference_count_=0;have_previous_=reference_submitted_=false;
     last_gps_ns_=0;phase_=HOLDOUT_COOLDOWN;cooldown_until_=add(now,config_.cooldown_ns);
-    cooldown_fault_reported_=false;
+    cooldown_fault_reported_=false;cooldown_fault_reason_=HOLDOUT_NONE;
 }
 void GpsHoldout::emit(HoldoutEvent event,HoldoutReason reason,
                       const adapter::Observation* o,const mx5_dr_snapshot* s) {
@@ -105,9 +108,9 @@ void GpsHoldout::abort(HoldoutReason reason,uint64_t now) {
     const bool in_cooldown=phase_==HOLDOUT_COOLDOWN&&
         (now<cooldown_until_||reason==HOLDOUT_STALE_REFERENCE);
     const uint64_t original_cooldown=cooldown_until_;
-    // The first cooldown fault can discard an applied calibration. Coalesce
-    // repeated bad input only while no new calibration or candidate was
-    // learned: a later reset must not silently erase that new evidence.
+    // Coalesce only the same repeated fault when no new input or calibration
+    // has arrived. A valid GPS reference remains new evidence even after its
+    // pipeline queue entry was drained and removed from references_.
     const FaultCalibration& fault=pipeline_.fault_calibration();
     const bool before_fault=reason==HOLDOUT_SOURCE_FAULT&&fault.valid;
     const GyroBiasStatus& gyro=before_fault?fault.gyro:pipeline_.calibration();
@@ -116,12 +119,14 @@ void GpsHoldout::abort(HoldoutReason reason,uint64_t now) {
         gyro.candidate_ready||wheel.candidate_ready||
         gyro.state==GYRO_BIAS_COLLECTING||wheel.segments||
         wheel.partial_training_distance_m>0;
-    if(!in_cooldown||!cooldown_fault_reported_||learned_since_fault)
+    if(!in_cooldown||!cooldown_fault_reported_||
+       reason!=cooldown_fault_reason_||learned_since_fault||have_previous_||reference_count_)
         emit(HOLDOUT_ABORT,reason,0,0);
     restart(now);
     if(in_cooldown) {
         cooldown_until_=original_cooldown;
         cooldown_fault_reported_=true;
+        cooldown_fault_reason_=reason;
     }
 }
 void GpsHoldout::reset(mx5_dr_context x,HoldoutReason reason) {
@@ -130,7 +135,7 @@ void GpsHoldout::reset(mx5_dr_context x,HoldoutReason reason) {
     // prior cooldown input fault was already recorded.
     emit(HOLDOUT_ABORT,reason,0,0);
     pipeline_.reset(x);reference_count_=0;have_previous_=reference_submitted_=false;last_gps_ns_=0;
-    cooldown_fault_reported_=false;
+    cooldown_fault_reported_=false;cooldown_fault_reason_=HOLDOUT_NONE;
     phase_=HOLDOUT_WARMUP;anchor_ns_=end_ns_=cooldown_until_=watermark_=latest_received_ns_=0;
 }
 PipelineResult GpsHoldout::enqueue_raw(const RawEvent& r) {

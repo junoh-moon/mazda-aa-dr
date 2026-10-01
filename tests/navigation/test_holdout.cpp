@@ -447,6 +447,50 @@ static void cooldown_relearned_calibration_fault_is_recorded() {
     }
     CHECK(wheel_abort);
 }
+static void cooldown_preserves_distinct_fault_reasons_and_new_references() {
+    Fixture f(500000000ULL,500000000ULL);
+    A::Observation gap=gps(1000);gap.position.mode=0;
+    CHECK(f.h.enqueue_position(gap)==N::PIPELINE_NO_ANCHOR);
+    N::HoldoutResult result;
+    CHECK(f.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    CHECK(result.reason==N::HOLDOUT_REAL_GAP&&!f.h.pop(&result));
+    N::RawEvent malformed=N::RawEvent();malformed.kind=N::YAW;
+    malformed.epoch=1;malformed.receive_seq=++f.seq;
+    malformed.received_ns=T(1100);malformed.count=0;
+    CHECK(f.h.enqueue_raw(malformed)==N::PIPELINE_BAD_INPUT);
+    CHECK(f.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    CHECK(result.reason==N::HOLDOUT_SOURCE_FAULT&&!f.h.pop(&result));
+    A::Observation bad=gps(1200);bad.position.mode=9;
+    CHECK(f.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(f.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    CHECK(result.reason==N::HOLDOUT_BAD_GPS&&!f.h.pop(&result));
+    bad=gps(1300);bad.position.mode=9;
+    CHECK(f.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(!f.h.pop(&result)); // Identical fault with no new evidence coalesces.
+    CHECK(f.h.enqueue_position(gps(1350))==N::PIPELINE_OK);
+    bad=gps(1400);bad.position.mode=9;
+    CHECK(f.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(f.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    CHECK(result.reason==N::HOLDOUT_BAD_GPS&&!f.h.pop(&result));
+    CHECK(f.h.enqueue_position(gps(1600))==N::PIPELINE_OK);
+    f.h.drain(T(1600));
+    CHECK(f.h.phase()==N::HOLDOUT_WARMUP);
+
+    Fixture drained(500000000ULL,500000000ULL);
+    bad=gps(1000);bad.position.mode=9;
+    CHECK(drained.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(drained.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    bad=gps(1050);bad.position.mode=9;
+    CHECK(drained.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(drained.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    CHECK(drained.h.enqueue_position(gps(1100))==N::PIPELINE_OK);
+    drained.raw(1100);drained.h.drain(T(1100));
+    CHECK(!drained.h.pop(&result));
+    bad=gps(1200);bad.position.mode=9;
+    CHECK(drained.h.enqueue_position(bad)==N::PIPELINE_BAD_INPUT);
+    CHECK(drained.h.pop(&result)&&result.event==N::HOLDOUT_ABORT);
+    CHECK(result.reason==N::HOLDOUT_BAD_GPS&&!drained.h.pop(&result));
+}
 static void wheel_training_outside_holdout_only() {
     Fixture a(2000000000ULL,30000000000ULL),b(2000000000ULL,30000000000ULL);
     a.warm();b.warm();
@@ -494,6 +538,7 @@ int main() {
     independent_and_exact();aborts_and_reset();
     future_input_and_output_bound();calibration_survives_complete_only();
     cooldown_relearned_calibration_fault_is_recorded();
+    cooldown_preserves_distinct_fault_reasons_and_new_references();
     wheel_training_outside_holdout_only();
     std::printf("MODEL GPS holdout: %u synthetic checks\n",checks);return 0;
 }

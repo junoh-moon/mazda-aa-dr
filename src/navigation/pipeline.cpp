@@ -66,6 +66,7 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
     gps_wheel_.configure(gps_wheel,c.sample_age_max_ns);
     configured_=mx5_dr_init_model(&core_,&c,x)==MX5_DR_OK;
     if (configured_) reset_state(x);
+    else status_.result=PIPELINE_BAD_INPUT;
     return configured_;
 }
 bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
@@ -75,16 +76,20 @@ bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
         if(!next||next>UINT32_MAX||next<=previous) {
             mx5_dr_context terminal=context();terminal.generation=UINT64_MAX;
             reset_state(terminal);configured_=false;
+            status_.result=PIPELINE_BAD_INPUT;
             qualified_revoker_=0;qualified_revoker_user_=0;qualified_owner_=0;
             return false;
         }
         x.generation=next;
     }
     model_=false; qualified_revoker_=0; qualified_revoker_user_=0;qualified_owner_=0;
+    // MODEL assumptions cannot remain attached to a new qualified domain.
+    status_.uncertainties=0;
     gyro_bias_.configure(false,profile_.yaw_zero,c.sample_age_max_ns);
     gps_wheel_.configure(false,c.sample_age_max_ns);
     configured_=mx5_dr_init(&core_,&c,x)==MX5_DR_OK;
     if (configured_) reset_state(x);
+    else status_.result=PIPELINE_BAD_INPUT;
     return configured_;
 }
 bool Pipeline::bind_qualified_revoker(QualifiedRevoker revoke,void* user) {
@@ -449,6 +454,10 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
         }
         have_fix_=false; gps_wheel_.unavailable();
     }
+    // A GPS quality-only 1<->2 transition can advance the adapter generation
+    // without a new verified anchor. Keep the old core generation: adapter
+    // publication then remains unavailable until a qualified anchor arrives.
+    // Retagging this seed from receipt alone would bypass that qualification.
     position_mode_=mode;
     if (!model_) return PIPELINE_OK;
     if (!good_fix(o)) {
