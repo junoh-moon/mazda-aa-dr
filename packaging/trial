@@ -50,13 +50,23 @@ current_status() {
         require_usb
         ALLOW_REMOUNT=1
         mount_rw "$HERE"
-        cd -P -- "$HERE"
+        cd -P -- "$HERE" || fail 'Cannot enter USB for startup report'
         require_usb
         report=$HERE/startup-result.txt
         if [ -e "$report" ] || [ -L "$report" ]; then regular "$report"; fi
-        printf 'scope=parked_startup_check\n%s\n%s\nstatus_exit=%s\n' \
-            "$boundary_output" "$status_output" "$last_rc" > startup-result.txt
-        sync
+        report_tmp=$(mktemp ./startup-result.XXXXXX) || fail 'Cannot stage startup report'
+        # This subshell is an if condition: POSIX shells suppress set -e here.
+        # Check writes explicitly and keep the previous report on write error.
+        if ! printf 'scope=parked_startup_check\n%s\n%s\nstatus_exit=%s\n' \
+            "$boundary_output" "$status_output" "$last_rc" > "$report_tmp"; then
+            rm -f "$report_tmp" || :
+            fail 'Cannot write startup report'
+        fi
+        if ! mv "$report_tmp" startup-result.txt; then
+            rm -f "$report_tmp" || :
+            fail 'Cannot replace startup report'
+        fi
+        sync || fail 'Cannot sync startup report'
     ); then echo 'Startup check saved: startup-result.txt'
     else echo 'Startup check could not be saved; the displayed status remains valid.'; fi
 }

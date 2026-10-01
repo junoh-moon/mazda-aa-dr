@@ -38,10 +38,10 @@ class TrialMenuTests(unittest.TestCase):
         self.env = dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root),
                         MX5DR_FIXTURE_FINISH_WAIT='0')
 
-    def menu(self, keys):
+    def menu(self, keys, preexec_fn=None):
         return subprocess.run(['sh', str(self.usb / 'trial')], input=keys,
                               text=True, capture_output=True, env=self.env,
-                              cwd=self.root, timeout=20)
+                              cwd=self.root, timeout=20, preexec_fn=preexec_fn)
 
     def prepare_logs(self, acknowledged=True):
         self.fixture.run_script('install.sh')
@@ -133,6 +133,24 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('2\n0\n')
         self.assertIn('reboot_check=unavailable', result.stdout)
         self.assertNotIn('reboot_check=new_boot_observed', result.stdout)
+
+    def test_status_report_write_error_is_not_reported_as_saved(self):
+        import resource
+        import signal
+        self.prepare_logs()
+        report = self.usb / 'startup-result.txt'
+        report.write_text('previous parked check\n')
+
+        def disallow_file_growth():
+            # A real kernel write error, including when this test runs as root.
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+
+        result = self.menu('2\n0\n', preexec_fn=disallow_file_growth)
+        self.assertIn('Startup check could not be saved', result.stdout)
+        self.assertNotIn('Startup check saved:', result.stdout)
+        self.assertEqual(report.read_text(), 'previous parked check\n')
+        self.assertFalse(list(self.usb.glob('startup-result.??????')))
 
     def test_status_is_read_only_and_failure_remains_visible(self):
         self.prepare_logs()
