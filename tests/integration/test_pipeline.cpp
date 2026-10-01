@@ -109,6 +109,72 @@ static void bridge_contracts(const mx5_dr_snapshot& valid) {
     s=valid;q=qualify(s);q.limits_verified_until_mono_ns=now_ns+1000000000;
     assert(map_core_snapshot(s,q,&out)==CORE_BRIDGE_OK && out.valid_until_mono_ns==1250000000);
 }
+static void publication_contracts(const mx5_dr_core& core,const mx5_dr_snapshot& current) {
+    using namespace runtime;
+    CoreBridgeQualification q=qualify(current);
+    adapter::DrSnapshot out=adapter::DrSnapshot();
+    const uint64_t requested=now_ns+50000000;
+    assert(prepare_core_publication(core,q,requested,&out)==CORE_BRIDGE_OK);
+    assert(out.valid_until_mono_ns==requested);
+    assert(out.frontier_mono_ns==current.frontier_ns && out.derived_utc_ns==current.derived_utc_ns);
+    assert(out.latitude_deg==current.latitude_deg && out.longitude_deg==current.longitude_deg);
+    // A request is only an upper bound. Source leases and both age limits apply.
+    assert(prepare_core_publication(core,q,UINT64_MAX,&out)==CORE_BRIDGE_OK);
+    assert(out.valid_until_mono_ns==1250000000);
+    mx5_dr_core short_lease=core;short_lease.estimate.sensor_lease_until_ns=now_ns+30000000;
+    assert(prepare_core_publication(short_lease,q,requested,&out)==CORE_BRIDGE_OK);
+    assert(out.valid_until_mono_ns==now_ns+30000000);
+    mx5_dr_core short_age=core;short_age.config.snapshot_age_max_ns=40000000;
+    assert(prepare_core_publication(short_age,q,requested,&out)==CORE_BRIDGE_OK);
+    assert(out.valid_until_mono_ns==current.frontier_ns+40000000);
+    q.max_snapshot_age_ns=20000000;
+    assert(prepare_core_publication(core,q,requested,&out)==CORE_BRIDGE_OK);
+    assert(out.valid_until_mono_ns==current.frontier_ns+20000000);
+    q=qualify(current);q.duration_max_s=0.125;
+    assert(prepare_core_publication(core,q,requested,&out)==CORE_BRIDGE_OK);
+    assert(out.valid_until_mono_ns>=1124999999 && out.valid_until_mono_ns<=1125000000);
+    mx5_dr_core short_duration=core;short_duration.config.duration_max_s=0.125;
+    q=qualify(current);
+    assert(prepare_core_publication(short_duration,q,requested,&out)==CORE_BRIDGE_OK);
+    assert(out.valid_until_mono_ns>=1124999999 && out.valid_until_mono_ns<=1125000000);
+    // At 20 m/s plus 0.3 m/s uncertainty, 0.203 m headroom lasts 10 ms.
+    for(unsigned core_limit=0;core_limit<2;++core_limit) {
+        mx5_dr_core limited=core;q=qualify(current);
+        const double limit=current.error_budget_m+0.203;
+        if(core_limit)limited.config.error_max_m=limit;else q.error_max_m=limit;
+        assert(prepare_core_publication(limited,q,requested,&out)==CORE_BRIDGE_OK);
+        assert(out.valid_until_mono_ns>=now_ns+9999999 && out.valid_until_mono_ns<=now_ns+10000000);
+        const uint64_t deadline=out.valid_until_mono_ns;
+        for(unsigned step=0;step<=4;++step) {
+            mx5_dr_snapshot s=mx5_dr_snapshot();CoreBridgeQualification at=q;
+            at.now_mono_ns=now_ns+(deadline-now_ns)*step/4;
+            at.limits_verified_until_mono_ns=at.now_mono_ns;
+            assert(mx5_dr_get_snapshot(&limited,at.now_mono_ns,q.expected_context,&s)==MX5_DR_OK);
+            adapter::DrSnapshot check=adapter::DrSnapshot();
+            assert(map_core_snapshot(s,at,&check)==CORE_BRIDGE_OK);
+        }
+        mx5_dr_snapshot expired=mx5_dr_snapshot();CoreBridgeQualification after=q;
+        after.now_mono_ns=after.limits_verified_until_mono_ns=deadline+1;
+        const mx5_dr_result r=mx5_dr_get_snapshot(&limited,deadline+1,q.expected_context,&expired);
+        adapter::DrSnapshot check=adapter::DrSnapshot();
+        assert(r==MX5_DR_E_LIMIT || map_core_snapshot(expired,after,&check)==CORE_BRIDGE_LIMIT);
+    }
+    q=qualify(current);
+    assert(prepare_core_publication(core,q,now_ns-1,&out)==CORE_BRIDGE_TIME && !out.ready);
+    assert(prepare_core_publication(core,q,requested,0)==CORE_BRIDGE_NO_OUTPUT);
+    q.profile_verified=false;out.ready=true;
+    assert(prepare_core_publication(core,q,requested,&out)==CORE_BRIDGE_UNQUALIFIED);
+    assert(!out.ready && !out.source_epoch && !out.derived_utc_ns);
+    q=qualify(current);q.limits_verified_until_mono_ns=now_ns-1;
+    assert(prepare_core_publication(core,q,requested,&out)==CORE_BRIDGE_TIME && !out.ready);
+    q=qualify(current);mx5_dr_core model=core;
+    model.domain=MX5_DR_MODEL_DOMAIN;model.estimate.domain=MX5_DR_MODEL_DOMAIN;
+    assert(prepare_core_publication(model,q,requested,&out)==CORE_BRIDGE_UNQUALIFIED && !out.ready);
+    mx5_dr_core returned=core;
+    assert(mx5_dr_control(&returned,MX5_DR_GPS_RETURN,context(core.estimate.context.generation+1),3)==MX5_DR_OK);
+    q.expected_context=returned.estimate.context;
+    assert(prepare_core_publication(returned,q,requested,&out)==CORE_BRIDGE_UNQUALIFIED && !out.ready);
+}
 static void send(adapter::VehicleData& data,bool original) {
     borrowed_wrapper=&data;expect_original=original;const unsigned before=sends;
     assert(adapter::send_vehicle_data(expected_session,&data)==-731);
@@ -123,7 +189,7 @@ int main() {
     uint8_t original[48],position[72]={};for(unsigned j=0;j<48;++j)original[j]=uint8_t(j+1);
     adapter::VehicleData data={1,original,48};
     adapter::position_enter(0,position); // establishes exact mode0 context and generation
-    mx5_dr_core core;mx5_dr_snapshot s=prepare(core);bridge_contracts(s);
+    mx5_dr_core core;mx5_dr_snapshot s=prepare(core);bridge_contracts(s);publication_contracts(core,s);
     adapter::DrSnapshot mapped=adapter::DrSnapshot();
     assert(runtime::map_core_snapshot(s,qualify(s),&mapped)==runtime::CORE_BRIDGE_OK);
     assert(adapter::publish_snapshot(mapped));
@@ -152,6 +218,26 @@ int main() {
     // Other sensor data is never rewritten, including within a mode0 call.
     put32(position,0);data.type=3;adapter::position_enter(0,position);send(data,true);adapter::position_leave();
     assert(last_observation.choice==adapter::ORIGINAL);
+    // Worker publication precedes a later OEM callback. The old current-time
+    // mapping above still expires after 1 ns; a core-checked lease permits this
+    // asynchronous handoff without rewriting the prediction's timestamp.
+    data.type=1;s=prepare(core);
+    assert(runtime::prepare_core_publication(core,qualify(s),now_ns+50000000,&mapped)==runtime::CORE_BRIDGE_OK);
+    const uint64_t deadline=mapped.valid_until_mono_ns,stamp=mapped.derived_utc_ns;
+    assert(adapter::publish_snapshot(mapped));
+    now_ns+=20000000;adapter::position_enter(0,position);send(data,false);adapter::position_leave();
+    assert(last_observation.choice==adapter::DR_REPLACEMENT);
+    assert((uint64_t(get32(sent))|(uint64_t(get32(sent+4))<<32))==stamp);
+    now_ns=deadline;adapter::position_enter(0,position);send(data,false);adapter::position_leave();
+    ++now_ns;adapter::position_enter(0,position);send(data,true);adapter::position_leave();
+    assert(last_observation.reason==adapter::EXPIRED);
+    s=prepare(core);
+    assert(runtime::prepare_core_publication(core,qualify(s),now_ns+50000000,&mapped)==runtime::CORE_BRIDGE_OK);
+    assert(adapter::publish_snapshot(mapped));
+    put32(position,1);adapter::position_enter(0,position);send(data,true);adapter::position_leave();
+    assert(last_observation.reason==adapter::NOT_UNKNOWN);
+    put32(position,0);adapter::position_enter(0,position);send(data,true);adapter::position_leave();
+    assert(last_observation.reason==adapter::EPOCH_MISMATCH);
     std::printf("pipeline tests: core -> qualified bridge -> fake OEM, %u exactly-once sends passed (synthetic only)\n",sends);
     return 0;
 }

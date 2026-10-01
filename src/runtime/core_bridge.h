@@ -19,7 +19,8 @@ struct CoreBridgeQualification {
     uint64_t max_snapshot_age_ns;
     // Caller has checked error/time/distance limits THROUGH this deadline.
     // If only mx5_dr_get_snapshot(now) has been checked, set this to now exactly.
-    // The bridge never creates a future validity claim from a current sample.
+    // map_core_snapshot never extends this claim. prepare_core_publication
+    // instead rechecks the immutable core to derive a future numeric lease.
     uint64_t limits_verified_until_mono_ns;
     double duration_max_s, distance_max_m, error_max_m;
     bool profile_verified, input_quality_verified;
@@ -32,6 +33,15 @@ struct CoreBridgeQualification {
 CoreBridgeResult map_core_snapshot(const mx5_dr_snapshot& source,
                                   const CoreBridgeQualification& qualification,
                                   adapter::DrSnapshot* out);
+// Single-owner worker API. Check the immutable qualified core through an
+// explicitly requested publication deadline, capped by its original evidence
+// leases, snapshot age and numeric budgets. Qualification must cover now; the
+// helper checks later numeric validity itself. Never extrapolates coordinates
+// or refreshes measurement/UTC timestamps, and does not publish or enable ASSIST.
+CoreBridgeResult prepare_core_publication(const mx5_dr_core& core,
+                                         const CoreBridgeQualification& qualification,
+                                         uint64_t requested_until_mono_ns,
+                                         adapter::DrSnapshot* out);
 const char* core_bridge_result_name(CoreBridgeResult);
 // Diagnostic serialization only: never returns a ready DrSnapshot. Model
 // values cannot pass map_core_snapshot, even with externally forged q flags.

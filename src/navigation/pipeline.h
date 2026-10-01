@@ -86,6 +86,11 @@ public:
     Diagnostic diagnostic(uint64_t now_ns) const;
     runtime::CoreBridgeResult qualified_snapshot(uint64_t now_ns,
         const runtime::CoreBridgeQualification&, adapter::DrSnapshot*) const;
+    // Worker-side asynchronous handoff. Original prediction timestamps stay
+    // unchanged; queued GPS/native/anchor transitions cap its publication lease.
+    runtime::CoreBridgeResult qualified_publication(uint64_t now_ns,
+        const runtime::CoreBridgeQualification&, uint64_t requested_until_ns,
+        adapter::DrSnapshot*) const;
     const Status& status() const { return status_; }
     const GyroBiasStatus& calibration() const { return gyro_bias_.status(); }
     const WheelScaleStatus& wheel_calibration() const { return gps_wheel_.status(); }

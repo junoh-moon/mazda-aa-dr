@@ -81,6 +81,44 @@ CoreBridgeResult map_core_snapshot(const mx5_dr_snapshot& s,
     *out=mapped;
     return CORE_BRIDGE_OK;
 }
+CoreBridgeResult prepare_core_publication(const mx5_dr_core& core,
+        const CoreBridgeQualification& q,uint64_t requested_until,adapter::DrSnapshot* out) {
+    if (!out) return CORE_BRIDGE_NO_OUTPUT;
+    std::memset(out,0,sizeof(*out));
+    mx5_dr_snapshot current=mx5_dr_snapshot();
+    if (mx5_dr_get_snapshot(&core,q.now_mono_ns,q.expected_context,&current)!=MX5_DR_OK)
+        return CORE_BRIDGE_UNQUALIFIED;
+    adapter::DrSnapshot mapped=adapter::DrSnapshot();
+    const CoreBridgeResult result=map_core_snapshot(current,q,&mapped);
+    if (result!=CORE_BRIDGE_OK) return result;
+    if (requested_until<q.now_mono_ns) return CORE_BRIDGE_TIME;
+
+    uint64_t end=minimum(requested_until,current.sensor_lease_until_ns);
+    end=minimum(end,saturating_add(current.frontier_ns,q.max_snapshot_age_ns));
+    end=minimum(end,saturating_add(current.frontier_ns,core.config.snapshot_age_max_ns));
+    uint64_t begin=q.now_mono_ns;
+    // The immutable core's age, elapsed time and error budget only increase.
+    // Find the last eligible nanosecond using the actual core/bridge predicates,
+    // including tighter caller limits, without rounding an error-derived lease
+    // outwards. The validated 150 ms age bound limits this to 28 iterations.
+    while (begin<end) {
+        const uint64_t candidate=begin+(end-begin)/2+1;
+        mx5_dr_snapshot future=mx5_dr_snapshot();
+        CoreBridgeQualification at=q;
+        at.now_mono_ns=at.limits_verified_until_mono_ns=candidate;
+        adapter::DrSnapshot checked=adapter::DrSnapshot();
+        if (mx5_dr_get_snapshot(&core,candidate,q.expected_context,&future)==MX5_DR_OK &&
+            map_core_snapshot(future,at,&checked)==CORE_BRIDGE_OK)
+            begin=candidate;
+        else
+            end=candidate-1;
+    }
+    // Retain the prediction and its measurement/UTC stamps. Only its numeric
+    // publication lease is extended; final-send provenance is still mandatory.
+    mapped.valid_until_mono_ns=begin;
+    *out=mapped;
+    return CORE_BRIDGE_OK;
+}
 const char* core_bridge_result_name(CoreBridgeResult r) {
     static const char* const names[]={"OK","NO_OUTPUT","UNQUALIFIED","CONTEXT","OVERFLOW",
         "TIME","LIMIT","NUMERIC","BEARING"};

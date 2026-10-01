@@ -558,6 +558,23 @@ runtime::CoreBridgeResult Pipeline::qualified_snapshot(uint64_t now,
     if (model_||d.result!=MX5_DR_OK||q.now_mono_ns!=now) return runtime::CORE_BRIDGE_UNQUALIFIED;
     return runtime::map_core_snapshot(d.snapshot,q,out);
 }
+runtime::CoreBridgeResult Pipeline::qualified_publication(uint64_t now,
+        const runtime::CoreBridgeQualification& q,uint64_t requested_until,
+        adapter::DrSnapshot* out) const {
+    if (!out) return runtime::CORE_BRIDGE_NO_OUTPUT;
+    std::memset(out,0,sizeof *out);
+    if (model_||q.now_mono_ns!=now||diagnostic(now).result!=MX5_DR_OK)
+        return runtime::CORE_BRIDGE_UNQUALIFIED;
+    for (size_t i=0;i<size_;++i) {
+        if ((queue_[i].kind==POSITION_EVENT&&queue_[i].observation.position.mode!=0)||
+             queue_[i].kind==ANCHOR_EVENT) {
+            // diagnostic already rejected events due now. Do not let a lease
+            // cross a known future revocation while the event awaits drain.
+            requested_until=min64(requested_until,queue_[i].time-1);
+        }
+    }
+    return runtime::prepare_core_publication(core_,q,requested_until,out);
+}
 const char* pipeline_result_name(PipelineResult r) {
     static const char* const names[]={"OK","WAITING","BAD_INPUT","LATE","CLOCK_RESET",
         "SOURCE_RESET","OVERFLOW","MISSING_SENSOR","CORE_REJECTED","NO_ANCHOR"};
