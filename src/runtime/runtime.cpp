@@ -88,14 +88,16 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
   if(!mx5::runtime::format_request_trace(request,sizeof request,o.request_result,o.request_trace))return false;
   int n;
   if(o.kind==A::Observation::POSITION) {
-    char lat[48],lon[48],h[48],v[48];
+    char lat[48],lon[48],h[48],v[48],horizontal[48],vertical[48];
     json_number(o.position.latitude_deg,lat);json_number(o.position.longitude_deg,lon);
     json_number(o.position.heading_deg,h);json_number(o.position.velocity_kmh,v);
+    json_number(o.position.horizontal,horizontal);json_number(o.position.vertical,vertical);
     n=snprintf(line,capacity,
       "{\"kind\":\"position\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,"
-      "\"mode\":%d,\"utc_s\":%llu,\"lat\":%s,\"lon\":%s,\"heading\":%s,\"kmh\":%s,\"request\":%s}",
+      "\"mode\":%d,\"utc_s\":%llu,\"lat\":%s,\"lon\":%s,\"heading\":%s,\"kmh\":%s,"
+      "\"altitude_m\":%d,\"horizontal\":%s,\"vertical\":%s,\"request\":%s}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
-      (unsigned long long)o.position.utc_seconds,lat,lon,h,v,request);
+      (unsigned long long)o.position.utc_seconds,lat,lon,h,v,o.position.altitude_m,horizontal,vertical,request);
   } else {
     char a[97]="",b[97]="";
     char session[200];

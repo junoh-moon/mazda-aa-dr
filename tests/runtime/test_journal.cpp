@@ -10,6 +10,7 @@
 #include <iterator>
 #include <vector>
 #include <new>
+#include <limits>
 
 static int32_t unused_next(void *, A::VehicleData *) { return 0; }
 struct CadenceResult { unsigned late,holdout_late;uint64_t resets;std::vector<unsigned> drains; };
@@ -250,6 +251,42 @@ static void route_general_worker(const char* root,const std::string& logs) {
   assert(!rmdir((logs+"/capture.stop").c_str()));
   puts("Long route: ordinary worker and capture tail retain the entire row");
 }
+// Authored snapshots reproduce the independently observed partial-cache shape:
+// GSA changes quality alone; GGA changes altitude/coordinates before RMC time
+// and motion. This exercises the real formatter, not an OEM parser replacement.
+static void position_journal() {
+  A::Observation o=A::Observation();o.kind=A::Observation::POSITION;
+  o.request_result=A::R::NOT_FOUND;
+  o.call_sequence=17;o.prediction_generation=4;o.mono_ns=103;
+  o.original_mode=o.position.mode=1;o.position.utc_seconds=1790856000;
+  o.position.latitude_deg=35;o.position.longitude_deg=135;
+  o.position.heading_deg=20;o.position.velocity_kmh=18;
+  for(unsigned stage=0;stage<8;++stage) {
+    if(stage==1) {o.position.horizontal=1;o.position.vertical=1.5;}
+    if(stage==2)o.position.altitude_m=12;
+    if(stage==3) {
+      o.position.latitude_deg=36;o.position.longitude_deg=136;o.position.altitude_m=24;
+    }
+    if(stage==4) {
+      ++o.position.utc_seconds;o.position.heading_deg=40;o.position.velocity_kmh=37;
+    }
+    if(stage==5) {
+      o.position.altitude_m=INT32_MIN;
+      o.position.horizontal=std::numeric_limits<double>::quiet_NaN();
+      o.position.vertical=std::numeric_limits<double>::infinity();
+    }
+    if(stage==6) {
+      o.position.altitude_m=INT32_MAX;
+      o.position.horizontal=-std::numeric_limits<double>::infinity();o.position.vertical=0;
+    }
+    if(stage==7) {
+      o.position.altitude_m=-12;o.position.horizontal=-0.25;o.position.vertical=0.5;
+    }
+    char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
+    assert(format_observation(line,sizeof line,o));puts(line);
+    ++o.call_sequence;++o.mono_ns;
+  }
+}
 static void request_journal(bool emit) {
   namespace R=mx5::runtime::request_trace;
   A::Observation o=A::Observation();o.kind=A::Observation::POSITION;o.call_sequence=17;
@@ -306,6 +343,30 @@ static void request_journal(bool emit) {
   assert(format_observation(line,sizeof line,o));if(emit)puts(line);
   if(!emit)fprintf(stderr,"maximum escaped observation JSON: %zu bytes; capacity %u\n",strlen(line)+1,
       unsigned(mx5::runtime::OBSERVATION_JSON_CAPACITY));
+  // Full nine-field POSITION rows must fit beside the same worst-case request
+  // metadata. A legitimate long request must not trigger capture failure.
+  A::Observation full=o;full.kind=A::Observation::POSITION;
+  full.original_mode=full.position.mode=INT32_MIN;
+  full.call_sequence=full.prediction_generation=UINT32_MAX;full.mono_ns=UINT64_MAX;
+  full.position.utc_seconds=UINT64_MAX;
+  full.position.altitude_m=INT32_MIN;
+  full.position.latitude_deg=full.position.heading_deg=full.position.horizontal=
+      std::numeric_limits<double>::max();
+  full.position.longitude_deg=full.position.velocity_kmh=full.position.vertical=
+      -std::numeric_limits<double>::max();
+  assert(format_observation(line,sizeof line,full));
+  const size_t position_required=strlen(line)+1;
+  if(!emit)fprintf(stderr,"maximum escaped position JSON: %zu bytes; capacity %u\n",position_required,
+      unsigned(mx5::runtime::OBSERVATION_JSON_CAPACITY));
+  char position_bounds[mx5::runtime::OBSERVATION_JSON_CAPACITY+2];
+  memset(position_bounds,0x5a,sizeof position_bounds);
+  assert(format_observation(position_bounds+1,position_required,full));
+  assert(!strcmp(position_bounds+1,line));
+  assert(position_bounds[0]==0x5a && position_bounds[position_required+1]==0x5a);
+  memset(position_bounds,0x5a,sizeof position_bounds);
+  assert(!format_observation(position_bounds+1,position_required-1,full));
+  assert(position_bounds[position_required-1]==0 && position_bounds[0]==0x5a &&
+      position_bounds[position_required]==0x5a);
   // Exact-size success, one byte short failure, and adjacent bytes untouched.
   char request[mx5::runtime::REQUEST_JSON_CAPACITY];assert(mx5::runtime::format_request_trace(request,sizeof request,R::OK,t));
   const size_t required=strlen(request)+1;
@@ -446,6 +507,7 @@ static int run() {
 }
 }
 int main(int argc,char** argv) {
+  if(argc==2 && !strcmp(argv[1],"--emit-positions")) {position_journal();return 0;}
   if(argc==3 && !strcmp(argv[1],"--real-storage")) {
     config.max_log_bytes=8388608;config.max_log_files=3;
     arm_test_mode();check_real_storage<Journal>(argv[2],"trace");return 0;
