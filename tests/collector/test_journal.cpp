@@ -1,11 +1,22 @@
 #define MX5_COLLECTOR_TESTING
 #define main collector_program_main
+#include "../runtime/storage_fixture.h"
+#define statvfs(path,info) fixture_statvfs(path,info)
 #include "../../src/collector/collector.cpp"
+#undef statvfs
 #undef main
 #include <cassert>
 #include <string>
 
-int main() {
+int main(int argc,char** argv) {
+  if(argc==3 && !strcmp(argv[1],"--real-storage")) {
+    config.max_log_bytes=1048576;config.max_log_files=2;
+    check_real_storage<Journal>(argv[2],"collector");return 0;
+  }
+  if(argc==3 && !strcmp(argv[1],"--storage")) {
+    config.max_log_bytes=65536;config.max_log_files=2;
+    check_storage<Journal>("collector",argv[2]);return 0;
+  }
   char preload[] = "LD_PRELOAD=/fixture.so", audit[] = "LD_AUDIT=/audit.so";
   char library[] = "LD_LIBRARY_PATH=/jci/lib", data[] = "JCI_FIXTURE=data";
   char *input[] = {preload, library, data, audit, 0}, *output[3];

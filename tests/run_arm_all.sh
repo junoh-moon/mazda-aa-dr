@@ -63,6 +63,9 @@ MX5DR_JOURNAL_BOUNDARY_BUILD="$build/journal-boundaries" sh tests/runtime/run_jo
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-queue-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
+for scenario in startup during query invalid healthy; do
+    qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test" --storage "$scenario"
+done
 MX5DR_JOURNAL_FIXTURE="qemu-arm -L $QEMU_SYSROOT $build/journal-test" \
     python3 -m unittest discover -s tests/journal -p test_shadow_results.py -v
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_worker_session.cpp -ldl -pthread -lrt -lm -o "$build/worker-session-test"
@@ -80,6 +83,9 @@ for fixture in reset input; do
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch $dbus tests/collector/test_journal.cpp src/runtime/config.cpp -ldbus-1 -pthread -lrt -o "$build/collector-journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/collector-journal-test"
+for scenario in startup during query invalid healthy; do
+    qemu-arm -L "$QEMU_SYSROOT" "$build/collector-journal-test" --storage "$scenario"
+done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch tests/runtime/test_loader.cpp -ldl -pthread -o "$build/loader-test"
 qemu-arm -L "$QEMU_SYSROOT" -E "LD_PRELOAD=$preload" "$build/loader-test" "$preload"
 sh tests/adapter/run_arm.sh

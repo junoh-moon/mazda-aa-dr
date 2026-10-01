@@ -18,6 +18,7 @@ MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_LINE_BYTES = 8192
 MAX_MEMBERS = 4096
+STORAGE_FILES = ('trace.storage.json', 'collector.storage.json')
 CLEAR_BYTES = (32, 36, 37, 38, 39, 40, 44, 45, 46, 47)
 CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT"}
 REASONS = ("PASS", "NO_CONTEXT", "NESTED_CALL", "EXTRA_LOCATION", "BAD_LENGTH",
@@ -192,6 +193,7 @@ class Auditor:
         self.collector_counts = Counter()
         self.collector_boots = []
         self.collector_stops = []
+        self.storage_stops = []
         self.collector_pids = set()
         self.collector_session = None
         self.collector_sessions = []
@@ -347,6 +349,26 @@ class Auditor:
             return
         kind = row["kind"]
         self.counts[kind] += 1
+        if kind == 'storage_stop':
+            # These fixed diagnostics are separate from the failed journal,
+            # including the collector's usual envelope. Never infer a complete
+            # session from the last healthy row preceding a storage stop.
+            if not self.validate(row, source,
+                                 ('pid', 'mono_ns', 'reserve_bytes', 'margin_bytes', 'syscall_errno'),
+                                 ('stream', 'boot_id', 'reason')):
+                return
+            if (row['stream'] not in ('trace', 'collector') or
+                    row['reason'] not in ('low_space', 'space_query_failed', 'space_info_invalid') or
+                    any(not bounded_int(row[key], 0, 2**64-1) for key in
+                        ('pid', 'mono_ns', 'reserve_bytes', 'margin_bytes', 'syscall_errno')) or
+                    'available_bytes' not in row or
+                    (row['available_bytes'] is not None and
+                     not bounded_int(row['available_bytes'], 0, 2**64-1))):
+                self.issue('partial_record', source, 'Invalid storage stop diagnostic')
+                return
+            self.storage_stops.append(row)
+            self.issue('storage_stopped', source, row['stream'] + ': ' + row['reason'])
+            return
         collector = row.get("stream") == "collector"
         if collector and not self.collector_record(row, source):
             return
@@ -1272,7 +1294,9 @@ class Auditor:
             if path.is_symlink():
                 self.issue("unsafe_input", str(path), "Symlink inputs are refused")
             elif path.is_dir():
-                files = sorted(path.rglob("*.jsonl"), key=lambda p: rotation_key(str(p)))
+                files = list(path.rglob("*.jsonl"))
+                files += [p for p in path.rglob('*.storage.json') if p.name in STORAGE_FILES]
+                files.sort(key=lambda p: rotation_key(str(p)))
                 if not files:
                     self.issue("no_jsonl_files", str(path), "No JSONL files found")
                 for file in files:
@@ -1308,7 +1332,7 @@ class Auditor:
                     self.issue("duplicate_archive_member", str(path), name)
                     continue
                 names.add(name)
-                if member.isfile() and name.endswith(".jsonl"):
+                if member.isfile() and (name.endswith(".jsonl") or PurePosixPath(name).name in STORAGE_FILES):
                     members.append(member)
                 elif member.isfile():
                     self.ignored.append(name)
@@ -1375,6 +1399,7 @@ class Auditor:
                                         reference_exclusion="not_provable_from_journal",
                                         comparison_scope="recorded_compared_events_including_later_aborted_windows",
                                         scope="model_to_gps_differences_not_physical_accuracy"),
+                    storage_stops=self.storage_stops,
                     position_poll_modes=dict(self.poll_modes), send_choices=dict(self.choices),
                     send_reasons=dict(self.reasons), lower_send_results=dict(self.results),
                     checked_location_payload_pairs=self.checked,

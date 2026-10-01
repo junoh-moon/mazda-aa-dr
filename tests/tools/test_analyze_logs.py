@@ -78,6 +78,36 @@ class AnalyzeTests(unittest.TestCase):
         report = self.audit()
         self.assertEqual(report["status"], "local_checks_pass")
         self.assertEqual(report["phone_acceptance"], "not_established")
+
+    def test_storage_stops_are_read_from_directory_and_export_archive(self):
+        for stream in ('trace', 'collector'):
+            marker = dict(kind='storage_stop', stream=stream,
+                          boot_id='12345678-1234-1234-1234-123456789abc',
+                          pid=123, mono_ns=50, reason='low_space', available_bytes=7340032,
+                          reserve_bytes=8388608, margin_bytes=65536, syscall_errno=0)
+            trace = self.root / 'trace.0.jsonl'
+            trace.write_bytes(encode(records()))
+            stop = self.root / (stream + '.storage.json')
+            stop.write_bytes(encode([marker]))
+            archive = self.root / (stream + '.tar')
+            with tarfile.open(archive, 'w') as tar:
+                tar.add(trace, arcname='logs/trace.0.jsonl')
+                tar.add(stop, arcname='logs/' + stop.name)
+            for path in (self.root, archive):
+                report = module.analyze([path])
+                self.assertEqual(report['status'], 'inconclusive', report)
+                self.assertIn('storage_stopped', self.codes(report))
+                self.assertEqual(report['storage_stops'], [marker])
+                self.assertNotIn('unexpected_collector_record', self.codes(report))
+            stop.unlink()
+
+    def test_storage_stop_cannot_claim_negative_or_boolean_available_space(self):
+        for available in (-1, True):
+            row = dict(kind='storage_stop', stream='trace', boot_id='unknown', pid=123,
+                       mono_ns=50, reason='low_space', available_bytes=available,
+                       reserve_bytes=8388608, margin_bytes=65536, syscall_errno=0)
+            report = self.audit(records() + [row])
+            self.assertIn('partial_record', self.codes(report))
         self.assertEqual(report["dr_accuracy"], "not_established")
         self.assertEqual(report["send_choices"], {"ORIGINAL": 1})
 

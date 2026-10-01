@@ -37,7 +37,7 @@ class TrialStatusTests(unittest.TestCase):
                            gps_anchor_gate='WAITING'),
                       dict(kind='shadow', mono_ns=99000000000, domain='model',
                            assist_ready=False, model_valid=False, events=4, intervals=0,
-                           result='WAITING', pipeline='WAITING'),
+                           result='E_NO_SEED', pipeline='WAITING'),
                       dict(kind='motion_batch', schema=1, epoch=1, events=[
                           [sensor, sensor, 99000000000, 90000, 0, 0, 0, 0, 1, 0]
                           for sensor in (1, 2, 3)])]
@@ -133,6 +133,30 @@ class TrialStatusTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn('reverse_received_recently=observed receipt_only_not_direction_quality', r.stdout)
         self.assertIn('rejected_raw_seen=true', r.stdout)
+
+    def test_storage_stop_is_visible_even_while_last_health_is_recent(self):
+        self.write('trace.storage.json', [dict(kind='storage_stop', stream='trace',
+                   boot_id=BOOT, mono_ns=99500000000, reason='low_space',
+                   available_bytes=7 * 1024 * 1024, reserve_bytes=8 * 1024 * 1024)])
+        r = self.run_status()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('storage_stop=trace reason=low_space', r.stdout)
+        self.assertIn('capture_active=unavailable', r.stdout)
+        self.assertIn('computation_active=unavailable', r.stdout)
+
+    def test_old_boot_storage_stop_does_not_disable_current_capture(self):
+        self.write('trace.storage.json', [dict(kind='storage_stop', stream='trace',
+                   boot_id=OLD, mono_ns=99000000000, reason='low_space')])
+        self.assertEqual(self.run_status().returncode, 0)
+
+    def test_restarted_worker_does_not_hide_prior_storage_failure(self):
+        self.trace[0]['mono_ns'] = 90000000000
+        self.write('trace.storage.json', [dict(kind='storage_stop', stream='trace',
+                   boot_id=BOOT, mono_ns=80000000000, reason='low_space')])
+        r = self.run_status()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('storage_stop=trace reason=low_space', r.stdout)
+        self.assertIn('capture_active=observed', r.stdout)
 
     def test_old_boot_and_missing_boot_do_not_use_fresh_looking_rows(self):
         self.trace[0]['boot_id'] = OLD

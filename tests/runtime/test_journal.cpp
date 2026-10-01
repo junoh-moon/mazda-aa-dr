@@ -1,6 +1,9 @@
 // Includes the private logger so failure paths can be tested without exposing
 // configuration switches in the shipped runtime. No firmware is loaded.
+#include "storage_fixture.h"
+#define statvfs(path,info) fixture_statvfs(path,info)
 #include "../../src/runtime/runtime.cpp"
+#undef statvfs
 #include <cassert>
 #include <string>
 #include <fstream>
@@ -377,6 +380,14 @@ static int run() {
 }
 }
 int main(int argc,char** argv) {
+  if(argc==3 && !strcmp(argv[1],"--real-storage")) {
+    config.max_log_bytes=8388608;config.max_log_files=3;
+    arm_test_mode();check_real_storage<Journal>(argv[2],"trace");return 0;
+  }
+  if(argc==3 && !strcmp(argv[1],"--storage")) {
+    config.max_log_bytes=65536;config.max_log_files=3;
+    arm_test_mode();check_storage<Journal>("trace",argv[2]);return 0;
+  }
   if(argc==2 && !strcmp(argv[1],"--emit-model-results"))return model_result_cases::run();
   const bool emit_requests=argc==2 && !strcmp(argv[1],"--emit-requests");
   request_journal(emit_requests);

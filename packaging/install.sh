@@ -75,6 +75,11 @@ for name in sm.conf sm_WCP.conf; do
     ! grep -F "$TOKEN" "$ROOT/jci/sm/$name" >/dev/null || fail 'Legacy persistent mx5dr preload found; run uninstall.sh first, then install one-boot package'
     ! grep -F "$TAP_TOKEN" "$ROOT/jci/sm/$name" >/dev/null || fail 'Persistent VBS tap preload found; run uninstall.sh first, then install one-boot package'
 done
+payload_bytes=0
+for name in libmx5dr.so libmx5dr-vimtap.so mx5dr-collector mx5dr-guard mx5dr-sha256; do
+    payload_bytes=$((payload_bytes + $(wc -c < "$HERE/$name")))
+done
+require_trial_space "$payload_bytes"
 prepare_collector_storage
 [ ! -e "$BASE/pending" ] || fail 'Incomplete transaction: run uninstall.sh before retrying'
 mount_rw "$ROOT/jci/sm"

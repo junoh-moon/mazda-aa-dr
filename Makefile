@@ -14,6 +14,7 @@ NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
 SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
+STORAGE_HEADERS = src/runtime/storage.h src/runtime/boot_id.h
 HOST_DBUS_FLAGS = $(shell pkg-config --cflags dbus-1)
 HOST_DBUS_LIBS = $(shell pkg-config --libs dbus-1)
 ARM_PREFIX ?=
@@ -62,13 +63,14 @@ $(BUILD)/test_model_session_reset: $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEAD
 $(BUILD)/test_model_session_input: $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_input.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $^ $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
 $(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) -DMX5_COLLECTOR_TESTING $(HOST_DBUS_FLAGS) $^ $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+	$(CXX) $(CXX_WARN) -DMX5_COLLECTOR_TESTING $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
 $(BUILD)/test_collector_journal: tests/collector/test_journal.cpp src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) tests/collector/test_journal.cpp src/runtime/config.cpp $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
 test-collector: $(BUILD)/test_collector $(BUILD)/mx5dr-collector-host $(BUILD)/test_collector_journal $(BUILD)/test_journal $(BUILD)/test_adapter
 	$(BUILD)/test_collector_journal
+	@set -e; for scenario in startup during query invalid healthy; do $(BUILD)/test_collector_journal --storage $$scenario; done
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/collector -v
 test-core: $(BUILD)/test_core $(BUILD)/replay
 	$(BUILD)/test_core
@@ -102,6 +104,7 @@ test-runtime: $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_re
 	$(BUILD)/test_request_status
 	$(BUILD)/test_journal_queue
 	$(BUILD)/test_journal
+	@set -e; for scenario in startup during query invalid healthy; do $(BUILD)/test_journal --storage $$scenario; done
 	$(BUILD)/test_model_session
 	$(BUILD)/test_model_session_reset
 	$(BUILD)/test_model_session_reset bus
@@ -214,6 +217,8 @@ $(BUILD)/test_shadow_log: tests/runtime/test_shadow_log.cpp src/runtime/shadow_l
 
 $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: $(NAV_HEADERS)
 $(BUILD)/test_journal $(BUILD)/arm/src/runtime/runtime.o: src/runtime/shadow_log.h
+$(BUILD)/test_journal $(BUILD)/test_collector_journal: tests/runtime/storage_fixture.h
+$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_collector $(BUILD)/test_collector_journal $(BUILD)/mx5dr-collector-host: $(STORAGE_HEADERS)
 $(BUILD)/test_journal: src/runtime/request_log.h src/adapter/request_hooks.h
 $(BUILD)/test_journal: src/runtime/worker_tick.h src/runtime/journal_queue.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/cold_patch.h src/adapter/request_hooks.h src/runtime/request_observer.h

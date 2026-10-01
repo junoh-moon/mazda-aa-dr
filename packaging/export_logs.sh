@@ -7,6 +7,9 @@ validate_persist
 dest=$1
 case "$dest" in /*) ;; *) fail 'Destination must be absolute';; esac
 [ -d "$dest" ] && [ ! -L "$dest" ] || fail 'Destination is not a real directory'
+dest=$(CDPATH= cd -P -- "$dest" && pwd -P) || fail 'Cannot resolve export destination'
+persist_path=$(CDPATH= cd -P -- "$persist" && pwd -P) || fail 'Cannot resolve persistent storage'
+case "$dest/" in "$persist_path/"*) fail 'Export destination must be outside persistent storage; use the mounted USB';; esac
 ALLOW_REMOUNT=1
 [ -z "$ROOT" ] || ALLOW_REMOUNT=0
 mount_rw "$dest"

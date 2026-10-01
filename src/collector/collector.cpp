@@ -3,6 +3,7 @@
 #endif
 #include "../runtime/config.h"
 #include "../runtime/boot_id.h"
+#include "../runtime/storage.h"
 #include <dbus/dbus.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -134,6 +135,11 @@ struct Journal {
     if (n + 1 > config.max_log_bytes) {
       fail();
       return;
+    }
+    const mx5::runtime::StorageSpace space=mx5::runtime::storage_space(root,n+1);
+    if(space.reason) {
+      mx5::runtime::record_storage_stop(root,"collector",space);
+      fail();return;
     }
     if (!f || written + n + 1 > config.max_log_bytes)
       rotate();

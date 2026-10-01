@@ -23,6 +23,13 @@
 후속 제품 설치·journal까지 연결했습니다. [제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)과
 [후속 반복 취소 비교](../validation/MANAGER_CANCELLATION_2026-09-30.md)를 함께 따릅니다.
 
+[한 번의 시험 준비](../validation/TRIAL_PREPARATION_2026-10-01.md)에서 상태 확인의
+계산 진행 누락을 수정하고 저장 공간 보호를 추가했습니다. 설치 전 예상 공간,
+두 기록기의 8MiB 여유 정책과 고정 중단 진단, PC 분석과 내부 저장소로의 회수
+방지를 연결했습니다. 실제 작은 임시 파일시스템, host/고정 ARM 및 원본 BusyBox
+경로를 검사하고 있으며 최종 후보의 고정·검증은 별도 기록합니다. 공개 ZIP을
+이 수정본으로 간주하지 마십시오. live ASSIST와 실차 실행은 여전히 미완료입니다.
+
 [LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
 `GetUbloxDiag`도 특정 위치 응답의 출처 증거로 바로 사용할 수 없음을 확인했습니다.
 원본은 위치·진단 캐시를 별도 잠금으로 순차 갱신하고, 센서 상태도 다른 메시지에서

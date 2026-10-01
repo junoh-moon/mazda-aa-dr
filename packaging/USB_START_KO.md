@@ -29,6 +29,16 @@ AA 연결 후 주차 상태에서 수집 상태를 확인하십시오.
 sh /data_persist/mx5-aa-dr/tools/trial_status.sh
 ```
 
+원시 수신, OEM 위치, 계산 입력 처리를 각각 확인합니다.
+`model_solution=not_observed`이면 아직 유효 계산 결과가 확인되지 않은 상태입니다.
+정차 중 기준점을 기다릴 수 있으므로 함께 표시된 `pipeline`과
+`gps_anchor_gate`를 확인하십시오. 기동 확인 성공이 시험 완료를 뜻하지는 않습니다.
+
+설치기는 필요한 저장 공간을 먼저 확인합니다. 실행 중에도 공간이 부족해지면
+기록을 중단하고 사유를 남기며, 기존 로그를 지워서 계속 수집하지 않습니다.
+로그는 최대 26MiB이며 설치 파일·설정 백업은 별도입니다. 8MiB 여유 정책은
+다른 프로그램의 동시 쓰기나 파일시스템 고장까지 방지하는 보장은 아닙니다.
+
 운전 중에는 명령을 입력하지 마십시오. 도착 후 주차 상태에서 로그를
 저장하십시오. 마지막 경로는 실제 USB 경로로 바꾸십시오.
 
@@ -36,6 +46,10 @@ sh /data_persist/mx5-aa-dr/tools/trial_status.sh
 sh /data_persist/mx5-aa-dr/tools/finish_capture.sh
 sh /data_persist/mx5-aa-dr/tools/export_logs.sh /tmp/mnt/sda1
 ```
+
+종료 확인이 실패해도 그 출력과 남은 파일을 회수하십시오. 실제 USB 경로를
+사용하고, PC에서 archive의 `.sha256`을 확인하십시오. 회수 후 차량 원본은
+남으며 로그는 위 상한에서 관리됩니다. 차량 내부에 archive를 만들지 마십시오.
 
 제거할 때는 USB에서 `sh uninstall.sh`를 실행하십시오. USB가 없어도
 `sh /data_persist/mx5-aa-dr/tools/uninstall.sh`로 제거할 수 있습니다.

@@ -153,6 +153,37 @@ prepare_storage() {
     chmod 0755 "$BASE" "$BASE/backups"
     chmod 0750 "$BASE/logs"
 }
+storage_free_kib() {
+    # -P prevents wrapped device rows; -k pins units on both host and OEM BusyBox.
+    space_df=$(LC_ALL=C df -Pk "$1") || return 1
+    printf '%s\n' "$space_df" | awk 'NR==2 && NF>=6 && $4 ~ /^[0-9]+$/ {free=$4; valid=1}
+        END {if(!valid || NR!=2) exit 1; print free}'
+}
+require_trial_space() {
+    # Count only the remaining log allocation, not another full copy of logs
+    # already on the volume. Keep 8 MiB + 64 KiB as in runtime/storage.h, plus
+    # 1 MiB for helpers, configuration backups/staging and filesystem overhead.
+    # $1 is the new binary payload size; existing mapped binaries may persist.
+    validate_persist
+    space_free=$(storage_free_kib "$persist") || fail 'Cannot inspect persistent free space'
+    space_missing=0
+    if [ "$MODE" != OFF ]; then
+        [ ! -L "$BASE" ] && [ ! -L "$BASE/logs" ] || fail 'Symlink log storage'
+        for entry in trace.0.jsonl:8388608 trace.1.jsonl:8388608 trace.2.jsonl:8388608 \
+                     collector.0.jsonl:1048576 collector.1.jsonl:1048576; do
+            name=${entry%:*}; cap=${entry#*:}; bytes=0
+            if [ -e "$BASE/logs/$name" ] || [ -L "$BASE/logs/$name" ]; then
+                regular "$BASE/logs/$name"
+                bytes=$(wc -c < "$BASE/logs/$name")
+                [ "$bytes" -le "$cap" ] || bytes=$cap
+            fi
+            space_missing=$((space_missing + cap - bytes))
+        done
+    fi
+    space_need=$((8192 + 64 + 1024 + (space_missing + $1 + 1023) / 1024))
+    echo "storage_available_kib=$space_free required_kib=$space_need remaining_log_kib=$(((space_missing + 1023) / 1024)) reserve_kib=8192"
+    [ "$space_free" -ge "$space_need" ] || fail 'Insufficient persistent space; installation/rearm not started. Export existing logs and inspect storage while parked.'
+}
 prepare_collector_storage() {
     # Installation/arming need a runnable collector. Recovery must still work
     # after accounts change or disappear, so generic storage has no NSS gate.

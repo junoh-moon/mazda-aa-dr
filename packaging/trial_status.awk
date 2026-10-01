@@ -32,6 +32,13 @@ FILENAME ~ /\/trace\.[012]\.jsonl$/ && !/^\{"kind":"[a-z_]+",/ {next}
 FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_pid":[0-9]+,"observed_at_mono_ns":[0-9]+,"producer_mono_ns":null,"producer_time_status":"unknown","kind":"[a-z_]+",/ {next}
 {
     kind=field("kind")
+    if (kind=="storage_stop" && FILENAME ~ /\/(trace|collector)\.storage\.json$/ &&
+        field("boot_id")==boot && not_future(field("mono_ns"))) {
+        print "storage_stop=" field("stream") " reason=" field("reason") " available_bytes=" field("available_bytes") " mono_ns=" field("mono_ns")
+        if(field("stream")=="trace" && field("mono_ns")+0>=runtime_boot+0) {capture="false"; computation="false"}
+        if(field("stream")=="collector" && field("mono_ns")+0>=collector_start+0) stopped=1
+        storage_stopped=1; bad=1; next
+    }
     if (kind=="boot" && FILENAME ~ /\/trace\.[012]\.jsonl$/) {
         reset_runtime(); runtime=(field("boot_id")==boot); runtime_boot=field("mono_ns")
         if (!not_future(runtime_boot)) runtime=0
@@ -39,7 +46,8 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
         next
     }
     if (kind=="collector_boot" && FILENAME ~ /\/collector\.[01]\.jsonl$/) {
-        collector=(field("boot_id")==boot); poll=""; stopped=0; next
+        collector=(field("boot_id")==boot); collector_start=field("observed_at_mono_ns")
+        poll=""; stopped=0; next
     }
     if (FILENAME ~ /\/trace\.[012]\.jsonl$/ && runtime) {
         if (kind=="shadow_boot") capture=field("capture_active")
@@ -92,6 +100,8 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
     }
 }
 END {
+    report("storage_headroom",space_ok==1,"reserve=8MiB plus_write_margin")
+    report("storage_capture_clean",!storage_stopped,"current_boot")
     report("guard_current_boot",oneboot=="consumed_this_boot",oneboot)
     report("runtime_current_boot",runtime, "mode=" mode)
     report("health_recent",runtime && fresh(health),"window=30s")
