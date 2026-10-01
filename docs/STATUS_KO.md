@@ -26,9 +26,19 @@ poll을 확인하십시오. ASSIST는 계속 비활성입니다.
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.9-shadow.3](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.3)입니다.
+현재 공개판은 [v0.3.10-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)입니다.
+고정 소스 `50ba484133b0e52739e5af35f7dcc993d5a3f850`를 master에 반영하고
+설치 ZIP·체크섬을 발행한 뒤 공개 파일을 다시 받아 대조했습니다.
+[새 발행 검증](../validation/RELEASE_V0310_2026-10-02.md)에 새 host Python
+533개·C/C++, 전체 ARM과 실제 AA DSO 145개·원본 설치기 71개,
+최종 ZIP의 순정 BusyBox 네 검사를 생략 없이 기록합니다.
+LDS 전용 제품을 자동 설치하여 callback·캐시 할당 출처와 응답 식별자를
+기존 용량 제한 AA 기록에 전달합니다. 이전 v2 설치의 회수·제거도
+재설치·재무장 없이 검사했습니다. 실제 관성항법 위치 적용은 미완료입니다.
+
+이전 공개판 [v0.3.9-shadow.3](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.3)은
 고정 소스 `0ae08ccfae3504bd54dd286baa6c682c3e75b059`를 master에 반영하고
-설치 ZIP·체크섬을 발행했습니다. 새판은 명시적인 순정 CMU 재부팅 요청과
+설치 ZIP·체크섬을 발행했습니다. 당시 명시적인 순정 CMU 재부팅 요청과
 새 boot ID 대조, 전체 설치 폴더·실제 autostart·SM·부팅 진단의 USB 회수,
 보고서 쓰기 실패 표시를 포함합니다. 전원 상태와 단일 USB 교체 순서는
 [설치 안내](ONE_COMMAND_INSTALL_KO.md)를 따르십시오.
@@ -40,15 +50,19 @@ poll을 확인하십시오. ASSIST는 계속 비활성입니다.
 host 회수 시험의 20초 초과는 원인 미확정으로 보존하며 동일 소스의 단일
 대조와 전체 재실행 통과로 구분합니다. 이 고정 커밋에는 LDS 자동 기동
 설치기가 없으며 공개 `.3` ZIP에도 새 코어가 포함되지 않았습니다.
-LDS 제품 설치·원본 실행 통합은 후속 작업 중이고 실제 ASSIST 적용은 남습니다.
+이 코어 pin 당시의 LDS 제품 설치·원본 실행 통합은 아래 후속 작업과 구분합니다.
 
-후속 구현은 LDS 전용 제품 DSO와 정확한 cold 설치기, normal/WCP 자동
-기동 템플릿을 연결했습니다. 기존 파일의 데이터를 바꾸지 않고 원본 callback·
+후속 `50ba484`는 LDS 전용 제품 DSO와 정확한 cold 설치기, normal/WCP 자동
+기동 템플릿을 연결했습니다. 원본 LDS 실행 코드를 유지하고 callback·
 캐시·응답 연결을 관측하며, 기존 AA 용량 제한 기록으로 전달합니다.
 [원본 설치기 검증](../validation/LDS_COLD_INSTALL_2026-10-02.md)의 ARM 71개와
-호스트 1개는 직접 설치기 실행 결과입니다. 여섯 산출물의 최종 고정 소스
-전체 검사·실제 제품 자동 연결·최종 ZIP 검사는 별도 범위입니다.
-공개 `.3` 설치 ZIP은 갱신되지 않았고 live ASSIST도 비활성입니다.
+호스트 1개는 직접 설치기 실행 결과입니다. 별도
+[실제 제품 연결](../validation/LDS_PRODUCT_RUNTIME_2026-10-02.md)은 원본
+응답 9건을 실제 AA worker에 기록하고 필드 81개와 정확한 요청 연결을
+대조했습니다. 작성한 AA 시작·WorkerScope이며 정상 전체 기동·폰 송신은
+포함하지 않습니다. 전체 분석은 `inconclusive`를 유지했습니다.
+새 코드는 공개 v0.3.10-shadow.1에 포함됐으며 과거 `.3` ZIP은 변경하지
+않았습니다. live ASSIST는 계속 비활성입니다.
 v1.0에는 여전히 물리 입력의 단위·시각·품질, 요청별 자격, 실제 위치
 대체와 GPS 복귀 및 폰/지도 반영의 근거가 필요합니다.
 

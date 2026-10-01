@@ -13,11 +13,11 @@ v0.3.9-shadow.2 회수는 성공했지만 trace·collector JSONL 파일은
 제약을 반영한 숫자 메뉴와 저장 공간·계산 진단을 포함합니다.
 차량 USB 포트는 하나이고 허브를 사용할 수 없으므로 설치·회수 USB와 AA 연결을
 주차 중에 번갈아 연결합니다. AA 연결 중 셸이나 상태 명령을 요구하지 않습니다.
-현재 파일은 [v0.3.9-shadow.3 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.3)의
-`mazda-aa-dr-v0.3.9-shadow.3.zip`입니다. 소스는
-`0ae08ccfae3504bd54dd286baa6c682c3e75b059`, ZIP의 SHA-256은
-`186cd6cad2965e8c76921db8efcae0eed6547638a6c10e1c36734ddb52af03bc`입니다.
-[최종 ZIP·발행 검증](../validation/RELEASE_V039_SHADOW3_2026-10-02.md)과
+현재 파일은 [v0.3.10-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)의
+`mazda-aa-dr-v0.3.10-shadow.1.zip`입니다. 소스는
+`50ba484133b0e52739e5af35f7dcc993d5a3f850`, ZIP의 SHA-256은
+`630d34be2cfe342a215d92a59d116e2ea1c61f00cb1154938083b85d126ef9a5`입니다.
+[최종 ZIP·발행 검증](../validation/RELEASE_V0310_2026-10-02.md)과
 [이전 회수 핫픽스](../validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)를 구분하십시오.
 이전 시험의 메뉴3이 `/proc/mounts` 오류로 실패했다면 USB 파일을 교체하고
 기존 한 줄 뒤 `3`만 사용하십시오. 이미 제거했어도 남은 로그를 회수합니다.
@@ -26,9 +26,9 @@ v0.3.9-shadow.2 회수는 성공했지만 trace·collector JSONL 파일은
 이용한 주행을 확인했습니다. [빈 기록 조사](../validation/EMPTY_CAPTURE_2026-10-02.md)에
 따라 기동·저장 경로를 확인하며 센서 수집과 계산 결과는 판정하지 못했습니다.
 허용된 한 번의 시험은 이미 사용했으며, 아래 절차를 새 주행 요청으로 해석하지 않습니다.
-**아래 설치 `1 → 5 → 2 → 0`과 확대 회수는 공개 `.3`의 절차입니다.**
+**아래 설치 `1 → 5 → 2 → 0`과 확대 회수는 공개 v0.3.9-shadow.3부터 도입했으며 이번 판에서도 유지합니다.**
 guard 진단·메뉴 `5` 재부팅·새 부팅 ID 대조·전체 설치 폴더 회수를 포함하며
-이전 `.2`에는 이 기능이 없습니다. 현재 차량 셸은 닫혔으며 이 문서는
+이전 `v0.3.9-shadow.2`에는 이 기능이 없습니다. 현재 차량 셸은 닫혔으며 이 문서는
 추가 방문 요청이 아닙니다. 설치·제거 사진만으로 실제 자동 기동이나 수집·계산
 성공을 판정하지 않습니다.
 원본 AA 연결 등록의 서버 주소 GUID·client 고유 이름과 실제 raw 송신 연결의
@@ -39,6 +39,9 @@ GPS holdout 결과에 원본 위치의 호출·generation 식별자를 보존하
 지우거나 센서 자격으로 바꾸지 않습니다. 기준점·콜백 결합 수정과 원본 위치
 아홉 필드 보존도 유지합니다. 실제 LDS는 서로 다른 callback에서 갱신된 필드를
 함께 반환할 수 있으며 각 필드의 물리 생산 시각은 미검증입니다.
+이번 판은 그 필드별 관측 할당 출처를 LDS 전용 제품에서 AA 기록까지
+전달합니다. [원본 제품 실행](../validation/LDS_PRODUCT_RUNTIME_2026-10-02.md)의
+응답 연결 성공도 물리 입력 자격이나 실제 ASSIST 적용을 뜻하지 않습니다.
 v0.3.5의 첫 host 큐 막힘 원인은
 미확정이며 이번 판의 별도 전체 검사 통과와 구분합니다.
 [v1.0 완료 조건](V1_READINESS_KO.md)은 유지하며 live ASSIST는 계속 비활성입니다.

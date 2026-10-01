@@ -137,7 +137,16 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
   원본 등록 ID 10개와 25개 데이터 슬롯, 실패 시 원본 전달을 확인합니다.
   같은 프로세스의 cache 할당 출처를 보존하는 기반이며 물리 생산 시각이나
   실제 요청별 ASSIST 자격이 아닙니다. 최종 제품·ZIP 통합과 정상 전체
-  기동 검증은 별도 결과로 확인하며, 공개 `.3` ZIP에는 포함되지 않습니다.
+  기동 검증은 별도 결과로 확인합니다. 공개 v0.3.10-shadow.1에 포함했고
+  과거 `.3` ZIP은 변경하지 않았습니다.
+- [x] 실제 LDS 제품의 원본 callback·응답 출처를 실제 AA worker 기록까지 연결합니다.
+  [제품 실행](../validation/LDS_PRODUCT_RUNTIME_2026-10-02.md)에서 응답 9건·
+  원시 값 81개와 부분 할당 출처를 대조했습니다. 작성한 AA 기동·WorkerScope이며
+  정상 전체 SM·AA 송신·물리 입력 자격의 완료로 세지 않습니다.
+- [ ] 같은 worker에서 immutable POSITION과 LDS sideband를 정확한 요청으로 연결하는
+  크기 제한 공급부를 구현합니다. 비동기로 늦게 도착한 관측 때문에 이미 실행한
+  callback의 출처를 사후 유효로 바꾸지 않습니다. cache 할당 번호·관측 시각은
+  물리 측정 순번·시각이 아니며 센서·receiver 자격과 readiness는 별도로 구현합니다.
 - [x] 외부 journal 큐 수정을 통합하고 동일 제품의 원본 실행에서 관측 loss 0을 확인합니다.
   과거 drop의 정확한 호출 조합·원인을 확정한 것으로 세지 않습니다.
 - [x] 세션 관측·전환 검사의 추가 도구는 설치 전후 목록을 남기고 모두 제거했습니다.
@@ -417,7 +426,7 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
 | 요구사항 | 현재 근거 | 부족한 구현 또는 증거 |
 | --- | --- | --- |
 | 깨끗한 USB에 압축 해제 후 `sh install.sh` | MP3/JS·정적 해시 도구 포함. 실제 ARM BusyBox/libc에서 최종 ZIP 설치·제거·재설치 성공 | 실제 CMU 미디어의 MP3→shell 동작, 실제 저장소의 remount·내구성은 미검증 |
-| 정확한 펌웨어·계정·경로 | 네 원본 identity 유지. `cmu=0`, `service=1001`, 순정 저장소 symlink 반영 | 다른 펌웨어에 일반화하지 않음. 현장 설치 정보와 대조 필요 |
+| 정확한 펌웨어·계정·경로 | 기존 네 원본과 LDS 의존성 여섯 identity. `cmu=0`, `service=1001`, 순정 저장소·libdbus symlink 반영 | 다른 펌웨어에 일반화하지 않음. 현장 설치 정보와 대조 필요 |
 | OEM 호출 계약·터치 공존 | ARM veneer/encoder 합성 시험. 순정 커널에서 AA 후크와 터치 DSO 동시 로드. 원본 manager의 자동 LDS→native send와 OBSERVE/SCRUB 실행 | 정상 폰 연결 상태의 AA 송신·터치 입력, 수명·동시성·지연 장애의 전 범위 미검증 |
 | 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. 원본 VBS callback과 AA 수신을 합성 입력으로 실행. journal·종료·회수 회귀, [주차 중 수집/계산 분리 진단](../validation/TRIAL_STATUS_REVIEW_2026-10-01.md), [MODEL 초기화 원인 기록](../validation/MODEL_RESET_REVIEW_2026-10-01.md) | 물리 센서 callback과 주행 전체의 누락·부하·로그 보관량 미검증. 상태 명령의 종료 코드 0은 항법 계산·폰 수용이 아님 |
 | 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험. VIP 요레이트 생산자의 선택 경로 해석 실행과 MODEL 합계 넘침 거부 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음. count 넘침과 손실 창도 식별 불가 |
@@ -427,7 +436,7 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
 | 휴대폰·앱 수용 | OEM LOCATION 경로의 정적 근거와 VM의 실제 native API 호출. 폰 없이도 send=0을 반환함 | Galaxy S25·동글·네이버 지도에서 위치가 반영되는 실행 증거 없음 |
 | 다음 부팅과 장애 복구 | 일회 소비 가드·설치 중단 회귀. 실제 SM에서 명시적 재시작과 지연 SIGKILL 뒤 보드 재부팅 요청 관찰 | 다른 실패 경로와 물리 watchdog·전원 차단·다음 부팅의 복구는 미검증 |
 | 기존 설정 보존 | touch 설정 편집/제거 roundtrip, 무관한 파일을 변경하지 않는 설치기 | 기존 터치와 km/L의 실제 화면·입력 결과 미검증 |
-| 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 다섯 ARM 바이너리, ZIP manifest/source commit. [v0.3.9-shadow.1](../validation/RELEASE_V039_2026-10-01.md) 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |
+| 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 여섯 ARM 바이너리, ZIP manifest/source commit. [v0.3.10-shadow.1](../validation/RELEASE_V0310_2026-10-02.md) 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |
 
 독립 감사에서 정차 GPS·지연 수신 시 heading 상실, 자이로 보정의 수신 시각,
 단일 휠 모순과 빌드/검사의 오래된 입력·상속 환경 문제를 재현하고 수정했습니다.

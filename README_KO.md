@@ -13,16 +13,20 @@
 
 [과거 첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
-현재 공개판은 [v0.3.9-shadow.3 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.3)입니다.
-순정 CMU 재부팅 요청과 전후 boot ID 대조, 전체 설치 폴더·기동 진단의
-USB 회수를 추가했습니다. ACC·엔진이 꺼진 ON·실제 엔진 가동을 구분한
-절차와 [새 발행 검증](validation/RELEASE_V039_SHADOW3_2026-10-02.md)을 확인하십시오.
+현재 공개판은 [v0.3.10-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)입니다.
+원본 LDS callback·캐시의 필드 할당 출처와 응답 식별자를 관측하는 제품을
+자동 설치하고 기존 용량 제한 AA 기록에 연결합니다. 작성한 기동 경계에서
+원본 라이브러리의 응답 9건이 실제 AA worker까지 전달된
+[제품 실행](validation/LDS_PRODUCT_RUNTIME_2026-10-02.md)과
+[발행 검증](validation/RELEASE_V0310_2026-10-02.md)을 확인하십시오.
+순정 CMU 재부팅 요청·전후 boot ID 대조·전체 설치 폴더 진단의 USB 회수와
+ACC·엔진이 꺼진 ON·실제 엔진 가동을 구분한 절차도 유지합니다.
 원본 AA 연결 등록에서 서버 주소 GUID와 client 고유 이름을 소유 복사하고,
 실제 raw 송신이 같은 연결을 사용했는지 기록합니다. 식별자가 없어도 원시 위치를
 보존하며, 생산자 측정 시각이나 센서 자격으로 인정하지 않습니다.
 원본 위치 아홉 필드와 GPS holdout의 호출·generation 연결, 누락·중복 진단,
 기존 MODEL 비교를 유지합니다. 기준점·콜백 및 큐 폐기 경계 수정도 포함합니다.
-실제 자격 입력 공급부와 LDS producer의 프로세스 간 연결은 미완료이므로
+물리 센서의 시각·품질과 실제 자격 입력 공급부는 미완료이므로
 **ASSIST는 계속 비활성**입니다.
 
 **v0.3.9-shadow.1의 회수 실패 복구:** 핫픽스로 USB 파일을 교체하고 아래
