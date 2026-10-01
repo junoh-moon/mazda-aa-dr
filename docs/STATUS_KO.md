@@ -44,6 +44,10 @@
 해당 독립 변경 소스의 전체 host Python 375개·C/C++와 고정 ARM 전체는
 생략 없이 통과했습니다. live ASSIST는 계속 비활성이고, 이 수정의 합성
 회귀를 실차 입력·폰 수용 증거로 세지 않습니다.
+[v0.3.8 소스와 병합한 후속 검증](../validation/ASSIST_STALE_CALLBACK_2026-10-01.md)도
+새 ARM 빌드·로컬 SHADOW ZIP에서 host Python 401개·C/C++와 고정 ARM 전체를
+생략 없이 통과했습니다. 공개 v0.3.8 ZIP은 그대로이며 이 후속 수정은
+아직 공개되지 않았습니다.
 
 [원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
 실제 NMEA parser→callback→잠금 cache 쓰기→원본 service snapshot→serializer와

@@ -65,6 +65,44 @@ ARM 종료 0, 생략 0이며 시작·끝 `ARM_TEST_INPUTS`의
 POSITION·ANCHOR·센서 자격은 작성한 입력입니다. 원본 펌웨어 VM·실차·
 폰에서는 이 후속 변경을 실행하지 않았습니다.
 
+## 공개 v0.3.8과 통합한 소스의 재검증
+
+원격 `v0.3.8-shadow.1`의 holdout 원본 연결·위치 기록 보완과 이 수정은
+`d3c6fa1e81fa16046ebbd1f200c22ffb3c3eda6a`에서 병합했습니다.
+고정 GCC 4.9.1 도구체인으로 다섯 ARM 산출물을 새로 빌드했고, 로컬
+SHADOW ZIP의 `build-info.json`은 해당 커밋과 `source_modified=false`를
+기록합니다. 로컬 ZIP SHA-256은
+`4560926ace8b60187db448d9c5f8667fd5ad25b5f5896c69dc3ee43621d4ec31`이고,
+제품 DSO SHA-256은
+`4ef64da1fae9c18c975833495c69fda9a9b41ceaf0c3d78e07fc9eeeb911b441`입니다.
+이 로컬 ZIP을 새 공개 릴리즈로 게시하지 않았습니다. 공개 v0.3.8 ZIP은
+`40051f8` 소스·SHA-256 `19edb8b72faba813e169543ff6e1697a945954f13f76d5ee1346803b81168686`으로
+그대로이며, GitHub에서 다시 받은 파일의 SHA·CRC·`build-info.json`을 대조했습니다.
+
+첫 통합 `make test`는 종료 0이었으나 컨테이너에 순정 fixture가 없어
+설치기 검사 20개를 생략했습니다. 기존 비공개 OEM VM 이미지에서 설치기용
+원본 파일 여덟 개만 추출하고 네 바이너리의 SHA-256을
+`packaging/firmware.sha256`과 대조한 뒤 전체를 다시 실행했습니다.
+최종 `make test`는 Python **401개**(41+124+28+1+10+163+34)와 C/C++를
+종료 0·생략 0으로 통과했습니다. 고정 ARM/QEMU 전체도 종료 0·생략 0이며
+시작·종료 `ARM_TEST_INPUTS` 두 기록이 같고 `release_verified=true`입니다.
+ARM의 실제 제품 DSO suite는 position 8, request 14, request-wire 1,
+session 29, bus 31, assist 28, runtime-assist 9개를 통과했습니다. 별도
+ARM 시험 실행 파일의 navigation 3,358개, ASSIST worker 19,621개,
+holdout 7,258개와 formatter를 소비한 Python 51개도 통과했습니다.
+
+| 비공개 통합 실행 기록 | SHA-256 |
+| --- | --- |
+| 순정 fixture를 포함한 최종 host 전체 로그 | `21a3b3d63a9d4f24cea13e1bdee70a872c4b65c0265c204a6fddb49522b9f9e9` |
+| 최종 고정 ARM 전체 로그 | `876e733cfc2cf604b865a613cf9365ed478b2360a2ea3256ca6c9ce70435bf50` |
+
+Claude Code CLI와 별도 Codex의 병합 소스 읽기 전용 검토에서는 확인된
+P1/P2 회귀를 찾지 못했습니다. Claude가 제시한 큐 포화와 동시 callback
+순서 가설은 제품 재현으로 확정한 결함이 아닙니다. 리뷰어들은 시험을
+실행하지 않았습니다. 위 통합 소스로 원본 OEM VM, 순정 BusyBox 직접 설치,
+실차·폰 검사를 새로 수행하지 않았습니다. 공개 v0.3.8의 별도 설치·배포
+검증은 [그 판의 기록](RELEASE_V038_2026-10-01.md)을 따르십시오.
+
 ## 남은 조건
 
 실제 센서의 단위·측정 시각·품질, LDS의 생산자→snapshot→응답 자격,
