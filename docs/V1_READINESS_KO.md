@@ -24,6 +24,11 @@ GPS 단절 중 보정 위치가 실제 AA 송신에 선택되고, GPS 복귀 시
 한 번의 시험이 모든 물리 센서·폰 수용·복구 조건을 해결한다고 약속하거나,
 SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 않습니다.
 
+차량의 USB 포트 하나를 AA와 설치·회수용 쉘이 번갈아 사용합니다.
+AA 연결 중 메뉴2 확인을 요구하지 않습니다. 수집은 시험 부팅에서 자동으로
+시작하며, 주차 후 AA를 분리하고 USB·쉘로 돌아와 바로 메뉴3으로 회수합니다.
+현재 연결·부팅의 진단과 보존된 시험 기록은 별도로 해석합니다.
+
 ## 작업 목록
 
 - [x] 2026-10-01의 한 번의 통합 실차 시험 허용을 현재 지침에 반영합니다.
@@ -80,6 +85,11 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   [wire 연결 검증](../validation/WIRE_REQUEST_2026-10-01.md)에서 원본 라이브러리의
   역순·재사용·timeout·취소, 제품 cold 설치와 원본 data-client 연결을 확인했습니다.
   작성 서버/worker fixture이며 producer snapshot 자격이나 폰 수용을 뜻하지 않습니다.
+- [x] 원본 등록에서 AA 요청의 서버 주소 GUID와 client 고유 이름을 소유 사본으로 기록합니다.
+  [연결 식별자 검증](../validation/AA_ENDPOINT_IDENTITY_2026-10-01.md)에서
+  새 제품 DSO와 원본 client의 두 daemon·여덟 요청을 대조했습니다.
+  같은 serial·이름 재사용을 구분하고 원시 위치 아홉 필드를 보존합니다.
+  이 식별자의 존재는 LDS sideband 연결이나 물리 입력 자격을 뜻하지 않습니다.
 - [x] 작성 NMEA 입력을 실제 원본 parser·callback·cache·service 응답과 제품 token까지 연결합니다.
   [원본 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서 부분 갱신,
   무갱신 재조회, serial 분리, 같은 바이너리의 계측 on/off와 snapshot 뒤 새 쓰기를
