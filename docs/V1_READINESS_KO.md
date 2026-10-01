@@ -80,11 +80,16 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   [wire 연결 검증](../validation/WIRE_REQUEST_2026-10-01.md)에서 원본 라이브러리의
   역순·재사용·timeout·취소, 제품 cold 설치와 원본 data-client 연결을 확인했습니다.
   작성 서버/worker fixture이며 producer snapshot 자격이나 폰 수용을 뜻하지 않습니다.
+- [x] 작성 NMEA 입력을 실제 원본 parser·callback·cache·service 응답과 제품 token까지 연결합니다.
+  [원본 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서 부분 갱신,
+  무갱신 재조회, serial 분리, 같은 바이너리의 계측 on/off와 snapshot 뒤 새 쓰기를
+  대조했습니다. 관측기 쓰기 번호는 개별 필드의 물리 생산 시각이 아니며, 초기화·입력·
+  대기 순서는 작성한 조건입니다. 제품 qualified 공급부와 전체 SM 기동은 미완료입니다.
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
   [LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
   위치·진단 캐시의 별도 갱신과 공통 snapshot 식별자의 부재를 확인했습니다.
-  진단 polling으로 자격을 채우지 않으며 생산자→snapshot→응답 연결은 미구현입니다.
-  정적 조사만 수행했으며 상위 자격·ASSIST 항목의 완료로 세지 않습니다.
+  진단 polling으로 자격을 채우지 않으며 제품의 생산자→snapshot→응답 공급부는 미구현입니다.
+  해당 정적 조사와 위 별도 실행을 상위 물리 자격·ASSIST 항목의 완료로 세지 않습니다.
   [요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)은 발행 당시 원본
   목적지·경로·인터페이스·메서드명을 응답까지 연결합니다. well-known 서비스
   이름은 실제 제공자 인증이 아니므로 이 상위 자격 항목은 미완료입니다.

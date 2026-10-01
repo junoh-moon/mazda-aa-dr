@@ -23,6 +23,16 @@
 입력 공급부·센서·폰 수용은 미완료이며 live ASSIST는 계속 비활성입니다.
 아래 이력의 공개 ZIP 미갱신·미구현 설명은 각 검증 당시의 상태입니다.
 
+[원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
+실제 NMEA parser→callback→잠금 cache 쓰기→원본 service snapshot→serializer와
+공개 v0.3.5 제품 token을 연결했습니다. GGA 좌표·고도가 갱신돼도 이전 RMC의
+UTC·방향·속도가 함께 반환되며, snapshot 뒤 새 쓰기가 완료되어도 이미 복사한
+응답은 이전 값을 유지했습니다. 작성 입력·초기화·진단 계측의 결과이며 개별 필드의
+물리 측정 시각이나 제품 qualified 공급부를 구현한 것은 아닙니다. 같은 바이너리의
+서버 계측 on/off 응답도 비교했습니다. 제품 position 기록의 고도·horizontal·vertical
+누락은 후속 소스에서 수정하여 formatter 회귀를 통과했습니다. 이 수정은 위 공개
+v0.3.5 ZIP에 아직 포함되지 않으며 실제 ASSIST는 여전히 비활성입니다.
+
 [평탄화 전 요청·응답 연결](../validation/WIRE_REQUEST_2026-10-01.md)을
 `3812fe6`·`fe052be`에서 구현했습니다. 원본 builder와 pending의 실제 수명 안에서
 raw serial·reply_serial·sender·오류를 제품 token에 연결하며 기존 공개 getter도
