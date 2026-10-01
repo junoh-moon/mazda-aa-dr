@@ -36,7 +36,11 @@ ModelProfile research_model_profile();
 enum PipelineResult {
     PIPELINE_OK=0, PIPELINE_WAITING, PIPELINE_BAD_INPUT, PIPELINE_LATE,
     PIPELINE_CLOCK_RESET, PIPELINE_SOURCE_RESET, PIPELINE_OVERFLOW,
-    PIPELINE_MISSING_SENSOR, PIPELINE_CORE_REJECTED, PIPELINE_NO_ANCHOR
+    PIPELINE_MISSING_SENSOR, PIPELINE_CORE_REJECTED, PIPELINE_NO_ANCHOR,
+    // A POSITION from a retired generation with no live or queued seed.
+    // Replay of an applied callback, or a candidate that could later publish,
+    // is BAD_INPUT instead.
+    PIPELINE_STALE_INPUT
 };
 struct Status {
     PipelineResult result;
@@ -173,6 +177,10 @@ private:
     uint64_t qualified_anchor_call_sequence_, last_qualified_position_call_sequence_;
     // Retained across candidate retirement within one source/session epoch.
     uint64_t qualified_observed_position_call_sequence_;
+    // Negative boundaries from ignored old-generation POSITIONs. Neither
+    // observation time nor callback order can qualify a later GPS anchor.
+    uint64_t qualified_stale_position_cutoff_ns_;
+    uint64_t qualified_stale_position_call_sequence_;
     bool qualified_anchor_paired_;
     int position_mode_;
     bool configured_, model_, have_fix_;

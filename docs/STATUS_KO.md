@@ -48,6 +48,17 @@ host·고정 ARM·순정 공유 runtime의 코어 각 11,732개와 독립 분석
 비활성 계산 경로 결함은 후속 판에서 수정했습니다.
 아래 이력의 공개 ZIP 미갱신·미구현 설명은 각 검증 당시의 상태입니다.
 
+공개 v0.3.8 이후의 [이전 세대 콜백 경계 보완](../validation/ASSIST_STALE_CALLBACK_2026-10-01.md)은
+폐기된 qualified 계산기의 늦은 GPS 콜백과 새 기준점의 순서 역전을
+구분합니다. 아직 소스 후속 변경이며 공개 ZIP에는 들어 있지 않습니다.
+해당 독립 변경 소스의 전체 host Python 375개·C/C++와 고정 ARM 전체는
+생략 없이 통과했습니다. live ASSIST는 계속 비활성이고, 이 수정의 합성
+회귀를 실차 입력·폰 수용 증거로 세지 않습니다.
+[v0.3.8 소스와 병합한 후속 검증](../validation/ASSIST_STALE_CALLBACK_2026-10-01.md)도
+새 ARM 빌드·로컬 SHADOW ZIP에서 host Python 401개·C/C++와 고정 ARM 전체를
+생략 없이 통과했습니다. 공개 v0.3.8 ZIP은 그대로이며 이 후속 수정은
+아직 공개되지 않았습니다.
+
 [원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
 실제 NMEA parser→callback→잠금 cache 쓰기→원본 service snapshot→serializer와
 공개 v0.3.5 제품 token을 연결했습니다. GGA 좌표·고도가 갱신돼도 이전 RMC의

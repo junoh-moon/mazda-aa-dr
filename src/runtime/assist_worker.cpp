@@ -15,7 +15,8 @@ bool same_context(const mx5_dr_context& a,const mx5_dr_context& b) {
 }
 bool limit(double value,double maximum) { return std::isfinite(value)&&value>0&&value<=maximum; }
 bool nonfatal(navigation::PipelineResult r) {
-    return r==navigation::PIPELINE_OK||r==navigation::PIPELINE_WAITING||r==navigation::PIPELINE_NO_ANCHOR;
+    return r==navigation::PIPELINE_OK||r==navigation::PIPELINE_WAITING||
+        r==navigation::PIPELINE_NO_ANCHOR||r==navigation::PIPELINE_STALE_INPUT;
 }
 }
 AssistWorker::AssistWorker(const mx5_dr_config& config,const AssistSource& source)
@@ -89,6 +90,9 @@ bool AssistWorker::consume(const AssistInput& in,uint64_t now,const AssistReadin
     }
     if(!active_) { ++status_.ignored;return true; }
     if(!same_epochs(in.context,binding_))return false;
+    // A verified BEGIN cuts over to its new generation. Older queued controls
+    // after that boundary are a source-order fault, not the retired backlog
+    // which the pipeline may ignore before any new BEGIN.
     if(in.context.generation<binding_.generation)return false;
     navigation::PipelineResult result=navigation::PIPELINE_BAD_INPUT;
     if(in.kind==ASSIST_POSITION) {
@@ -117,6 +121,12 @@ bool AssistWorker::consume(const AssistInput& in,uint64_t now,const AssistReadin
         else result=pipeline_.enqueue_reverse(e,in.reverse);
     }
     status_.pipeline_result=result;
+    if(result==navigation::PIPELINE_STALE_INPUT) {
+        // An older callback may be dropped only after the previously published
+        // generation is already unselectable. A live candidate fails closed.
+        if(publication_live_&&published_generation_==adapter::generation())return false;
+        ++status_.ignored;
+    }
     return nonfatal(result);
 }
 void AssistWorker::tick(adapter::MonotonicClock clock,void* clock_user) {

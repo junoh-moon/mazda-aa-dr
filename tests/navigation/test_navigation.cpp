@@ -647,15 +647,15 @@ static void qualified_revoker_failure_is_terminal() {
     CHECK(same_mode.enqueue_yaw(evidence(2,2,110),0,2047,1,T(110),T(110))==PIPELINE_BAD_INPUT);
     CHECK(same_mode_response.calls==1&&same_mode.context().generation==3);
     adapter::Observation stale=pos(115,0,4);stale.prediction_generation=2;
-    CHECK(same_mode.enqueue_position(stale)==PIPELINE_BAD_INPUT);
+    CHECK(same_mode.enqueue_position(stale)==PIPELINE_STALE_INPUT);
     mx5_dr_anchor stale_anchor=mx5_dr_anchor();stale_anchor.context=mx5_dr_context{1,1,2};
     CHECK(same_mode.enqueue_anchor(stale_anchor,T(115))==PIPELINE_BAD_INPUT);
     CHECK(same_mode_response.calls==1&&same_mode.status().resets==1);
-    adapter::Observation gap=pos(120,0,4);gap.prediction_generation=3;
+    adapter::Observation gap=pos(120,0,5);gap.prediction_generation=3;
     CHECK(same_mode.enqueue_position(gap)==PIPELINE_OK);
     CHECK(same_mode.drain(T(120))==PIPELINE_OK);
     CHECK(same_mode_response.calls==1&&same_mode.status().resets==1);
-    gap=pos(130,0,5);gap.prediction_generation=3;
+    gap=pos(130,0,6);gap.prediction_generation=3;
     CHECK(same_mode.enqueue_position(gap)==PIPELINE_OK);
     CHECK(same_mode.drain(T(130))==PIPELINE_OK);
     CHECK(same_mode_response.calls==1&&same_mode.context().generation==3);
@@ -679,6 +679,38 @@ static void qualified_revoker_failure_is_terminal() {
         CHECK(owned.bind_qualified_revoker(fixed_revoke_generation,&lifetime_response));
     }
     CHECK(lifetime_response.calls==1);
+}
+static void stale_position_cannot_cross_a_queued_qualified_anchor() {
+    uint64_t revoker=0;Pipeline p;seed_qualified(p,1,&revoker);
+    revoker=2;CHECK(p.retire_qualified());
+    CHECK(p.context().generation==3&&!p.diagnostic(T(110)).snapshot.valid);
+    mx5_dr_anchor next=mx5_dr_anchor();next.context=p.context();
+    next.anchor_id=5;next.position_seq=20;next.measured_ns=T(110);
+    next.utc_ns=1700000000110000000ULL;next.latitude_deg=35;
+    next.longitude_deg=135;next.position_error_m=1;
+    next.validated=next.heading_valid=next.calibration_verified=1;
+    next.quality=MX5_DR_VALID;
+    CHECK(p.enqueue_anchor(next,T(110),5)==PIPELINE_OK);
+    adapter::Observation old=pos(111,1,6);old.prediction_generation=2;
+    CHECK(p.enqueue_position(old)==PIPELINE_BAD_INPUT);
+    CHECK(p.status().resets==1&&p.context().generation==3);
+    CHECK(p.drain(T(120))==PIPELINE_OK);
+    CHECK(!p.diagnostic(T(120)).snapshot.valid);
+
+    uint64_t live_revoker=0;Pipeline live;seed_qualified(live,1,&live_revoker);
+    adapter::Observation delayed=pos(115,1,4);delayed.prediction_generation=1;
+    CHECK(live.enqueue_position(delayed)==PIPELINE_BAD_INPUT);
+    CHECK(live.context().generation==3&&live.status().resets==1);
+    next.context=live.context();next.measured_ns=T(110);
+    CHECK(live.enqueue_anchor(next,T(120),5)==PIPELINE_BAD_INPUT);
+    CHECK(live.status().resets==2&&!live.diagnostic(T(120)).snapshot.valid);
+
+    uint64_t anchor_revoker=0;Pipeline anchor_live;
+    seed_qualified(anchor_live,1,&anchor_revoker);
+    next.context=mx5_dr_context{1,1,1};next.measured_ns=T(115);
+    CHECK(anchor_live.enqueue_anchor(next,T(115),5)==PIPELINE_BAD_INPUT);
+    CHECK(anchor_live.context().generation==3&&anchor_live.status().resets==1);
+    CHECK(!anchor_live.diagnostic(T(115)).snapshot.valid);
 }
 static void qualified_coverage(Pipeline& p) {
     CHECK(p.enqueue_speed(evidence(1,2,100),10)==PIPELINE_OK);
@@ -805,7 +837,8 @@ int main(int argc,char** argv) {
         for(unsigned i=0;i<6;++i)raw_yaw_accumulator_rejection(i);
         raw_yaw_accumulator_boundaries();
         rejected_gps_requires_new_pair();single_stopped_wheel_consistency();qualified();
-        qualified_anchor_before_observed_return();qualified_revoker_failure_is_terminal();exhausted_model();
+        qualified_anchor_before_observed_return();qualified_revoker_failure_is_terminal();
+        stale_position_cannot_cross_a_queued_qualified_anchor();exhausted_model();
         exhausted_qualified(0);exhausted_qualified(1);exhausted_qualified(2);
         exhausted_anchor_replacement();exhausted_position_sequence(); }
     std::printf("navigation: %u checks passed\n",checks); return 0; }
