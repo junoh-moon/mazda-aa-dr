@@ -253,7 +253,7 @@ def check_full_export(root, archive, command_baselines):
         # evidence of running OEM processes. dmesg can legitimately fail here.
         for name in ('proc/self/mountinfo', 'proc/version', 'proc/cmdline', 'proc/meminfo',
                      'proc/partitions', 'proc/1/status', 'proc/1/cmdline'):
-            require(name + '=unavailable' in report.splitlines(),
+            require(name + '=missing' in report.splitlines(),
                     'Absent authored proc source was reported as captured: ' + name)
         for key, (expected_exit, expected_output) in command_baselines.items():
             output = body(stage + '/' + key + '.txt')
