@@ -27,7 +27,7 @@ for test in observe scrub native malformed nested assist epoch reacquire expiry 
     qemu-arm -L "$sysroot" "$build/adapter-test" "$test"
 done
 "${cross}g++" $flags -I src tests/adapter/provenance_context_test.cpp \
-    src/adapter/adapter.cpp src/runtime/request_trace.cpp -o "$build/provenance-context-test"
+    src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp -o "$build/provenance-context-test"
 for case in captured nested failure missing invalidate unqualified malformed; do
     qemu-arm -L "$sysroot" "$build/provenance-context-test" "$case"
 done

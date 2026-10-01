@@ -47,7 +47,7 @@ $(BUILD)/replay: $(CORE) src/core/dr_core.h tests/core/replay.c | $(BUILD)
 	$(CC) $(C_WARN) -Isrc/core $(CORE) tests/core/replay.c -lm -o $@
 $(BUILD)/test_adapter: $(ADAPTER) src/adapter/adapter.h tests/adapter/adapter_test.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ADAPTER) tests/adapter/adapter_test.cpp -ldl -pthread -o $@
-$(BUILD)/test_provenance_context: src/adapter/adapter.cpp src/adapter/adapter.h src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h tests/adapter/provenance_context_test.cpp | $(BUILD)
+$(BUILD)/test_provenance_context: src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.h src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h tests/adapter/provenance_context_test.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
