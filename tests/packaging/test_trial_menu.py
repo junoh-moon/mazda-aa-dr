@@ -1,5 +1,6 @@
 """Numeric USB workflow with real helpers and synthetic firmware fixtures."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -106,6 +107,45 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('2\n3\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assert_export()
+
+    def previous_boot_retrieval(self, acknowledged):
+        self.prepare_logs(acknowledged=acknowledged)
+        rows = [dict(kind='boot', boot_id=BOOT.strip(), mono_ns=1000000000, mode=4),
+                dict(kind='position', mono_ns=99000000000, mode=1),
+                dict(kind='motion_batch', schema=1, epoch=1, events=[[1, 1, 99000000000, 1, 0, 0, 0, 0, 1, 0]])]
+        payload = ''.join(json.dumps(row, separators=(',', ':')) + '\n' for row in rows).encode()
+        (self.logs / 'trace.0.jsonl').write_bytes(payload)
+        (self.base / 'guard/last-boot').write_text(BOOT)
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text(BOOT.replace('12345678', '87654321'))
+        (self.root / 'proc/uptime').write_text('2.00 1.00\n')
+        before = self.fixture.autostart.read_bytes()
+        # No menu2/arm/install command is issued on return; AA occupied the
+        # single USB port during the authored previous-boot recording.
+        result = self.menu('3\n')
+        self.assertNotEqual(result.returncode, 0)  # Current-boot finish is unproved.
+        report = (self.usb / 'trial-result.txt').read_text()
+        self.assertIn('status_scope=current_boot', report)
+        self.assertIn('export_scope=all_retained_boots', report)
+        self.assertIn('retained_runtime_last_boot=previous_boot boot_id=' + BOOT.strip(), report)
+        self.assertIn('position_records=1 motion_batches=1', report)
+        self.assertIn('status_exit=1', report)
+        self.assertIn('finish_exit=1', report)
+        self.assertIn('export_exit=0', report)
+        self.assertIn('Current status is not a verdict on the retained trial', result.stdout)
+        archive, = self.usb.glob('mx5dr-logs-*.tar')
+        self.assertEqual(archive.with_suffix('.tar.sha256').read_text().split()[0],
+                         hashlib.sha256(archive.read_bytes()).hexdigest())
+        with tarfile.open(archive) as tar:
+            self.assertEqual(tar.extractfile('logs/trace.0.jsonl').read(), payload)
+        self.assertEqual((self.logs / 'trace.0.jsonl').read_bytes(), payload)
+        self.assertFalse((self.base / 'guard/arm').exists())
+        self.assertEqual(self.fixture.autostart.read_bytes(), before)
+
+    def test_single_port_reboot_return_exports_without_previous_ack(self):
+        self.previous_boot_retrieval(acknowledged=False)
+
+    def test_single_port_reboot_return_exports_without_accepting_old_ack(self):
+        self.previous_boot_retrieval(acknowledged=True)
 
     def test_unconfirmed_finish_still_exports_and_retains_failure(self):
         self.prepare_logs(acknowledged=False)

@@ -19,6 +19,16 @@ function health_recent(ns) {return recent(ns,5)}
 function poll_recent(ns) {return recent(ns,8)}
 function model_recent(ns) {return recent(ns,2)}
 function unsigned_field(key) {return $0 ~ ("\"" key "\":[0-9]+[,}]")}
+function valid_boot_id(id, compact) {
+    if (length(id)!=36 || substr(id,9,1)!="-" || substr(id,14,1)!="-" ||
+        substr(id,19,1)!="-" || substr(id,24,1)!="-") return 0
+    compact=id; gsub(/-/,"",compact)
+    return length(compact)==32 && compact ~ /^[0-9a-f]+$/
+}
+function reset_retained(id) {
+    retained_boot=id; retained_positions=0; retained_motion=0; retained_end=0
+    retained_model=0; retained_valid=0; retained_attempts=0
+}
 function clear_model_snapshot() {shadow=""; solution=""; processed=""; pipeline=""; result=""; attempts=""; intervals=""}
 function reset_runtime() {
     health=""; hooks=""; dropped=""; audit=""; capture=""; mode=""
@@ -38,7 +48,7 @@ function report(name, ok, detail) {
 function observe(name, ok, detail) {
     print name "=" (ok ? "observed" : "unavailable") (detail!="" ? " " detail : "")
 }
-BEGIN {reset_runtime(); bad=0}
+BEGIN {reset_runtime(); reset_retained(""); bad=0}
 # Files must contain complete emitted object lines before they count as evidence.
 !/^\{.*\}$/ {next}
 FILENAME ~ /\/trace\.[012]\.jsonl$/ && !/^\{"kind":"[a-z_]+",/ {next}
@@ -53,6 +63,13 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
         storage_stopped=1; bad=1; next
     }
     if (kind=="boot" && FILENAME ~ /\/trace\.[012]\.jsonl$/) {
+        # Keep only the last boot's retained rows, without comparing its clock
+        # to this boot's uptime. Same-boot worker restarts reset current health
+        # below but do not erase earlier records from that boot. A missing or
+        # malformed boot marker never assigns orphan rows to a known boot.
+        identity=field("boot_id")
+        if (!valid_boot_id(identity)) reset_retained("")
+        else if (identity!=retained_boot) reset_retained(identity)
         reset_runtime(); runtime=(field("boot_id")==boot); runtime_boot=field("mono_ns")
         if (!not_future(runtime_boot)) runtime=0
         mode=field("mode")
@@ -61,6 +78,22 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
     if (kind=="collector_boot" && FILENAME ~ /\/collector\.[01]\.jsonl$/) {
         collector=(field("boot_id")==boot); collector_start=field("observed_at_mono_ns")
         poll=""; stopped=0; next
+    }
+    if (FILENAME ~ /\/trace\.[012]\.jsonl$/ && retained_boot!="") {
+        if (kind=="position") retained_positions++
+        if (kind=="motion_batch" && /"schema":1[,}]/) retained_motion++
+        if (kind=="capture_end" && field("boot_id")==retained_boot) retained_end=1
+        # These are row counts, not drain/integration totals or a trial verdict.
+        # Reset/teardown does not erase prior rows; malformed metadata adds no
+        # calculation evidence. Physical measurement time remains unknown.
+        if (kind=="shadow" && field("domain")=="model" && /"assist_ready":false[,}]/ &&
+            /"model_valid":(true|false)[,}]/ && unsigned_field("events") &&
+            field("result") ~ /^[A-Z_]+$/ && field("pipeline") ~ /^[A-Z_]+$/) {
+            retained_model++
+            if (field("model_valid")=="true") retained_valid++
+            if (unsigned_field("drain_calls_total") && field("drain_calls_total")+0>0)
+                retained_attempts++
+        }
     }
     if (FILENAME ~ /\/trace\.[012]\.jsonl$/ && runtime) {
         if (kind=="shadow_boot") capture=field("capture_active")
@@ -174,6 +207,8 @@ END {
     print "gps_anchor_gate=" anchor " last_position_rejection_30s=" position_rejection " last_motion_reset_30s=" motion_rejection " last_model_exclusion_30s=" motion_exclusion
     print "rejected_raw_seen_this_boot=" (rejected_raw ? "true" : "false") " untimed_rejected_raw_seen=" (untimed_rejected_raw ? "true" : "false") " untimed_motion_reset_seen=" (untimed_motion_reset ? "true" : "false")
     print "last_pipeline_reset_this_boot=" pipeline_reset " operation=" reset_operation " receive_seq=" reset_sequence " mono_ns=" reset_time " untimed_reset_seen=" (untimed_pipeline_reset ? "true" : "false")
+    print "retained_runtime_last_boot=" (retained_boot=="" ? "unavailable" : (retained_boot==boot ? "current_boot" : "previous_boot")) " boot_id=" (retained_boot=="" ? "unknown" : retained_boot) " position_records=" retained_positions " motion_batches=" retained_motion " capture_end_record=" (retained_end ? "observed" : "not_observed") " records_only_not_current_readiness"
+    print "retained_model_diagnostic_records=" retained_model " model_valid_records=" retained_valid " drain_attempt_records=" retained_attempts " domain=model assist_ready=false records_only_not_trial_success"
     if (bad) print "Collection evidence incomplete. Keep/export existing logs; missing/rotated boot markers cannot be reconstructed by this check."
     else print "Capture startup evidence only. Inspect MODEL status and reasons; this is not a completed navigation trial."
     exit bad

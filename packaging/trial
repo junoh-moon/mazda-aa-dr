@@ -16,14 +16,16 @@ require_usb() {
 finish_and_export() {
     require_usb
     echo 'Saving current status, finishing capture (up to 15 seconds), then exporting to this USB.'
+    scope_notice='Current status is not a verdict on the retained trial. A nonzero finish_exit leaves current-boot completion unconfirmed; export_exit reports retrieval separately.'
+    echo "$scope_notice"
     if status_output=$(sh "$HERE/trial_status.sh" 2>&1); then status_rc=0; else status_rc=$?; fi
     if finish_output=$(sh "$HERE/finish_capture.sh" 2>&1); then finish_rc=0; else finish_rc=$?; fi
-    printf '%s\nstatus_exit=%s\n%s\nfinish_exit=%s\n' "$status_output" "$status_rc" "$finish_output" "$finish_rc"
+    printf 'status_scope=current_boot\n%s\nstatus_exit=%s\nfinish_scope=current_boot\n%s\nfinish_exit=%s\n' "$status_output" "$status_rc" "$finish_output" "$finish_rc"
     # An unavailable status or failed acknowledgement must not discard raw
     # evidence. Export it anyway, retaining the separate failure in the report.
     require_usb
     if export_output=$(sh "$HERE/export_logs.sh" "$HERE" 2>&1); then export_rc=0; else export_rc=$?; fi
-    printf '%s\nexport_exit=%s\n' "$export_output" "$export_rc"
+    printf 'export_scope=all_retained_boots\n%s\nexport_exit=%s\n' "$export_output" "$export_rc"
     require_usb
     # Fixed, small report on the USB, never an accumulating log on the CMU.
     # Acquire the remount lock only after child helpers release theirs.
@@ -31,8 +33,8 @@ finish_and_export() {
     mount_rw "$HERE"
     report=$HERE/trial-result.txt
     if [ -e "$report" ] || [ -L "$report" ]; then regular "$report"; fi
-    printf '%s\nstatus_exit=%s\n%s\nfinish_exit=%s\n%s\nexport_exit=%s\n' \
-        "$status_output" "$status_rc" "$finish_output" "$finish_rc" \
+    printf '%s\nstatus_scope=current_boot\n%s\nstatus_exit=%s\nfinish_scope=current_boot\n%s\nfinish_exit=%s\nexport_scope=all_retained_boots\n%s\nexport_exit=%s\n' \
+        "$scope_notice" "$status_output" "$status_rc" "$finish_output" "$finish_rc" \
         "$export_output" "$export_rc" > "$report" || fail 'Cannot save USB report; retain the displayed result.'
     sync
     echo "Result saved: $report"
@@ -45,10 +47,11 @@ last_rc=0
 while :; do
     printf '\n%s\n' 'Parked USB trial menu' \
         '1 Install for the next boot' \
-        '2 Show capture and calculation status' \
+        '2 Optional current status and retained record summary' \
         '3 Finish capture and save logs to this USB' \
         '4 Uninstall (keeps collected logs)' \
         '0 Exit'
+    echo 'Capture starts automatically on the armed boot; menu 2 is not required. With one USB port, disconnect AA while parked, reconnect this USB, then choose 3.'
     printf 'Number, then Enter: '
     if ! IFS= read -r choice; then exit "$last_rc"; fi
     case "$choice" in

@@ -42,8 +42,9 @@ for name in trace.2.jsonl trace.1.jsonl trace.0.jsonl collector.1.jsonl collecto
     fi
 done
 echo "Parked capture evidence only; this does not approve driving or ASSIST."
+echo "current_boot_id=$boot_id. Recent checks can be unavailable after AA disconnect or reboot; retained rows are reported separately."
 echo "one_boot=$oneboot retained_bytes=$retained trace_cap_bytes=25165824 collector_cap_bytes=2097152 (24+2 MiB, rotates)"
-echo 'Retention duration is unknown until this vehicle log rate is measured. Preserve/export this visit before another boot; do not repeat a drive just to obtain a status pass.'
+echo 'Retention duration is unknown until this vehicle log rate is measured. Export at the first parked USB return, without reinstalling or rearming. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
 space_ok=0
 space_free=$(storage_free_kib "$persist") || space_free=unknown
 if [ "$space_free" != unknown ] && [ "$space_free" -gt 8256 ]; then space_ok=1; fi

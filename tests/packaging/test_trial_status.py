@@ -69,6 +69,87 @@ class TrialStatusTests(unittest.TestCase):
         self.assertIn('does not approve driving or ASSIST', r.stdout)
         self.assertIn('reverse_received_recently=observed receipt_only_not_direction_quality', r.stdout)
 
+    def test_usb_return_after_aa_disconnect_keeps_retained_and_current_separate(self):
+        (self.root / 'proc/uptime').write_text('200.00 1.00\n')
+        r = self.run_status()
+        self.assertNotEqual(r.returncode, 0)  # Recent collection is unavailable.
+        self.assertIn('capture_active=unavailable', r.stdout)
+        self.assertIn('retained_runtime_last_boot=current_boot boot_id=' + BOOT, r.stdout)
+        self.assertIn('position_records=1 motion_batches=1', r.stdout)
+        self.assertIn('records_only_not_current_readiness', r.stdout)
+
+    def test_rebooted_usb_return_preserves_previous_boot_without_retiming(self):
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text(OLD + '\n')
+        (self.root / 'proc/uptime').write_text('2.00 1.00\n')
+        self.trace.append(dict(kind='capture_end', boot_id=BOOT, mono_ns=99900000000))
+        r = self.run_status()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('runtime_current_boot=unavailable', r.stdout)
+        self.assertIn('retained_runtime_last_boot=previous_boot boot_id=' + BOOT, r.stdout)
+        self.assertIn('position_records=1 motion_batches=1 capture_end_record=observed', r.stdout)
+        self.assertNotIn('health_recent=observed', r.stdout)
+
+    def test_retained_summary_continues_rotation_but_does_not_invent_a_boot(self):
+        self.write('trace.2.jsonl', self.trace[:4])
+        r = self.run_status(trace=[dict(kind='position', mono_ns=100000000000, mode=1)])
+        self.assertIn('retained_runtime_last_boot=current_boot boot_id=' + BOOT, r.stdout)
+        self.assertIn('position_records=2 motion_batches=0', r.stdout)
+        (self.logs / 'trace.2.jsonl').unlink()
+        r = self.run_status(trace=[dict(kind='position', mono_ns=100000000000, mode=1)])
+        self.assertIn('retained_runtime_last_boot=unavailable boot_id=unknown', r.stdout)
+        self.assertIn('position_records=0 motion_batches=0', r.stdout)
+
+    def test_new_or_malformed_boot_cannot_inherit_retained_counts(self):
+        self.write('trace.1.jsonl', self.trace)
+        for identity in (OLD, 'bad-log-text'):
+            r = self.run_status(trace=[dict(kind='boot', boot_id=identity, mono_ns=1, mode=4)])
+            self.assertIn('position_records=0 motion_batches=0', r.stdout)
+            if identity == OLD:
+                self.assertIn('retained_runtime_last_boot=previous_boot boot_id=' + OLD, r.stdout)
+            else:
+                self.assertIn('retained_runtime_last_boot=unavailable boot_id=unknown', r.stdout)
+
+    def test_retained_model_rows_survive_aa_reset_without_claiming_current_solution(self):
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        self.trace.append(dict(row, model_valid=True, result='OK', pipeline='OK',
+                               drain_calls_total=40))
+        self.trace.append(dict(kind='shadow_session', mono_ns=99000000000, reset=True))
+        r = self.run_status()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn('model_solution=not_observed', r.stdout)
+        self.assertIn('calculation_attempt_recent=unavailable', r.stdout)
+        self.assertIn('retained_model_diagnostic_records=2 model_valid_records=1 drain_attempt_records=1', r.stdout)
+        self.assertIn('records_only_not_trial_success', r.stdout)
+
+    def test_same_boot_runtime_restart_retains_counts_but_new_boot_resets_them(self):
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        row.update(model_valid=True, result='OK', pipeline='OK', drain_calls_total=40)
+        for identity in (BOOT, OLD):
+            rows = self.trace + [dict(kind='boot', boot_id=identity, mono_ns=99500000000, mode=4),
+                                 dict(kind='position', mono_ns=99900000000, mode=1)]
+            r = self.run_status(trace=rows)
+            self.assertNotEqual(r.returncode, 0)  # New worker has no health yet.
+            self.assertIn('model_solution=not_observed', r.stdout)
+            if identity == BOOT:
+                self.assertIn('position_records=2 motion_batches=1', r.stdout)
+                self.assertIn('retained_model_diagnostic_records=1 model_valid_records=1 drain_attempt_records=1', r.stdout)
+            else:
+                self.assertIn('position_records=1 motion_batches=0', r.stdout)
+                self.assertIn('retained_model_diagnostic_records=0 model_valid_records=0 drain_attempt_records=0', r.stdout)
+
+    def test_retained_rows_do_not_promote_malformed_model_or_other_boot_end(self):
+        row = next(row for row in self.trace if row['kind'] == 'shadow')
+        rows = [item for item in self.trace if item is not row]
+        for change in ({'domain': 'qualified'}, {'events': '4'}, {'model_valid': 'true'}):
+            rows.append(dict(row, **change))
+        # A missing/quoted counter is not proof of a drain invocation. Its
+        # otherwise well-formed diagnostic still counts as a retained row.
+        rows.append(dict(row, drain_calls_total='40'))
+        rows.append(dict(kind='capture_end', boot_id=OLD, mono_ns=99900000000))
+        r = self.run_status(trace=rows)
+        self.assertIn('capture_end_record=not_observed', r.stdout)
+        self.assertIn('retained_model_diagnostic_records=1 model_valid_records=0 drain_attempt_records=0', r.stdout)
+
     def test_capture_without_computation_preserves_collection_result(self):
         self.trace[1]['active'] = False
         self.trace[2]['computation_active'] = False

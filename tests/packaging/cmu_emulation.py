@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import time
 
@@ -443,7 +444,8 @@ def main():
         return
     default_mode = (args.bundle / 'bundle-default-mode').read_text().strip()
     require(default_mode in ('OBSERVE', 'SHADOW'), 'Unsupported bundle default mode')
-    with tempfile.TemporaryDirectory(prefix='mx5dr-cmu-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='mx5dr-cmu-') as tmp, \
+            tempfile.TemporaryDirectory(prefix='mx5dr-detached-usb-') as detached:
         root = Path(tmp)
         usb = make_root(root, args.stock.resolve(), args.bundle.resolve())
         def run(script, ok=True):
@@ -486,6 +488,14 @@ def main():
         require((root / 'mount.calls').read_text().splitlines() ==
                 ['-o remount,rw /', '-o remount,ro /'], 'Incorrect containing mount selected/restored')
         require(not (base.parent / '.mx5dr-install-lock').exists(), 'Installer left a lock')
+        # The installation USB is absent from the guest during loader/guard/
+        # collector execution. Startup must use the installed persistent files.
+        saved_mounts = (root / 'proc/mounts').read_text()
+        usb.rename(Path(detached) / 'usb')
+        (root / 'proc/mounts').write_text(''.join(
+            line for line in saved_mounts.splitlines(keepends=True)
+            if line.split()[1] != '/tmp/mnt/sda1'))
+        require(not usb.exists(), 'Installation USB was not detached')
         # Exercise both experimental DSOs with the stock dynamic loader/libc.
         # glibc returns success even when it ignores a missing LD_PRELOAD DSO.
         # Require positive initialization evidence, not just /bin/true's status.
@@ -501,6 +511,9 @@ def main():
         trial = root / result.stdout.strip().lstrip('/')
         initial_trial = trial.read_text()
         require(TOUCH in initial_trial, 'Initial trial lost AA touch')
+        require('/data_persist/mx5-aa-dr/libmx5dr.so' in initial_trial and
+                '/tmp/mnt/sda1' not in initial_trial,
+                'Trial preload depends on the installation USB')
         require(('/libmx5dr-vimtap.so' in initial_trial) == (default_mode == 'SHADOW'),
                 'Initial trial VBS tap differs from the bundle default mode')
         print('PASS: ' + default_mode + ' bundle default and initial trial preload selection', flush=True)
@@ -522,6 +535,11 @@ def main():
         require(journal.is_file() and journal.stat().st_uid == 1001, 'Collector failed service ownership')
         require('collector_boot' in journal.read_text(), 'Collector boot evidence missing')
         require('collector_stop' in journal.read_text(), 'Collector stop evidence missing')
+        require(not usb.exists(), 'USB reappeared before persistent execution ended')
+        (Path(detached) / 'usb').rename(usb)
+        (root / 'proc/mounts').write_text(saved_mounts)
+        print('PASS: absent installation USB during stock loader, actual guard selection '
+              'and collector execution; no OEM service startup claimed', flush=True)
         # Run the parked helpers with explicitly synthetic sensor/health rows.
         # No OEM sensor callback or AA process is claimed by these records.
         current_boot = (root / 'proc/sys/kernel/random/boot_id').read_text().strip()
@@ -534,14 +552,20 @@ def main():
                  dict(kind='shadow', mono_ns=99000000000, domain='model', assist_ready=False,
                       model_valid=False, events=4, result='E_NO_SEED', pipeline='WAITING'),
                  dict(kind='motion_batch', schema=1, epoch=1, events=[
-                     [sensor, sensor, 99000000000, 90000, 0, 0, 0, 0, 1, 0] for sensor in (1, 2, 3)])]
+                     [sensor, sensor, 99000000000, 90000, 0, 0, 0, 0, 1, 0] for sensor in (1, 2, 3)]),
+                 dict(kind='shadow', mono_ns=99000000000, domain='model', assist_ready=False,
+                      model_valid=True, events=4, result='OK', pipeline='OK', drain_calls_total=40),
+                 dict(kind='shadow_session', mono_ns=99500000000, reset=True)]
         (base / 'logs/trace.0.jsonl').write_text(''.join(json.dumps(row, separators=(',', ':')) + '\n' for row in trace))
         collector = [dict(kind='collector_boot', boot_id=current_boot, schema=1),
                      dict(kind='poll', end_ns=99000000000, seq=0)]
         journal.write_text(''.join(json.dumps(dict(stream='collector', collector_pid=123,
             observed_at_mono_ns=99000000000, producer_mono_ns=None,
             producer_time_status='unknown', **row), separators=(',', ':')) + '\n' for row in collector))
-        run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial")
+        status = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial")
+        require('model_solution=not_observed' in status.stdout and
+                'retained_model_diagnostic_records=2 model_valid_records=1 drain_attempt_records=1' in status.stdout,
+                'AA reset lost retained MODEL rows or promoted them to current readiness')
         (base / 'logs/capture.done').write_text(current_boot + '\n')
         journal.write_bytes(original_collector)
         run("printf '3\\n' | sh /tmp/mnt/sda1/trial")
@@ -553,6 +577,49 @@ def main():
                 hashlib.sha256(archive.read_bytes()).hexdigest(), 'Export checksum mismatch')
         require((root / 'mount.calls').read_text().splitlines()[-2:] ==
                 ['-o remount,rw /tmp/mnt/sda1', '-o remount,ro /tmp/mnt/sda1'], 'USB mount not restored')
+        # Authored rebooted USB return: no menu2, reinstall or arm. Previous
+        # receipt times exceed the new uptime and must never become current.
+        raw = (base / 'logs/trace.0.jsonl').read_bytes()
+        startup = (root / 'usr/bin/autostart').read_bytes()
+        config = (base / 'mx5dr.conf').read_bytes()
+        put(root, '/proc/sys/kernel/random/boot_id', '31234567-1234-1234-1234-0123456789ab\n')
+        put(root, '/proc/uptime', '2.00 0.00\n')
+        run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
+        for old_ack in (False, True):
+            ack = base / 'logs/capture.done'
+            if old_ack:
+                ack.write_text(current_boot + '\n')
+            else:
+                ack.unlink(missing_ok=True)
+            before = set(usb.glob('mx5dr-logs-*.tar'))
+            run("printf '3\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+            report = (usb / 'trial-result.txt').read_text()
+            for expected in ('status_scope=current_boot', 'finish_scope=current_boot',
+                             'export_scope=all_retained_boots', 'status_exit=1',
+                             'finish_exit=1', 'export_exit=0',
+                             'runtime_current_boot=unavailable',
+                             'retained_runtime_last_boot=previous_boot boot_id=' + current_boot,
+                             'position_records=1 motion_batches=1',
+                             'retained_model_diagnostic_records=2 model_valid_records=1 drain_attempt_records=1'):
+                require(expected in report, 'Rebooted USB report missing: ' + expected)
+            exports = set(usb.glob('mx5dr-logs-*.tar')) - before
+            require(len(exports) == 1, 'Rebooted USB return did not create one archive')
+            archive = exports.pop()
+            require(archive.with_suffix('.tar.sha256').read_text().split()[0] ==
+                    hashlib.sha256(archive.read_bytes()).hexdigest(), 'Previous-boot export checksum mismatch')
+            with tarfile.open(archive) as exported:
+                require(exported.extractfile('logs/trace.0.jsonl').read() == raw and
+                        exported.extractfile('logs/collector.0.jsonl').read() == original_collector,
+                        'Previous-boot archive changed raw bytes')
+            require((base / 'logs/trace.0.jsonl').read_bytes() == raw and
+                    (base / 'mx5dr.conf').read_bytes() == config and
+                    (root / 'usr/bin/autostart').read_bytes() == startup and
+                    not (base / 'guard/arm').exists(), 'Retrieval changed raw files or startup state')
+            print('PASS: rebooted single-port menu3 raw export with ' +
+                  ('old acknowledgement rejected' if old_ack else 'missing acknowledgement unconfirmed'), flush=True)
+        # Restore the authored boot for the pre-existing same-boot rearm test.
+        put(root, '/proc/sys/kernel/random/boot_id', current_boot + '\n')
+        put(root, '/proc/uptime', '100.00 0.00\n')
         # A later touch edit must never be paired with an old trial by raw arm.
         # Explicit rearm rebuilds the pair, while still refusing this same boot.
         updated_touch = TOUCH.replace('.so', '-updated.so')
