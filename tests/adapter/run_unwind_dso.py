@@ -191,6 +191,9 @@ def main():
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
     if args.suite not in ('session', 'bus', 'assist', 'runtime-assist'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
+    if args.suite == 'runtime-assist':
+        # The pinned glibc provides the real monotonic fixture clock in librt.
+        command.append('-lrt')
     command += ['-ldl', '-pthread', '-o', str(executable)]
     subprocess.run(command, check=True)
     environment = dict(os.environ)

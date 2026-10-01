@@ -19,18 +19,20 @@ template<class Function> static Function runtime_assist_function(uintptr_t offse
 }
 class ProductAssistWorker {
     alignas(R::AssistWorker) unsigned char storage_[sizeof(R::AssistWorker)];
+    R::AssistWorker* object_;
 public:
-    ProductAssistWorker(const mx5_dr_config& config,const R::AssistSource& source) {
+    ProductAssistWorker(const mx5_dr_config& config,const R::AssistSource& source)
+        : object_(reinterpret_cast<R::AssistWorker*>(storage_)) {
         static_assert(std::is_trivially_destructible<R::AssistWorker>::value,
                       "Add product destruction if needed");
         runtime_assist_function<void(*)(R::AssistWorker*,const mx5_dr_config&,
             const R::AssistSource&)>(TEST_ASSIST_CONSTRUCT)(self(),config,source);
     }
-    R::AssistWorker* self() { return reinterpret_cast<R::AssistWorker*>(storage_); }
+    R::AssistWorker* self() { return object_; }
     // Like the product API, this is single-owner data. Inspect after joining
     // the worker; do not poll non-atomic product state from the fixture thread.
     const R::AssistStatus& status() const {
-        return reinterpret_cast<const R::AssistWorker*>(storage_)->status();
+        return object_->status();
     }
 };
 static void configure_runtime(unsigned mode,bool hooks) {

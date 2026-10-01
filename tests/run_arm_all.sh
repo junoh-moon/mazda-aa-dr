@@ -89,7 +89,7 @@ for scenario in startup during query invalid healthy; do
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch tests/runtime/test_loader.cpp -ldl -pthread -o "$build/loader-test"
 qemu-arm -L "$QEMU_SYSROOT" -E "LD_PRELOAD=$preload" "$build/loader-test" "$preload"
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_assist_worker.cpp src/runtime/assist_worker.cpp src/runtime/core_bridge.cpp src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp src/adapter/adapter.cpp "$build/core.o" -pthread -lm -o "$build/assist-worker-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_assist_worker.cpp src/runtime/assist_worker.cpp src/runtime/core_bridge.cpp src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp src/adapter/adapter.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -pthread -ldl -lrt -lm -o "$build/assist-worker-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/assist-worker-test"
 sh tests/adapter/run_arm.sh
 python3 tests/adapter/run_unwind_dso.py --library "$preload" \
