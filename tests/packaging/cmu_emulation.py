@@ -529,7 +529,10 @@ def main():
         trace = [dict(kind='boot', boot_id=current_boot, mono_ns=1000000000, mode=4),
                  dict(kind='shadow_boot', active=True, capture_active=True),
                  dict(kind='health', mono_ns=99000000000, hook_installed=True,
-                      audit_fault=0, dropped=0, capture_active=True),
+                      audit_fault=0, dropped=0, capture_active=True, computation_active=True),
+                 dict(kind='position', mono_ns=99000000000, mode=1),
+                 dict(kind='shadow', mono_ns=99000000000, domain='model', assist_ready=False,
+                      model_valid=False, events=4, result='E_NO_SEED', pipeline='WAITING'),
                  dict(kind='motion_batch', schema=1, epoch=1, events=[
                      [sensor, sensor, 99000000000, 90000, 0, 0, 0, 0, 1, 0] for sensor in (1, 2, 3)])]
         (base / 'logs/trace.0.jsonl').write_text(''.join(json.dumps(row, separators=(',', ':')) + '\n' for row in trace))
