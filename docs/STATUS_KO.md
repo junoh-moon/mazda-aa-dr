@@ -25,6 +25,13 @@ ASSIST는 계속 비활성입니다. 기존 [v0.3.5](../validation/RELEASE_V035_
 비활성 계산 경로에 결함이 있으므로 실차 시험 후보로 선택하지 마십시오.
 아래 이력의 공개 ZIP 미갱신·미구현 설명은 각 검증 당시의 상태입니다.
 
+공개 v0.3.6 이후의 [이전 세대 콜백 경계 보완](../validation/ASSIST_STALE_CALLBACK_2026-10-01.md)은
+폐기된 qualified 계산기의 늦은 GPS 콜백과 새 기준점의 순서 역전을
+구분합니다. 아직 소스 후속 변경이며 공개 ZIP에는 들어 있지 않습니다.
+새 소스의 전체 host Python 375개·C/C++와 고정 ARM 전체는 생략 없이
+통과했습니다. live ASSIST는 계속 비활성이고, 이 수정의 합성 회귀를
+실차 입력·폰 수용 증거로 세지 않습니다.
+
 [평탄화 전 요청·응답 연결](../validation/WIRE_REQUEST_2026-10-01.md)을
 `3812fe6`·`fe052be`에서 구현했습니다. 원본 builder와 pending의 실제 수명 안에서
 raw serial·reply_serial·sender·오류를 제품 token에 연결하며 기존 공개 getter도

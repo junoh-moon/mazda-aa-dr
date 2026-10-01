@@ -21,7 +21,8 @@ ModelProfile research_model_profile() {
 Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     last_yaw_time_(0), interval_seq_(0), position_seq_(0), wheel_conflict_since_(0),
     qualified_anchor_call_sequence_(0), last_qualified_position_call_sequence_(0),
-    qualified_observed_position_call_sequence_(0),
+    qualified_observed_position_call_sequence_(0), qualified_stale_position_cutoff_ns_(0),
+    qualified_stale_position_call_sequence_(0),
     qualified_anchor_paired_(false), position_mode_(-1),
     configured_(false), model_(false), have_fix_(false),
     qualified_retired_(false), retired_from_generation_(0),
@@ -65,6 +66,8 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
     }
     if(!valid_profile)return false;
     model_=true; profile_=p; qualified_retired_=false;retired_from_generation_=0;
+    qualified_stale_position_cutoff_ns_=0;
+    qualified_stale_position_call_sequence_=0;
     qualified_revoker_=0; qualified_revoker_user_=0;
     qualified_owner_=0;
     gyro_bias_.configure(auto_bias,p.yaw_zero,c.sample_age_max_ns);
@@ -98,7 +101,11 @@ bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
     configured_=mx5_dr_init(&core_,&c,x)==MX5_DR_OK;
     if (configured_) reset_state(x);
     else status_.result=PIPELINE_BAD_INPUT;
-    if(!same_source_session)qualified_observed_position_call_sequence_=0;
+    if(!same_source_session) {
+        qualified_observed_position_call_sequence_=0;
+        qualified_stale_position_cutoff_ns_=0;
+        qualified_stale_position_call_sequence_=0;
+    }
     return configured_;
 }
 bool Pipeline::bind_qualified_revoker(QualifiedRevoker revoke,void* user) {
@@ -132,7 +139,11 @@ bool Pipeline::rearm_qualified(const mx5_dr_config& c,mx5_dr_context x) {
         configured_=false;status_.result=PIPELINE_BAD_INPUT;return false;
     }
     reset_state(x);qualified_retired_=false;retired_from_generation_=0;
-    if(!same_source_session)qualified_observed_position_call_sequence_=0;
+    if(!same_source_session) {
+        qualified_observed_position_call_sequence_=0;
+        qualified_stale_position_cutoff_ns_=0;
+        qualified_stale_position_call_sequence_=0;
+    }
     return true;
 }
 void Pipeline::reset_state(mx5_dr_context x) {
@@ -310,12 +321,42 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
 PipelineResult Pipeline::enqueue_position(const adapter::Observation& o) {
     if (o.kind!=adapter::Observation::POSITION) return PIPELINE_BAD_INPUT;
     // The adapter can have captured this callback before an independent
-    // worker fault invalidated its generation. Drop that old observation;
-    // revoking again would chase a backlog of stale callbacks indefinitely.
+    // worker fault invalidated its generation. Ignore it only if the old
+    // calculator has already been retired and no replacement seed is queued.
     if(!model_&&owns_qualified_revoker()&&o.prediction_generation&&
        o.prediction_generation<context().generation) {
-        ++status_.rejected;status_.result=PIPELINE_BAD_INPUT;return PIPELINE_BAD_INPUT;
+        // A callback already consumed by this calculator is a source replay,
+        // not merely delayed work from the retired generation. Discarded
+        // callbacks do not advance this watermark: concurrent old callbacks
+        // can arrive out of order and none can alter the retired calculator.
+        if(!o.call_sequence||!o.mono_ns||
+           o.call_sequence<=qualified_observed_position_call_sequence_)
+            return fault(PIPELINE_BAD_INPUT);
+        // Retain negative evidence even if a live candidate must be faulted:
+        // a direct caller can otherwise re-seed the same source/session using
+        // an earlier anchor after the old callback has been discarded.
+        qualified_stale_position_cutoff_ns_=max64(qualified_stale_position_cutoff_ns_,o.mono_ns);
+        qualified_stale_position_call_sequence_=max64(qualified_stale_position_call_sequence_,
+                                                      o.call_sequence);
+        // Even without a published snapshot, ACTIVE/READY may become eligible
+        // after another sensor interval. A delayed GPS decision cannot be
+        // ignored across that live seed. A queued anchor can revive a retired
+        // calculator before this old callback would otherwise be consumed.
+        if(!qualified_retired_)return fault(PIPELINE_BAD_INPUT);
+        for(size_t j=0;j<size_;++j)
+            if(queue_[j].kind==ANCHOR_EVENT||
+               (queue_[j].kind==POSITION_EVENT&&queue_[j].observation.position.mode!=0))
+                return fault(PIPELINE_BAD_INPUT);
+        // The observer clock is not producer measurement time. These retained
+        // boundaries can veto later input, never qualify a new anchor.
+        ++status_.rejected;status_.result=PIPELINE_STALE_INPUT;return PIPELINE_STALE_INPUT;
     }
+    if(!model_&&owns_qualified_revoker()&&
+       ((qualified_stale_position_cutoff_ns_&&
+         o.mono_ns<=qualified_stale_position_cutoff_ns_)||
+        (qualified_stale_position_call_sequence_&&
+         o.call_sequence<=qualified_stale_position_call_sequence_)))
+        return fault(PIPELINE_BAD_INPUT);
     Event e=Event(); e.kind=POSITION_EVENT; e.time=e.received=o.mono_ns; e.observation=o;
     return insert(e);
 }
@@ -324,8 +365,22 @@ PipelineResult Pipeline::enqueue_anchor(const mx5_dr_anchor& a,uint64_t received
     if (model_) return PIPELINE_BAD_INPUT;
     if(owns_qualified_revoker()&&a.context.generation&&
        a.context.generation<context().generation) {
+        // Direct qualified callers must not keep an ACTIVE or queued seed
+        // after an old anchor is rejected. The worker also treats BAD_INPUT
+        // as fatal, but the Pipeline itself owns publication revocation.
+        if(!qualified_retired_)return fault(PIPELINE_BAD_INPUT);
+        for(size_t j=0;j<size_;++j)
+            if(queue_[j].kind==ANCHOR_EVENT||
+               (queue_[j].kind==POSITION_EVENT&&queue_[j].observation.position.mode!=0))
+                return fault(PIPELINE_BAD_INPUT);
         ++status_.rejected;status_.result=PIPELINE_BAD_INPUT;return PIPELINE_BAD_INPUT;
     }
+    if(owns_qualified_revoker()&&
+       ((qualified_stale_position_cutoff_ns_&&
+         a.measured_ns<=qualified_stale_position_cutoff_ns_)||
+        (qualified_stale_position_call_sequence_&&
+         position_call_sequence<=qualified_stale_position_call_sequence_)))
+        return fault(PIPELINE_BAD_INPUT);
     if(owns_qualified_revoker()&&!position_call_sequence)return fault(PIPELINE_BAD_INPUT);
     if(owns_qualified_revoker()&&
        position_call_sequence<=qualified_observed_position_call_sequence_) {
@@ -833,7 +888,8 @@ runtime::CoreBridgeResult Pipeline::qualified_publication(uint64_t now,
 }
 const char* pipeline_result_name(PipelineResult r) {
     static const char* const names[]={"OK","WAITING","BAD_INPUT","LATE","CLOCK_RESET",
-        "SOURCE_RESET","OVERFLOW","MISSING_SENSOR","CORE_REJECTED","NO_ANCHOR"};
+        "SOURCE_RESET","OVERFLOW","MISSING_SENSOR","CORE_REJECTED","NO_ANCHOR",
+        "STALE_INPUT"};
     return unsigned(r)<sizeof names/sizeof names[0]?names[r]:"UNKNOWN";
 }
 } }
