@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request', 'session', 'bus', 'assist'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'session', 'bus', 'assist', 'runtime-assist'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -140,10 +140,28 @@ def main():
                  'anchor_first_reacquire', 'separate_reacquire', 'native_reacquire', 'quality_reacquire')
         fixture, access = 'assist_publication', 'assist_dso_access.h'
         macro, marker = '-DMX5_ASSIST_DSO_TEST', 'PASS assist publication '
+    elif args.suite == 'runtime-assist':
+        names = {
+            'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
+            'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+            'GENERATION': '_ZN3mx57adapter10generationEv',
+            'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
+            'VEHICLE_SEND': 'mx5_send_vehicle_data', 'DEFAULT_CONFIG': 'mx5_dr_default_config',
+            'ASSIST_CONSTRUCT': '_ZN3mx57runtime12AssistWorkerC1ERK13mx5_dr_configRKNS0_12AssistSourceE',
+            'RUN_WORKER': '_ZN3mx57runtime10run_workerEPKcS2_PNS0_12AssistWorkerE',
+            'RUNTIME_CONFIG': '_ZN12_GLOBAL__N_16configE',
+            'HOOK_INSTALLED': '_ZN12_GLOBAL__N_114hook_installedE',
+            'RUNTIME_SINK': '_ZN12_GLOBAL__N_14sinkEPKN3mx57adapter11ObservationEPv',
+            'AUDIT_FAILURE': '_ZN12_GLOBAL__N_116disable_mutationEv',
+        }
+        cases = ('publication', 'source_fault', 'unqualified', 'recovery', 'audit',
+                 'journal_failure', 'pre_stopped', 'unhooked', 'shadow')
+        fixture, access = 'runtime_assist', 'runtime_assist_dso_access.h'
+        macro, marker = '-DMX5_RUNTIME_ASSIST_DSO_TEST', 'PASS runtime assist '
     offsets = {}
     for label, name in names.items():
         rows = [line.split() for line in symbols.splitlines() if line.split()[-1] == name]
-        require(len(rows) == 1 and rows[0][1] in ('t', 'T', 'b', 'B'), name)
+        require(len(rows) == 1 and rows[0][1] in ('t', 'T', 'b', 'B', 'd', 'D'), name)
         offsets[label] = int(rows[0][0], 16)
     exports = subprocess.check_output([nm, '-D', '--defined-only', str(library)], text=True)
     exported = [line.split()[-1] for line in exports.splitlines()]
@@ -153,7 +171,7 @@ def main():
     (build / 'unwind_offsets.h').write_text(''.join(
         '#define TEST_' + label + ' 0x%xu\n' % offset for label, offset in offsets.items()))
     names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
-    if args.suite not in ('session', 'bus', 'assist'):
+    if args.suite not in ('session', 'bus', 'assist', 'runtime-assist'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
     for root, directories, files in os.walk(repo / 'src'):
@@ -171,7 +189,7 @@ def main():
                '-D_GNU_SOURCE', macro, '-mcpu=cortex-a9', '-mfpu=neon',
                '-mfloat-abi=softfp', '-marm', '-I' + str(build / 'source/src'), '-I' + str(build),
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
-    if args.suite not in ('session', 'bus', 'assist'):
+    if args.suite not in ('session', 'bus', 'assist', 'runtime-assist'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
     command += ['-ldl', '-pthread', '-o', str(executable)]
     subprocess.run(command, check=True)

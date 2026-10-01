@@ -18,6 +18,14 @@
 전체 host/ARM 검사를 통과한 제품과 새 빌드의 동일성, 최종 ZIP의 순정 BusyBox
 설치 검사와 게시 후 다운로드 대조를 기록합니다. live ASSIST는 계속 비활성입니다.
 
+후속 [qualified worker](../src/runtime/assist_worker.h)는 검증된 외부 입력의
+소비·계산·발행·철회를 실제 journal worker에 연결했습니다. 입력 상실 뒤 같은
+계산을 재활용하지 않고 새 기준점을 요구하며, 정상 동시 입력과 새 source/session
+전환은 원본 시각 그대로 처리합니다. host 제어기 12,643개 검사와 실제 worker
+9개 사례를 통과했습니다. 전체 회귀·고정 ARM·순정 공유 runtime 검증은 진행
+중입니다. 물리 센서와 요청별 provenance 공급부는 여전히 미구현이며,
+생산 시작 경로는 null 공급부·ASSIST 설정 거부를 유지합니다. 공개 ZIP은 변경하지 않았습니다.
+
 [후속 ASSIST 송신 기한 구현](../validation/ASSIST_PUBLICATION_2026-10-01.md)은
 `f3556b4`에서 코어의 원본 입력 유효 기간·나이·시간·오차 예산으로 비동기 송신
 가능 기한을 직접 구하도록 했습니다. 대기 중인 GPS/기준점 전환도 반영하며

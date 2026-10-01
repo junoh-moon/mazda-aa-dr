@@ -14,6 +14,8 @@
 #include "request_log.h"
 #include "../adapter/bus_hooks.h"
 #include "worker_tick.h"
+#include "worker.h"
+#include "assist_worker.h"
 #include "journal_queue.h"
 #include "model_session.h"
 #include "model_bus.h"
@@ -491,7 +493,35 @@ void rejected_model_position(Journal& j,const A::Observation& o,const char* reas
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
 }
 
-void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
+void journal_assist(Journal& j,const mx5::runtime::AssistStatus& s,uint64_t now) {
+  const char* const states[]={"waiting_source","waiting_begin","waiting_input","published",
+      "source_fault","input_fault","clock_fault","context_changed","backlog","stopped"};
+  if(unsigned(s.state)>=sizeof states/sizeof states[0]) { j.fail();return; }
+  char line[640];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"assist_worker\",\"mono_ns\":%llu,\"state\":\"%s\","
+      "\"candidate_ready\":%s,\"ticks\":%llu,\"inputs\":%llu,\"begins\":%llu,"
+      "\"publications\":%llu,\"withdrawals\":%llu,\"ignored\":%llu,"
+      "\"pipeline\":\"%s\",\"bridge_result\":%u,"
+      "\"last_frontier_ns\":%llu,\"last_valid_until_ns\":%llu}",
+      (unsigned long long)now,states[unsigned(s.state)],s.state==mx5::runtime::ASSIST_PUBLISHED?"true":"false",
+      (unsigned long long)s.ticks,(unsigned long long)s.inputs,(unsigned long long)s.begins,
+      (unsigned long long)s.published,(unsigned long long)s.withdrawn,(unsigned long long)s.ignored,
+      N::pipeline_result_name(s.pipeline_result),unsigned(s.bridge_result),
+      (unsigned long long)s.last_publication.frontier_mono_ns,
+      (unsigned long long)s.last_publication.valid_until_mono_ns);
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+
+} // namespace
+
+namespace mx5 { namespace runtime {
+void* run_worker(const char* root,const char* motion_channel,AssistWorker* assist) {
+  // Stop on every exit, including startup failures before the main loop.
+  struct StopAssist {
+    AssistWorker* worker;
+    ~StopAssist() { if(worker)worker->stop(); }
+  } stop_assist={assist};
   // An explicit stop survives same-boot service restarts. Do not rotate or
   // append even a boot record after an acknowledged capture was closed.
   if(stop_requested(root)) { freeze_capture();return 0; }
@@ -553,6 +583,8 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
   uint64_t last_shadow_log=0;
   uint64_t last_calibration_log=0;
   uint64_t last_stop_check=0;
+  uint64_t last_assist_log=0;
+  AssistState last_assist_state=ASSIST_WAITING_SOURCE;
   uint64_t drain_calls=0;
   mx5::runtime::WorkerTick model_tick;
   for (;;) {
@@ -562,6 +594,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
       last_stop_check=cutoff;
       stopping=stop_requested(root);
       if(stopping) {
+        if(assist)assist->stop();
         freeze_capture();
         if(shadow) {
           navigation.reset(navigation.context());
@@ -606,7 +639,10 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
         shadow && model_session.available() && model_bus.available(),
         bus_boundary?model_bus.since_ns():model_session.since_ns(),bus_boundary);
     if(stopping) {
-      if(drain_capture_tail(j))finish_capture(j,boot_id,cutoff,clock_ns(0));
+      if(drain_capture_tail(j)) {
+        if(assist)journal_assist(j,assist->status(),clock_ns(0));
+        finish_capture(j,boot_id,cutoff,clock_ns(0));
+      }
       return 0; // Even failed finalization cannot reopen this capture.
     }
     now=clock_ns(0);
@@ -674,6 +710,22 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
       journal_health(j,now,capture&&!j.failed,shadow && model_session.available() && model_bus.available());
       j.flush();
     }
+    // The live qualified source remains unimplemented. A future verified
+    // backend uses this same worker, after raw capture and journal checks.
+    // The controller never enables adapter mutation or supplies provenance.
+    if(assist) {
+      if(config.mode==3 && hook_installed && !j.failed &&
+         !__sync_fetch_and_add(&audit_fault,0))assist->tick(clock_ns,0);
+      else assist->stop();
+      const AssistStatus& status=assist->status();
+      now=clock_ns(0);
+      if(!last_assist_log || status.state!=last_assist_state ||
+         (now>=last_assist_log && now-last_assist_log>=1000000000ULL)) {
+        last_assist_log=now;last_assist_state=status.state;
+        journal_assist(j,status,now);
+      }
+      if(j.failed || __sync_fetch_and_add(&audit_fault,0))assist->stop();
+    }
     // The stock unconnected Unix-datagram queue is small. Wake on motion
     // arrival instead of accumulating bursts across an unconditional sleep.
     // Keep MODEL computation on its 50 ms deadline even during frequent input.
@@ -685,6 +737,14 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
     nanosleep(&pause, 0);
   }
   return 0;
+}
+} }
+
+namespace {
+void* worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
+  // TODO: connect the physically verified sensor and per-request provider
+  // backend. Never substitute the MODEL source or observed receipt clock.
+  return mx5::runtime::run_worker(root,motion_channel,0);
 }
 void* worker(void*) { return worker_at(ROOT); }
 
