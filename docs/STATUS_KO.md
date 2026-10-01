@@ -99,6 +99,14 @@ provenance도 바꾸지 않습니다. live ASSIST와 v1.0은 계속 미완료입
 부분 초기화 조건을 보존합니다. 제품 preload·AA worker 결합과 물리 입력
 자격은 이 실행에 포함하지 않았습니다.
 
+[제품과 결합한 원본 reader 실행](../validation/LDS_DRIVER_PRODUCT_2026-10-02.md)은
+`0f9ffdd`의 실제 제품에서 LDS parser·callback 직접 호출 없이 원본 질의 9건을
+AA worker까지 연결하고 숫자 81개를 대조했습니다. 작성한 부분 기동과
+WorkerScope이며 실제 AA 송신·물리 입력 자격은 남습니다. 같은 pin의
+[기동 진단 병합 검사](../validation/GUARDED_SOURCE_MERGE_2026-10-02.md)는
+새 host Python 577개·C/C++, 변경 guard의 ARM 36개 및 로컬 ZIP의 순정
+BusyBox 설치·회수 경로를 구분하여 기록합니다. 새 공개 릴리즈는 아닙니다.
+
 [현재 callback의 요청 문맥 전달](../validation/PROVENANCE_CONTEXT_2026-10-02.md)은
 one-shot으로 확보한 Trace·호출·세대를 inline 출처 검증 함수에 직접 넘깁니다.
 새 host·ARM 일곱 회귀와 기존 host 집중 검사를 통과했습니다. 물리 자격
