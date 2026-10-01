@@ -16,20 +16,31 @@ guard 소비는 판정되지 않았고 센서·SHADOW·폰 수용도 미판정�
 출발 전 주차 중 `one_boot=consumed_this_boot`, 현재 collector 기록과 최근
 poll을 확인하십시오. ASSIST는 계속 비활성입니다.
 
-**2026-10-01 사용자 변경 지시: v1.0 전에 실차 설치·시험 기회를 한 번 허용했습니다.**
-이전 펌웨어 파일만 사용하는 제한을 해당 통합 시험에 한해 갱신합니다.
-가능한 구현·원본 런타임·오프라인 검증을 먼저 끝내고, 주차 중 기동·복구 확인과
-자동 원본 관측·원시 센서·SHADOW/GPS 제외 비교·회수를 한 번에 준비합니다.
-반복 방문이나 폰/동글 탁상 시험의 추가 승인이 아닙니다. 설치 성공만으로
+**2026-10-01 허용된 한 번의 실차 설치·시험 기회는 위 첫 시도에 사용됐습니다.**
+이전 펌웨어 파일만 사용하는 제한은 그 통합 시험에 한해 갱신됐습니다.
+추가 방문을 요청하지 않고 가능한 원본 런타임·오프라인 검증을 먼저 진행합니다.
+별도 기회가 정해진다면 주차 중 기동·복구 확인과 자동 원본 관측·원시 센서·
+SHADOW/GPS 제외 비교·회수를 한 번에 준비해야 합니다. 설치 성공만으로
 측정 준비를 판정하지 않으며 저장 공간과 실제 계산 시도·중단 사유를 확인합니다.
 실차 센서·폰 수용·물리 복구는 아직 미검증이고 제품 ASSIST는 미완료입니다.
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.10-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)입니다.
+현재 공개 시험판은 [v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)입니다.
+고정 소스 `be96c6de6619d8e9053a327fd16e9df718384ca4`의 설치 ZIP·
+체크섬을 게시한 뒤 다시 내려받아 바이트·SHA·CRC·내부 source pin을
+대조했습니다. [새 발행 검증](../validation/RELEASE_V0310_SHADOW2_2026-10-02.md)은
+host Python 576개·C/C++, 고정 ARM Python 105개·실제 제품 DSO 145개·
+원본 LDS 설치기 71개와 최종 ZIP 순정 BusyBox 검사를 구분합니다.
+같은 부팅의 가드 선택 거부, 새 부팅의 소비 표식, 소비한 설정 해시와 현재
+설정의 일치를 진단합니다. 표식은 SM 경로 수신이나 AA 기동의 증명이
+아닙니다. 물리 CMU·센서·폰 시험은 새로 수행하지 않았고 ASSIST는
+계속 비활성입니다.
+
+이전 공개판은 [v0.3.10-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)입니다.
 고정 소스 `50ba484133b0e52739e5af35f7dcc993d5a3f850`를 master에 반영하고
 설치 ZIP·체크섬을 발행한 뒤 공개 파일을 다시 받아 대조했습니다.
-[새 발행 검증](../validation/RELEASE_V0310_2026-10-02.md)에 새 host Python
+[이전 발행 검증](../validation/RELEASE_V0310_2026-10-02.md)에 당시 host Python
 533개·C/C++, 전체 ARM과 실제 AA DSO 145개·원본 설치기 71개,
 최종 ZIP의 순정 BusyBox 네 검사를 생략 없이 기록합니다.
 LDS 전용 제품을 자동 설치하여 callback·캐시 할당 출처와 응답 식별자를
@@ -62,7 +73,7 @@ host 회수 시험의 20초 초과는 원인 미확정으로 보존하며 동일
 대조했습니다. 작성한 AA 시작·WorkerScope이며 정상 전체 기동·폰 송신은
 포함하지 않습니다. 전체 분석은 `inconclusive`를 유지했습니다.
 새 코드는 공개 v0.3.10-shadow.1에 포함됐으며 과거 `.3` ZIP은 변경하지
-않았습니다. 후속 `v0.3.10-shadow.2` 후보는 재부팅 뒤 가드 선택·설정·collector의
+않았습니다. 공개 `v0.3.10-shadow.2` 시험판은 재부팅 뒤 가드 표식·설정·collector의
 일곱 진단을 추가합니다. 공개 `v0.3.10-shadow.1`에는 `startup_state`,
 `config_mode`, `runtime_disable_next_start` 출력이 없습니다. 이 진단만으로
 LDS 실제 수신이나 물리 자격을 증명할 수 없습니다. live ASSIST는 비활성입니다.

@@ -15,12 +15,13 @@ See [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate remov
 
 [한국어](README_KO.md) · [Current status / handoff](docs/STATUS_KO.md) · [Review corrections](docs/REVIEW_2026-09-28_KO.md)
 
-The published [v0.3.10-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)
-adds an installed LDS observer that carries callback/cache assignment lineage and
-response identity into the bounded AA journal. Original-library execution reached
+The published [v0.3.10-shadow.2 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)
+adds guarded startup and config-binding diagnostics to the LDS observer. The
+observer carries callback/cache assignment lineage and response identity into
+the bounded AA journal. Original-library execution reached
 the actual AA worker and matched nine responses, with authored startup boundaries.
 See the [product execution](validation/LDS_PRODUCT_RUNTIME_2026-10-02.md) and
-[release verification](validation/RELEASE_V0310_2026-10-02.md).
+[release verification](validation/RELEASE_V0310_SHADOW2_2026-10-02.md).
 It retains the explicit CMU reboot request, before/after boot-ID checks and whole-installation
 startup diagnostics exported to USB. Its instructions distinguish ACC, engine-off
 ON and a running engine.
@@ -68,9 +69,10 @@ After the CMU returns, reopen the USB shell. Before moving, use menu `2` to chec
 `startup_state=guard_committed_after_new_boot`,
 `one_boot=consumed_this_boot`, `config_mode=SHADOW`,
 `runtime_disable_next_start=absent`, nonzero `retained_bytes`, and
-`collector_poll_recent=observed`. These seven checks apply to the subsequent
-v0.3.10-shadow.2 candidate; the published shadow.1 package lacks `startup_state`,
-`config_mode`, and `runtime_disable_next_start`.
+`collector_poll_recent=observed`. These seven checks apply to the published
+v0.3.10-shadow.2 trial candidate; shadow.1 lacks `startup_state`,
+`config_mode`, and `runtime_disable_next_start`. A positive guard marker does
+not prove that SM received the trial path or that AA started.
 If `startup_state=new_linux_boot_arm_unconsumed` or the collector poll is
 missing immediately after the screen returns, wait 60 seconds while parked
 and run `2` once more. If any of the seven checks is still absent, export

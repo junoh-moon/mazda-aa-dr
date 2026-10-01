@@ -13,12 +13,12 @@
 
 [과거 첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
-현재 공개판은 [v0.3.10-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)입니다.
+현재 공개 시험판은 [v0.3.10-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)입니다.
 원본 LDS callback·캐시의 필드 할당 출처와 응답 식별자를 관측하는 제품을
 자동 설치하고 기존 용량 제한 AA 기록에 연결합니다. 작성한 기동 경계에서
 원본 라이브러리의 응답 9건이 실제 AA worker까지 전달된
 [제품 실행](validation/LDS_PRODUCT_RUNTIME_2026-10-02.md)과
-[발행 검증](validation/RELEASE_V0310_2026-10-02.md)을 확인하십시오.
+[발행 검증](validation/RELEASE_V0310_SHADOW2_2026-10-02.md)을 확인하십시오.
 순정 CMU 재부팅 요청·전후 boot ID 대조·전체 설치 폴더 진단의 USB 회수와
 ACC·엔진이 꺼진 ON·실제 엔진 가동을 구분한 절차도 유지합니다.
 원본 AA 연결 등록에서 서버 주소 GUID와 client 고유 이름을 소유 복사하고,
@@ -60,8 +60,8 @@ sh /tmp/mnt/sda1/trial
 화면 복귀 후 USB·셸로 돌아와 `2`에서 새 boot ID,
 `startup_state=guard_committed_after_new_boot`, 현재 부팅의 가드 소비와
 `config_mode=SHADOW`, `runtime_disable_next_start=absent`, 전체 보존 파일의
-바이트 수와 현재 collector의 최근 poll을 확인하십시오. 이 일곱 근거는 후속
-`v0.3.10-shadow.2` 후보에 해당하며 공개 `v0.3.10-shadow.1`에는 `startup_state`, `config_mode`,
+바이트 수와 현재 collector의 최근 poll을 확인하십시오. 이 일곱 근거는 공개
+`v0.3.10-shadow.2` 시험판에 해당하며 이전 `v0.3.10-shadow.1`에는 `startup_state`, `config_mode`,
 `runtime_disable_next_start` 출력이 없습니다. 새 부팅 직후 가드 예약이 남아 있거나
 collector poll이 아직 없으면 주차 상태에서 60초 기다린 뒤 `2`를 한 번만 다시
 확인하십시오. 여전히 일곱 근거가 모이지 않으면 `3`으로 회수하고 `4`로 예약을
