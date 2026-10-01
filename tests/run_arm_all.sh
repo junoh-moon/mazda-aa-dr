@@ -117,6 +117,8 @@ python3 tests/adapter/run_unwind_dso.py --library "$preload" \
 qemu-arm -L "$QEMU_SYSROOT" "$build/navigation-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp -o "$build/vim-parser-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/vim-parser-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_lds_lineage.cpp src/sensors/lds_lineage.cpp -o "$build/lds-lineage-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/lds-lineage-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/sha256.cpp src/runtime/config.cpp -ldl -pthread -lrt -o "$build/vim-tap-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/vim-tap-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -DMX5DR_CHANNEL_RECVMSG_WRAP -Wl,--wrap=recvmsg -Isrc tests/navigation/test_channel.cpp src/navigation/channel.cpp -pthread -lrt -o "$build/motion-channel-test"

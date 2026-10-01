@@ -160,9 +160,12 @@ endif
 $(BUILD)/test_channel: tests/navigation/test_channel.cpp tests/navigation/receive_clock_fixture.h src/navigation/channel.cpp $(NAV_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(CHANNEL_TEST_FLAGS) $(filter %.cpp,$^) -pthread -o $@
 
-test-sensors: $(BUILD)/test_vim_source $(BUILD)/test_vim_tap
+test-sensors: $(BUILD)/test_vim_source $(BUILD)/test_vim_tap $(BUILD)/test_lds_lineage
 	$(BUILD)/test_vim_source
 	$(BUILD)/test_vim_tap
+	$(BUILD)/test_lds_lineage
+$(BUILD)/test_lds_lineage: tests/sensors/test_lds_lineage.cpp src/sensors/lds_lineage.cpp src/sensors/lds_lineage.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -o $@
 $(BUILD)/test_vim_source: tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $^ -o $@
 
