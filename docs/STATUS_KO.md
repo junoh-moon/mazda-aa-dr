@@ -48,6 +48,12 @@
 새 ARM 빌드·로컬 SHADOW ZIP에서 host Python 401개·C/C++와 고정 ARM 전체를
 생략 없이 통과했습니다. 공개 v0.3.8 ZIP은 그대로이며 이 후속 수정은
 아직 공개되지 않았습니다.
+[같은 로컬 ZIP의 원본 userspace VM 관측](../validation/INTEGRATED_VM_2026-10-01.md)은
+진단용 PID 1에서 `sh install.sh`·일회성 guard·collector·원본
+VBS/AA/LDS/navi 기동과 LDS 위치 질의 응답을 확인했습니다. GPS/CAN·live
+AA session이 없어 위치 poll 22건은 모두 mode 0, 완전 LOCATION payload는
+0건입니다. 분석은 종료 2·`inconclusive`이고 runner는 240초 제한
+`observation_only`입니다. 정상 전체 차량 기동·실차·폰 자격을 추가하지 않습니다.
 
 [원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
 실제 NMEA parser→callback→잠금 cache 쓰기→원본 service snapshot→serializer와
