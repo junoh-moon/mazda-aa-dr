@@ -259,7 +259,7 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
 | 깨끗한 USB에 압축 해제 후 `sh install.sh` | MP3/JS·정적 해시 도구 포함. 실제 ARM BusyBox/libc에서 최종 ZIP 설치·제거·재설치 성공 | 실제 CMU 미디어의 MP3→shell 동작, 실제 저장소의 remount·내구성은 미검증 |
 | 정확한 펌웨어·계정·경로 | 네 원본 identity 유지. `cmu=0`, `service=1001`, 순정 저장소 symlink 반영 | 다른 펌웨어에 일반화하지 않음. 현장 설치 정보와 대조 필요 |
 | OEM 호출 계약·터치 공존 | ARM veneer/encoder 합성 시험. 순정 커널에서 AA 후크와 터치 DSO 동시 로드. 원본 manager의 자동 LDS→native send와 OBSERVE/SCRUB 실행 | 정상 폰 연결 상태의 AA 송신·터치 입력, 수명·동시성·지연 장애의 전 범위 미검증 |
-| 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. 원본 VBS callback과 AA 수신을 합성 입력으로 실행. journal·종료·회수 회귀 | 물리 센서 callback과 주행 전체의 누락·부하·로그 보관량 미검증 |
+| 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. 원본 VBS callback과 AA 수신을 합성 입력으로 실행. journal·종료·회수 회귀와 [주차 중 수집/계산 분리 진단](../validation/TRIAL_STATUS_REVIEW_2026-10-01.md) | 물리 센서 callback과 주행 전체의 누락·부하·로그 보관량 미검증. 상태 명령의 종료 코드 0은 항법 계산·폰 수용이 아님 |
 | 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험. VIP 요레이트 생산자의 선택 경로 해석 실행과 MODEL 합계 넘침 거부 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음. count 넘침과 손실 창도 식별 불가 |
 | 적분 시간·신선도 | receipt와 producer 시각 분리, MODEL이 qualified로 승격되지 않는 검사 | 현재 IPC payload에는 생산자 시각/순번이 없음. 검증된 지연 상한 등 대체 근거도 없음 |
 | 위치 계산·재획득 | 코어·정차 보정·GPS holdout·wheel 보정 합성 시험 | 실제 경로·독립 기준 위치 비교 없음. GPS holdout 차이를 ground truth로 세지 않음 |

@@ -550,6 +550,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
   uint64_t last_shadow_log=0;
   uint64_t last_calibration_log=0;
   uint64_t last_stop_check=0;
+  uint64_t drain_calls=0;
   mx5::runtime::WorkerTick model_tick;
   for (;;) {
     const uint64_t cutoff=clock_ns(0);
@@ -611,6 +612,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
         if(now>navigation.reorder_ns()) {
           const uint64_t resets=navigation.status().resets,watermark=now-navigation.reorder_ns();
           navigation.drain(watermark);
+          if(drain_calls!=UINT64_MAX)++drain_calls;
           journal_pipeline_reset(j,navigation,resets,"drain",watermark);
         }
         if(now>navigation.reorder_ns())holdout.drain(now-navigation.reorder_ns());
@@ -643,6 +645,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
               "\"model_valid\":%s,\"assist_ready\":false,\"state\":%u,"
               "\"result\":\"%s\",\"pipeline\":\"%s\",\"uncertainties\":%u,"
               "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
+              "\"drain_calls_total\":%llu,"
               "\"frontier_ns\":%llu,\"lat\":%s,\"lon\":%s,\"heading_rad\":%s,"
               "\"speed_mps\":%s,\"error_model_m\":%s,\"stopped\":%s,"
               "\"yaw_zero\":%.17g,\"calibration_version\":%llu,\"wheel_scale\":%.17g,"
@@ -654,6 +657,7 @@ void *worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
               mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
               (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
               (unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
+              (unsigned long long)drain_calls,
               (unsigned long long)d.snapshot.frontier_ns,lat,lon,heading,speed,error,
               d.snapshot.stopped?"true":"false",navigation.calibration().active_zero,
               (unsigned long long)navigation.calibration().calibration_version,
