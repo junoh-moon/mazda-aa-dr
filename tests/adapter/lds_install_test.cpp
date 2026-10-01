@@ -218,7 +218,7 @@ static void occupy_bus_preparation(const Fixture& f) {
     b.endpoint.get_unique_name=reinterpret_cast<decltype(b.endpoint.get_unique_name)>(f.bases[5]+0x90a8);
     b.endpoint.free_guid=reinterpret_cast<decltype(b.endpoint.free_guid)>(f.bases[5]+0x2021c);
     b.endpoint.register_caller=f.bases[3]+0x6b58;
-    require(A::prepare_bus_hooks(b),"existing immutable bus bindings prepared with original targets");
+    require(A::prepare_bus_hooks(b,0),"existing immutable bus bindings prepared with original targets");
 }
 
 static uintptr_t replacement(unsigned i) {

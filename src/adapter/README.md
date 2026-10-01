@@ -136,7 +136,8 @@ before a cold data-only transaction. It keeps original code and the descriptor
 unchanged, retains prepared original targets until exit and forwards unchanged
 when observational metadata is unavailable. This DSO contains no AA worker or
 position veneer. `arm_entry.cpp` keeps the AA-specific entry in the AA product;
-shared adapter invalidation is the real implementation in both products.
+AA prediction invalidation remains in the AA product; the LDS bus wrapper
+tracks connection lifetimes without AA prediction state.
 
 Callback assignment lineage and the exact D-Bus response identity travel over a
 nonblocking sideband to the existing bounded AA journal. They describe observed

@@ -1,4 +1,5 @@
 #include "adapter.h"
+#include "bus_hooks.h"
 #include <atomic>
 #include <cerrno>
 #include <cmath>
@@ -106,6 +107,9 @@ bool configure(SendFunction next, const Options& opt) {
     if (opt.allow_assist && (!opt.clock || !opt.provenance || !opt.max_snapshot_age_ns))
         return false;
     next_send = next; options = opt; configured = true; return true;
+}
+bool prepare_bus_hooks(const BusBindings& bindings) {
+    return prepare_bus_hooks(bindings,&invalidate);
 }
 bool set_mode(Mode requested) {
     if (requested < OFF || requested > ASSIST ||

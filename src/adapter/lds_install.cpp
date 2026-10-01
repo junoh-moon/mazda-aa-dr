@@ -277,7 +277,9 @@ bool prepare(void* user) {
     Setup& s=*static_cast<Setup*>(user);
     // Even a partly prepared binding object must keep all its original targets.
     s.retained->keep=true;
-    return A::prepare_bus_hooks(s.bus) && A::prepare_lds_hooks(s.lds);
+    // This DSO runs only inside LDS. No AA prediction state exists here to
+    // revoke; bus_hooks retains its own connection/version invalidation.
+    return A::prepare_bus_hooks(s.bus,0) && A::prepare_lds_hooks(s.lds);
 }
 bool installed;
 }

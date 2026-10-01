@@ -20,6 +20,10 @@ TARGET = 'arm-cortexa9_neon-linux-gnueabi'
 ARTIFACTS = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so', 'mx5dr-collector',
              'mx5dr-guard', 'mx5dr-sha256')
 RECORD = 'arm-build.json'
+# Regression guard for the LDS DSO's own static TLS, including worst-case
+# alignment padding. The published 7,288-byte image repeatedly crashed in a
+# partial OEM SM QEMU run; this cap does not prove total process stack headroom.
+LDS_TLS_REGRESSION_LIMIT = 512
 
 
 def digest(path):
@@ -89,10 +93,15 @@ def check_elf(path):
     load_segments = 0
     for index in range(phcount):
         segment = struct.unpack_from('<IIIIIIII', data, phoff + index * phsize)
-        kind, offset, _, _, filesz, memsz, _, _ = segment
-        if offset + filesz > len(data) or (kind == 1 and filesz > memsz):
+        kind, offset, _, _, filesz, memsz, _, align = segment
+        if offset + filesz > len(data) or (kind in (1, 7) and filesz > memsz):
             raise ValueError('Truncated ELF segment: ' + path.name)
         load_segments += kind == 1
+        if path.name == 'libmx5dr-ldstap.so' and kind == 7:
+            if align > 1 and align & (align - 1):
+                raise ValueError('Invalid LDS TLS alignment: ' + path.name)
+            if memsz + max(align - 1, 0) > LDS_TLS_REGRESSION_LIMIT:
+                raise ValueError('LDS thread-local storage exceeds regression limit: ' + path.name)
         if path.name == 'mx5dr-sha256' and kind in (2, 3):
             raise ValueError('Hash helper is not statically linked')
     if not load_segments:

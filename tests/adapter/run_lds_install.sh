@@ -45,7 +45,7 @@ original_hashes() {
 source_hashes() {
     sha256sum tests/adapter/run_lds_install.sh tests/adapter/lds_install_test.cpp \
         src/adapter/lds_install.cpp src/adapter/lds_hooks.cpp src/adapter/bus_hooks.cpp \
-        src/adapter/adapter.cpp src/sensors/lds_lineage.cpp src/runtime/lds_sideband.cpp \
+        src/sensors/lds_lineage.cpp src/runtime/lds_sideband.cpp \
         src/runtime/request_trace.cpp src/runtime/sha256.cpp \
         src/adapter/*.h src/runtime/*.h src/sensors/*.h
 }
@@ -91,8 +91,8 @@ trap finish 0
 "$qemu" --version > "$output/qemu.txt"
 printf 'stock=%s\ncompiler_sysroot=%s\n' "$stock" "$QEMU_SYSROOT" > "$output/paths.txt"
 
-# The real adapter state supplies bus invalidation. Its AA-only ARM entry is a
-# separate translation unit and is intentionally absent from this LDS fixture.
+# LDS has no AA prediction state; its bus wrapper still tracks connection
+# transitions without linking the AA adapter's large per-thread TLS frames.
 # No --gc-sections or function/data sections are needed with the pinned linker.
 # Only failure injection wraps mprotect; normal calls use the real syscall.
 if ! run_logged build "${CROSS_COMPILE}g++" --sysroot="$QEMU_SYSROOT" \
@@ -102,7 +102,7 @@ if ! run_logged build "${CROSS_COMPILE}g++" --sysroot="$QEMU_SYSROOT" \
     tests/adapter/lds_install_test.cpp src/adapter/lds_install.cpp \
     src/adapter/lds_hooks.cpp src/sensors/lds_lineage.cpp \
     src/runtime/lds_sideband.cpp src/adapter/bus_hooks.cpp \
-    src/adapter/adapter.cpp src/runtime/request_trace.cpp src/runtime/sha256.cpp \
+    src/runtime/request_trace.cpp src/runtime/sha256.cpp \
     -Wl,--wrap=mprotect -ldl -pthread -lrt -lm -o "$output/lds-install-test"; then
     echo "ERROR: LDS fixture build failed; see $output/build.log" >&2
     exit 1
