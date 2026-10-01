@@ -123,8 +123,12 @@ test-tools:
 	$(PYTHON) -m unittest discover -s tests/tools -v
 test-build-deps:
 	$(PYTHON) -m unittest discover -s tests/build -v
-test-integration: $(BUILD)/test_pipeline
+test-integration: $(BUILD)/test_pipeline $(BUILD)/test_assist_publication
 	$(BUILD)/test_pipeline
+	@set -e; for scenario in straight quality_gap quality_cycle turn reverse expiry reacquire native_return stale_control unverified; do $(BUILD)/test_assist_publication $$scenario; done
+
+$(BUILD)/test_assist_publication: tests/adapter/assist_publication_test.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp src/runtime/core_bridge.h $(ADAPTER) src/adapter/adapter.h $(BUILD)/core_host.o
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -pthread -lm -o $@
 $(BUILD)/core_host.o: $(CORE) src/core/dr_core.h | $(BUILD)
 	$(CC) $(C_WARN) -c $(CORE) -o $@
 $(BUILD)/test_pipeline: $(BUILD)/core_host.o src/runtime/core_bridge.cpp tests/integration/test_pipeline.cpp $(ADAPTER)

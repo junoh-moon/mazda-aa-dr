@@ -215,10 +215,21 @@ PipelineResult Pipeline::enqueue_reverse(const mx5_dr_evidence& v,int reverse) {
     Event e=Event(); e.kind=REVERSE_EVENT; e.time=v.measured_ns; e.received=v.received_ns;
     e.evidence=v; e.value=reverse; return insert(e);
 }
-PipelineResult Pipeline::control(mx5_dr_control_kind kind) {
+PipelineResult Pipeline::control(mx5_dr_control_kind kind,uint64_t observed_generation) {
     mx5_dr_context x=context();
     if (x.generation==UINT64_MAX || position_seq_==UINT64_MAX) return fault(PIPELINE_BAD_INPUT);
-    ++x.generation; ++position_seq_;
+    if (!model_&&observed_generation) {
+        // The adapter revokes on every raw mode transition, including GPS
+        // quality changes which leave this calculator READY. Its captured
+        // generation may therefore advance by more than our control count.
+        if(observed_generation<=x.generation)return fault(PIPELINE_BAD_INPUT);
+        x.generation=observed_generation;
+    } else {
+        // MODEL identity (and the original untagged normalized test API) is
+        // local. An adapter observation never qualifies a MODEL estimate.
+        ++x.generation;
+    }
+    ++position_seq_;
     status_.core_result=mx5_dr_control(&core_,kind,x,position_seq_);
     clear_history();
     return status_.core_result==MX5_DR_OK?PIPELINE_OK:PIPELINE_NO_ANCHOR;
@@ -293,14 +304,14 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
         gps_wheel_.unavailable(); have_fix_=false;
         if (position_mode_!=3) {
             const uint64_t faults=status_.resets;
-            const PipelineResult r=control(MX5_DR_NATIVE_POSITION);
+            const PipelineResult r=control(MX5_DR_NATIVE_POSITION,o.prediction_generation);
             if (status_.resets!=faults) return r;
         }
         position_mode_=3; return PIPELINE_OK;
     }
     if (mode==0) {
         gps_wheel_.unavailable();
-        if (position_mode_!=0) { position_mode_=0; return control(MX5_DR_GAP); }
+        if (position_mode_!=0) { position_mode_=0; return control(MX5_DR_GAP,o.prediction_generation); }
         return PIPELINE_OK;
     }
     // Select the samples for this GPS decision before GPS_RETURN discards the
@@ -322,7 +333,7 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     }
     if (position_mode_==0||position_mode_==3) {
         const uint64_t faults=status_.resets;
-        const PipelineResult r=control(MX5_DR_GPS_RETURN);
+        const PipelineResult r=control(MX5_DR_GPS_RETURN,o.prediction_generation);
         if (status_.resets!=faults) return r;
         have_fix_=false; gps_wheel_.unavailable();
     }
@@ -475,7 +486,12 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
                 }
             }
             if (revoke) {
-                control(MX5_DR_DISABLE);
+                // Qualified anchors/controls below already revoke explicitly.
+                // An extra local DISABLE would consume their generation before
+                // the captured adapter transition can be applied. No snapshot
+                // escapes this single-owner drain; pending controls also suppress
+                // diagnostic/publication before it runs. Keep MODEL semantics.
+                if(model_)control(MX5_DR_DISABLE);
                 if (status_.resets!=faults) return status_.result;
                 have_fix_=false;
             }

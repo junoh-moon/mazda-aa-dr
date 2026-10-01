@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise authored exceptions across the unmodified production ARM DSO.
+"""Exercise authored calls across the unmodified production ARM DSO.
 
 No OEM code is loaded. The caller must verify the build/toolchain inputs (as
 run_arm_all.sh does). This additionally checks that archive exception/runtime
@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request', 'session', 'bus'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'session', 'bus', 'assist'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -116,6 +116,29 @@ def main():
                  'prediction_exit_free', 'prediction_exit_closed', 'prediction_exit_signal')
         fixture, access = 'bus_hooks', 'bus_dso_access.h'
         macro, marker = '-DMX5_BUS_DSO_TEST', 'PASS bus connection '
+    elif args.suite == 'assist':
+        names = {
+            'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
+            'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+            'GENERATION': '_ZN3mx57adapter10generationEv',
+            'PUBLISH': '_ZN3mx57adapter16publish_snapshotERKNS0_10DrSnapshotE',
+            'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
+            'VEHICLE_SEND': 'mx5_send_vehicle_data', 'DEFAULT_CONFIG': 'mx5_dr_default_config',
+            'PIPELINE_CONSTRUCT': '_ZN3mx510navigation8PipelineC1Ev',
+            'PIPELINE_INIT': '_ZN3mx510navigation8Pipeline14init_qualifiedERK13mx5_dr_config14mx5_dr_context',
+            'PIPELINE_ANCHOR': '_ZN3mx510navigation8Pipeline14enqueue_anchorERK13mx5_dr_anchory',
+            'PIPELINE_POSITION': '_ZN3mx510navigation8Pipeline16enqueue_positionERKNS_7adapter11ObservationE',
+            'PIPELINE_SPEED': '_ZN3mx510navigation8Pipeline13enqueue_speedERK15mx5_dr_evidenced',
+            'PIPELINE_REVERSE': '_ZN3mx510navigation8Pipeline15enqueue_reverseERK15mx5_dr_evidencei',
+            'PIPELINE_YAW': '_ZN3mx510navigation8Pipeline11enqueue_yawERK15mx5_dr_evidencedttyy',
+            'PIPELINE_DRAIN': '_ZN3mx510navigation8Pipeline5drainEy',
+            'PIPELINE_DIAGNOSTIC': '_ZNK3mx510navigation8Pipeline10diagnosticEy',
+            'PIPELINE_PUBLICATION': '_ZNK3mx510navigation8Pipeline21qualified_publicationEyRKNS_7runtime23CoreBridgeQualificationEyPNS_7adapter10DrSnapshotE',
+        }
+        cases = ('straight', 'quality_gap', 'quality_cycle', 'turn', 'reverse', 'expiry', 'reacquire',
+                 'native_return', 'stale_control', 'unverified')
+        fixture, access = 'assist_publication', 'assist_dso_access.h'
+        macro, marker = '-DMX5_ASSIST_DSO_TEST', 'PASS assist publication '
     offsets = {}
     for label, name in names.items():
         rows = [line.split() for line in symbols.splitlines() if line.split()[-1] == name]
@@ -129,7 +152,7 @@ def main():
     (build / 'unwind_offsets.h').write_text(''.join(
         '#define TEST_' + label + ' 0x%xu\n' % offset for label, offset in offsets.items()))
     names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
-    if args.suite not in ('session', 'bus'):
+    if args.suite not in ('session', 'bus', 'assist'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
     for root, directories, files in os.walk(repo / 'src'):
@@ -147,7 +170,7 @@ def main():
                '-D_GNU_SOURCE', macro, '-mcpu=cortex-a9', '-mfpu=neon',
                '-mfloat-abi=softfp', '-marm', '-I' + str(build / 'source/src'), '-I' + str(build),
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
-    if args.suite not in ('session', 'bus'):
+    if args.suite not in ('session', 'bus', 'assist'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
     command += ['-ldl', '-pthread', '-o', str(executable)]
     subprocess.run(command, check=True)

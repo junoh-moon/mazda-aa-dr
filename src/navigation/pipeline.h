@@ -130,7 +130,7 @@ private:
     PipelineResult fault(PipelineResult);
     PipelineResult advance(uint64_t);
     PipelineResult apply_position(const adapter::Observation&);
-    PipelineResult control(mx5_dr_control_kind);
+    PipelineResult control(mx5_dr_control_kind, uint64_t observed_generation=0);
     bool valid_gps_position(const adapter::Observation&) const;
     bool good_fix(const adapter::Observation&) const;
     bool can_keep_stationary_heading(const adapter::Observation&) const;
