@@ -27,6 +27,14 @@ host Python 371개·C/C++와 고정 ARM 전체, 실제 제품 DSO의 호출 계�
 live 자격 입력과 qualified worker 발행 연결은 미구현이며 ASSIST는 비활성입니다.
 공개 v0.3.4 ZIP을 바꾸거나 이 후속 소스를 새 릴리즈로 게시한 것은 아닙니다.
 
+[ASSIST 계산·송신 상태 전환 수정](../validation/ASSIST_GENERATION_2026-10-01.md)은
+`3d05a2c`에서 GPS 품질 변경과 복귀 때 계산기와 adapter의 generation이
+어긋나던 두 결함을 해결했습니다. 이전 실제 ARM DSO에서 실패를 재현하고,
+수정 제품의 계산→발행→송신 10개 사례를 고정 sysroot와 순정 공유 runtime에서
+통과했습니다. 입력·자격과 worker 스케줄은 작성한 시험 조건이며, 실제 runtime의
+qualified 입력 연결은 여전히 미구현입니다. 전체 host 검사와 패키징 누락 보완,
+고정 ARM 전체 검사를 완료하고 임시 도구를 제거했습니다. 공개 설치 ZIP은 변경하지 않았습니다.
+
 앞선 외부 master에서 [v0.3.3-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)을
 커밋 `260528c751739c0afb59153f7a5cfa3585eb6048`에서 빌드하여 게시한 것을 확인했습니다.
 해당 host/ARM·순정 BusyBox 설치 검사는 외부 발행 기록을 따릅니다. 이번 작업은

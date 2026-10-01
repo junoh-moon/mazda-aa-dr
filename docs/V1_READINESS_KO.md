@@ -306,6 +306,10 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   [송신 기한 검증](../validation/ASSIST_PUBLICATION_2026-10-01.md)은 지연 송신,
   기한 경계·GPS 복귀·대기 중인 기준점·MODEL 거부와 전체 host/ARM 통과를
   기록합니다. live 자격 입력 및 qualified worker 발행 연결은 여전히 미구현입니다.
+- [x] 실제 adapter 관측을 계산기에 연결해 GPS 품질 변경·복귀의 generation
+  불일치를 재현·수정했습니다. [제품 DSO 연결 검사](../validation/ASSIST_GENERATION_2026-10-01.md)는
+  별도 시험 worker의 계산→발행→송신 10개 사례를 고정 ARM 및 순정 공유 runtime에서
+  확인합니다. 작성한 자격·센서 입력이며 live runtime 입력 연결 완료로 세지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
