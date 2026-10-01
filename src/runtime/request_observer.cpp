@@ -47,6 +47,7 @@ Result Observer::request_begin(void* method, Token* out, const session_trace::Sn
     return ledger_.request_begin(method, issue, out);
 }
 Result Observer::request_end(void* method) { return ledger_.request_end(method); }
+Result Observer::wire_issue(Token request,const WireIssue& wire) { return ledger_.wire_issue(request,wire); }
 
 Reply Observer::read_reply(void* method) const {
     const PreserveErrno saved;
@@ -69,13 +70,14 @@ Reply Observer::read_reply(void* method) const {
     return copy;
 }
 
-ReplyScope::ReplyScope(Observer& owner, void* method, const bus_trace::Snapshot& connection)
+ReplyScope::ReplyScope(Observer& owner, void* method, const bus_trace::Snapshot& connection,
+                       const WireReply& wire)
     : owner_(&owner), previous_(reply_scope), token_(), result_(BAD_INPUT) {
     const PreserveErrno saved;
     ReplyConstruction construction={previous_,false};
     reply_scope = this; // Mask the outer request even on NOT_FOUND/BUSY.
     if (owner.valid()) {
-        Reply reply=owner.read_reply(method);reply.connection=connection;
+        Reply reply=owner.read_reply(method);reply.connection=connection;reply.wire=wire;
         result_ = owner.ledger_.reply_enter(method, reply, &token_);
     }
     construction.complete=true;

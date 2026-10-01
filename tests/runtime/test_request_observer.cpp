@@ -304,4 +304,35 @@ static void session_context_copy() {
       assert(!trace.issue.known && !trace.issue.session_lifetime); }
     empty(o);puts("PASS observer retains issue-time ambient session without ownership promotion");
 }
-int main() { metadata();nested();lifetime();cross_thread();invalid();overlapping_replies();failed_scope_construction();session_context_copy();route_at_issue(); }
+static void raw_wire_reply_scope() {
+    R::Observer o(api());Reply r={1,-1,999,":1.public",0};Method methods[2]={&r,&r};
+    int workers[2]={},positions[2]={};R::Token requests[2],work;
+    for(unsigned n=0;n<2;++n) {
+        assert(o.request_begin(&methods[n],&requests[n])==R::OK);
+        R::WireIssue wire=R::WireIssue();wire.known=true;wire.serial=51+n;wire.observed_ns=100+n;
+        errno=EDOM;assert(o.wire_issue(requests[n],wire)==R::OK&&errno==EDOM);
+    }
+    for(int n=1;n>=0;--n) {
+        R::WireReply wire=R::WireReply();wire.known=true;wire.serial=91+unsigned(n);
+        wire.reply_serial=51+unsigned(n);wire.type=2;wire.observed_ns=200+unsigned(n);
+        wire.sender=R::copy_text(":1.raw");
+        {
+            R::ReplyScope reply(o,&methods[n],mx5::runtime::bus_trace::Snapshot(),wire);
+            wire=R::WireReply();
+            assert(reply.result()==R::OK&&errno==EDOM);
+            assert(o.worker_post(&workers[n],&positions[n],&work)==R::OK);
+            // Inline work and method cleanup can precede submit's return.
+            assert(o.request_end(&methods[n])==R::OK);
+            R::WorkerScope run(o,&workers[n]);R::Trace trace;
+            assert(o.position_take(&positions[n],&trace)==R::OK);
+            assert(trace.request.id==requests[n].id&&trace.issue.wire.serial==51+unsigned(n));
+            assert(trace.reply.wire.known&&trace.reply.wire.serial==91+unsigned(n)&&
+                trace.reply.wire.reply_serial==51+unsigned(n)&&trace.reply.wire.type==2);
+            assert(!strcmp(trace.reply.wire.sender.bytes,":1.raw"));
+            assert(!trace.reply.wire_serial_known&&!trace.reply.wire_serial);
+            assert(trace.reply.type==1&&!strcmp(trace.reply.sender.bytes,":1.public"));
+        }
+    }
+    empty(o);puts("PASS observer owns raw headers separately through reversed replies and inline consumption");
+}
+int main() { raw_wire_reply_scope();metadata();nested();lifetime();cross_thread();invalid();overlapping_replies();failed_scope_construction();session_context_copy();route_at_issue(); }

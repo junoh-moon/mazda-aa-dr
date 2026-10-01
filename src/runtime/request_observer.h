@@ -41,6 +41,7 @@ public:
     bool valid() const;
     Result request_begin(void* method, Token*, const session_trace::Snapshot& = session_trace::Snapshot(),
                          const bus_trace::Snapshot& = bus_trace::Snapshot());
+    Result wire_issue(Token request, const WireIssue&);
     Result request_end(void* method);
     // Exact worker and position supplied by the verified BLM ABI, before post.
     Result worker_post(void* worker, const void* position, Token*);
@@ -64,10 +65,15 @@ private:
 // Stack-only scopes surround the entire original synchronous notify/doWork
 // call. They mask outer scopes even when a nested observation is missing or
 // belongs to another Observer. Neither scope owns any OEM object or string.
+// The caller must keep the method alive throughout getter reads/reply_enter.
+// The pinned OEM pending handler retains it through notify; its verified reply
+// getters only read fields and do not reenter callbacks. A method freed/reused
+// inside those reads violates this lifetime boundary and is not address-safe.
 // Destruction must be LIFO on the creating thread; never heap-queue a scope.
 class ReplyScope {
 public:
-    ReplyScope(Observer&, void* method, const bus_trace::Snapshot& = bus_trace::Snapshot());
+    ReplyScope(Observer&, void* method, const bus_trace::Snapshot& = bus_trace::Snapshot(),
+               const WireReply& = WireReply());
     ~ReplyScope();
     Result result() const { return result_; }
     Token token() const { return token_; }

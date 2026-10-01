@@ -25,6 +25,22 @@ void normalize_text(Text& text) {
         text.complete = false;
     }
 }
+WireIssue copy_wire_issue(const WireIssue& input) {
+    WireIssue result=input;
+    if(!result.known||!result.serial) {
+        const bool conflict=result.conflict;
+        result=WireIssue();result.conflict=conflict;
+    }
+    return result;
+}
+WireReply copy_wire_reply(const WireReply& input) {
+    if(!input.known)return WireReply();
+    WireReply result=input;
+    // A local timeout is a real raw error object but may have no sender and
+    // serial zero. Preserve those facts without claiming a wire reception.
+    normalize_text(result.sender);normalize_text(result.error_name);
+    return result;
+}
 Issue copy_issue(const Issue& input) {
     Issue result = input;
     result.known &= ISSUE_BUS_LIFETIME | ISSUE_SESSION_LIFETIME | ISSUE_SESSION_STATE;
@@ -36,6 +52,7 @@ Issue copy_issue(const Issue& input) {
     }
     normalize_text(result.route.destination);normalize_text(result.route.path);
     normalize_text(result.route.interface_name);normalize_text(result.route.member);
+    result.wire=copy_wire_issue(input.wire);
     return result;
 }
 Reply copy_reply(const Reply& input) {
@@ -43,6 +60,7 @@ Reply copy_reply(const Reply& input) {
     if (!result.type_known) result.type = 0;
     if (!result.wire_serial_known) result.wire_serial = 0;
     normalize_text(result.sender);normalize_text(result.error_name);
+    result.wire=copy_wire_reply(input.wire);
     return result;
 }
 }
@@ -202,6 +220,32 @@ Result Ledger::request_begin(const void* method, const Issue& issue, Token* out)
     result = leave(OK);
     if (result == OK) *out = token;
     return result;
+}
+
+Result Ledger::wire_issue(Token request, const WireIssue& input) {
+    const PreserveErrno saved;
+    if(!request.id||!request.epoch)return BAD_INPUT;
+    if(!initialized_)return EXHAUSTED;
+    // Missing optional metadata is not a missed method/worker lifetime event.
+    // Do not use enter(), whose contention revokes the whole request epoch.
+    if(pthread_mutex_trylock(&mutex_)!=0)return BUSY;
+    const Result current=check_epoch(request.epoch);
+    if(current!=OK)return leave(current);
+    RequestSlot* slot=request_for(request);
+    if(!slot)return leave(NOT_FOUND);
+    if(slot->replied)return leave(USED);
+    WireIssue& stored=slot->issue.wire;
+    const WireIssue observed=copy_wire_issue(input);
+    if(stored.conflict)return leave(CONFLICT);
+    if(observed.conflict) { stored.conflict=true;return leave(CONFLICT); }
+    if(!observed.known)return leave(NOT_READY);
+    if(stored.known) {
+        if(stored.serial!=observed.serial) { stored.conflict=true;return leave(CONFLICT); }
+        // A second read of the same serial does not refresh its observed time.
+        return leave(OK);
+    }
+    stored=observed;
+    return leave(OK);
 }
 
 Result Ledger::reply_enter(const void* method, const Reply& reply, Token* out) {
