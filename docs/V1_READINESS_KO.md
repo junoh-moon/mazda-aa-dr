@@ -104,6 +104,9 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   [v0.3.4 발행](../validation/RELEASE_V034_2026-10-01.md)을 완료했습니다.
   master 반영·고정 소스의 새 빌드와 검증 제품의 동일성, 최종 순정 셸 설치 및
   게시된 ZIP의 재다운로드를 확인했습니다.
+  [v0.3.5 발행](../validation/RELEASE_V035_2026-10-01.md)은 외부 master의 코드까지
+  통합해 host·ARM 전체와 최종 ZIP을 새로 검사했습니다. 첫 host 큐 막힘과
+  변경 없는 재실행 통과, 미확정 원인을 함께 보존했습니다.
 - [x] 센서·항법, OEM 호출/복구, USB/분석기의 독립 감사를 수행하고 확인된 결함을 수정합니다.
 - [x] 실제 OEM SM의 명시적 재시작과 지연 종료 정책을 실행·정적 근거로 확인합니다.
   정상 전체 기동과 물리 watchdog 재부팅은 아래 별도 조건으로 남깁니다.
@@ -333,11 +336,11 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
 | 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험. VIP 요레이트 생산자의 선택 경로 해석 실행과 MODEL 합계 넘침 거부 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음. count 넘침과 손실 창도 식별 불가 |
 | 적분 시간·신선도 | receipt와 producer 시각 분리, MODEL이 qualified로 승격되지 않는 검사 | 현재 IPC payload에는 생산자 시각/순번이 없음. 검증된 지연 상한 등 대체 근거도 없음 |
 | 위치 계산·재획득 | 코어·정차 보정·GPS holdout·wheel 보정 합성 시험 | 실제 경로·독립 기준 위치 비교 없음. GPS holdout 차이를 ground truth로 세지 않음 |
-| 요청 출처·ASSIST 실행 | adapter의 출처/epoch, qualified 파이프라인과 코어 근거 송신 기한을 합성 입력으로 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 요청 관측 연계는 제품에 연결했으나 qualified 자격 입력·worker 발행 연결은 미구현. 전체 manager 이후 반복 취소 timeout 원인 미분리 |
+| 요청 출처·ASSIST 실행 | raw 헤더→제품 token 관측, qualified 파이프라인→실제 worker→발행·철회와 코어 근거 송신 기한 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 물리 센서·요청별 qualified 자격 입력 공급부는 미구현. 원본 snapshot과 각 필드 생산자 연결·전체 manager 이후 반복 취소 timeout 원인 미분리 |
 | 휴대폰·앱 수용 | OEM LOCATION 경로의 정적 근거와 VM의 실제 native API 호출. 폰 없이도 send=0을 반환함 | Galaxy S25·동글·네이버 지도에서 위치가 반영되는 실행 증거 없음 |
 | 다음 부팅과 장애 복구 | 일회 소비 가드·설치 중단 회귀. 실제 SM에서 명시적 재시작과 지연 SIGKILL 뒤 보드 재부팅 요청 관찰 | 다른 실패 경로와 물리 watchdog·전원 차단·다음 부팅의 복구는 미검증 |
 | 기존 설정 보존 | touch 설정 편집/제거 roundtrip, 무관한 파일을 변경하지 않는 설치기 | 기존 터치와 km/L의 실제 화면·입력 결과 미검증 |
-| 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 다섯 ARM 바이너리, ZIP manifest/source commit. v0.3.4-shadow.1 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |
+| 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 다섯 ARM 바이너리, ZIP manifest/source commit. v0.3.5-shadow.1 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |
 
 독립 감사에서 정차 GPS·지연 수신 시 heading 상실, 자이로 보정의 수신 시각,
 단일 휠 모순과 빌드/검사의 오래된 입력·상속 환경 문제를 재현하고 수정했습니다.

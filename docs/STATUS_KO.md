@@ -12,21 +12,26 @@
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.4-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.4-shadow.1)입니다.
-사용자의 발행 지시에 따라 코드를 master에 반영하고 `4330e99`에 고정했습니다.
-숫자 메뉴·저장 공간 보완·MODEL 구간 순서 수정을 포함합니다. [발행 검증](../validation/RELEASE_V034_2026-10-01.md)은
-전체 host/ARM 검사를 통과한 제품과 새 빌드의 동일성, 최종 ZIP의 순정 BusyBox
-설치 검사와 게시 후 다운로드 대조를 기록합니다. live ASSIST는 계속 비활성입니다.
+현재 공개판은 [v0.3.5-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.5-shadow.1)입니다.
+사용자의 발행 지시에 따라 외부 master `ccb67ab`까지 통합하고 `3ec606b`에
+고정했습니다. raw 요청 연결, 지연 yaw·holdout 보완, qualified ASSIST worker와
+후보 철회를 포함하며 기존 숫자 메뉴·저장 공간 정책을 유지합니다.
+[발행 검증](../validation/RELEASE_V035_2026-10-01.md)에 새 빌드의 host Python
+375개·C/C++와 고정 ARM 전체, 순정 BusyBox 최종 ZIP 설치·게시 후 다운로드
+대조를 기록했습니다. host 최초 큐 막힘은 동일 바이너리 단독·전체 재실행에서
+통과했지만 원인은 미확정입니다. 임시 도구는 제거했습니다. 실제 qualified
+입력 공급부·센서·폰 수용은 미완료이며 live ASSIST는 계속 비활성입니다.
+아래 이력의 공개 ZIP 미갱신·미구현 설명은 각 검증 당시의 상태입니다.
 
 [평탄화 전 요청·응답 연결](../validation/WIRE_REQUEST_2026-10-01.md)을
 `3812fe6`·`fe052be`에서 구현했습니다. 원본 builder와 pending의 실제 수명 안에서
 raw serial·reply_serial·sender·오류를 제품 token에 연결하며 기존 공개 getter도
 별도로 보존합니다. 원본 라이브러리의 29요청·역순 응답·주소 재사용·timeout·취소,
 실제 제품 cold 설치와 원본 data-client 네 요청을 검사했습니다. 서버와 worker
-소비는 작성한 fixture이며 전체 SM/LDS·차량 검증은 아닙니다. 전체 host 374개
-Python·C/C++와 고정 ARM 검사를 생략 없이 통과했습니다. producer/snapshot 자격과
-폰 수용은 여전히 남아 있고 ASSIST는 비활성입니다. 이 변경의 공개 ZIP 발행은
-아직 별도 단계입니다.
+소비는 작성한 fixture이며 전체 SM/LDS·차량 검증은 아닙니다. 해당 제품의 전체
+host Python 374개와 C/C++·고정 ARM 검사를 생략 없이 통과했습니다.
+후속 통합 제품은 위 v0.3.5로 별도 검사·발행했습니다. producer/snapshot 자격과
+폰 수용은 여전히 남아 있고 ASSIST는 비활성입니다.
 
 [실제 runtime worker의 ASSIST 연결](../validation/ASSIST_RUNTIME_2026-10-01.md)은
 `2313373`에서 검증된 외부 입력의 소비·계산·발행·철회를 연결했습니다.
