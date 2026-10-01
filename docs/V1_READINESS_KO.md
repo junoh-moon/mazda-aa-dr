@@ -90,6 +90,10 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   같은 값 재할당·미확인 쓰기·응답 사본을 검사했습니다. 새 코어는 비공개 관측 서버에
   소스 링크했으며 공개 설치판의 실제 LDS 기동·등록·공급부 연결은 미구현입니다.
   관측 할당 identity를 물리 측정 시각이나 qualified 출처로 세지 않습니다.
+- [x] qualified ASSIST 큐를 폐기할 때 미처리 POSITION의 음성 경계를 보존합니다.
+  [실제 제품 대조](../validation/ASSIST_QUEUE_CUTOFF_2026-10-01.md)에서 같은 tick의
+  큐 폐기로 이전 기준점이 발행되는 실패를 재현하고 정상 회복까지 검사했습니다.
+  새 물리 입력 공급부·live ASSIST 활성화는 포함하지 않습니다.
 - [x] 원본 위치 journal의 고도·horizontal·vertical 누락을 수정합니다.
   [v0.3.7 검증](../validation/RELEASE_V037_2026-10-01.md)에서 실제 제품 DSO의
   아홉 필드·nonfinite/0 구별·버퍼 경계와 host/ARM 전체를 검사했습니다.

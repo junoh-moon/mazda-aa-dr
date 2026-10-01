@@ -58,7 +58,13 @@ host·고정 ARM·순정 공유 runtime의 코어 각 11,732개와 독립 분석
 새 ARM 빌드·로컬 SHADOW ZIP에서 host Python 401개·C/C++와 고정 ARM 전체를
 생략 없이 통과했습니다. 공개 v0.3.8 ZIP은 그대로이며 이 후속 수정은
 아직 공개되지 않았습니다.
-[같은 로컬 ZIP의 원본 userspace VM 관측](../validation/INTEGRATED_VM_2026-10-01.md)은
+[큐 폐기 경계 보완](../validation/ASSIST_QUEUE_CUTOFF_2026-10-01.md)은
+같은 tick의 큐에 남은 POSITION을 지우며 경계를 잃던 후속 결함을 수정했습니다.
+수정 전 실제 ARM DSO에서 이전 기준점의 DR 선택을 재현했고, 수정 후 두
+전달 순서의 거부와 정상 기준점의 회복을 대조했습니다. `9e082f7`의 전체
+host Python 401개·C/C++와 고정 ARM 전체는 생략 없이 통과했습니다.
+공개 ZIP은 유지하며 live ASSIST 자격이나 LDS 제품 공급부를 추가하지 않습니다.
+[외부 통합판 `d3c6fa1` ZIP의 원본 userspace VM 관측](../validation/INTEGRATED_VM_2026-10-01.md)은
 진단용 PID 1에서 `sh install.sh`·일회성 guard·collector·원본
 VBS/AA/LDS/navi 기동과 LDS 위치 질의 응답을 확인했습니다. GPS/CAN·live
 AA session이 없어 위치 poll 22건은 모두 mode 0, 완전 LOCATION payload는
