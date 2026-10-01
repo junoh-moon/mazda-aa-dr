@@ -293,7 +293,7 @@ $(BUILD)/test_runtime_assist: tests/adapter/runtime_assist_test.cpp src/runtime/
 
 # Sideband receipt is a separate bounded journal input. Keep every fixture that
 # compiles the real worker linked against the same production implementation.
-$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist $(BUILD)/test_worker_lds: $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/lds_request_source.h
+$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist $(BUILD)/test_worker_lds $(BUILD)/test_worker_lds_source: $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/lds_request_source.h src/runtime/lds_source_bus.h
 
 $(BUILD)/test_data_patch: tests/adapter/data_patch_test.cpp src/adapter/data_patch.h src/adapter/adapter.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
@@ -307,17 +307,20 @@ $(BUILD)/test_worker_lds_source: tests/runtime/test_worker_lds_source.cpp src/ru
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/runtime/runtime.cpp,$^) -ldl -pthread -lrt -lm -o $@
 $(BUILD)/test_lds_request_source: tests/runtime/test_lds_request_source.cpp $(LDS_REQUEST_SOURCE) src/runtime/lds_request_source.h $(LDS_SIDEBAND) $(LDS_HEADERS) src/runtime/request_trace.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -lrt -o $@
+$(BUILD)/test_lds_source_bus: tests/runtime/test_lds_source_bus.cpp src/runtime/lds_source_bus.h src/runtime/bus_trace.h $(LDS_REQUEST_SOURCE) src/runtime/lds_request_source.h $(LDS_SIDEBAND) $(LDS_HEADERS) src/runtime/request_trace.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -lrt -o $@
 $(BUILD)/test_lds_install: tests/adapter/lds_install_test.cpp src/adapter/lds_install.cpp src/adapter/lds_install.h src/adapter/data_patch.h src/adapter/lds_hooks.h $(LDS_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -o $@
 $(BUILD)/test_lds_tap: tests/sensors/test_lds_tap.cpp src/sensors/lds_tap.cpp $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) src/adapter/lds_install.h src/runtime/loader.h src/runtime/config.h src/runtime/sha256.h $(LDS_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/sensors/lds_tap.cpp,$^) -pthread -lrt -o $@
 
-test-lds: $(BUILD)/test_data_patch $(BUILD)/test_lds_hooks $(BUILD)/test_lds_sideband $(BUILD)/test_worker_lds $(BUILD)/test_lds_request_source $(BUILD)/test_worker_lds_source $(BUILD)/test_lds_install $(BUILD)/test_lds_tap
+test-lds: $(BUILD)/test_data_patch $(BUILD)/test_lds_hooks $(BUILD)/test_lds_sideband $(BUILD)/test_worker_lds $(BUILD)/test_lds_request_source $(BUILD)/test_lds_source_bus $(BUILD)/test_worker_lds_source $(BUILD)/test_lds_install $(BUILD)/test_lds_tap
 	$(BUILD)/test_data_patch
 	$(BUILD)/test_lds_sideband
 	$(BUILD)/test_lds_request_source
+	$(BUILD)/test_lds_source_bus
 	$(BUILD)/test_lds_install
 	@set -e; for scenario in off invalid missing_mode missing_config disabled marker_symlink marker_error observe scrub install_failed rollback_failed cold_lost normal late_receiver sender_failed unrequested null_handle repeated; do $(BUILD)/test_lds_tap $$scenario; done
 	@set -e; for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind; do $(BUILD)/test_lds_hooks $$scenario; done
 	@set -e; for scenario in capture occupied pre_stopped bounded malformed wrong_uid; do $(BUILD)/test_worker_lds $$scenario; done
-	@set -e; for scenario in position_first sideband_first mismatch late_conflict pre_stopped malformed_recovery; do $(BUILD)/test_worker_lds_source $$scenario; done
+	@set -e; for scenario in position_first sideband_first mismatch late_conflict pre_stopped malformed_recovery first_bus startup_bus bus_reconnect; do $(BUILD)/test_worker_lds_source $$scenario; done

@@ -127,7 +127,8 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
 - [ ] 실제 요청별 provider/session/receiver 자격을 구현·검사합니다.
   [LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
   위치·진단 캐시의 별도 갱신과 공통 snapshot 식별자의 부재를 확인했습니다.
-  진단 polling으로 자격을 채우지 않으며 제품의 생산자→snapshot→응답 공급부는 미구현입니다.
+  진단 polling으로 자격을 채우지 않으며 물리 자격을 갖춘
+  생산자→snapshot→응답 공급부는 미구현입니다.
   해당 정적 조사와 위 별도 실행을 상위 물리 자격·ASSIST 항목의 완료로 세지 않습니다.
   [요청 경로 보존](../validation/REQUEST_ROUTE_2026-09-30.md)은 발행 당시 원본
   목적지·경로·인터페이스·메서드명을 응답까지 연결합니다. well-known 서비스
@@ -309,7 +310,8 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
   대조한 외부 결과를 보존합니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단
   polling으로 요청별 자격을 만들 수 없습니다. 원본 갱신 순서의 근거는
   [외부 정적 분석](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)이며
-  제품의 생산자→snapshot→요청·응답 연결은 미구현입니다.
+  해당 정적 조사 당시 제품의 생산자→snapshot→요청·응답 연결은 미구현이었습니다.
+  후속 관측 공급부의 구현은 위 완료 항목과 구분하며 물리 자격은 아직 미완료입니다.
   [세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서
   이전 세션의 기준점·학습 보정·대기 입력 잔류를 제거하고 원시 입력을 보존했습니다.
   원본 VM의 두 조건에서 각각 지연 요청 네 건을 새 MODEL에서 제외했고, 재시작

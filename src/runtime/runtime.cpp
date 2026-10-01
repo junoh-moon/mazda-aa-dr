@@ -21,6 +21,7 @@
 #include "model_bus.h"
 #include "lds_sideband.h"
 #include "lds_request_source.h"
+#include "lds_source_bus.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -617,7 +618,7 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
   mx5::runtime::ModelSession model_session;
   mx5::runtime::ModelBus model_bus;
   ModelSession source_session;
-  ModelBus source_bus;
+  LdsSourceBus source_bus;
   const N::ModelProfile model=N::research_model_profile();
   mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
   const bool capture=config.mode==4 && motion.open_channel(motion_channel);
@@ -659,12 +660,12 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
   for (;;) {
     const uint64_t cutoff=clock_ns(0);
     source.advance(cutoff);
-    // Observed lifecycle changes retire the association window. Unknown
-    // initial context is not a physical qualification or a reason to discard
-    // exact queued requests. reset's negative clock floor rejects old input.
+    // The first LDS submission discovers its bus before issuing the request.
+    // A later worker poll must not treat that discovery as a lost lifetime.
+    // Subsequent observed changes still retire the window and reject old input.
     const ModelSession::Update session_update=source_session.update(A::read_issue_session(),cutoff);
-    const ModelBus::Update bus_update=source_bus.update(A::read_position_bus(),cutoff);
-    if(session_update==ModelSession::CHANGED || bus_update==ModelBus::CHANGED)source.reset(cutoff);
+    const bool bus_changed=source_bus.update(A::read_position_bus());
+    if(session_update==ModelSession::CHANGED || bus_changed)source.reset(cutoff);
     bool stopping=false;
     if(cutoff>=last_stop_check && cutoff-last_stop_check>=1000000000ULL) {
       last_stop_check=cutoff;

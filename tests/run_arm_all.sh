@@ -68,8 +68,10 @@ for scenario in capture occupied pre_stopped bounded malformed wrong_uid; do
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_lds_request_source.cpp src/runtime/lds_request_source.cpp src/runtime/lds_sideband.cpp src/runtime/request_trace.cpp -pthread -lrt -o "$build/lds-request-source-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/lds-request-source-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_lds_source_bus.cpp src/runtime/lds_request_source.cpp src/runtime/lds_sideband.cpp src/runtime/request_trace.cpp -pthread -lrt -o "$build/lds-source-bus-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/lds-source-bus-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_worker_lds_source.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" -ldl -pthread -lrt -lm -o "$build/worker-lds-source-test"
-for scenario in position_first sideband_first mismatch late_conflict pre_stopped malformed_recovery; do
+for scenario in position_first sideband_first mismatch late_conflict pre_stopped malformed_recovery first_bus startup_bus bus_reconnect; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/worker-lds-source-test" "$scenario"
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/core_bridge.cpp tests/integration/test_pipeline.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -o "$build/pipeline-test"

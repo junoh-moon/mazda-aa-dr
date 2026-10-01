@@ -13,18 +13,34 @@
 namespace R=mx5::runtime;
 namespace L=R::lds_sideband;
 namespace Q=R::request_trace;
+namespace bus_fixture {
+// Authored originals behind the real bus ownership wrappers.
+static int handles[1];
+static int32_t closed(void*,void*) { return 0; }
+static void* create(A::BusClosed,void*) { return &handles[0]; }
+static int32_t connect(void*,const char*,int32_t,uintptr_t) { return 1; }
+static void end(void*) {}
+static int32_t signal(void*,void*) { return 0; }
+static int32_t is_signal(void*,const char*,const char*) { return 1; }
+}
 static char channel[80];
 static A::Observation expected;
 struct Consumer {
     R::LdsRequestSource source;
-    std::atomic<unsigned> reads,matched,mismatched,conflicts,polls;
+    std::atomic<unsigned> reads,matched,mismatched,conflicts,polls,pause,revoked;
     R::LdsRequestSource::JoinedReply owned;
-    Consumer():reads(0),matched(0),mismatched(0),conflicts(0),polls(0),owned() {}
+    Consumer():reads(0),matched(0),mismatched(0),conflicts(0),polls(0),pause(0),revoked(0),owned() {}
     static R::AssistPoll pop(void* user,R::AssistInput*) {
         static_cast<Consumer*>(user)->polls.fetch_add(1);return R::ASSIST_EMPTY;
     }
     static bool readiness(void* user,uint64_t,R::AssistReadiness* out) {
         Consumer& c=*static_cast<Consumer*>(user);c.reads.fetch_add(1);
+        // Hold the actual worker between boundary reads. The parent may then
+        // complete the first request before the worker discovers its bus.
+        if(c.pause.load()==1) {
+            c.pause.store(2);while(c.pause.load()!=3)usleep(1000);c.pause.store(0);
+        }
+        if(c.owned.revision&&!c.source.current(c.owned))c.revoked.fetch_add(1);
         R::LdsRequestSource::JoinedReply joined;
         const R::LdsRequestSource::Result result=c.source.lookup(expected,&joined);
         if(result==R::LdsRequestSource::MATCHED) {
@@ -67,6 +83,20 @@ static bool wait_count(const std::atomic<unsigned>& count) {
     const uint64_t until=clock_ns(0)+3000000000ULL;
     while(clock_ns(0)<until) { if(count.load())return true;usleep(1000); }
     return false;
+}
+static void wait_paused() {
+    const uint64_t until=clock_ns(0)+3000000000ULL;
+    while(consumer.pause.load()!=2&&clock_ns(0)<until)usleep(1000);
+    assert(consumer.pause.load()==2);
+}
+static void prepare_bus() {
+    const A::BusBindings bindings={bus_fixture::create,bus_fixture::connect,
+        bus_fixture::end,bus_fixture::end,bus_fixture::signal,bus_fixture::is_signal,A::BusEndpointApi()};
+    assert(A::prepare_bus_hooks(bindings));
+    assert(mx5_bus_create(bus_fixture::closed,0)==&bus_fixture::handles[0]);
+    assert(mx5_bus_connect(&bus_fixture::handles[0],"authored",0,0)==1);
+    // No LDS submission has used this real registry entry yet.
+    assert(A::read_position_bus().connection.result==R::bus_trace::UNOBSERVED);
 }
 static void send_malformed() {
     const int fd=socket(AF_UNIX,SOCK_DGRAM|SOCK_NONBLOCK,0);assert(fd>=0);
@@ -114,8 +144,9 @@ static L::Record sideband() {
 }
 int main(int argc,char** argv) {
     assert(argc==2);alarm(15);const std::string scenario=argv[1];
+    const bool discovery=scenario=="first_bus"||scenario=="startup_bus"||scenario=="bus_reconnect";
     assert(scenario=="position_first"||scenario=="sideband_first"||scenario=="mismatch"||
-           scenario=="late_conflict"||scenario=="pre_stopped"||scenario=="malformed_recovery");
+           scenario=="late_conflict"||scenario=="pre_stopped"||scenario=="malformed_recovery"||discovery);
     char root[]="/tmp/mx5dr-worker-lds-source-XXXXXX";assert(mkdtemp(root));
     const std::string logs=std::string(root)+"/logs",trace=logs+"/trace.0.jsonl";
     assert(!mkdir(logs.c_str(),0700));
@@ -123,6 +154,10 @@ int main(int argc,char** argv) {
     snprintf(channel,sizeof channel,"mx5dr.worker.source.%ld",(long)getpid());prepare();
     R::AssistSource source={Consumer::pop,Consumer::readiness,&consumer};
     R::AssistWorker assist(mx5_dr_default_config(),source);controller=&assist;
+    if(discovery) {
+        if(scenario!="startup_bus")prepare_bus();
+        consumer.pause.store(1);
+    }
     if(scenario=="pre_stopped") {
         L::Record side=sideband();side.source_instance=88;side.sequence=1;
         L::Diagnostic diagnostic=L::Diagnostic();diagnostic.sender_pid=getpid();
@@ -137,10 +172,24 @@ int main(int argc,char** argv) {
         puts("worker LDS source pre_stopped PASS: existing evidence retired without reopening capture");return 0;
     }
     pthread_t thread;assert(!pthread_create(&thread,0,run,root));
-    assert(wait_text(trace,"\"status\":\"opened\""));assert(wait_count(consumer.reads));
+    if(discovery) {
+        wait_paused();
+        if(scenario=="startup_bus")prepare_bus();
+        A::observe_position_bus(&bus_fixture::handles[0]);
+        prepare();
+        expected.request_trace.issue.connection=A::read_bus_connection(&bus_fixture::handles[0]);
+        expected.request_trace.reply.connection=expected.request_trace.issue.connection;
+        expected.request_trace.issue.bus_lifetime=expected.request_trace.issue.connection.lifetime;
+        assert(A::read_position_bus().connection.result==R::bus_trace::CONNECTED);
+    } else {
+        assert(wait_text(trace,"\"status\":\"opened\""));assert(wait_count(consumer.reads));
+    }
     L::Sender sender;assert(sender.open_channel(channel,88));L::Record side=sideband();
     char raw[R::OBSERVATION_JSON_CAPACITY];assert(format_observation(raw,sizeof raw,expected));
-    if(scenario=="sideband_first") {
+    if(discovery) {
+        // Both halves predate the next worker poll, as in the original LDS run.
+        sink(&expected,0);assert(sender.try_send(side));consumer.pause.store(3);
+    } else if(scenario=="sideband_first") {
         assert(sender.try_send(side));assert(wait_text(trace,"\"kind\":\"lds_sideband\""));
         assert(!consumer.matched.load());sink(&expected,0);
     } else {
@@ -156,6 +205,30 @@ int main(int argc,char** argv) {
     }
     if(scenario=="mismatch")assert(wait_count(consumer.mismatched));
     else assert(wait_count(consumer.matched));
+    if(scenario=="bus_reconnect") {
+        consumer.pause.store(1);wait_paused();
+        mx5_bus_disconnect(&bus_fixture::handles[0]);
+        assert(mx5_bus_connect(&bus_fixture::handles[0],"authored",0,0)==1);
+        A::observe_position_bus(&bus_fixture::handles[0]);
+        // Replaying the old issue after a real observed lifetime change must
+        // neither preserve the old lease nor create a new match.
+        sink(&expected,0);assert(sender.try_send(side));consumer.pause.store(3);
+        assert(wait_count(consumer.revoked));
+        consumer.pause.store(1);wait_paused();
+        assert(consumer.source.status().matches==1);
+        assert(consumer.source.status().rejected==2);
+        prepare();++expected.call_sequence;++expected.request_trace.request.id;
+        ++expected.request_trace.worker.id;++expected.request_trace.issue.wire.serial;
+        ++expected.request_trace.reply.wire.serial;++expected.request_trace.reply.wire.reply_serial;
+        expected.request_trace.issue.connection=A::read_bus_connection(&bus_fixture::handles[0]);
+        expected.request_trace.reply.connection=expected.request_trace.issue.connection;
+        expected.request_trace.issue.bus_lifetime=expected.request_trace.issue.connection.lifetime;
+        side=sideband();
+        side.wire.request_serial=side.wire.reply_serial=expected.request_trace.issue.wire.serial;
+        side.wire.response_serial=expected.request_trace.reply.wire.serial;
+        consumer.matched.store(0);sink(&expected,0);assert(sender.try_send(side));consumer.pause.store(3);
+        assert(wait_count(consumer.matched));
+    }
     if(scenario=="late_conflict") {
         side.position.latitude_deg+=1;side.observed_ns=clock_ns(0);
         assert(sender.try_send(side));assert(wait_count(consumer.conflicts));
@@ -176,6 +249,10 @@ int main(int argc,char** argv) {
         assert(text.find("\"reason\":\"bad_record\"")!=std::string::npos);
         assert(consumer.source.status().positions==1&&consumer.source.status().records==1);
         assert(consumer.source.status().conflicts==0);
+    }
+    if(discovery) {
+        assert(consumer.source.status().matches==(scenario=="bus_reconnect"?2u:1u));
+        assert(consumer.source.status().rejected==(scenario=="bus_reconnect"?2u:0u));
     }
     assert(!unlink(trace.c_str()));assert(!unlink((logs+"/capture.done").c_str()));
     assert(!rmdir((logs+"/capture.stop").c_str()));assert(!rmdir(logs.c_str()));assert(!rmdir(root));
