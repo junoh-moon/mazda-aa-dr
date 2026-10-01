@@ -14,6 +14,9 @@ NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
 SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
+LDS_SIDEBAND = src/runtime/lds_sideband.cpp
+LDS_HEADERS = src/runtime/lds_sideband.h src/sensors/lds_lineage.h
+LDS_HOOKS = src/adapter/lds_hooks.cpp src/sensors/lds_lineage.cpp
 STORAGE_HEADERS = src/runtime/storage.h src/runtime/boot_id.h
 HOST_DBUS_FLAGS = $(shell pkg-config --cflags dbus-1)
 HOST_DBUS_LIBS = $(shell pkg-config --libs dbus-1)
@@ -24,14 +27,14 @@ ARM_CPPFLAGS = -Isrc -I$(ARM_SYSROOT)/usr/include/dbus-1.0 -I$(ARM_SYSROOT)/usr/
 ARM_CXXFLAGS = -std=c++11 -Os -Wall -Wextra -Werror -fPIC -fvisibility=hidden -fno-exceptions -fno-rtti -fno-omit-frame-pointer -ftls-model=initial-exec $(ARM_FLAGS)
 ARM_DEPFLAGS = -MMD -MP -MF $(@:.o=.d).tmp -MT $@
 ASSIST_WORKER = src/runtime/assist_worker.cpp
-ARM_SOURCES = $(ASSIST_WORKER) src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/core_bridge.cpp $(NAVIGATION)
+ARM_SOURCES = $(ASSIST_WORKER) src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) src/runtime/runtime.cpp src/runtime/core_bridge.cpp $(NAVIGATION)
 ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o $(BUILD)/arm/src/adapter/request_veneer.o
 COLLECTOR_OBJECTS = $(BUILD)/arm/src/collector/collector.o $(BUILD)/arm/src/runtime/config.o
 GUARD_OBJECTS = $(BUILD)/arm/src/guard/guard.o $(BUILD)/arm/src/runtime/sha256.o
 HASH_OBJECTS = $(BUILD)/arm/src/tools/sha256_main.o $(BUILD)/arm/src/runtime/sha256.o
 ALL_ARM_OBJECTS = $(sort $(ARM_OBJECTS) $(SENSOR_OBJECTS) $(COLLECTOR_OBJECTS) $(GUARD_OBJECTS) $(HASH_OBJECTS))
 
-.PHONY: all test test-build-deps test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-request-publication test-journal-boundaries test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
+.PHONY: all test test-build-deps test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-lds test-request-publication test-journal-boundaries test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
 all: test
 $(BUILD):
 	mkdir -p $@
@@ -56,13 +59,13 @@ $(BUILD)/test_request_status: tests/runtime/test_request_status.cpp src/runtime/
 $(BUILD)/test_journal_queue: tests/runtime/test_journal_queue.cpp src/runtime/journal_queue.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
 $(BUILD)/test_journal: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/motion_batch.h tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_worker_session: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_worker_session.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_worker_session.cpp -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_worker_session.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_reset: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_reset.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_input: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_input.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
 $(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
@@ -172,20 +175,20 @@ $(BUILD)/test_lds_lineage: tests/sensors/test_lds_lineage.cpp src/sensors/lds_li
 $(BUILD)/test_vim_source: tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $^ -o $@
 
-test: test-build-deps test-motion-journal test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-collector test-packaging test-tools test-integration
+test: test-build-deps test-motion-journal test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-lds test-collector test-packaging test-tools test-integration
 
 $(BUILD)/test_motion_batch: tests/runtime/test_motion_batch.cpp src/runtime/motion_batch.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
-test-motion-journal: $(BUILD)/test_motion_batch $(BUILD)/test_shadow_log $(BUILD)/test_journal
+test-motion-journal: $(BUILD)/test_motion_batch $(BUILD)/test_shadow_log $(BUILD)/test_journal $(BUILD)/test_lds_sideband $(BUILD)/test_lds_hooks
 	$(BUILD)/test_motion_batch
 	$(BUILD)/test_shadow_log
-	MX5DR_MOTION_FIXTURE=$(abspath $(BUILD)/test_motion_batch) MX5DR_SHADOW_FIXTURE=$(abspath $(BUILD)/test_shadow_log) MX5DR_JOURNAL_FIXTURE=$(abspath $(BUILD)/test_journal) $(PYTHON) -m unittest discover -s tests/journal -v
+	MX5DR_MOTION_FIXTURE=$(abspath $(BUILD)/test_motion_batch) MX5DR_SHADOW_FIXTURE=$(abspath $(BUILD)/test_shadow_log) MX5DR_JOURNAL_FIXTURE=$(abspath $(BUILD)/test_journal) MX5DR_LDS_FIXTURE=$(abspath $(BUILD)/test_lds_sideband) MX5DR_LDS_HOOK_FIXTURE=$(abspath $(BUILD)/test_lds_hooks) $(PYTHON) -m unittest discover -s tests/journal -v
 
 $(BUILD)/arm/src/runtime/runtime.o: src/runtime/motion_batch.h
 
 # Only wrappers that surround OEM calls need C++ cleanup/unwind tables.
 # A caller's exception or deferred cancellation must cross the shim intact.
-$(BUILD)/arm/src/adapter/adapter.o $(BUILD)/arm/src/adapter/request_hooks.o $(BUILD)/arm/src/adapter/bus_hooks.o $(BUILD)/arm/src/adapter/session_hooks.o $(BUILD)/arm/src/runtime/request_observer.o: override ARM_CXXFLAGS += -fexceptions
+$(BUILD)/arm/src/adapter/adapter.o $(BUILD)/arm/src/adapter/request_hooks.o $(BUILD)/arm/src/adapter/bus_hooks.o $(BUILD)/arm/src/adapter/session_hooks.o $(BUILD)/arm/src/adapter/lds_hooks.o $(BUILD)/arm/src/runtime/request_observer.o: override ARM_CXXFLAGS += -fexceptions
 
 arm: $(BUILD)/libmx5dr-vimtap.so $(BUILD)/libmx5dr.so $(BUILD)/mx5dr-collector $(BUILD)/mx5dr-guard $(BUILD)/mx5dr-sha256
 $(BUILD)/arm/%.o: %.cpp
@@ -271,3 +274,22 @@ $(BUILD)/test_assist_worker: tests/runtime/test_assist_worker.cpp $(ASSIST_WORKE
 
 $(BUILD)/test_runtime_assist: tests/adapter/runtime_assist_test.cpp src/runtime/runtime.cpp src/runtime/worker.h $(ASSIST_WORKER) src/runtime/assist_worker.h $(RUNTIME_SUPPORT) $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) src/runtime/loader.cpp $(BUILD)/core_host.o $(STORAGE_HEADERS)
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/runtime/runtime.cpp,$^) -ldl -pthread -lrt -lm -o $@
+
+# Sideband receipt is a separate bounded journal input. Keep every fixture that
+# compiles the real worker linked against the same production implementation.
+$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist: $(LDS_SIDEBAND) $(LDS_HEADERS)
+
+$(BUILD)/test_data_patch: tests/adapter/data_patch_test.cpp src/adapter/data_patch.h src/adapter/adapter.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $< -o $@
+$(BUILD)/test_lds_hooks: tests/adapter/lds_hooks_test.cpp tests/adapter/lds_relay.S $(LDS_HOOKS) $(LDS_SIDEBAND) src/adapter/lds_hooks.h $(LDS_HEADERS) | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -lrt -o $@
+$(BUILD)/test_lds_sideband: tests/runtime/test_lds_sideband.cpp $(LDS_SIDEBAND) $(LDS_HEADERS) src/runtime/request_log.h src/runtime/request_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -lrt -o $@
+$(BUILD)/test_worker_lds: tests/runtime/test_worker_lds.cpp src/runtime/runtime.cpp src/runtime/worker.h $(ASSIST_WORKER) src/runtime/assist_worker.h $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_HEADERS) $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) src/runtime/loader.cpp $(BUILD)/core_host.o $(STORAGE_HEADERS)
+	$(CXX) $(CXX_WARN) $(filter-out %.h src/runtime/runtime.cpp,$^) -ldl -pthread -lrt -lm -o $@
+
+test-lds: $(BUILD)/test_data_patch $(BUILD)/test_lds_hooks $(BUILD)/test_lds_sideband $(BUILD)/test_worker_lds
+	$(BUILD)/test_data_patch
+	$(BUILD)/test_lds_sideband
+	@set -e; for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind; do $(BUILD)/test_lds_hooks $$scenario; done
+	@set -e; for scenario in capture occupied pre_stopped bounded malformed wrong_uid; do $(BUILD)/test_worker_lds $$scenario; done

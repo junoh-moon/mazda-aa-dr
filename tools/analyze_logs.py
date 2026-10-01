@@ -42,6 +42,8 @@ LIMITATIONS = [
     "Holdout journal structure cannot prove that GPS references were excluded from prediction inputs.",
     "Holdout references match earlier raw rows within one trace group and recorded session; missing boot still leaves process identity unproven.",
     "Motion counts cover channel-accepted records; source measurement timing remains unknown.",
+    "LDS attachments use six exact wire identifiers within one trace group and recorded session; body and clocks never substitute for identity.",
+    "LDS field origins are observed cache assignments, not producer measurements, receiver quality, or ASSIST qualification; UID 0 is only a local account boundary.",
     "Collector stops carry no boot ID; matching uses ordered boot boundaries, PID, and monotonic receipt time.",
 ]
 
@@ -171,6 +173,270 @@ def decode_motion_records(row):
     return result
 
 
+class LdsLinks:
+    """Bounded diagnostic join; late ambiguity withdraws earlier attachments.
+
+    Exhaustion disables only this session's offline association, without
+    evicting keys and accidentally accepting reused identities later. Raw rows
+    and all existing MODEL/send analysis continue independently.
+    """
+    POSITION_FIELDS = ('mode', 'utc_s', 'lat', 'lon', 'altitude_m', 'heading',
+                       'kmh', 'horizontal', 'vertical')
+    capacity = 4096
+    attachment_limit = 256
+
+    def __init__(self, issue):
+        self.issue = issue
+        self.finished = Counter()
+        self.finished_sideband = Counter()
+        self.attachments = []
+        self.attachment_total = 0
+        self.records = Counter()
+        self.statuses = Counter()
+        self.session_index = 0
+        self.reset()
+
+    def begin(self):
+        if self.session_index:
+            counts, sideband, attachments = self.current()
+            self.finished.update(counts)
+            self.finished_sideband.update(sideband)
+            self.attachment_total += len(attachments)
+            self.attachments.extend(attachments[:max(0, self.attachment_limit-len(self.attachments))])
+        self.session_index += 1
+        self.reset()
+
+    def reset(self):
+        self.entries = {}
+        self.ids = {}
+        self.sources = {}
+        self.unkeyed = Counter()
+        self.exhausted = False
+
+    @staticmethod
+    def text(value):
+        return (isinstance(value, dict) and type(value.get('complete')) is bool and
+                'value' in value and ((value['value'] is None and not value['complete']) or
+                (isinstance(value['value'], str) and len(value['value']) < 64 and
+                 all(0 < ord(c) <= 255 for c in value['value']))))
+
+    @classmethod
+    def complete(cls, value):
+        return cls.text(value) and value['complete'] and bool(value['value'])
+
+    @staticmethod
+    def uint(value, bits=64, minimum=0):
+        return bounded_int(value, minimum, 2**bits-1)
+
+    @classmethod
+    def sideband_key(cls, wire):
+        if (not isinstance(wire, dict) or
+                not all(cls.complete(wire.get(k)) for k in
+                        ('server_guid', 'client_unique', 'server_unique')) or
+                not all(cls.uint(wire.get(k), 32, 1) for k in
+                        ('request_serial', 'response_serial', 'reply_serial'))):
+            return None
+        return (wire['server_guid']['value'], wire['client_unique']['value'], wire['request_serial'],
+                wire['server_unique']['value'], wire['response_serial'], wire['reply_serial'])
+
+    @classmethod
+    def position_key(cls, row):
+        request = row.get('request', {})
+        endpoint, wire = request.get('endpoint', {}), request.get('wire', {})
+        issue, reply = wire.get('issue', {}), wire.get('reply', {})
+        if (request.get('result') != 'observed' or issue.get('known') is not True or
+                issue.get('endpoint_matched') is not True or issue.get('conflict') is not False or
+                reply.get('known') is not True or reply.get('type') != 2 or
+                issue.get('serial') != reply.get('reply_serial')):
+            return None
+        return cls.sideband_key(dict(server_guid=endpoint.get('server_guid'),
+            client_unique=endpoint.get('unique_name'), server_unique=reply.get('sender'),
+            request_serial=issue.get('serial'), response_serial=reply.get('serial'),
+            reply_serial=reply.get('reply_serial')))
+
+    @classmethod
+    def payload(cls, position):
+        return (isinstance(position, dict) and all(k in position for k in cls.POSITION_FIELDS) and
+                all(bounded_int(position[k], -2**31, 2**31-1) for k in ('mode', 'altitude_m')) and
+                cls.uint(position['utc_s']) and
+                all(position[k] is None or
+                    (type(position[k]) in (int, float) and
+                     -sys.float_info.max <= position[k] <= sys.float_info.max)
+                    for k in ('lat', 'lon', 'heading', 'kmh', 'horizontal', 'vertical')))
+
+    @classmethod
+    def valid_record(cls, row):
+        if (row.get('schema') != 1 or type(row.get('schema')) is not int or
+                row.get('association_only') is not True or row.get('assist_ready') is not False or
+                row.get('producer_time_status') != 'unknown' or
+                not bounded_int(row.get('sender_pid'), 1, 2**31-1) or row.get('sender_uid') != 0 or
+                type(row.get('sender_uid')) is not int or
+                not all(cls.uint(row.get(k), minimum=1) for k in ('source_instance', 'sequence')) or
+                not all(cls.uint(row.get(k)) for k in ('mono_ns', 'observed_ns', 'dropped_before')) or
+                not cls.uint(row.get('flags'), 8) or
+                not all(bounded_int(row.get(k), -2**31, 2**31-1) for k in
+                        ('path_result', 'send_result', 'reply_type'))):
+            return False
+        wire, lineage, position = row.get('wire'), row.get('field_lineage'), row.get('position')
+        if (not isinstance(wire, dict) or
+                not all(cls.text(wire.get(k)) for k in
+                        ('server_guid', 'client_unique', 'server_unique', 'destination')) or
+                not all(cls.uint(wire.get(k), 32) for k in
+                        ('request_serial', 'response_serial', 'reply_serial')) or
+                not isinstance(lineage, dict) or lineage.get('association_only') is not True or
+                not all(cls.uint(lineage.get(k)) for k in ('lifetime', 'write_sequence')) or
+                not isinstance(position, dict) or
+                type(position.get('snapshot_known')) is not bool or
+                position['snapshot_known'] != bool(row['flags'] & 1) or
+                not all(k in position for k in cls.POSITION_FIELDS)):
+            return False
+        sequences, clocks = lineage.get('field_write_sequences'), lineage.get('field_observed_ns')
+        if (not isinstance(sequences, list) or not isinstance(clocks, list) or
+                len(sequences) != 9 or len(clocks) != 9 or
+                not all(cls.uint(v) and v <= lineage['write_sequence'] for v in sequences) or
+                not all(cls.uint(v) for v in clocks) or
+                any(s == 0 and c != 0 for s, c in zip(sequences, clocks))):
+            return False
+        return cls.payload(position)
+
+    def entry(self, key, source):
+        if self.exhausted:
+            return None
+        if key not in self.entries:
+            if len(self.entries) >= self.capacity:
+                self.capacity_fault(source)
+                return None
+            self.entries[key] = dict(positions=0, position=None, record=None, conflict=False)
+        return self.entries[key]
+
+    def capacity_fault(self, source):
+        if not self.exhausted:
+            self.issue('lds_sideband_capacity', source,
+                       'Bounded association state exhausted; this session cannot establish unique links')
+        self.exhausted = True
+
+    def position(self, row, valid_request, source):
+        key = self.position_key(row) if valid_request else None
+        if key is None:
+            self.unkeyed['identity_unavailable'] += 1
+            return
+        entry = self.entry(key, source)
+        if entry is None:
+            self.unkeyed['state_capacity'] += 1
+            return
+        entry['positions'] += 1
+        if entry['position'] is None:
+            entry['position'] = row
+
+    def record(self, row, source):
+        self.records['rows'] += 1
+        if not self.valid_record(row):
+            self.records['malformed'] += 1
+            self.issue('lds_sideband_malformed', source, 'Invalid diagnostic sideband record')
+            return
+        self.records['valid'] += 1
+        if row['dropped_before'] or row['flags'] & 128:
+            self.issue('lds_sideband_loss', source, 'Sender reports missing or uncountable observations')
+        key = self.sideband_key(row['wire'])
+        if key is None:
+            self.records['identity_unavailable'] += 1
+            return
+        entry = self.entry(key, source)
+        if entry is None:
+            return
+        identity = (row['sender_uid'], row['sender_pid'], row['source_instance'], row['sequence'])
+        canonical = json.dumps({k: v for k, v in row.items() if k != 'mono_ns'}, sort_keys=True)
+        if identity in self.ids:
+            old_key, old_record = self.ids[identity]
+            if old_key == key and old_record == canonical:
+                self.records['duplicates'] += 1
+                return
+            entry['conflict'] = self.entries[old_key]['conflict'] = True
+            self.issue('lds_sideband_record_reused', source, 'One sender record identity has conflicting observations')
+        else:
+            if len(self.ids) >= self.capacity:
+                self.capacity_fault(source)
+                return
+            self.ids[identity] = (key, canonical)
+            source_key = identity[:3]
+            previous = self.sources.get(source_key)
+            if previous is not None and (row['sequence'] <= previous[0] or row['dropped_before'] < previous[1]):
+                self.issue('lds_sideband_sequence', source, 'Sender order or cumulative loss counter regressed')
+            self.sources[source_key] = (row['sequence'], row['dropped_before'])
+        if entry['record'] is not None:
+            entry['conflict'] = True
+        else:
+            entry['record'] = row
+        wire = row['wire']
+        if (row['flags'] & 16 or wire['reply_serial'] != wire['request_serial'] or
+                (self.complete(wire['destination']) and wire['destination']['value'] != wire['client_unique']['value'])):
+            entry['conflict'] = True
+
+    def status(self, row, source):
+        if (row.get('schema') != 1 or type(row.get('schema')) is not int or
+                row.get('association_only') is not True or row.get('assist_ready') is not False or
+                row.get('status') not in ('opened', 'unavailable', 'rejected', 'drain_limit', 'closed') or
+                row.get('reason') not in ('none', 'syscall_failed', 'truncated', 'credentials_missing',
+                                         'credentials_mismatch', 'bad_record') or
+                not all(self.uint(row.get(k)) for k in ('mono_ns', 'count', 'sender_uid')) or
+                not bounded_int(row.get('sender_pid'), 0, 2**31-1) or
+                not bounded_int(row.get('syscall_errno'), 0, 2**31-1)):
+            self.issue('lds_sideband_malformed', source, 'Invalid sideband receiver status')
+            return
+        self.statuses[row['status']] += 1
+        if row['status'] in ('unavailable', 'rejected'):
+            self.issue('lds_sideband_transport', source, row['status'] + ': ' + row['reason'])
+
+    def current(self):
+        counts, sideband, attachments = self.unkeyed.copy(), Counter(), []
+        for key, entry in self.entries.items():
+            count, row, record = entry['positions'], entry['position'], entry['record']
+            if not count:
+                if record is not None:
+                    sideband['state_capacity' if self.exhausted else
+                             'conflict' if entry['conflict'] else 'missing_position'] += 1
+                continue
+            if self.exhausted:
+                state = 'state_capacity'
+            elif entry['conflict']:
+                state = 'conflict'
+            elif count > 1:
+                state = 'ambiguous_position'
+            elif (record is None or record['flags'] & 111 != 111 or record['reply_type'] != 2 or
+                  record['send_result'] == 0 or
+                  not self.complete(record['wire']['destination'])):
+                state = 'missing_sideband'
+            elif any(k not in row for k in self.POSITION_FIELDS):
+                state = 'payload_incomplete'
+            elif not self.payload(row):
+                state = 'payload_malformed'
+            elif any(row[k] != record['position'][k] for k in self.POSITION_FIELDS):
+                state = 'payload_mismatch'
+            else:
+                state = 'matched'
+                attachments.append(dict(recorded_session=self.session_index, call=row['call'],
+                    generation=row['generation'], source_instance=record['source_instance'],
+                    sequence=record['sequence'], sender_pid=record['sender_pid'], sender_uid=record['sender_uid'],
+                    path_result=record['path_result'], send_result=record['send_result'], flags=record['flags'],
+                    wire_key=list(key), field_lineage=record['field_lineage']))
+            counts[state] += count
+            if record is not None:
+                sideband[state] += 1
+        return counts, sideband, attachments
+
+    def report(self):
+        counts, sideband, attachments = self.current()
+        counts.update(self.finished)
+        sideband.update(self.finished_sideband)
+        total = self.attachment_total + len(attachments)
+        shown = self.attachments + attachments[:max(0, self.attachment_limit-len(self.attachments))]
+        return dict(position_links=dict(counts), sideband_links=dict(sideband),
+                    records=dict(self.records), statuses=dict(self.statuses),
+                    duplicates=self.records['duplicates'], attachments=shown, omitted_attachments=total-len(shown),
+                    state_capacity=self.capacity, scope='same_trace_group_and_recorded_session',
+                    producer_time_status='unknown', association_only=True, assist_ready=False)
+
+
 class Auditor:
     def __init__(self):
         self.counts = Counter()
@@ -194,6 +460,7 @@ class Auditor:
         self.health = []
         self.issues = []
         self.issue_counts = Counter()
+        self.lds = LdsLinks(self.issue)
         self.files = []
         self.ignored = []
         self.total_bytes = 0
@@ -245,6 +512,7 @@ class Auditor:
             self.issues.append(dict(severity=severity, code=code, source=source, detail=detail))
 
     def new_session(self, boot=None):
+        self.lds.begin()
         self.session = dict(boot=boot, last_send_ns=-1, health_ns=-1, sends=0,
                             dropped_max=0, health_records=0, motion_epoch=None,
                             motion_seq=0, motion_ns=0, last_diagnostic_ns=-1,
@@ -415,7 +683,7 @@ class Auditor:
                 kind not in ("health", "capture_end")):
             self.issue("record_after_capture_end", source, kind)
         if kind == "position":
-            self.request_record(row, source, count=True)
+            request_valid = self.request_record(row, source, count=True)
             if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "utc_s")):
                 return
             self.position_numbers(row, source)
@@ -434,6 +702,11 @@ class Auditor:
                     self.issue("holdout_reference_ambiguous", source,
                                "Later duplicate invalidates %d prior reference matches" % matched)
             self.positions[key] = row
+            self.lds.position(row, request_valid, source)
+        elif kind == 'lds_sideband':
+            self.lds.record(row, source)
+        elif kind == 'lds_sideband_status':
+            self.lds.status(row, source)
         elif kind == "send":
             self.send(row, source)
         elif kind == "health":
@@ -1335,8 +1608,8 @@ class Auditor:
                 self.request_endpoints[state] += 1
                 wire_issue = t.get("wire", {}).get("issue", {})
                 # A validated known issue has a nonzero uint32 serial. Count
-                # availability only; no LDS sideband join or qualification is
-                # implemented, and no reply/receipt clock proves freshness.
+                # availability only. The separate LDS diagnostic join needs
+                # the reply key too; no reply/receipt clock proves freshness.
                 self.request_endpoints["exact_request_key_records"] += int(
                     complete and wire_issue.get("known", False) and
                     wire_issue.get("endpoint_matched", False) and not wire_issue["conflict"])
@@ -1379,6 +1652,7 @@ class Auditor:
                 self.issue("bus_changed_since_issue", source, "Reply connection differs from the issue-time connection")
                 if issue["object"] == reply["object"] and reply["lifetime"] < issue["lifetime"]:
                     self.issue("bus_lifetime_regressed", source, "Same request's reply precedes its issue connection lifetime", True)
+        return True
 
     def send(self, row, source):
         if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "type", "length",
@@ -1623,8 +1897,9 @@ class Auditor:
                                              wire_headers=dict(self.request_wire_headers),
                                              wire_complete_error_names=dict(self.request_wire_errors),
                                              endpoint_identity=dict(self.request_endpoints),
-                                             lds_sideband_matching="not_implemented",
+                                             lds_sideband_matching="exact_wire_key_diagnostic_only",
                                              qualification="not_established"),
+                    lds_sideband=self.lds.report(),
                     stream_correlation=dict(aa_boot_ids=aa_boot_ids, collector_boot_ids=collector_boot_ids,
                                             shared_kernel_boot_ids=sorted(set(aa_boot_ids) & set(collector_boot_ids)),
                                             meaning="same_kernel_boot_only_not_request_or_producer_provenance"),

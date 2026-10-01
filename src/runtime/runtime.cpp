@@ -19,6 +19,7 @@
 #include "journal_queue.h"
 #include "model_session.h"
 #include "model_bus.h"
+#include "lds_sideband.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -520,7 +521,35 @@ void journal_assist(Journal& j,const mx5::runtime::AssistStatus& s,uint64_t now)
 } // namespace
 
 namespace mx5 { namespace runtime {
-void* run_worker(const char* root,const char* motion_channel,AssistWorker* assist) {
+// Kept separate so the same bounded drain can be exercised with a perpetually
+// readable authored receiver as well as the real credentialed socket.
+template<class Receiver> static unsigned drain_lds(Journal& journal,Receiver& receiver) {
+  namespace L=lds_sideband;
+  char line[L::JSON_CAPACITY];unsigned drained=0;
+  while(drained<L::DRAIN_LIMIT&&!journal.failed) {
+    L::Record record;L::Diagnostic diagnostic;
+    const L::ReceiveResult result=receiver.receive(&record,&diagnostic);
+    if(result==L::EMPTY)break;
+    ++drained;
+    bool formatted=false;
+    if(result==L::RECORD)formatted=L::format_record(line,sizeof line,record,diagnostic);
+    if(!formatted) {
+      if(result==L::RECORD)diagnostic.fault=L::BAD_RECORD;
+      formatted=L::format_status(line,sizeof line,"rejected",diagnostic);
+    }
+    if(formatted)journal.line(line);
+    // Do not spin on a broken descriptor or let metadata acquisition faults
+    // suppress the independently queued OEM POSITION/SEND observations.
+    if(diagnostic.fault==L::SYSCALL_FAILED) { receiver.close_channel();break; }
+  }
+  if(drained==L::DRAIN_LIMIT) {
+    L::Diagnostic diagnostic=L::Diagnostic();diagnostic.received_ns=clock_ns(0);
+    if(L::format_status(line,sizeof line,"drain_limit",diagnostic,drained))journal.line(line);
+  }
+  return drained;
+}
+void* run_worker_channels(const char* root,const char* motion_channel,const char* lds_channel,
+                          uid_t lds_uid,AssistWorker* assist) {
   // Stop on every exit, including startup failures before the main loop.
   struct StopAssist {
     AssistWorker* worker;
@@ -550,6 +579,15 @@ void* run_worker(const char* root,const char* motion_channel,AssistWorker* assis
            boot_result);
   j.line(line);
   j.flush();
+  lds_sideband::Receiver lds;
+  if(!j.failed) {
+    const bool opened=lds.open_channel(lds_channel,lds_uid);
+    const int open_errno=opened?0:errno;
+    lds_sideband::Diagnostic diagnostic=lds_sideband::Diagnostic();
+    diagnostic.received_ns=clock_ns(0);
+    if(!opened) { diagnostic.fault=lds_sideband::SYSCALL_FAILED;diagnostic.syscall_errno=open_errno; }
+    if(lds_sideband::format_status(line,sizeof line,opened?"opened":"unavailable",diagnostic))j.line(line);
+  }
   N::Pipeline navigation;
   N::GpsHoldout holdout;
   N::MotionReceiver motion;
@@ -630,6 +668,10 @@ void* run_worker(const char* root,const char* motion_channel,AssistWorker* assis
         }
       }
     }
+    // Separate diagnostic rows may arrive before or after their raw POSITION.
+    // No wait/join, producer-time inference, motion freshness gate or queue
+    // substitution is performed in the AA process.
+    if(lds.active()&&!j.failed)drain_lds(j,lds);
     uint64_t now = clock_ns(0);
     if(shadow && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
           navigation.reset(navigation.context());
@@ -644,6 +686,10 @@ void* run_worker(const char* root,const char* motion_channel,AssistWorker* assis
         shadow && model_session.available() && model_bus.available(),
         bus_boundary?model_bus.since_ns():model_session.since_ns(),bus_boundary);
     if(stopping) {
+      lds.close_channel();
+      lds_sideband::Diagnostic diagnostic=lds_sideband::Diagnostic();
+      diagnostic.received_ns=clock_ns(0);
+      if(lds_sideband::format_status(line,sizeof line,"closed",diagnostic))j.line(line);
       if(drain_capture_tail(j)) {
         if(assist)journal_assist(j,assist->status(),clock_ns(0));
         finish_capture(j,boot_id,cutoff,clock_ns(0));
@@ -744,6 +790,9 @@ void* run_worker(const char* root,const char* motion_channel,AssistWorker* assis
     nanosleep(&pause, 0);
   }
   return 0;
+}
+void* run_worker(const char* root,const char* motion_channel,AssistWorker* assist) {
+  return run_worker_channels(root,motion_channel,lds_sideband::CHANNEL_NAME,lds_sideband::LDS_UID,assist);
 }
 } }
 

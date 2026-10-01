@@ -50,7 +50,7 @@ class EndpointIdentity(unittest.TestCase):
         self.assertEqual(counts.get('records', 0), 1)
         self.assertEqual(counts.get('complete', 0), 1)
         self.assertEqual(counts.get('exact_request_key_records', 0), 1)
-        self.assertEqual(request.get('lds_sideband_matching'), 'not_implemented')
+        self.assertEqual(request.get('lds_sideband_matching'), 'exact_wire_key_diagnostic_only')
         self.assertEqual(request['qualification'], 'not_established')
         self.assertEqual(report['phone_acceptance'], 'not_established')
         self.assertEqual(report['dr_accuracy'], 'not_established')
