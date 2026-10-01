@@ -34,7 +34,10 @@ r7 진단 initramfs SHA-256은
 모델은 QEMU의 미구현 수신기 선택 경계에만 적용했습니다. NMEA는 PTY로
 원본 LDS에, 센서는 원본 VIM API에 넣었습니다. 원본 AA manager가 LDS에
 요청하고 원본 callback·위치 worker·송신 경로를 수행했습니다. 물리 GPS/CAN,
-전체 순정 init, 차량 장치, 호스트 네트워크, 폰은 없었습니다. initramfs,
+전체 순정 init, 차량 장치, 호스트 네트워크, 폰은 없었습니다.
+순정 `aap_service`는 별도 프로세스로 기동했고, 제품 DSO는 진단 호출기에
+preload해 그 프로세스에서 원본 BLM manager를 적재·호출했습니다. 순정 AA
+프로세스의 제품 cold preload·전체 수명 검증은 아닙니다. initramfs,
 원본 console과 상세 trace는 배포하지 않는 `evidence/integrated-positive-20261001/`
 안에 보관합니다. VM runner는 이 별도 initramfs를 `external image`로 표시하므로
 runner의 출처 필드는 비어 있습니다. 이미지 sidecar·실제 아카이브·runner의

@@ -81,6 +81,13 @@ mode 1 복귀 뒤 유효 결과가 철회됐습니다. LOCATION 48바이트 쌍 
 보존한 전체 PC 판정은 여전히 `inconclusive`입니다. 이는 부분 SM·가상
 GPIO·합성 수신 시각 시험이며 차량·폰 검증이나 live ASSIST 자격이 아닙니다.
 
+[후속 최신 DSO 재실행](../validation/INTEGRATED_CURRENT_DSO_VM_2026-10-01.md)은
+ASSIST 큐 수정이 포함된 `fda002…` 제품의 새 ZIP을 같은 원본 LDS·VIM 경계에
+연결했습니다. 두 VM에서 no-fix 중 연속 MODEL 유효 55·47건과 작성 휠
+10m/s의 거리 일치를 다시 관측했습니다. guest 진단은 끝났으나 두 runner는
+guest halt 뒤 제한 종료됐고 전체 분석도 `inconclusive`입니다. 최신 소스의
+host/ARM 빌드·설치 fixture를 별도로 통과했지만 차량·폰 자격은 추가되지 않았습니다.
+
 [원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
 실제 NMEA parser→callback→잠금 cache 쓰기→원본 service snapshot→serializer와
 공개 v0.3.5 제품 token을 연결했습니다. GGA 좌표·고도가 갱신돼도 이전 RMC의
