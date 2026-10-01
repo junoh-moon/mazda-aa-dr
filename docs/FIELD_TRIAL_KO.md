@@ -5,8 +5,8 @@
 로그 회수·다음 부팅 복귀 확인을 묶습니다. OBSERVE와 SHADOW를 별도 방문으로
 나누는 것을 기본 절차로 삼지 않습니다.
 
-현재 공개 묶음은 [v0.3.1-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.1-shadow.1)입니다.
-고정 커밋·ZIP 해시·실행 범위는 [릴리즈 검증 기록](../validation/RELEASE_2026-09-30.md),
+현재 공개 묶음은 [v0.3.2-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)입니다.
+고정 커밋·ZIP 해시·실행 범위는 [릴리즈 검증 기록](../validation/RELEASE_2026-10-01.md),
 압축 해제와 `sh install.sh` 절차는 [USB 설치 안내](../packaging/USB_START_KO.md)를
 따르십시오. 이 문서는 해당 SHADOW 시험 후보의 통합 절차입니다. 실제 차량의
 정상 기동·복구·센서와 폰 수용은 아직 검증하지 않았습니다.

@@ -13,9 +13,9 @@ USB 설치 ZIP의 내용물을 FAT32 USB 최상위에 복사하면 MP3/JS로 진
 [사용 안내](packaging/USB_START_KO.md) · [설치 수정과 검증](validation/USB_INSTALL_2026-09-29.md).
 현재 소스는 CMU의 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
 이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리한다.
-이 수정을 포함한 [v0.3.1-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.1-shadow.1)을 게시했습니다.
+이 수정을 포함한 [v0.3.2-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)을 게시했습니다.
 공개 파일 재다운로드와 전체 host/ARM·순정 BusyBox 설치 검사는
-[최종 릴리즈 검증](validation/RELEASE_2026-09-30.md)에 기록했습니다.
+[최종 릴리즈 검증](validation/RELEASE_2026-10-01.md)에 기록했습니다.
 기존 `v0.3.0-shadow.1` ZIP은 이 수정을 포함하지 않습니다.
 
 **master의 추가 변경(PR #12):** 실제 VIM 센서 콜백 → 시간 정렬 → DR 코어 → LOCATION 미리보기의 SHADOW 계산을 구현했다. [기능·계약·남은 조건](docs/LIVE_SHADOW_2026-09-29_KO.md). 배포된 `v0.2.0-observe.2`에는 이 기능이 없으며 live ASSIST는 계속 차단된다.
