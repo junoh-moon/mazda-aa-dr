@@ -156,6 +156,16 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   START 이후 공급과 고유 주기 대조까지 완주했습니다. 합성 위치·부분
   SM·진단 interposer와 바뀐 CPU 부하의 근거이며 물리 수신기나 제품
   자격·폰 수용은 아닙니다.
+  [CPU 루프 제거 재실행](../validation/LDS_WFI_REPLAY_2026-10-01.md)의
+  같은 이미지 네 번은 모두 질의 도중 완료하지 못했습니다. 한 번의 두
+  vCPU는 커널 WFI 경로에 있었고 나머지 정지 원인은 미분리입니다.
+  기본 QEMU에서 이 fixture의 안정적 완주는 아직 입증하지 못했습니다.
+  같은 원본 커널·진단 이미지에만 `nohlt`를 추가한 후속 비교는
+  30/37개 질의를 완료했지만, mode 1·UTC 0과 전환 경계의 서로 다른
+  NMEA 주기 혼합을 발견했습니다. [세부 검증](../validation/LDS_WFI_REPLAY_2026-10-01.md)은
+  이를 자격 없는 응답으로 분리합니다. idle/IRQ 정지 원인은 미확정입니다.
+  QMP trace에서 진행 중 GIC 이벤트와 중단 뒤 8초간 0건을 대조했지만,
+  마지막 timer 예약과 물리 하드웨어 경로는 확인하지 못했습니다.
   [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)에서
   원본 `GetPosition`과 `GetUbloxDiag`의 출력 형식·별도 cache mutex를
   대조한 외부 결과를 보존합니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단
