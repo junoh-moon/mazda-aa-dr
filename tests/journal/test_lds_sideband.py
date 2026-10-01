@@ -82,6 +82,8 @@ class LdsSideband(unittest.TestCase):
             attached = self.linked(report)
             self.assertEqual(attached['position_links'], {'matched': 1})
             self.assertEqual(attached['attachments'][0]['field_lineage'], emitted['field_lineage'])
+            self.assertEqual(attached['assignment_patterns'], {
+                'some_fields/one_distinct_known_assignment': 1})
             self.assertEqual(report['request_observation']['qualification'], 'not_established')
 
     def test_both_arrival_orders_have_the_same_owned_reference(self):
@@ -97,6 +99,63 @@ class LdsSideband(unittest.TestCase):
                 self.assertEqual(report['request_observation']['qualification'], 'not_established')
                 self.assertEqual(a.counts['position'], 1)
                 self.assertNotIn('unknown_record_kind', [i['code'] for i in a.issues])
+
+    def test_assignment_diversity_uses_write_identity_not_observer_clock(self):
+        # Authored origins have three distinct write IDs despite equal
+        # observer clocks. This still says nothing about GPS fix epochs.
+        _, report = observe(position(), sideband())
+        result = self.linked(report)
+        self.assertEqual(result['assignment_patterns'], {
+            'all_fields/multiple_distinct_known_assignments': 1})
+        self.assertEqual(result['attachments'][0]['known_field_assignments'],
+                         'multiple_distinct_known_assignments')
+        self.assertEqual(result['producer_time_status'], 'unknown')
+        self.assertFalse(result['assist_ready'])
+
+    def test_unknown_and_one_retained_origin_are_separate_states(self):
+        unknown = sideband()
+        unknown['field_lineage']['field_write_sequences'] = [0] * 9
+        unknown['field_lineage']['field_observed_ns'] = [0] * 9
+        one = sideband()
+        one['field_lineage']['field_write_sequences'] = [1] * 9
+        a = audit.Auditor()
+        for row in (boot(), position(), unknown, boot(), position(), one):
+            a.consume(row, 'authored-lineage')
+        result = self.linked(a.report())
+        self.assertEqual(result['position_links'], {'matched': 2})
+        self.assertEqual(result['assignment_patterns'], {
+            'no_fields/no_known_field_assignment': 1,
+            'all_fields/one_distinct_known_assignment': 1})
+        self.assertEqual(a.report()['lds_sideband']['assignment_patterns'],
+                         result['assignment_patterns'])
+        self.assertEqual(result['assignment_scope'],
+                         'matched_wire_payload_retained_field_origins_not_producer_or_assist')
+
+    def test_partial_mixed_lineage_keeps_both_diagnostic_dimensions(self):
+        row = sideband()
+        row['field_lineage']['field_write_sequences'][0] = 0
+        row['field_lineage']['field_observed_ns'][0] = 0
+        _, report = observe(position(), row)
+        result = self.linked(report)
+        self.assertEqual(result['assignment_patterns'], {
+            'some_fields/multiple_distinct_known_assignments': 1})
+
+    def test_unavailable_lifetime_and_no_tracked_write_are_distinct(self):
+        row = sideband()
+        row['field_lineage'].update(lifetime=0, write_sequence=0,
+            field_write_sequences=[0]*9, field_observed_ns=[0]*9)
+        _, report = observe(position(), row)
+        self.assertEqual(self.linked(report)['assignment_patterns'], {
+            'no_fields/observation_lifetime_unavailable': 1})
+        row['field_lineage']['lifetime'] = 2
+        _, report = observe(position(), row)
+        self.assertEqual(self.linked(report)['assignment_patterns'], {
+            'no_fields/no_tracked_cache_write_in_lifetime': 1})
+        row['field_lineage']['lifetime'] = 0
+        row['field_lineage']['write_sequence'] = 3
+        a, report = observe(position(), row)
+        self.assertEqual(self.linked(report)['position_links'], {'missing_sideband': 1})
+        self.assertIn('lds_sideband_malformed', [i['code'] for i in a.issues])
 
     def test_each_wire_identity_component_is_required(self):
         for field in ('server_guid', 'client_unique', 'server_unique',
@@ -123,6 +182,7 @@ class LdsSideband(unittest.TestCase):
         a, report = observe(position(), sideband(), conflicting)
         self.assertEqual(self.linked(report)['position_links'], {'conflict': 1})
         self.assertEqual(report['lds_sideband']['attachments'], [])
+        self.assertEqual(report['lds_sideband']['assignment_patterns'], {})
         self.assertEqual(a.counts['position'], 1)
 
     def test_duplicate_identical_record_is_not_two_responses(self):
@@ -135,10 +195,14 @@ class LdsSideband(unittest.TestCase):
     def test_reported_match_is_withdrawn_by_later_conflict(self):
         a, first = observe(position(), sideband())
         self.assertEqual(self.linked(first)['position_links'], {'matched': 1})
+        self.assertEqual(first['lds_sideband']['assignment_patterns'], {
+            'all_fields/multiple_distinct_known_assignments': 1})
         row = sideband()
         row['position']['lat'] += 1
         a.consume(row, 'late-conflict')
-        self.assertEqual(self.linked(a.report())['position_links'], {'conflict': 1})
+        current = self.linked(a.report())
+        self.assertEqual(current['position_links'], {'conflict': 1})
+        self.assertEqual(current['assignment_patterns'], {})
 
     def test_body_disagreement_after_exact_join_never_repairs_raw_position(self):
         row, original = sideband(), position()
@@ -159,6 +223,7 @@ class LdsSideband(unittest.TestCase):
         result = self.linked(report)
         self.assertEqual(result['position_links'], {})
         self.assertEqual(result['sideband_links'], {'missing_position': 1})
+        self.assertEqual(result['assignment_patterns'], {})
 
     def test_attachment_preserves_path_result_and_local_sender_identity(self):
         row = sideband()

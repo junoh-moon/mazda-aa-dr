@@ -44,6 +44,8 @@ LIMITATIONS = [
     "Motion counts cover channel-accepted records; source measurement timing remains unknown.",
     "LDS attachments use six exact wire identifiers within one trace group and recorded session; body and clocks never substitute for identity.",
     "LDS field origins are observed cache assignments, not producer measurements, receiver quality, or ASSIST qualification; UID 0 is only a local account boundary.",
+    "LDS assignment patterns cover only matched wire/payload rows and count retained known field origins, not all cache writes or physical fixes.",
+    "A recorded LDS match may change with later rows; file end does not certify a complete source or receiver session.",
     "Collector stops carry no boot ID; matching uses ordered boot boundaries, PID, and monotonic receipt time.",
 ]
 
@@ -189,6 +191,7 @@ class LdsLinks:
         self.issue = issue
         self.finished = Counter()
         self.finished_sideband = Counter()
+        self.finished_assignment_patterns = Counter()
         self.attachments = []
         self.attachment_total = 0
         self.records = Counter()
@@ -198,9 +201,10 @@ class LdsLinks:
 
     def begin(self):
         if self.session_index:
-            counts, sideband, attachments = self.current()
+            counts, sideband, attachments, patterns = self.current()
             self.finished.update(counts)
             self.finished_sideband.update(sideband)
+            self.finished_assignment_patterns.update(patterns)
             self.attachment_total += len(attachments)
             self.attachments.extend(attachments[:max(0, self.attachment_limit-len(self.attachments))])
         self.session_index += 1
@@ -295,7 +299,8 @@ class LdsLinks:
                 len(sequences) != 9 or len(clocks) != 9 or
                 not all(cls.uint(v) and v <= lineage['write_sequence'] for v in sequences) or
                 not all(cls.uint(v) for v in clocks) or
-                any(s == 0 and c != 0 for s, c in zip(sequences, clocks))):
+                any(s == 0 and c != 0 for s, c in zip(sequences, clocks)) or
+                (lineage['lifetime'] == 0 and lineage['write_sequence'] != 0)):
             return False
         return cls.payload(position)
 
@@ -387,8 +392,26 @@ class LdsLinks:
         if row['status'] in ('unavailable', 'rejected'):
             self.issue('lds_sideband_transport', source, row['status'] + ': ' + row['reason'])
 
+    @staticmethod
+    def assignment_pattern(lineage):
+        # A known field origin identifies an observed assignment during a
+        # cache write. Not every write establishes one. Count distinct origins
+        # retained on these fields, never producer fixes or measurement epochs.
+        # Equal observer clocks cannot merge write identities.
+        sequences = lineage['field_write_sequences']
+        known = {sequence for sequence in sequences if sequence}
+        coverage = 'all_fields' if all(sequences) else (
+            'some_fields' if known else 'no_fields')
+        origins = 'multiple_distinct_known_assignments' if len(known) > 1 else (
+            'one_distinct_known_assignment' if known else
+            'no_known_field_assignment' if lineage['write_sequence'] else
+            'no_tracked_cache_write_in_lifetime' if lineage['lifetime'] else
+            'observation_lifetime_unavailable')
+        return coverage, origins
+
     def current(self):
         counts, sideband, attachments = self.unkeyed.copy(), Counter(), []
+        patterns = Counter()
         for key, entry in self.entries.items():
             count, row, record = entry['positions'], entry['position'], entry['record']
             if not count:
@@ -414,26 +437,32 @@ class LdsLinks:
                 state = 'payload_mismatch'
             else:
                 state = 'matched'
+                coverage, origins = self.assignment_pattern(record['field_lineage'])
+                patterns[coverage + '/' + origins] += 1
                 attachments.append(dict(recorded_session=self.session_index, call=row['call'],
                     generation=row['generation'], source_instance=record['source_instance'],
                     sequence=record['sequence'], sender_pid=record['sender_pid'], sender_uid=record['sender_uid'],
                     path_result=record['path_result'], send_result=record['send_result'], flags=record['flags'],
-                    wire_key=list(key), field_lineage=record['field_lineage']))
+                    wire_key=list(key), field_lineage=record['field_lineage'],
+                    assignment_coverage=coverage, known_field_assignments=origins))
             counts[state] += count
             if record is not None:
                 sideband[state] += 1
-        return counts, sideband, attachments
+        return counts, sideband, attachments, patterns
 
     def report(self):
-        counts, sideband, attachments = self.current()
+        counts, sideband, attachments, patterns = self.current()
         counts.update(self.finished)
         sideband.update(self.finished_sideband)
+        patterns.update(self.finished_assignment_patterns)
         total = self.attachment_total + len(attachments)
         shown = self.attachments + attachments[:max(0, self.attachment_limit-len(self.attachments))]
         return dict(position_links=dict(counts), sideband_links=dict(sideband),
                     records=dict(self.records), statuses=dict(self.statuses),
                     duplicates=self.records['duplicates'], attachments=shown, omitted_attachments=total-len(shown),
                     state_capacity=self.capacity, scope='same_trace_group_and_recorded_session',
+                    assignment_patterns=dict(patterns),
+                    assignment_scope='matched_wire_payload_retained_field_origins_not_producer_or_assist',
                     producer_time_status='unknown', association_only=True, assist_ready=False)
 
 

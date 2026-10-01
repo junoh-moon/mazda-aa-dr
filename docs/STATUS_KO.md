@@ -37,6 +37,13 @@ host Python 576개·C/C++, 고정 ARM Python 105개·실제 제품 DSO 145개·
 아닙니다. 물리 CMU·센서·폰 시험은 새로 수행하지 않았고 ASSIST는
 계속 비활성입니다.
 
+후속 [LDS 할당 출처 진단](../validation/LDS_ASSIGNMENT_DIAGNOSTIC_2026-10-02.md)은
+정확히 연결된 원본 응답에서 아홉 필드에 남은 캐시 할당 번호의 다양성과
+미확인 상태를 PC 분석기에 표시합니다. 공개 `.2` ZIP의 제품 코드는
+바꾸지 않았고 새 실차 기록도 얻지 않았습니다. 동일 번호나 동일 관측
+시각은 물리 측정 시각·신선도·수신기 품질을 증명하지 않습니다. 같은 worker의
+live 공급부와 ASSIST 자격은 아직 미완료입니다.
+
 이전 공개판은 [v0.3.10-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.1)입니다.
 고정 소스 `50ba484133b0e52739e5af35f7dcc993d5a3f850`를 master에 반영하고
 설치 ZIP·체크섬을 발행한 뒤 공개 파일을 다시 받아 대조했습니다.
