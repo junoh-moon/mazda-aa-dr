@@ -59,6 +59,12 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   START 이후 공급과 고유 주기 대조까지 완주했습니다. 합성 위치·부분
   SM·진단 interposer와 바뀐 CPU 부하의 근거이며 물리 수신기나 제품
   자격·폰 수용은 아닙니다.
+  [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)에서
+  원본 `GetPosition`과 `GetUbloxDiag`의 출력 형식·별도 cache mutex를
+  직접 대조했습니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단
+  polling으로 요청별 자격을 만들 수 없습니다. 원본 갱신 순서의 근거는
+  [외부 정적 분석](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)이며
+  제품의 생산자→snapshot→요청·응답 연결은 미구현입니다.
   [세션 후보 철회·MODEL 초기화 검토](../validation/MODEL_SESSION_REVIEW_2026-09-30.md)에서
   이전 세션의 기준점·학습 보정·대기 입력 잔류를 제거하고 원시 입력을 보존했습니다.
   원본 VM의 두 조건에서 각각 지연 요청 네 건을 새 MODEL에서 제외했고, 재시작

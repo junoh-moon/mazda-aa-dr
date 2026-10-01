@@ -246,6 +246,15 @@ NMEA 공급을 수정한 뒤 기본 QEMU의 여러 실행은 WFI 정지 또는 S
 수신·진단용 GPIO 보정·부분 SM과 바뀐 CPU 부하의 관측이며 실제
 수신기/차량·폰이나 제품 ASSIST 검증이 아닙니다.
 
+[LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)는
+외부 [원본 함수 정적 분석](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)의
+입력 해시와 공개 D-Bus 출력 형식·별도 cache mutex를 root가 직접 대조했습니다.
+`GetUbloxDiag`와 `GetPosition`에는 같은 생산 측정을 연결하는 ID가 없으므로
+진단값을 사후 polling하여 위치 응답별 수신기·센서 자격으로 승격할 수
+없습니다. 제품 live `provenance()`는 계속 false이고 ASSIST는 비활성입니다.
+원본 갱신 순서와 경쟁 가능성은 외부 정적 분석이며 이번 직접 실행 결과가
+아닙니다. 생산자→위치 snapshot→실제 요청·응답 경계의 자격 연결은 미구현입니다.
+
 [기본 MODEL GPS 기준점 회귀 수정](../validation/GPS_REJECTION_2026-09-30.md)에서는
 GPS 쌍 검사 실패 뒤 이전 READY 기준점이 다음 단절 때 되살아나는 결함을
 재현·수정했습니다. 현재 배포 runtime의 GPS/wheel 검사 활성 경로에는
