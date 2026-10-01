@@ -179,6 +179,11 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   별도 실행에서는 325 tick 뒤였고, 마지막 비교값 쓰기 뒤 같은
   스레드의 TCN 재읽기는 제한 종료까지 미관측이었습니다. TCG 스케줄링
   지연과 정확한 guest 재시도·clockevent 결과는 아직 분리하지 못했습니다.
+  [추가 타이머·IRQ 대조](../validation/LDS_TIMER_IRQ_FOLLOWUP_2026-10-01.md)는
+  단일 TCG 스레드에서도 42 tick 늦은 GPT 비교값과 출력선 low를
+  관찰했습니다. 다른 실행의 정시 GPT callback은 제한 종료 직전이라
+  그 뒤 동작을 판정할 수 없습니다. GIC 전달·CPU 수락을 포함한
+  같은 실행의 원인 경계는 미확정입니다.
   [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)에서
   원본 `GetPosition`과 `GetUbloxDiag`의 출력 형식·별도 cache mutex를
   대조한 외부 결과를 보존합니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단
