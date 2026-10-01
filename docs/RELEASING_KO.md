@@ -37,7 +37,7 @@ RELEASE_COMMIT='REPLACE_WITH_40_CHARACTER_COMMIT_SHA'
 
 gh auth status
 RELEASE_WORK=$(mktemp -d /tmp/mazda-aa-dr-release.XXXXXX)
-git clone "https://github.com/$RELEASE_REPO.git" "$RELEASE_WORK/source"
+git clone "git@github.com:$RELEASE_REPO.git" "$RELEASE_WORK/source"
 cd "$RELEASE_WORK/source"
 git remote set-url --push origin "git@github.com:$RELEASE_REPO.git"
 git fetch origin master --tags

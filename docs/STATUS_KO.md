@@ -12,15 +12,17 @@
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.5-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.5-shadow.1)입니다.
-사용자의 발행 지시에 따라 외부 master `ccb67ab`까지 통합하고 `3ec606b`에
-고정했습니다. raw 요청 연결, 지연 yaw·holdout 보완, qualified ASSIST worker와
-후보 철회를 포함하며 기존 숫자 메뉴·저장 공간 정책을 유지합니다.
-[발행 검증](../validation/RELEASE_V035_2026-10-01.md)에 새 빌드의 host Python
-375개·C/C++와 고정 ARM 전체, 순정 BusyBox 최종 ZIP 설치·게시 후 다운로드
-대조를 기록했습니다. host 최초 큐 막힘은 동일 바이너리 단독·전체 재실행에서
-통과했지만 원인은 미확정입니다. 임시 도구는 제거했습니다. 실제 qualified
-입력 공급부·센서·폰 수용은 미완료이며 live ASSIST는 계속 비활성입니다.
+현재 공개판은 [v0.3.6-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.6-shadow.1)입니다.
+`bdda755`에 고정한 새 ARM 빌드·설치 ZIP으로, v0.3.5의 오래된 ASSIST
+기준점 재사용 결함을 [정확한 GPS 콜백 결합](../validation/ASSIST_ANCHOR_PAIRING_2026-10-01.md)으로
+수정했습니다. raw 요청 연결·지연 yaw/holdout·숫자 메뉴·저장 공간 정책은
+유지합니다. [발행 검증](../validation/RELEASE_V036_2026-10-01.md)에 clean host
+Python 374개·C/C++와 고정 ARM 전체(생략 0), 순정 BusyBox 최종 ZIP 설치,
+원본 OEM VM의 제품 cold 설치·요청 연결, 게시 후 파일 재다운로드를 기록했습니다.
+VM runner의 240초 제한 종료와 bus lifetime 미확인 네 건은 별도로 남깁니다.
+실제 qualified 입력 공급부·물리 센서·차량 복구·폰 수용은 미완료이며 live
+ASSIST는 계속 비활성입니다. 기존 [v0.3.5](../validation/RELEASE_V035_2026-10-01.md)는
+비활성 계산 경로에 결함이 있으므로 실차 시험 후보로 선택하지 마십시오.
 아래 이력의 공개 ZIP 미갱신·미구현 설명은 각 검증 당시의 상태입니다.
 
 [원본 LDS 필드 출처 실행](../validation/LDS_FIELD_LINEAGE_2026-10-01.md)에서는
