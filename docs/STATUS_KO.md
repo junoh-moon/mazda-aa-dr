@@ -22,6 +22,12 @@
 마지막 쓰기 뒤 같은 스레드의 TCN 재읽기는 제한 종료까지 미관측입니다.
 TCG 스케줄링 지연의 영향과 guest 재시도 경로는 아직 확인하지 못했습니다.
 기본 QEMU 완주와 ASSIST 자격·폰 수용은 계속 미검증입니다.
+[후속 타이머·IRQ 대조](../validation/LDS_TIMER_IRQ_FOLLOWUP_2026-10-01.md)에서는
+실시간 단일 TCG 스레드에서도 가까운 GPT 비교값이 계산 전에 지나간
+사례를 기록했고, 그 실행의 마지막 GPT 출력선은 low였습니다. 별도
+단일 스레드 실행의 정상 예약·callback은 제한 종료 직전에 발생해
+후속 guest 동작을 판정할 수 없습니다. GIC IRQ 87 전달·CPU 수락은
+같은 정지 경계에서 미측정입니다.
 
 [후속 MODEL 초기화 원인 기록](../validation/MODEL_RESET_REVIEW_2026-10-01.md)은
 외부 `feat/session-observation`의 아이디어를 검토하고 raw 원본이 원인
