@@ -12,11 +12,11 @@
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 현재 공개 ZIP을 새 시험 준비가 끝난 묶음으로 간주하지 않습니다.
 
-외부 master에서 [v0.3.2-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)을
-커밋 `af1a24aafaf401f1b648b5af5d21b0d611f6f71a`에서 빌드하여 게시한 것을 확인했습니다.
+외부 master에서 [v0.3.3-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)을
+커밋 `260528c751739c0afb59153f7a5cfa3585eb6048`에서 빌드하여 게시한 것을 확인했습니다.
 해당 host/ARM·순정 BusyBox 설치 검사는 외부 발행 기록을 따릅니다. 이번 작업은
 공개 ZIP을 직접 내려받아 SHA-256·CRC·전체 manifest와 고정 커밋을 대조했습니다.
-[이번 릴리즈 검증](../validation/RELEASE_2026-10-01.md)에 파일 해시와 실행 범위를
+[이번 릴리즈 검증](../validation/RELEASE_V033_2026-10-01.md)에 파일 해시와 실행 범위를
 고정했습니다. 기본 모드는 SHADOW이며 ASSIST는 비활성입니다. 실차 센서 callback,
 위치 정확도, 정상 전체 차량 기동·복구와 폰 수용은 미검증입니다. 조사 문단의
 `공개 ZIP 미갱신`은 해당 시점의 기록이며 포함 여부는 고정 커밋으로 대조하십시오.
@@ -27,13 +27,14 @@
 `drain()` 호출 횟수를 분리해 표시하며, 이 수치를 센서 처리나 ASSIST
 자격으로 승격하지 않습니다. 전체 host·고정 ARM과 원본 ARM BusyBox의
 상태 표시·설치 에뮬레이션 통과는 외부 작성자의 실행 기록입니다. 이 문단은 해당 소스 변경의
-기록이며 위 v0.3.2 ZIP 자체에 포함된 기능으로 읽으면 안 됩니다.
+기록이며 v0.3.3 ZIP에도 포함됩니다. v0.3.2 검증은
+[이전 발행 기록](../validation/RELEASE_2026-10-01.md)에 남겨 두었습니다.
 
 아래 조사 이력의 미구현·미검증 범위는 각 기록 시점의 상태입니다. 요청 관측은
 후속 제품 설치·journal까지 연결했습니다. [제품 연결 검증](../validation/REQUEST_PRODUCT_2026-09-30.md)과
 [후속 반복 취소 비교](../validation/MANAGER_CANCELLATION_2026-09-30.md)를 함께 따릅니다.
 
-[한 번의 시험 후보](../validation/TRIAL_PREPARATION_2026-10-01.md)는 별도 커밋
+[이전 시험 후보](../validation/TRIAL_PREPARATION_2026-10-01.md)는 별도 커밋
 `a29f1b89987dc647f2146df945b9d2ba16526047`의
 `mazda-aa-dr-a29f1b8-shadow-trial.zip`입니다. 설치 전 예상 공간, 두 기록기의
 8MiB 여유 정책, 중단·MODEL 초기화 사유와 실제 계산 호출 수를 추가했습니다.
@@ -41,6 +42,15 @@
 최종 ZIP 설치·회수·제거 검사를 생략 없이 통과했습니다. 이 추가 보완은
 공개 v0.3.2 ZIP에 없습니다. 동시 부하 시험의 지연 원인은 미확정이고 실차
 센서·복구·폰 수용과 live ASSIST는 미완료입니다. 임시 도구는 모두 제거했습니다.
+
+Shift 키가 동작하지 않는 사용자 제약에 맞춰 [후속 후보 b185b99](../validation/KEYBOARD_TRIAL_2026-10-01.md)에
+숫자 USB 메뉴를 추가했습니다. `sh /tmp/mnt/sda1/trial` 한 줄을 열고
+숫자로 설치·상태 확인·종료와 자동 USB 회수·제거를 선택합니다. 종료 확인이
+실패해도 원본 회수를 시도하며 단계별 결과를 USB에 남깁니다. master `260528c`의
+raw 우선 기록·진단 보완도 통합했습니다. 원본 BusyBox의 메뉴 전체 흐름과
+상태 파서 35개, host Python 371개·C/C++와 고정 ARM 전체를 직접 통과했습니다.
+실패 시 원본 셸의 회수도 검사했으며 추가 도구를 모두 제거했습니다.
+작업 브랜치의 별도 후보이며 master 병합·GitHub 릴리즈 게시와 구분합니다.
 
 [LDS 진단 API 조사](../validation/LDS_DIAGNOSTIC_PROVENANCE_2026-10-01.md)에서
 `GetUbloxDiag`도 특정 위치 응답의 출처 증거로 바로 사용할 수 없음을 확인했습니다.

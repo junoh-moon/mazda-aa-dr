@@ -4,11 +4,12 @@ Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-gene
 
 **The current USB bundle is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. No vehicle or phone validation has been performed. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
 
-The current user requirement (2026-09-30) is to work with the supplied firmware
-files only and deliver a finished v1.0 for one final installation. Do not request
-vehicle trials or phone/dongle bench tests. Earlier trial procedures are retained
-as history. See [v1.0 completion criteria](docs/V1_READINESS_KO.md); firmware
-execution alone cannot establish physical sensor behavior or phone/app acceptance.
+On 2026-10-01 the user authorized one combined vehicle installation/test before
+v1.0, after feasible firmware and offline verification. This updates the earlier
+firmware-only restriction for that trial; it does not authorize repeated visits
+or phone/dongle bench tests. See the [combined trial](docs/FIELD_TRIAL_KO.md) and
+[v1.0 criteria](docs/V1_READINESS_KO.md). Physical sensor behavior, recovery and
+phone/app acceptance remain unverified.
 
 See [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate removes our preload from persistent service configurations and consumes one explicit authorization before exposing a trial. [Original-SM retry observations](validation/SM_RETRY_2026-09-29.md) cover explicit service restarts and delayed failure policy; physical watchdog recovery remains unverified.
 
@@ -18,12 +19,15 @@ The current USB packaging includes the MP3 diagnostic-terminal entry and support
 the target's BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock storage aliases
 and read-only root. See [USB instructions](packaging/USB_START_KO.md) and
 [new installation evidence](validation/USB_INSTALL_2026-09-29.md).
-The published [v0.3.2-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)
-includes these fixes. Its downloaded bytes, full host/ARM checks and stock BusyBox
-installation checks are recorded in the [final release verification](validation/RELEASE_2026-10-01.md).
-The additional storage reserve, retained MODEL reset reasons and drain counters
-are in the separate [a29f1b8 trial candidate](validation/TRIAL_PREPARATION_2026-10-01.md),
-not the published v0.3.2 ZIP. Use that pinned candidate for the authorized combined trial.
+The published [v0.3.3-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)
+includes the installation fixes and MODEL reset diagnostics. The publisher's full
+host/ARM and stock BusyBox checks are in the [release record](validation/RELEASE_V033_2026-10-01.md).
+We separately downloaded and checked that ZIP's hashes, CRC and manifest.
+The [b185b99 trial candidate](validation/KEYBOARD_TRIAL_2026-10-01.md) also includes
+storage checks, retained MODEL reset reasons, drain counters and a numeric USB menu.
+Open it with `sh /tmp/mnt/sda1/trial`; select 1 to install, 2 for status, or 3 to
+finish and export to the same USB while parked. These inputs need no Shift key.
+The public v0.3.3 ZIP and earlier a29f1b8 candidate do not contain the menu.
 The older v0.3.0-shadow.1 ZIP does not contain these fixes.
 The [OEM execution and account correction](validation/OEM_RUNTIME_2026-09-29.md)
 supersedes the earlier non-root `cmu` test assumption: stock `cmu` is UID 0,

@@ -4,25 +4,30 @@
 
 **현재 소스는 OBSERVE와 실제 센서 SHADOW 계산을 포함한 시험 후보**다. OFF 로딩, 폴링 프로세스 분리, 일회성 기동 보호를 구현하고 호스트·합성 ARM 검증을 통과했다. 차량·휴대폰 검증은 아직 수행하지 않았다. ASSIST는 차단되어 있으며 터널 내비게이션이 완성된 상태가 아니다.
 
-**현재는 제공된 펌웨어 파일만으로 개발·검증합니다.** 2026-09-30 사용자 요구는
-완성된 v1.0의 최종 설치 한 번입니다. 시험 후보의 차량 설치·주행·폰/동글 탁상
-시험을 요청하지 않습니다. [완료 조건](docs/V1_READINESS_KO.md)을 따르며,
-파일로 확인할 수 없는 물리 센서·폰/앱 수용·물리 복구는 미검증으로 남깁니다.
-[기존 통합 시험 계획](docs/FIELD_TRIAL_KO.md)은 이력으로 보존합니다.
+**2026-10-01에 사용자가 v1.0 전 실차 설치·시험 기회를 한 번 허용했습니다.**
+가능한 펌웨어·오프라인 검증을 먼저 마치고 [한 번의 통합 시험](docs/FIELD_TRIAL_KO.md)을
+준비합니다. 이전 펌웨어 파일만 사용하라는 제한을 해당 기회에 한해 갱신하며,
+반복 방문이나 폰/동글 탁상 시험의 추가 승인이 아닙니다.
+[완료 조건](docs/V1_READINESS_KO.md)을 유지하며 물리 센서·폰/앱 수용·복구는
+아직 미검증입니다.
 
 [과거 첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
 USB 설치 ZIP의 내용물을 FAT32 USB 최상위에 복사하면 MP3/JS로 진단 셸에
-진입할 수 있다. 해당 USB 디렉터리에서 `sh install.sh`를 실행한다.
+진입할 수 있습니다. 새 후보는 `sh /tmp/mnt/sda1/trial` 한 줄로 숫자 메뉴를
+엽니다. `1` 설치, `2` 상태 확인, `3` 종료·USB 회수를 주차 중에 선택합니다.
+Shift 키나 긴 회수 경로 입력이 필요하지 않습니다.
 [사용 안내](packaging/USB_START_KO.md) · [설치 수정과 검증](validation/USB_INSTALL_2026-09-29.md).
 현재 소스는 CMU의 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
 이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리한다.
-이 수정을 포함한 [v0.3.2-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)을 게시했습니다.
-공개 파일 재다운로드와 전체 host/ARM·순정 BusyBox 설치 검사는
-[최종 릴리즈 검증](validation/RELEASE_2026-10-01.md)에 기록했습니다.
-추가 저장 공간 보호·MODEL 초기화 사유·계산 호출 수는 공개 v0.3.2 ZIP에
-없습니다. 이번 한 번의 통합 시험에는 별도 [a29f1b8 고정 후보](validation/TRIAL_PREPARATION_2026-10-01.md)를
-사용하십시오. 실제 차량과 ASSIST 적용은 아직 미검증입니다.
+설치 수정과 MODEL 초기화 진단을 포함한 [v0.3.3-shadow.1 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)이
+외부 master에서 게시되었습니다. 발행자의 전체 host/ARM·순정 BusyBox 검사는
+[릴리즈 검증](validation/RELEASE_V033_2026-10-01.md)을 따릅니다. 이번 작업도
+공개 파일을 직접 내려받아 SHA-256·CRC·전체 manifest를 대조했습니다.
+숫자 메뉴·저장 공간 보호·MODEL 초기화 사유·계산 호출 수를 포함한
+[b185b99 고정 후보](validation/KEYBOARD_TRIAL_2026-10-01.md)는 공개 v0.3.3과
+별개입니다. 기존 a29f1b8 후보에도 숫자 메뉴는 없습니다.
+실제 차량과 ASSIST 적용은 아직 미검증입니다.
 기존 `v0.3.0-shadow.1` ZIP은 이 수정을 포함하지 않습니다.
 
 **master의 추가 변경(PR #12):** 실제 VIM 센서 콜백 → 시간 정렬 → DR 코어 → LOCATION 미리보기의 SHADOW 계산을 구현했다. [기능·계약·남은 조건](docs/LIVE_SHADOW_2026-09-29_KO.md). 배포된 `v0.2.0-observe.2`에는 이 기능이 없으며 live ASSIST는 계속 차단된다.

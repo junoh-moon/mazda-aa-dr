@@ -21,13 +21,13 @@ sh /tmp/mnt/sda1/trial
 만듭니다. SHADOW는 계산 결과를 기록하고 순정 송신을 유지합니다.
 ASSIST는 비활성 상태입니다. 설치 성공 후 정상적인 전원 종료·기동이 필요합니다.
 
-[v0.3.2-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.2-shadow.1)의
-공개 파일은 `mazda-aa-dr-v0.3.2-shadow.1.zip`이며 기본 모드는 SHADOW입니다.
-공개 파일 재다운로드까지 확인한 [최종 검증 결과](../validation/RELEASE_2026-10-01.md)와
+[v0.3.3-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)의
+공개 파일은 `mazda-aa-dr-v0.3.3-shadow.1.zip`이며 기본 모드는 SHADOW입니다.
+공개 파일 재다운로드까지 확인한 [검증 결과](../validation/RELEASE_V033_2026-10-01.md)와
 [설치 수정 범위](../validation/USB_INSTALL_2026-09-29.md)를 확인하십시오.
 기존 v0.3.0-shadow.1 ZIP에는 이 수정이 없습니다.
 
-숫자 메뉴는 v0.3.2 공개 ZIP과 이전 `a29f1b8` 후보에 없습니다.
+숫자 메뉴는 v0.3.3 공개 ZIP과 이전 `a29f1b8` 후보에 없습니다.
 메뉴를 포함한 후속 후보는 [주차 중 확인·회수 절차](FIELD_TRIAL_KO.md)의
 고정 파일을 사용하십시오. 기존 [저장 공간·계산 진단 검증](../validation/TRIAL_PREPARATION_2026-10-01.md)은
 해당 커밋의 기록이며 새 메뉴의 실행 결과와 구분합니다.
