@@ -71,6 +71,17 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   이를 자격 없는 응답으로 분리합니다. idle/IRQ 정지 원인은 미확정입니다.
   QMP trace에서 진행 중 GIC 이벤트와 중단 뒤 8초간 0건을 대조했지만,
   마지막 timer 예약과 물리 하드웨어 경로는 확인하지 못했습니다.
+  [후속 타이머 인과 계측](../validation/LDS_TIMER_CAUSALITY_2026-10-01.md)은
+  그 당시의 미확인 범위를 좁혔습니다. 원본 진단 VM에서 가상 시계가
+  계속 흐르는 동안 두 `local_timer`에 제어값 0이 쓰이고 IRQ가 멈췄습니다.
+  guest timer 목록은 `mxc_timer1` broadcast와 CPU별 `local_timer`를
+  확인했고, 계측 부하가 큰 별도 실행에서는 이미 지나간 GPT 비교값을
+  QEMU가 가까운 만료로 선택하지 않는 장면도 포착했습니다. 마지막
+  guest deadline과 QEMU 계산의 원인 관계, 기본 VM의 안정적 완주,
+  차량 경로는 여전히 미확정입니다.
+  파일 trace를 끈 후속 실행에서는 guest의 직전 TCN 읽기보다 254 tick
+  앞선 GPT 비교값이 QEMU 계산 시 이미 295 tick 지난 상태였습니다.
+  정확한 guest 재시도·clockevent 결과는 아직 측정하지 못했습니다.
   [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)에서
   원본 `GetPosition`과 `GetUbloxDiag`의 출력 형식·별도 cache mutex를
   직접 대조했습니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단
