@@ -171,6 +171,9 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   같은 로컬 제품 DSO에 원본 LDS·VIM 경유 합성 입력을 동시에 주어 약 5초
   no-fix 동안 연속 MODEL 유효 47건과 복귀 뒤 철회를 관측했습니다. 물리 센서의
   생산 시각·주기·품질, 완료된 GPS holdout, 차량 정확도는 여전히 미확인입니다.
+  [최신 DSO 재실행](../validation/INTEGRATED_CURRENT_DSO_VM_2026-10-01.md)도
+  두 합성 구간에서 계산을 재현했지만 guest halt 뒤 runner가 제한 종료됐고
+  전체 로그는 미결론입니다. 상위 물리 입력·시간 자격 항목은 미완료입니다.
 - [x] 원본 직렬 읽기·GPS 파서의 유효 응답으로 단절·복귀와 제품 MODEL을 검사합니다.
   [LDS 입력 기동 조사](../validation/LDS_INPUT_STARTUP_2026-09-30.md)의 여섯 VM에서
   SYSTEM 응답·USB 목록 요청까지 진행했지만 mode 0·READ_NOT_READY입니다.
