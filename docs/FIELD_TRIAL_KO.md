@@ -13,11 +13,12 @@ v0.3.9-shadow.2 회수는 성공했지만 trace·collector JSONL 파일은
 제약을 반영한 숫자 메뉴와 저장 공간·계산 진단을 포함합니다.
 차량 USB 포트는 하나이고 허브를 사용할 수 없으므로 설치·회수 USB와 AA 연결을
 주차 중에 번갈아 연결합니다. AA 연결 중 셸이나 상태 명령을 요구하지 않습니다.
-현재 파일은 [v0.3.9-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)의
-`mazda-aa-dr-v0.3.9-shadow.2.zip`입니다. 소스는
-`bdb37e0f8cf5c8acb95166fba7f02fce860e9e21`, ZIP의 SHA-256은
-`4f6633ac95a20aa6c9907c2938843dff2fa769e6fd4c14dbc4fc243d7bf30699`입니다.
-[회수 실패와 핫픽스 검증](../validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)을 따르십시오.
+현재 파일은 [v0.3.9-shadow.3 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.3)의
+`mazda-aa-dr-v0.3.9-shadow.3.zip`입니다. 소스는
+`0ae08ccfae3504bd54dd286baa6c682c3e75b059`, ZIP의 SHA-256은
+`186cd6cad2965e8c76921db8efcae0eed6547638a6c10e1c36734ddb52af03bc`입니다.
+[최종 ZIP·발행 검증](../validation/RELEASE_V039_SHADOW3_2026-10-02.md)과
+[이전 회수 핫픽스](../validation/TRIAL_EXPORT_HOTFIX_2026-10-02.md)를 구분하십시오.
 이전 시험의 메뉴3이 `/proc/mounts` 오류로 실패했다면 USB 파일을 교체하고
 기존 한 줄 뒤 `3`만 사용하십시오. 이미 제거했어도 남은 로그를 회수합니다.
 재설치·재주행은 필요하지 않습니다. 이 회수는 실제로 성공했으나 archive에
@@ -25,10 +26,9 @@ v0.3.9-shadow.2 회수는 성공했지만 trace·collector JSONL 파일은
 이용한 주행을 확인했습니다. [빈 기록 조사](../validation/EMPTY_CAPTURE_2026-10-02.md)에
 따라 기동·저장 경로를 확인하며 센서 수집과 계산 결과는 판정하지 못했습니다.
 허용된 한 번의 시험은 이미 사용했으며, 아래 절차를 새 주행 요청으로 해석하지 않습니다.
-**아래 설치 `1 → 5 → 2 → 0`과 확대 회수는 다음 릴리즈 후보용입니다.**
-후속 소스의 guard 진단·메뉴 `5` 재부팅·새 부팅 ID 대조·전체 설치 폴더 회수는
-현재 공개 `.2`에 없습니다. 새 고정 소스·최종 ZIP 검사와 발행이 끝나기 전에는
-공개 `.2`의 기능으로 취급하지 마십시오. 현재 차량 셸은 닫혔으며 이 문서는
+**아래 설치 `1 → 5 → 2 → 0`과 확대 회수는 공개 `.3`의 절차입니다.**
+guard 진단·메뉴 `5` 재부팅·새 부팅 ID 대조·전체 설치 폴더 회수를 포함하며
+이전 `.2`에는 이 기능이 없습니다. 현재 차량 셸은 닫혔으며 이 문서는
 추가 방문 요청이 아닙니다. 설치·제거 사진만으로 실제 자동 기동이나 수집·계산
 성공을 판정하지 않습니다.
 원본 AA 연결 등록의 서버 주소 GUID·client 고유 이름과 실제 raw 송신 연결의

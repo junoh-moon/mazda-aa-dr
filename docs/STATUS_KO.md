@@ -9,10 +9,9 @@
 guard 소비는 판정되지 않았고 센서·SHADOW·폰 수용도 미판정입니다.
 [실제 회수 분석](../validation/FIELD_V039_EMPTY_CAPTURE_2026-10-02.md)을
 확인하십시오. 현재 셸은 닫혔으므로 새 차량 방문을 요청하지 않습니다.
-후속 소스의 읽기 전용 상태 출력은 guard 표식 유무를 더 분명히 보고하지만
-공개 v0.3.9-shadow.2에는 포함되지 않습니다. 정확한 CMU 재부팅 방법과
-확대 디버그 회수는 [후속 소스](../validation/STARTUP_RECOVERY_2026-10-02.md)에
-구현했으며 아직 발행하지 않았습니다. 차량 점화 OFF/ON은
+공개 v0.3.9-shadow.3은 guard 표식 진단과 [정확한 CMU 재부팅 절차·확대 회수](../validation/STARTUP_RECOVERY_2026-10-02.md)를
+포함합니다. 최종 ZIP의 순정 셸 실행과 공개 재다운로드를
+[발행 기록](../validation/RELEASE_V039_SHADOW3_2026-10-02.md)에 보존합니다. 차량 점화 OFF/ON은
 실제 CMU 새 부팅을 보장하지 않습니다. 별도로 정한 다음 시험이 있다면
 출발 전 주차 중 `one_boot=consumed_this_boot`, 현재 collector 기록과 최근
 poll을 확인하십시오. ASSIST는 계속 비활성입니다.
@@ -27,7 +26,14 @@ poll을 확인하십시오. ASSIST는 계속 비활성입니다.
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.9-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)입니다.
+현재 공개판은 [v0.3.9-shadow.3](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.3)입니다.
+고정 소스 `0ae08ccfae3504bd54dd286baa6c682c3e75b059`를 master에 반영하고
+설치 ZIP·체크섬을 발행했습니다. 새판은 명시적인 순정 CMU 재부팅 요청과
+새 boot ID 대조, 전체 설치 폴더·실제 autostart·SM·부팅 진단의 USB 회수,
+보고서 쓰기 실패 표시를 포함합니다. 전원 상태와 단일 USB 교체 순서는
+[설치 안내](ONE_COMMAND_INSTALL_KO.md)를 따르십시오.
+
+아래는 `.2` 회수와 검증의 기록이며 새판의 실행 횟수로 바꾸지 않습니다.
 실차에서 v0.3.9-shadow.1의 메뉴3이 정상 `/proc/mounts` 링크를 거부했습니다.
 이후 핫픽스로 archive 회수는 성공했지만 trace·collector 기록 파일이 모두
 없었습니다. 사용자는 설치·차량 점화 OFF/ON·무선 AA 동글과 S25 연결·주행을

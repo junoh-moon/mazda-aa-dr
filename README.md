@@ -15,7 +15,11 @@ See [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate remov
 
 [한국어](README_KO.md) · [Current status / handoff](docs/STATUS_KO.md) · [Review corrections](docs/REVIEW_2026-09-28_KO.md)
 
-The published [v0.3.9-shadow.2 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)
+The published [v0.3.9-shadow.3 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.3)
+adds an explicit CMU reboot request, before/after boot-ID checks and whole-installation
+startup diagnostics exported to USB. Its instructions distinguish ACC, engine-off
+ON and a running engine; see the [release verification](validation/RELEASE_V039_SHADOW3_2026-10-02.md).
+It also retains the previous observation features: it
 records the transport server GUID and the client's unique name at the original
 AA connection registration, then records whether the actual raw send used that
 same connection binding. Missing identity does not discard raw position
@@ -32,9 +36,9 @@ The follow-up export succeeded but contained no trace or collector journals.
 The user confirmed ignition off/on and a drive with a wireless AA dongle and S25;
 a new CMU Linux boot was not established. See the [empty-capture analysis](validation/FIELD_V039_EMPTY_CAPTURE_2026-10-02.md)
 and [persistent-storage investigation](validation/EMPTY_CAPTURE_2026-10-02.md).
-Successful export does not establish capture. Subsequent source adds guard-marker
-diagnostics; a verified reboot procedure and expanded debug export are being
-prepared and are not part of the published `.2` bundle.
+Successful export does not establish capture. The `.3` bundle includes guard-marker
+diagnostics, menu `5` for the original CMU reboot command and expanded debug export.
+Reboot-command acceptance and a new CMU boot are checked separately.
 
 The [original release record](validation/RELEASE_V039_2026-10-01.md) contains the source pin,
 ZIP hash, final host/ARM and stock BusyBox checks, published-download verification,
@@ -50,15 +54,19 @@ then Enter. Change the drive letter if needed; no Shift characters are required.
 sh /tmp/mnt/sda1/trial
 ```
 
-For any separately authorized future trial, first establish a new CMU Linux boot
-and return to the USB shell **while parked**. Ignition off/on alone does not prove
-that boot; the exact reboot procedure is still being verified. Before moving, use menu `2` to check
+For any separately authorized future trial, keep the car parked in neutral with
+the parking brake applied and the engine actually running. Follow the
+[power-state and installation instructions](packaging/USB_START_KO.md): after menu `1`,
+choose `5` with the same USB connected, without pressing the engine button.
+After the CMU returns, reopen the USB shell. Before moving, use menu `2` to check
+`reboot_check=new_boot_observed`,
 `one_boot=consumed_this_boot`, nonzero `retained_bytes`, and
 `collector_poll_recent=observed`. If any of these startup observations is absent, export available
 evidence with `3`, then reopen the menu with the same command and disarm with
 `4`; do not proceed with that trial. A parked
 sensor-free status can exit nonzero even when these individual startup checks
-are present. Then swap the USB for AA or its dongle and check normal AA/touch
+are present. Exit with `0`, then swap the USB for AA or its dongle without another
+engine/CMU restart and check normal AA/touch
 operation while parked. Menu `2` does not itself start capture. After parking,
 disconnect AA, reconnect the USB, return to the shell and choose `3` directly.
 If shell reentry requires a normal reboot, retrieve the retained previous-boot

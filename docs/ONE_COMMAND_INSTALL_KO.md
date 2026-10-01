@@ -1,19 +1,19 @@
 # USB 숫자 메뉴로 설치·CMU 재부팅·회수
 
 대상은 **2019 MX-5 ND2 6MT / Mazda Connect NA 74.00.324A**입니다.
-현재 공개판은 [v0.3.9-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.2)이며,
-설치 파일 `mazda-aa-dr-v0.3.9-shadow.2.zip`의 SHA-256은
-`4f6633ac95a20aa6c9907c2938843dff2fa769e6fd4c14dbc4fc243d7bf30699`입니다.
+현재 공개판은 [v0.3.9-shadow.3](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.9-shadow.3)이며,
+설치 파일 `mazda-aa-dr-v0.3.9-shadow.3.zip`의 SHA-256은
+`186cd6cad2965e8c76921db8efcae0eed6547638a6c10e1c36734ddb52af03bc`입니다.
 GitHub의 자동 `Source code (zip)`은 설치 ZIP이 아닙니다.
 
-**아래 `1 → 5 → 2 → 0`과 확대 회수는 다음 릴리즈 후보의 절차입니다.**
-공개 `.2`에는 메뉴 `5`와 새 부팅 대조·전체 설치 폴더 회수가 없습니다.
-새 버전의 고정·검증·발행이 완료되기 전 공개 `.2`에 이 절차를 적용하지 마십시오.
+**아래 `1 → 5 → 2 → 0`과 확대 회수는 공개 `.3`의 절차입니다.**
+이전 `.2`에는 메뉴 `5`와 새 부팅 대조·전체 설치 폴더 회수가 없습니다.
+[발행·재다운로드 검증](../validation/RELEASE_V039_SHADOW3_2026-10-02.md)을 확인하십시오.
 첫 실차 회수 archive에는 trace·collector 기록이 없었습니다.
 [빈 기록 분석](../validation/FIELD_V039_EMPTY_CAPTURE_2026-10-02.md)을 보존하며,
 지금 추가 방문·재설치·재주행을 요청하지 않습니다.
 
-기존 `/proc/mounts` 회수 오류만 해결할 때는 공개 `.2`의 한 줄과 `3`을
+기존 자료를 회수할 때는 공개 `.3`의 한 줄과 `3`을
 사용합니다. 이미 제거했어도 남은 파일은 회수하지만, 기록이 없던 구간을
 복원하거나 같은 주행을 반복할 이유가 되지는 않습니다.
 
