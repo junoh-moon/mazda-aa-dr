@@ -161,7 +161,14 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
         else return fault(PIPELINE_BAD_INPUT);
         status_.uncertainties|=REVERSE_ENUM_MODEL|REVERSE_LATCH_MODEL;
     } else {
-        if (!r.count) return fault(PIPELINE_BAD_INPUT);
+        // VIP sends a wrapping u16 sum of 12-bit samples and a u8 count.
+        // If one added modulus still fits the reported count, the small
+        // apparent mean could be a wrapped large sum.
+        if (!r.count || r.count>255 ||
+            uint32_t(r.raw[0])+65536U<=uint32_t(r.count)*4095U)
+            return fault(PIPELINE_BAD_INPUT);
+        // This does not exclude count wrap, skipped inputs or stale samples.
+        // The result remains MODEL-only.
         unsigned mean=unsigned(r.raw[0])/r.count;
         if (mean>=4094) return fault(PIPELINE_BAD_INPUT);
         if (!last_yaw_time_) { last_yaw_time_=time; return PIPELINE_WAITING; }

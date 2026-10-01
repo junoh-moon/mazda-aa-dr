@@ -135,6 +135,11 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
   위치 순번 소진 시 큐 범위를 벗어나는 Pipeline 결함을 수정했습니다.
   [공개 API 재현·음성 대조·host/ARM 검사](../validation/PIPELINE_EXHAUSTION_2026-09-30.md)를
   확인했습니다. 극단적 순번의 합성 시험이며 실차 검증은 아닙니다.
+- [x] 원본 VIP의 16비트 요레이트 합계 넘침을 작은 정상 평균으로 수락하던
+  MODEL 결함을 수정했습니다. [원본 생산자 조사](../validation/VIP_ACCUMULATOR_2026-10-01.md)의
+  입력 해시를 직접 확인하고, [host/ARM 통합 검사](../validation/VIP_ACCUMULATOR_INTEGRATION_2026-10-01.md)를
+  완료했습니다. count 자체의 넘침·손실 창·생산 시각·물리 센서 품질은
+  이 경계식으로 복원되지 않으며 ASSIST 자격으로 세지 않습니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
@@ -147,7 +152,7 @@ SHADOW 로그 생성만으로 이 목표를 완료한 것으로 보지 않습니
 | 정확한 펌웨어·계정·경로 | 네 원본 identity 유지. `cmu=0`, `service=1001`, 순정 저장소 symlink 반영 | 다른 펌웨어에 일반화하지 않음. 현장 설치 정보와 대조 필요 |
 | OEM 호출 계약·터치 공존 | ARM veneer/encoder 합성 시험. 순정 커널에서 AA 후크와 터치 DSO 동시 로드. 원본 manager의 자동 LDS→native send와 OBSERVE/SCRUB 실행 | 정상 폰 연결 상태의 AA 송신·터치 입력, 수명·동시성·지연 장애의 전 범위 미검증 |
 | 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. 원본 VBS callback과 AA 수신을 합성 입력으로 실행. journal·종료·회수 회귀 | 물리 센서 callback과 주행 전체의 누락·부하·로그 보관량 미검증 |
-| 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음 |
+| 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험. VIP 요레이트 생산자의 선택 경로 해석 실행과 MODEL 합계 넘침 거부 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음. count 넘침과 손실 창도 식별 불가 |
 | 적분 시간·신선도 | receipt와 producer 시각 분리, MODEL이 qualified로 승격되지 않는 검사 | 현재 IPC payload에는 생산자 시각/순번이 없음. 검증된 지연 상한 등 대체 근거도 없음 |
 | 위치 계산·재획득 | 코어·정차 보정·GPS holdout·wheel 보정 합성 시험 | 실제 경로·독립 기준 위치 비교 없음. GPS holdout 차이를 ground truth로 세지 않음 |
 | 요청 출처·ASSIST 실행 | adapter의 출처/epoch 검사와 qualified 파이프라인은 합성 입력으로 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 요청 관측 연계는 제품에 연결했으나 qualified 자격 입력은 미구현. 전체 manager 이후 반복 취소 timeout 원인 미분리 |

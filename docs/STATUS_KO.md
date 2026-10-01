@@ -216,6 +216,16 @@ ASan/UBSan으로 재현·수정했습니다. root의 전체 host 330개 Python �
 고정 ARM 전체 검사는 통과했습니다. 순정 VM·차량·폰 실행이나 공개 ZIP 갱신은
 이번 결과에 포함되지 않습니다.
 
+[VIP 누적값 통합·직접 검사](../validation/VIP_ACCUMULATOR_INTEGRATION_2026-10-01.md)는
+외부 [원본 생산자 해석 기록](../validation/VIP_ACCUMULATOR_2026-10-01.md)의
+입력 해시를 직접 대조하고, 16비트 합계 넘침이 작은 정상 평균으로 보이던
+MODEL 결함을 재현·수정했습니다. root의 navigation 2,740개와 전체 host,
+고정 GCC 4.9.1 ARM 빌드·QEMU user 전체 검사가 통과했습니다. 기본 host
+실행에서 건너뛴 원본 파일·릴리즈 산출물 의존 packaging 검사는 필요한
+입력을 지정해 20개 모두 별도 통과했습니다. count 넘침·물리 품질·생산
+시각은 복구되지 않으며 원본 VIP MCU·실차·폰과 ASSIST는 미검증 또는
+비활성이고 공개 ZIP도 변경하지 않았습니다.
+
 [원본 커널의 GPIO 되읽기 진단](../validation/LDS_GPIO_VM_2026-10-01.md)에서는
 외부 Claude 브랜치의 USB 전원 추적을 확인하고, root가 별도 격리 VM에서
 출력 GPIO의 쓰기 뒤 latch 1·방향 1·PSR/sysfs 0을 직접 대조했습니다.
