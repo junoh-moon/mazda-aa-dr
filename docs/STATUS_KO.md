@@ -12,16 +12,24 @@
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개판은 [v0.3.7-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.7-shadow.1)입니다.
-`56a7042`에 고정한 새 ARM 빌드·설치 ZIP으로 원본 위치 기록의 고도·horizontal·
-vertical 누락을 수정했습니다. v0.3.6의 기준점·GPS 콜백 결합 수정, 숫자 메뉴와
-저장 공간 정책을 유지합니다. [발행 검증](../validation/RELEASE_V037_2026-10-01.md)에
-host Python 378개·C/C++와 고정 ARM 전체(생략 0), 실제 제품 기록 함수,
-원본 LDS parser→service 응답→제품 token, 최종 ZIP의 순정 BusyBox 설치·
-계정·복구·회수·제거를 기록했습니다. 공개 파일을 다시 내려받아 SHA·CRC·전체
-manifest·고정 소스를 대조했습니다. 임시 도구를 제거하고 최초 호스트 목록과
+현재 공개판은 [v0.3.8-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.8-shadow.1)입니다.
+`40051f8`에 고정한 새 ARM 빌드·설치 ZIP은 GPS holdout 결과에 원본 위치의
+호출·generation 식별자를 보존합니다. 분석기는 같은 기록 묶음·세션에서 정확한
+원본 행을 연결하고 누락·중복·불일치·과거 형식을 구분합니다. 연결 진단 때문에
+기존 MODEL 비교를 버리거나 GPS 차이를 참값으로 표시하지 않습니다.
+[기능 검증](../validation/HOLDOUT_REFERENCE_2026-10-01.md)과
+[발행 검증](../validation/RELEASE_V038_2026-10-01.md)에 새 checkout의 host Python
+401개·C/C++와 고정 ARM 전체(생략 0), 최종 ZIP의 순정 BusyBox 설치·계정·복구·
+회수·제거를 기록했습니다. 공개 파일을 다시 내려받아 SHA·CRC·전체 manifest·
+고정 소스를 대조했습니다. 추가 설치 도구를 제거하고 최초 호스트 목록과
 일치함을 확인했습니다. 실제 qualified 입력 공급부·물리 센서·차량 복구·폰 수용은
 미완료이며 live ASSIST는 계속 비활성입니다.
+
+[v0.3.7 검증](../validation/RELEASE_V037_2026-10-01.md)은 `56a7042` 제품의 원본
+위치 아홉 필드 보완, host Python 378개·C/C++·고정 ARM, 실제 위치 기록 함수와
+원본 LDS parser→service 응답→제품 token 실행을 별도 보존합니다. 이 원본 LDS
+실행과 기록 함수 직접 검사를 v0.3.8에서 다시 실행한 것으로 세지 않습니다.
+기준점·GPS 콜백 결합 수정, 숫자 메뉴와 저장 공간 정책은 유지합니다.
 
 외부 [v0.3.6 발행 기록](../validation/RELEASE_V036_2026-10-01.md)과
 [기준점 결합 검증](../validation/ASSIST_ANCHOR_PAIRING_2026-10-01.md)을 보존합니다.

@@ -19,14 +19,17 @@ The current USB packaging includes the MP3 diagnostic-terminal entry and support
 the target's BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock storage aliases
 and read-only root. See [USB instructions](packaging/USB_START_KO.md) and
 [new installation evidence](validation/USB_INSTALL_2026-09-29.md).
-The published [v0.3.7-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.7-shadow.1)
-preserves all nine original position fields, including altitude, `horizontal`
-and `vertical` previously omitted from the journal. It retains the qualified anchor
-pairing fix, numeric USB menu and storage limits. The live qualified input
-provider is still missing, so ASSIST stays disabled. The
-[release record](validation/RELEASE_V037_2026-10-01.md) pins the host/ARM checks,
-actual DSO formatter, original LDS parser-to-reply execution, stock BusyBox
-installation and verified published download to the same product.
+The published [v0.3.8-shadow.1 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.8-shadow.1)
+links GPS holdout results to the original position's call and generation IDs.
+The analyzer distinguishes exact matches, missing or ambiguous references, and
+older logs without these IDs. It preserves the MODEL comparisons and all nine
+original position fields, along with the anchor pairing fix, numeric USB menu
+and storage limits. The live qualified input provider is still missing, so
+ASSIST stays disabled. The [release record](validation/RELEASE_V038_2026-10-01.md)
+pins the full host/ARM checks, stock BusyBox installation and verified published
+download to the same product. The [v0.3.7 record](validation/RELEASE_V037_2026-10-01.md)
+separately preserves the earlier original LDS execution and actual position
+formatter checks; these were not repeated for v0.3.8.
 Unpack its contents to the USB root and run `sh install.sh` from that directory
 once the diagnostic shell opens. While parked, use
 `sh /tmp/mnt/sda1/trial` for status, finish/export or removal.
