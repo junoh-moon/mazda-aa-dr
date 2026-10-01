@@ -30,8 +30,8 @@ AA connection registration, then records whether the actual raw send used that
 same connection binding. Missing identity does not discard raw position
 observations. All nine original position fields, GPS holdout call/generation
 references and MODEL comparisons remain, alongside anchor/callback and
-discarded-queue fixes. Physical sensor timing/quality and the live qualified input
-provider remain incomplete, so **ASSIST stays disabled**.
+discarded-queue fixes. Physical LDS capture remains unverified; the live
+qualified input provider is unimplemented and unverified, so **ASSIST stays disabled**.
 
 **Recovering a failed v0.3.9-shadow.1 export:** replace the USB files with this
 hotfix and choose `3` after the command below, including after uninstalling.
@@ -65,10 +65,17 @@ the parking brake applied and the engine actually running. Follow the
 choose `5` with the same USB connected, without pressing the engine button.
 After the CMU returns, reopen the USB shell. Before moving, use menu `2` to check
 `reboot_check=new_boot_observed`,
-`one_boot=consumed_this_boot`, nonzero `retained_bytes`, and
-`collector_poll_recent=observed`. If any of these startup observations is absent, export available
-evidence with `3`, then reopen the menu with the same command and disarm with
-`4`; do not proceed with that trial. A parked
+`startup_state=guard_selected_after_new_boot`,
+`one_boot=consumed_this_boot`, `config_mode=SHADOW`,
+`runtime_disable_next_start=absent`, nonzero `retained_bytes`, and
+`collector_poll_recent=observed`. These seven checks apply to the subsequent
+v0.3.10-shadow.2 candidate; the published shadow.1 package lacks `startup_state`,
+`config_mode`, and `runtime_disable_next_start`.
+If `startup_state=new_linux_boot_arm_unconsumed` or the collector poll is
+missing immediately after the screen returns, wait 60 seconds while parked
+and run `2` once more. If any of the seven checks is still absent, export
+available evidence with `3`, then reopen the menu with the same command and
+disarm with `4`; do not proceed with that trial. A parked
 sensor-free status can exit nonzero even when these individual startup checks
 are present. Exit with `0`, then swap the USB for AA or its dongle without another
 engine/CMU restart and check normal AA/touch

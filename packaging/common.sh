@@ -18,6 +18,7 @@ MOUNT_LOCK=$ROOT/tmp/.mx5dr-mount.lock
 MOUNT_LOCKED=0
 REMOUNTED=''
 LOCKED=0
+ARM_PENDING=0
 fail() { echo "mx5dr: $*" >&2; exit 1; }
 hash() (
     # A stock CMU need not have sha256sum (or its optional -c mode). FAT USB
@@ -68,7 +69,15 @@ collector_user() {
 }
 cleanup() {
     rc=$?
-    trap - 0 HUP INT TERM
+    trap - 0
+    trap '' HUP INT TERM
+    # A caught signal or failed post-arm diagnostic publication must not leave
+    # a live authorization. This cannot cover abrupt power loss.
+    if [ "$ARM_PENDING" = 1 ]; then
+        rm -f "$BASE/guard/arm" || rc=1
+        rm -f "$BASE/guard/armed-boot.new.$$" || rc=1
+        sync || rc=1
+    fi
     if [ "$LOCKED" = 1 ]; then
         # Only this process's staging names, never another install's backups.
         for staged in "$ROOT/usr/bin/autostart.mx5dr-new.$$" "$ROOT/usr/bin/autostart.mx5dr-remove.$$" \
@@ -301,11 +310,74 @@ clear_capture_markers() {
 
 valid_boot_id() {
     printf '%s\n' "$1" | awk '
-        length($0)==36 {
+        NR==1 {
             s=$0
-            if (substr(s,9,1)!="-" || substr(s,14,1)!="-" || substr(s,19,1)!="-" || substr(s,24,1)!="-") exit 1
+            if (length(s)!=36 || substr(s,9,1)!="-" || substr(s,14,1)!="-" ||
+                substr(s,19,1)!="-" || substr(s,24,1)!="-") bad=1
             gsub(/-/,"",s)
-            if (length(s)==32 && s ~ /^[0-9a-f]+$/) ok=1
+            if (length(s)!=32 || s !~ /^[0-9a-f]+$/) bad=1
         }
-        END {exit !ok}'
+        NR>1 {bad=1}
+        END {exit (NR!=1 || bad)}'
+}
+read_boot_record() {
+    boot_record_path=$1
+    [ -f "$boot_record_path" ] && [ ! -L "$boot_record_path" ] || return 1
+    boot_record_bytes=$(wc -c < "$boot_record_path") || return 1
+    [ "$boot_record_bytes" -eq 37 ] || return 1
+    boot_record_id=$(cat "$boot_record_path") || return 1
+    valid_boot_id "$boot_record_id" || return 1
+    # Command substitution can discard NUL and trailing LF. Compare the file's
+    # actual bytes so neither corruption can become a qualified boot marker.
+    boot_record_actual_raw=$(od -v -An -t x1 "$boot_record_path") || return 1
+    boot_record_expected_raw=$(printf '%s\n' "$boot_record_id" | od -v -An -t x1) || return 1
+    boot_record_actual=$(printf '%s\n' "$boot_record_actual_raw" | tr -d '[:space:]') || return 1
+    boot_record_expected=$(printf '%s\n' "$boot_record_expected_raw" | tr -d '[:space:]') || return 1
+    [ "${#boot_record_actual}" -eq 74 ] && [ "${#boot_record_expected}" -eq 74 ] || return 1
+    [ "$boot_record_actual" = "$boot_record_expected" ] || return 1
+    [ "${2:-}" = quiet ] && return 0
+    printf '%s\n' "$boot_record_id"
+}
+
+# Check before changing service startup or rearm templates. Do not replace a
+# previous trial's diagnostic marker until the target guard has actually armed.
+prepare_arm_boot() {
+    arm_boot_id=$(read_boot_record "$ROOT/proc/sys/kernel/random/boot_id") || fail 'Invalid arming boot ID'
+}
+
+# Keep the prior trial's boot ID for export, but never pair it with a new arm.
+# A failed retry then remains diagnostically unconfirmed without deleting raw
+# logs or the earlier ID.
+stash_arm_boot() {
+    arm_marker_old=$BASE/guard/armed-boot
+    arm_marker_previous=$BASE/guard/armed-boot.previous
+    # A malformed old marker is itself a failed rearm. Revoke the old arm on
+    # any failure after entering this transaction, including type validation.
+    ARM_PENDING=1
+    if [ -e "$arm_marker_old" ] || [ -L "$arm_marker_old" ]; then
+        read_boot_record "$arm_marker_old" quiet || fail 'Invalid prior arming boot marker'
+    fi
+    if [ -e "$arm_marker_previous" ] || [ -L "$arm_marker_previous" ]; then
+        read_boot_record "$arm_marker_previous" quiet || fail 'Invalid previous arming boot marker'
+    fi
+    if [ -e "$arm_marker_old" ]; then
+        mv -f "$arm_marker_old" "$arm_marker_previous" || fail 'Cannot preserve prior arming boot marker'
+        sync
+    fi
+}
+
+# Diagnostic only: selection still belongs to the target guard at autostart.
+# The caller revokes arm if this post-arm publication fails.
+record_arm_boot() {
+    arm_boot_tmp=$BASE/guard/armed-boot.new.$$
+    [ ! -e "$arm_boot_tmp" ] && [ ! -L "$arm_boot_tmp" ] || return 1
+    if [ -e "$BASE/guard/armed-boot" ] || [ -L "$BASE/guard/armed-boot" ]; then
+        [ -f "$BASE/guard/armed-boot" ] && [ ! -L "$BASE/guard/armed-boot" ] || return 1
+    fi
+    printf '%s\n' "$arm_boot_id" > "$arm_boot_tmp" || return 1
+    chmod 0600 "$arm_boot_tmp" || return 1
+    if [ -z "$ROOT" ]; then chown 0 "$arm_boot_tmp" || return 1; fi
+    sync || return 1
+    mv -f "$arm_boot_tmp" "$BASE/guard/armed-boot" || return 1
+    sync || return 1
 }

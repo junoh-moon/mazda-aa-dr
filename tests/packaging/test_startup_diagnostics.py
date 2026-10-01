@@ -29,7 +29,7 @@ class StartupDiagnosticsTests(unittest.TestCase):
         self.guard = self.base / 'guard'
         self.proc = self.root / 'proc'
         (self.proc / 'self').mkdir(parents=True)
-        (self.proc / 'sys/kernel/random').mkdir(parents=True)
+        (self.proc / 'sys/kernel/random').mkdir(parents=True, exist_ok=True)
         (self.proc / 'sys/kernel/random/boot_id').write_text(BOOT)
         self.mounts = self.proc / 'self/mounts'
         self.mounts.write_text('rootfs / rootfs rw 0 0\n'
@@ -76,6 +76,8 @@ class StartupDiagnosticsTests(unittest.TestCase):
         self.assertEqual(values['path.data_persist.type'], 'symlink')
         self.assertEqual(values['path.mnt.type'], 'symlink')
         self.assertEqual(values['guard.last_boot.value'], BOOT.strip())
+        self.assertEqual(values['guard.armed_boot.value'], BOOT.strip())
+        self.assertEqual(values['guard.previous_armed_boot.status'], 'missing')
         self.assertEqual(values['guard.arm.status'], 'missing')
         self.assertEqual(values['guard.consumed.status'], 'valid')
         for index in range(1, 8):
@@ -211,6 +213,18 @@ class StartupDiagnosticsTests(unittest.TestCase):
         self.assertEqual(values['guard.last_boot.status'], 'malformed')
         self.assertEqual(values['guard.normal_source.status'], 'malformed')
         self.assertNotIn('PRIVATE_', result.stdout + result.stderr)
+
+    def test_rearm_boot_history_is_distinct_and_known_to_inventory(self):
+        old = self.guard / 'armed-boot'
+        prior = old.read_bytes()
+        old.rename(self.guard / 'armed-boot.previous')
+        old.write_text('87654321-1234-1234-1234-123456789abc\n')
+        result, values = self.run_diagnostics()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(values['guard.armed_boot.value'],
+                         '87654321-1234-1234-1234-123456789abc')
+        self.assertEqual(values['guard.previous_armed_boot.value'], prior.decode().strip())
+        self.assertEqual(values['guard.inventory.status'], 'known_entries_only')
 
     def test_unexpected_guard_entry_is_counted_without_name_or_contents(self):
         (self.guard / 'PRIVATE_NAME').write_text('PRIVATE_BODY')

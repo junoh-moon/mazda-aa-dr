@@ -553,6 +553,88 @@ def ownership_account_regressions(stock, bundle):
                 print('PASS: symlink/FIFO rejection at all four collector paths', flush=True)
 
 
+def startup_menu_flow(stock, bundle):
+    """Link menu 1→5→2 with real ARM guard and authored reboot/poll witnesses."""
+    with tempfile.TemporaryDirectory(prefix='mx5dr-startup-menu-') as tmp:
+        root = Path(tmp)
+        usb = make_root(root, stock, bundle)
+        reboot = root / 'sbin/reboot'
+        require(reboot.is_symlink(), 'Expected stock BusyBox reboot applet link')
+        reboot.unlink()
+        new_boot = '71234567-1234-1234-1234-0123456789ab'
+        put(root, '/sbin/reboot', '#!/bin/sh\n'
+            f'printf "{new_boot}\\n" > /proc/sys/kernel/random/boot_id\n'
+            'echo called > /reboot.witness\n', 0o755)
+
+        def run(script, ok=True):
+            result = execute_guest(root, script)
+            require((result.returncode == 0) == ok,
+                    f'Startup menu unexpected rc={result.returncode}: {script}')
+            return result
+
+        run("printf '1\\n5\\n' | sh /tmp/mnt/sda1/trial")
+        require((root / 'reboot.witness').read_text() == 'called\n' and
+                'boot_id=' + BOOT.strip() in (usb / 'reboot-request.txt').read_text(),
+                'Menu 1→5 failed to preserve the pre-request boot ID')
+        base = root / 'tmp/mnt/data_persist/mx5-aa-dr'
+        require((base / 'guard/arm').is_file(), 'Menu 1 did not arm actual ARM guard')
+        run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf')
+        require((base / 'guard/last-boot').read_text() == new_boot + '\n' and
+                not (base / 'guard/arm').exists(), 'Authored new boot did not consume arm')
+        rows = [dict(kind='collector_boot', boot_id=new_boot, schema=1),
+                dict(kind='poll', end_ns=99000000000, seq=0)]
+        (base / 'logs/collector.0.jsonl').write_text(''.join(json.dumps(dict(
+            stream='collector', collector_pid=123, observed_at_mono_ns=99000000000,
+            producer_mono_ns=None, producer_time_status='unknown', **row),
+            separators=(',', ':')) + '\n' for row in rows))
+        status = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        for expected in ('reboot_check=new_boot_observed',
+                         'startup_state=guard_selected_after_new_boot',
+                         'one_boot=consumed_this_boot', 'config_mode=SHADOW',
+                         'runtime_disable_next_start=absent',
+                         'collector_poll_recent=observed'):
+            require(expected in status.stdout, 'Menu 1→5→2 missing ' + expected)
+        retained = next((int(token.split('=', 1)[1]) for token in status.stdout.split()
+                         if token.startswith('retained_bytes=')), 0)
+        require(retained > 0 and 'status_exit=1' in status.stdout,
+                'Synthetic poll was not retained or missing AA runtime was overclaimed')
+        require('reboot_check=new_boot_observed' in (usb / 'startup-result.txt').read_text(),
+                'Menu 2 did not save the startup comparison to USB')
+        marker = base / 'guard/armed-boot'
+        marker.write_bytes(BOOT.strip().encode() + b'\x00')
+        damaged = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        require('guard_armed_boot=invalid' in damaged.stdout and
+                'startup_state=guard_selected_reboot_unconfirmed' in damaged.stdout,
+                'Stock BusyBox accepted a same-size NUL-corrupt arming marker')
+        marker.write_text(BOOT)
+        consumed = base / 'guard/consumed'
+        consumed_original = consumed.read_bytes()
+        consumed_damaged = bytearray(consumed_original)
+        consumed_damaged[25] = 0
+        consumed.write_bytes(consumed_damaged)
+        damaged = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        require('guard_consumed=invalid' in damaged.stdout and
+                'startup_state=guard_selected_after_new_boot' not in damaged.stdout,
+                'Stock BusyBox accepted an internal NUL in the v3 consumed marker')
+        consumed.write_bytes(consumed_original)
+        config = base / 'mx5dr.conf'
+        config_original = config.read_bytes()
+        config.write_bytes(config_original.replace(b'mode=', b'mo\x00e=', 1))
+        damaged = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        require('config_mode=unconfirmed' in damaged.stdout and
+                'startup_state=guard_selected_after_new_boot' not in damaged.stdout,
+                'Stock BusyBox accepted an internal NUL in the trial config')
+        config.write_bytes(config_original)
+        put(root, '/test-bin/od', '#!/bin/sh\nexit 1\n', 0o755)
+        missing_od = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        require('Invalid current boot ID' in missing_od.stdout + missing_od.stderr,
+                'Failed od was hidden by a successful tr pipeline')
+        print('PASS: stock ARM BusyBox menu1→5→2, real guard selection, authored reboot '
+              'and collector witnesses, seven startup fields and corrupt-byte rejection; '
+              'no PID 1/AA/VBS execution.',
+              flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stock', type=Path, required=True)
@@ -608,6 +690,10 @@ def main():
         lib.write_bytes(saved)
         run("printf '1\\n' | sh /tmp/mnt/sda1/trial")
         require((base / 'guard/arm').is_file(), 'Actual ARM guard did not arm')
+        require((base / 'guard/arm').stat().st_size == 538,
+                'Unexpected real ARM guard manifest length')
+        require((base / 'guard/armed-boot').read_text() == BOOT,
+                'Installer did not retain the arming Linux boot identity')
         require('mode=' + default_mode in (base / 'mx5dr.conf').read_text().splitlines(),
                 'Installed config differs from the bundle default mode')
         for name in ('jci/sm/sm.conf', 'jci/sm/sm_WCP.conf'):
@@ -635,6 +721,9 @@ def main():
             require('cannot be preloaded' not in loaded.stderr and
                     'calling init: ' + path in loaded.stderr,
                     'Stock loader did not initialize ' + name)
+        # Authored new kernel identity models the menu-5 reboot boundary. The
+        # guest still does not boot OEM PID 1 or a physical CMU.
+        put(root, '/proc/sys/kernel/random/boot_id', '11234567-1234-1234-1234-0123456789ab\n')
         result = run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf')
         trial = root / result.stdout.strip().lstrip('/')
         initial_trial = trial.read_text()
@@ -652,11 +741,16 @@ def main():
                 'Consumed arm did not bind the exact installed LDS product')
         print('PASS: ' + default_mode + ' bundle default and initial trial preload selection', flush=True)
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
-        put(root, '/proc/sys/kernel/random/boot_id', '11234567-1234-1234-1234-0123456789ab\n')
+        put(root, '/proc/sys/kernel/random/boot_id', '21234567-1234-1234-1234-0123456789ab\n')
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
         # Later status fixtures describe SHADOW. Select that mode explicitly for
         # this simulated new boot, including a real arm/consume transition.
         run('sh /data_persist/mx5-aa-dr/tools/arm.sh --mode=SHADOW')
+        require((base / 'guard/armed-boot.previous').read_text() == BOOT and
+                (base / 'guard/armed-boot').read_text() ==
+                '21234567-1234-1234-1234-0123456789ab\n',
+                'Rearm did not separate old and new boot identities')
+        put(root, '/proc/sys/kernel/random/boot_id', '31234567-1234-1234-1234-0123456789ab\n')
         result = run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf')
         shadow_trial = root / result.stdout.strip().lstrip('/')
         require('mode=SHADOW' in (base / 'mx5dr.conf').read_text().splitlines() and
@@ -699,6 +793,9 @@ def main():
             observed_at_mono_ns=99000000000, producer_mono_ns=None,
             producer_time_status='unknown', **row), separators=(',', ':')) + '\n' for row in collector))
         status = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial")
+        require('startup_state=guard_selected_after_new_boot' in status.stdout and
+                'linux_reboot_after_arm=observed' in status.stdout,
+                'Status did not prove a distinct authored Linux boot after arming')
         require('model_solution=not_observed' in status.stdout and
                 'retained_model_diagnostic_records=2 model_valid_records=1 drain_attempt_records=1' in status.stdout,
                 'AA reset lost retained MODEL rows or promoted them to current readiness')
@@ -720,7 +817,7 @@ def main():
         raw = (base / 'logs/trace.0.jsonl').read_bytes()
         startup = (root / 'usr/bin/autostart').read_bytes()
         config = (base / 'mx5dr.conf').read_bytes()
-        put(root, '/proc/sys/kernel/random/boot_id', '31234567-1234-1234-1234-0123456789ab\n')
+        put(root, '/proc/sys/kernel/random/boot_id', '41234567-1234-1234-1234-0123456789ab\n')
         put(root, '/proc/uptime', '2.00 0.00\n')
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
         for old_ack in (False, True):
@@ -764,10 +861,23 @@ def main():
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard arm', ok=False)
         run('sh /data_persist/mx5-aa-dr/tools/arm.sh --mode=SHADOW')
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
-        put(root, '/proc/sys/kernel/random/boot_id', '21234567-1234-1234-1234-0123456789ab\n')
+        put(root, '/proc/sys/kernel/random/boot_id', '51234567-1234-1234-1234-0123456789ab\n')
         result = run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf')
         require(updated_touch in (root / result.stdout.strip().lstrip('/')).read_text(),
                 'Explicit rearm lost the new touch setting')
+        # Reject the final marker rename after a real ARM guard has armed.
+        # A failed publication must revoke arm and preserve the previous ID.
+        prior_armed = (base / 'guard/armed-boot').read_bytes()
+        put(root, '/test-bin/mv', '#!/bin/sh\nfor last do :; done\n'
+            'case "$last" in */guard/armed-boot) exit 93;; esac\n'
+            'exec /bin/mv "$@"\n', 0o755)
+        failed = run('sh /data_persist/mx5-aa-dr/tools/arm.sh --mode=SHADOW', ok=False)
+        (root / 'test-bin/mv').unlink()
+        require('trial arm revoked' in failed.stderr and
+                not (base / 'guard/arm').exists() and
+                not (base / 'guard/armed-boot').exists() and
+                (base / 'guard/armed-boot.previous').read_bytes() == prior_armed,
+                'Failed post-arm marker publication left a live arm or reused the old ID')
         # Removal and reinstallation use the same no-sha256sum environment.
         run("printf '4\\n' | sh /tmp/mnt/sda1/trial")
         for name, before in baseline.items():
@@ -794,14 +904,60 @@ def main():
             require((root / name).read_bytes() == before, 'Retrieval changed OEM baseline: ' + name)
         print('PASS: menu4 removal then menu3 retained raw export, unchanged OFF/no-arm '
               'state and Linux mounts symlink', flush=True)
+        put(root, '/test-bin/mv', '#!/bin/sh\nfor last do :; done\n'
+            'case "$last" in */guard/armed-boot) exit 93;; esac\n'
+            'exec /bin/mv "$@"\n', 0o755)
+        failed = run('cd /tmp/mnt/sda1 && sh install.sh', ok=False)
+        (root / 'test-bin/mv').unlink()
+        require('trial arm revoked' in failed.stderr and
+                not (base / 'guard/arm').exists() and
+                'ONE-BOOT BEGIN' in (root / 'usr/bin/autostart').read_text(),
+                'Failed post-arm installer marker publication left an armed trial')
+        run('cd /tmp/mnt/sda1 && sh uninstall.sh')
         run('cd /tmp/mnt/sda1 && sh install.sh')
         require((base / 'guard/arm').exists(), 'Reinstall did not arm')
         run('cd /tmp/mnt/sda1 && sh uninstall.sh')
         require(not (base / 'guard/arm').exists(), 'Uninstall left a trial armed')
+        # Full parked recovery order after a fresh staged capture: export,
+        # remove, request reboot, then inspect the authored new Linux identity.
+        # Replace only the guest reboot applet with a witness; never request a
+        # real container/host reboot or claim PID 1 shutdown was exercised.
+        run('cd /tmp/mnt/sda1 && sh install.sh')
+        recovery_boot = (root / 'proc/sys/kernel/random/boot_id').read_text()
+        (base / 'logs/capture.done').write_text(recovery_boot)
+        before = set(usb.glob('mx5dr-logs-*.tar'))
+        run("printf '3\\n' | sh /tmp/mnt/sda1/trial")
+        require((base / 'logs/capture.stop').is_dir() and
+                len(set(usb.glob('mx5dr-logs-*.tar')) - before) == 1,
+                'Recovery menu3 did not stop and export current capture')
+        run("printf '4\\n' | sh /tmp/mnt/sda1/trial")
+        require('mode=OFF' in (base / 'mx5dr.conf').read_text() and
+                not (base / 'guard/arm').exists(), 'Recovery menu4 did not disarm and switch OFF')
+        reboot = root / 'sbin/reboot'
+        require(reboot.is_symlink(), 'Expected stock reboot applet link')
+        reboot.unlink()
+        put(root, '/sbin/reboot', '#!/bin/sh\n'
+            'printf "61234567-1234-1234-1234-0123456789ab\\n" > /proc/sys/kernel/random/boot_id\n'
+            'printf "2.00 0.00\\n" > /proc/uptime\n'
+            'echo called > /reboot.witness\n', 0o755)
+        run("printf '5\\n' | sh /tmp/mnt/sda1/trial")
+        require((root / 'reboot.witness').read_text() == 'called\n',
+                'Recovery menu5 did not hand off to reboot witness')
+        recovery = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        require('reboot_check=new_boot_observed' in recovery.stdout and
+                'config_mode=OFF' in recovery.stdout and
+                'guard_arm=absent' in recovery.stdout and
+                'runtime_disable_next_start=absent' in recovery.stdout and
+                (base / 'logs/capture.stop').is_dir(),
+                'Recovery menu2 lost the new boot, OFF, disarmed or stop evidence')
+        print('PASS: stock ARM BusyBox recovery menu3→4→5→2, authored reboot witness, '
+              'new boot ID, OFF, no arm and retained stop marker; no PID 1/vehicle reboot.',
+              flush=True)
         print('PASS: stock ARM BusyBox/libc, damaged USB rejection, install, loader, one boot, '
               'collector UID/exit, numeric USB menu install/status/finish/export/report/remove '
               '(explicit SHADOW, synthetic rows), touch update/rearm, reinstall. Mount operations simulated; '
               'no OEM service or vehicle execution.')
+    startup_menu_flow(args.stock.resolve(), args.bundle.resolve())
 
 
 if __name__ == '__main__':

@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
@@ -11,6 +12,8 @@ PACK = Path(__file__).resolve().parents[2] / 'packaging'
 COLLECTOR = Path(os.environ.get('MX5DR_TEST_BUILD', PACK.parent / 'build')) / 'test_collector'
 BOOT = '12345678-1234-1234-1234-123456789abc'
 OLD = '87654321-1234-1234-1234-123456789abc'
+MANIFEST = 'mx5dr-one-boot-v3\n' + ('a' * 64 + '\n') * 8
+LEGACY_MANIFEST = 'mx5dr-one-boot-v2\n' + ('a' * 64 + '\n') * 7
 
 
 class TrialStatusTests(unittest.TestCase):
@@ -24,7 +27,9 @@ class TrialStatusTests(unittest.TestCase):
         self.logs.mkdir(parents=True)
         (self.base / 'guard').mkdir()
         (self.base / 'guard/last-boot').write_text(BOOT + '\n')
-        (self.base / 'guard/consumed').write_text('fixture arm manifest\n')
+        (self.base / 'guard/consumed').write_text(MANIFEST)
+        (self.base / 'guard/armed-boot').write_text(OLD + '\n')
+        (self.base / 'mx5dr.conf').write_text('mode=SHADOW\nsample_ms=1000\n')
         bootfile = self.root / 'proc/sys/kernel/random/boot_id'
         bootfile.parent.mkdir(parents=True)
         bootfile.write_text(BOOT + '\n')
@@ -71,12 +76,51 @@ class TrialStatusTests(unittest.TestCase):
         self.assertIn('guard_last_boot=current guard_consumed=present', r.stdout)
         self.assertIn('reverse_received_recently=observed receipt_only_not_direction_quality', r.stdout)
 
+    def test_failed_od_cannot_validate_boot_id(self):
+        shim = self.root / 'shim'
+        shim.mkdir()
+        (shim / 'od').write_text('#!/bin/sh\nexit 1\n')
+        (shim / 'od').chmod(0o755)
+        result = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True,
+                                text=True, env=dict(os.environ,
+                                                    MX5DR_FIXTURE_ROOT=str(self.root),
+                                                    PATH=str(shim) + ':' + os.environ['PATH']))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Invalid current boot ID', result.stderr)
+
+    def test_od_error_after_complete_output_does_not_validate_marker_or_config(self):
+        shim = self.root / 'shim'
+        shim.mkdir()
+        (shim / 'od').write_text('''#!/bin/sh
+case " $* " in
+  *"$MX5DR_OD_FAIL_PATH"*) "$MX5DR_REAL_OD" "$@"; exit 77 ;;
+esac
+exec "$MX5DR_REAL_OD" "$@"
+''')
+        (shim / 'od').chmod(0o755)
+        base_env = dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root),
+                        MX5DR_REAL_OD=shutil.which('od'),
+                        PATH=str(shim) + ':' + os.environ['PATH'])
+        for path, expected in (('boot_id', 'Invalid current boot ID'),
+                               ('guard/consumed', 'guard_consumed=invalid'),
+                               ('mx5dr.conf', 'config_mode=unconfirmed')):
+            with self.subTest(path=path):
+                result = subprocess.run(['sh', str(PACK / 'trial_status.sh')],
+                                        capture_output=True, text=True,
+                                        env=dict(base_env, MX5DR_OD_FAIL_PATH=path))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stdout + result.stderr)
+                self.assertNotIn('startup_state=guard_selected_after_new_boot',
+                                 result.stdout)
+
     def test_guard_markers_survive_empty_log_failure(self):
+        (self.base / 'guard/armed-boot').unlink()
         r = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True, text=True,
                            env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('one_boot=consumed_this_boot retained_bytes=0', r.stdout)
         self.assertIn('guard_last_boot=current guard_consumed=present', r.stdout)
+        self.assertIn('guard_arm=absent guard_armed_boot=missing guard_previous_armed_boot=missing startup_state=guard_selected_reboot_unconfirmed', r.stdout)
         (self.root / 'proc/sys/kernel/random/boot_id').write_text(OLD + '\n')
         r = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True, text=True,
                            env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
@@ -89,6 +133,149 @@ class TrialStatusTests(unittest.TestCase):
                            env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('guard_last_boot=missing guard_consumed=absent', r.stdout)
+
+    def test_armed_boot_distinguishes_ignition_cycle_from_linux_reboot(self):
+        (self.base / 'guard/arm').write_text(MANIFEST)
+        (self.base / 'guard/armed-boot').write_text(BOOT + '\n')
+        r = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True,
+                           text=True, env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
+        self.assertNotEqual(r.returncode, 0)  # No logs are present.
+        self.assertIn('one_boot=arm_present retained_bytes=0', r.stdout)
+        self.assertIn('guard_armed_boot=current', r.stdout)
+        self.assertIn('startup_state=awaiting_linux_reboot', r.stdout)
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text(OLD + '\n')
+        r = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True,
+                           text=True, env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
+        self.assertIn('guard_armed_boot=different', r.stdout)
+        self.assertIn('startup_state=new_linux_boot_arm_unconsumed', r.stdout)
+
+    def test_consumed_guard_distinguishes_same_boot_selection_from_reboot(self):
+        marker = self.base / 'guard/armed-boot'
+        marker.write_text(BOOT + '\n')
+        same = self.run_status()
+        self.assertNotEqual(same.returncode, 0)
+        self.assertIn('startup_state=guard_selected_same_boot_as_arm', same.stdout)
+        self.assertIn('linux_reboot_after_arm=unavailable', same.stdout)
+        marker.write_text(OLD + '\n')
+        different = self.run_status()
+        self.assertEqual(different.returncode, 0, different.stdout + different.stderr)
+        self.assertIn('startup_state=guard_selected_after_new_boot', different.stdout)
+        self.assertIn('linux_reboot_after_arm=observed', different.stdout)
+
+    def test_legacy_manifest_is_retained_but_cannot_qualify_v3_startup(self):
+        (self.base / 'guard/consumed').write_text(LEGACY_MANIFEST)
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('guard_consumed=present', result.stdout)
+        self.assertIn('guard_consumed_schema=v2', result.stdout)
+        self.assertIn('one_boot=legacy_consumed_this_boot', result.stdout)
+        self.assertIn('guard_current_boot=unavailable', result.stdout)
+        self.assertIn('startup_state=legacy_guard_manifest', result.stdout)
+        (self.base / 'guard/consumed').write_text(MANIFEST)
+        (self.base / 'guard/arm').write_text(LEGACY_MANIFEST)
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('guard_arm_schema=v2', result.stdout)
+        self.assertIn('startup_state=legacy_guard_manifest', result.stdout)
+
+    def test_truncated_consumed_marker_cannot_claim_guard_selection(self):
+        (self.base / 'guard/consumed').write_text('truncated\n')
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('guard_consumed=invalid', result.stdout)
+        self.assertIn('one_boot=unconfirmed', result.stdout)
+
+    def test_same_size_corrupt_consumed_marker_cannot_claim_guard_selection(self):
+        (self.base / 'guard/consumed').write_bytes(b'x' * len(MANIFEST))
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('guard_consumed=invalid', result.stdout)
+        self.assertIn('one_boot=unconfirmed', result.stdout)
+
+    def test_nul_replaced_manifest_final_newline_cannot_claim_guard_selection(self):
+        (self.base / 'guard/consumed').write_bytes(MANIFEST.encode()[:-1] + b'\x00')
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('guard_consumed=invalid', result.stdout)
+        self.assertIn('one_boot=unconfirmed', result.stdout)
+
+    def test_nul_inside_v3_manifest_cannot_claim_guard_selection(self):
+        content = bytearray(MANIFEST.encode())
+        content[25] = 0
+        (self.base / 'guard/consumed').write_bytes(content)
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('guard_consumed=invalid', result.stdout)
+        self.assertIn('one_boot=unconfirmed', result.stdout)
+
+    def test_invalid_optional_guard_id_retains_current_boot_diagnostic(self):
+        (self.base / 'guard/armed-boot').unlink()
+        (self.base / 'guard/armed-boot').symlink_to('missing-target')
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('current_boot_id=' + BOOT, result.stdout)
+        self.assertIn('guard_armed_boot=invalid', result.stdout)
+        self.assertIn('startup_state=guard_selected_reboot_unconfirmed', result.stdout)
+
+    def test_missing_final_newline_does_not_qualify_guard_boot_marker(self):
+        for content in (OLD.encode(), OLD.encode() + b'\x00'):
+            with self.subTest(content=content):
+                (self.base / 'guard/armed-boot').write_bytes(content)
+                result = self.run_status()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('guard_armed_boot=invalid', result.stdout)
+                self.assertIn('startup_state=guard_selected_reboot_unconfirmed', result.stdout)
+
+    def test_corrupt_previous_marker_cannot_borrow_old_positive_startup(self):
+        (self.base / 'guard/armed-boot.previous').write_text('corrupt\n')
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('guard_previous_armed_boot=invalid', result.stdout)
+        self.assertIn('startup_state=prior_arming_history_invalid', result.stdout)
+        self.assertIn('one_boot=unconfirmed', result.stdout)
+
+    def test_runtime_disable_marker_blocks_old_boot_evidence(self):
+        (self.logs / 'disable-next-start').write_text('restore_failed_fatal\n')
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('runtime_disable_next_start=present', result.stdout)
+        self.assertIn('startup_state=runtime_disabled_next_start', result.stdout)
+        self.assertIn('one_boot=unconfirmed', result.stdout)
+
+    def test_off_mode_keeps_old_markers_without_claiming_current_start(self):
+        (self.base / 'mx5dr.conf').write_text(' # trial disabled\n mode = OFF  # comment\n')
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('config_mode=OFF', result.stdout)
+        self.assertIn('one_boot=unconfirmed', result.stdout)
+        self.assertIn('startup_state=trial_disabled', result.stdout)
+        self.assertIn('linux_reboot_after_arm=unavailable', result.stdout)
+
+    def test_unavailable_or_invalid_config_cannot_borrow_old_success(self):
+        config = self.base / 'mx5dr.conf'
+        for data in (None, 'mode=SHADOW\nmode=OFF\n', 'mode=ASSIST\n',
+                     'mode=SHADOW\nunknown=1\n', 'mode=SHADOW\x00\n'):
+            if data is None:
+                config.unlink(missing_ok=True)
+            else:
+                config.write_text(data)
+            result = self.run_status()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('config_mode=unconfirmed', result.stdout)
+            self.assertIn('startup_state=trial_config_unconfirmed', result.stdout)
+
+    def test_capture_stop_request_cannot_claim_live_trial(self):
+        (self.logs / 'capture.stop').mkdir()
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('startup_state=capture_stop_requested', result.stdout)
+        self.assertIn('one_boot=unconfirmed', result.stdout)
+
+    def test_boot_id_survives_invalid_uptime(self):
+        (self.root / 'proc/uptime').write_text('unavailable\n')
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('current_boot_id=' + BOOT, result.stdout)
 
     def test_usb_return_after_aa_disconnect_keeps_retained_and_current_separate(self):
         (self.root / 'proc/uptime').write_text('200.00 1.00\n')

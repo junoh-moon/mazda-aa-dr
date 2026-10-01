@@ -11,7 +11,7 @@ require_usb() {
     # Read that alias; the no-symlink rule still applies to ordinary files.
     [ -f "$ROOT/proc/mounts" ] && [ -r "$ROOT/proc/mounts" ] ||
         fail 'Cannot read the kernel mount table: /proc/mounts'
-    awk -v dest="$HERE" '$2==dest && $1 ~ /^\/dev\/sd[a-z]+[0-9]+$/ {found=1}
+    awk -v dest="$HERE" '$2==dest {found=(NF==6 && $1 ~ /^\/dev\/sd[a-z]+[0-9]+$/)}
         END {exit !found}' "$ROOT/proc/mounts" ||
         fail 'Run trial from the mounted USB root; keep that USB connected.'
 }

@@ -34,6 +34,7 @@ ROOT=${MX5DR_FIXTURE_ROOT:-}
 fail() { echo "$*" >&2; exit 1; }
 regular() { [ -f "$1" ] && [ ! -L "$1" ] || fail "nonregular"; }
 hash() { printf 'test-hash'; }
+prepare_arm_boot() { :; }
 verify_firmware() { echo "mode=$MODE remount=$ALLOW_REMOUNT"; exit 0; }
 ''')
         (bundle / 'mx5dr-sha256').write_text('never executed')

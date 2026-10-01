@@ -50,6 +50,24 @@ class Gate(unittest.TestCase):
   self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
   self.arm();self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
   (self.root/BASE/'guard/arm').unlink();self.put('proc/sys/kernel/random/boot_id',b'11234567-1234-1234-1234-0123456789ab\n');self.assertNotEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+ def test_damaged_last_boot_blocks_check_arm_and_same_boot_selection(self):
+  self.arm();self.assertEqual(self.call('select','/jci/sm/sm.conf').returncode,0)
+  marker=self.root/BASE/'guard/last-boot'
+  for damaged in (b'corrupt\n',b'01234567-1234-1234-1234-0123456789ab'):
+   with self.subTest(damaged=damaged):
+    self.put(BASE+'/guard/last-boot',damaged)
+    self.assertNotEqual(self.call('check').returncode,0)
+    self.assertNotEqual(self.call('arm').returncode,0)
+    # A previously published arm must not bypass the damaged same-boot fence.
+    marker.unlink();self.arm();self.put(BASE+'/guard/last-boot',damaged)
+    result=self.call('select','/jci/sm/sm.conf')
+    self.assertNotEqual(result.returncode,0)
+    self.assertEqual(result.stdout,'')
+    self.assertTrue((self.root/BASE/'guard/arm').exists())
+    (self.root/BASE/'guard/arm').unlink()
+  marker.unlink();marker.symlink_to(self.root/'proc/sys/kernel/random/boot_id')
+  self.assertNotEqual(self.call('check').returncode,0)
+  self.assertNotEqual(self.call('arm').returncode,0)
  def test_stock_absolute_and_relative_persist_alias(self):
   (self.root/'mnt').mkdir();(self.root/'data_persist').rename(self.root/'mnt/data_persist')
   alias=self.root/'data_persist'
