@@ -164,6 +164,7 @@ else
 fi
 echo "Staged $MODE for one guarded boot. Persistent service configs retain existing touch only. No processes restarted."
 if [ -z "$ROOT" ] && [ "$MODE" != OFF ]; then
-    echo 'Install steps finished. After successful command exit, power off normally and start again.'
-    echo "The next guarded boot collects $MODE logs automatically; no driving-time commands are needed."
+    echo 'Install steps finished. A vehicle ignition cycle alone does not prove a new CMU Linux boot.'
+    echo "The next guarded CMU startup requests automatic $MODE capture; no driving-time commands are needed."
+    echo 'Before moving, while parked, use trial menu 2 to check one_boot=consumed_this_boot, retained_bytes>0 and collector_poll_recent=observed.'
 fi
