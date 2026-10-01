@@ -198,6 +198,11 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   제한을 300초로 늘린 무개입 대조에서는 긴 무진행 뒤 질의가
   4~18회 재개됐습니다. 180초 관찰을 영구 정지로 보지 않으며,
   복귀 원인과 게스트·QEMU 시각 차이는 아직 분리되지 않았습니다.
+  후속 T16·T17에서는 롤오버와 다음 OCR1 비교/GIC IRQ 87 입력,
+  콘솔상 질의 재개가 같은 QEMU 실행에서 이어졌습니다. 다른 CPU
+  타이머 IRQ도 관찰되어 단독 원인·OEM 재시도·실차 성립은 여전히
+  확정하지 않습니다. [계측 기록](../validation/LDS_TIMER_WAKE_BOUNDARY_2026-10-01.md)을
+  따릅니다.
   [LDS 진단값 출처 연결 검토](../validation/LDS_DIAGNOSTIC_PROVENANCE_REVIEW_2026-10-01.md)에서
   원본 `GetPosition`과 `GetUbloxDiag`의 출력 형식·별도 cache mutex를
   대조한 외부 결과를 보존합니다. 두 응답을 같은 생산 측정으로 묶는 ID가 없어 진단

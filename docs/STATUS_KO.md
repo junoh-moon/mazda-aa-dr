@@ -54,6 +54,11 @@ halted였고, 새 GPT 출력·GIC IRQ 87 요청은 없었습니다. 이는 QEMU
 두 CPU가 유휴 상태였으나 그 뒤 질의 4~18회가 재개됐습니다. 180초
 무진행은 영구 정지가 아니며, 복귀를 일으킨 정확한 타이머 사건과
 guest uptime·QEMU 가상 시각의 차이는 추가 조사 중입니다.
+후속 호스트 QEMU 계측에서는 늦은 비교 뒤 롤오버 callback, 다시
+예약된 OCR1 비교의 GPT IRQ 출력과 GIC IRQ 87 입력, 그 뒤의 LDS
+질의 재개를 같은 실행에서 포착했습니다. [T16·T17 근거](../validation/LDS_TIMER_WAKE_BOUNDARY_2026-10-01.md)를
+따릅니다. 같은 실행에 CPU 개인 타이머 IRQ도 있어 IRQ 87이 유일한
+복귀 원인인지는 미확정이며, OEM 재시도·실차 동작은 여전히 미검증입니다.
 
 [외부 master의 MODEL 초기화 원인 기록](../validation/MODEL_RESET_REVIEW_2026-10-01.md)은
 이 작업 브랜치를 검토한 `260528c`의 독립 검증입니다. raw 원본이 원인
