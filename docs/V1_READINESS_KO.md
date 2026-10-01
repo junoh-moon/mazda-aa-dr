@@ -301,6 +301,11 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
   입력 해시를 대조한 기록과, [host/ARM 통합 검사](../validation/VIP_ACCUMULATOR_INTEGRATION_2026-10-01.md)를
   보존합니다. 이번 후보의 검사 개수로 합산하지 않습니다. count 자체의 넘침·손실 창·생산 시각·물리 센서 품질은
   이 경계식으로 복원되지 않으며 ASSIST 자격으로 세지 않습니다.
+- [x] qualified 코어의 원본 입력 lease·나이·시간·오차 예산에서 비동기 송신
+  기한을 구하는 API와 파이프라인 연결을 구현했습니다.
+  [송신 기한 검증](../validation/ASSIST_PUBLICATION_2026-10-01.md)은 지연 송신,
+  기한 경계·GPS 복귀·대기 중인 기준점·MODEL 거부와 전체 host/ARM 통과를
+  기록합니다. live 자격 입력 및 qualified worker 발행 연결은 여전히 미구현입니다.
 - [ ] 지원 범위의 위치 정확도와 Galaxy S25/무선 AA/네이버 지도 수용을 검증합니다.
 - [ ] 정상 전원 주기·실패 복구·기존 터치/km/L 공존의 실제 결과를 확인합니다.
 - [ ] 최종 커밋과 게시 ZIP을 고정하고 아래 조건 전체를 다시 감사합니다.
@@ -316,7 +321,7 @@ SHADOW 자료만으로 ASSIST 완료 조건을 충족한 것으로 표시하지 
 | 물리 센서 해석 | 원본 펌웨어의 callback ABI/필드 정적 분석과 합성 parser 시험. VIP 요레이트 생산자의 선택 경로 해석 실행과 MODEL 합계 넘침 거부 | 휠/yaw 부호·단위·bias·6MT 후진·cadence 및 품질의 실제 대조 없음. count 넘침과 손실 창도 식별 불가 |
 | 적분 시간·신선도 | receipt와 producer 시각 분리, MODEL이 qualified로 승격되지 않는 검사 | 현재 IPC payload에는 생산자 시각/순번이 없음. 검증된 지연 상한 등 대체 근거도 없음 |
 | 위치 계산·재획득 | 코어·정차 보정·GPS holdout·wheel 보정 합성 시험 | 실제 경로·독립 기준 위치 비교 없음. GPS holdout 차이를 ground truth로 세지 않음 |
-| 요청 출처·ASSIST 실행 | adapter의 출처/epoch 검사와 qualified 파이프라인은 합성 입력으로 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 요청 관측 연계는 제품에 연결했으나 qualified 자격 입력은 미구현. 전체 manager 이후 반복 취소 timeout 원인 미분리 |
+| 요청 출처·ASSIST 실행 | adapter의 출처/epoch, qualified 파이프라인과 코어 근거 송신 기한을 합성 입력으로 검사 | live `provenance()`는 항상 false, `allow_assist=false`. 요청 관측 연계는 제품에 연결했으나 qualified 자격 입력·worker 발행 연결은 미구현. 전체 manager 이후 반복 취소 timeout 원인 미분리 |
 | 휴대폰·앱 수용 | OEM LOCATION 경로의 정적 근거와 VM의 실제 native API 호출. 폰 없이도 send=0을 반환함 | Galaxy S25·동글·네이버 지도에서 위치가 반영되는 실행 증거 없음 |
 | 다음 부팅과 장애 복구 | 일회 소비 가드·설치 중단 회귀. 실제 SM에서 명시적 재시작과 지연 SIGKILL 뒤 보드 재부팅 요청 관찰 | 다른 실패 경로와 물리 watchdog·전원 차단·다음 부팅의 복구는 미검증 |
 | 기존 설정 보존 | touch 설정 편집/제거 roundtrip, 무관한 파일을 변경하지 않는 설치기 | 기존 터치와 km/L의 실제 화면·입력 결과 미검증 |

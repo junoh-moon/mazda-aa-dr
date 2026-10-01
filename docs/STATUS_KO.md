@@ -18,6 +18,15 @@
 전체 host/ARM 검사를 통과한 제품과 새 빌드의 동일성, 최종 ZIP의 순정 BusyBox
 설치 검사와 게시 후 다운로드 대조를 기록합니다. live ASSIST는 계속 비활성입니다.
 
+[후속 ASSIST 송신 기한 구현](../validation/ASSIST_PUBLICATION_2026-10-01.md)은
+`f3556b4`에서 코어의 원본 입력 유효 기간·나이·시간·오차 예산으로 비동기 송신
+가능 기한을 직접 구하도록 했습니다. 대기 중인 GPS/기준점 전환도 반영하며
+좌표·측정 시각을 갱신하지 않습니다. 현재 시각만 매핑한 경로의 실패를 확인한 뒤
+host Python 371개·C/C++와 고정 ARM 전체, 실제 제품 DSO의 호출 계약 검사를
+생략 없이 통과했습니다. master에도 반영했고 임시 도구를 제거했습니다.
+live 자격 입력과 qualified worker 발행 연결은 미구현이며 ASSIST는 비활성입니다.
+공개 v0.3.4 ZIP을 바꾸거나 이 후속 소스를 새 릴리즈로 게시한 것은 아닙니다.
+
 앞선 외부 master에서 [v0.3.3-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.3-shadow.1)을
 커밋 `260528c751739c0afb59153f7a5cfa3585eb6048`에서 빌드하여 게시한 것을 확인했습니다.
 해당 host/ARM·순정 BusyBox 설치 검사는 외부 발행 기록을 따릅니다. 이번 작업은
