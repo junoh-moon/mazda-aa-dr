@@ -162,6 +162,12 @@ python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --suite context-pool --output-dir "$build/context-pool-dso"
 python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
+    --suite context-pool-association --output-dir "$build/context-pool-association-dso"
+python3 tests/adapter/run_unwind_dso.py --library "$preload" \
+    --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
+    --suite small-stack --output-dir "$build/small-stack-dso"
+python3 tests/adapter/run_unwind_dso.py --library "$preload" \
+    --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
     --suite session --output-dir "$build/session-dso"
 python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \

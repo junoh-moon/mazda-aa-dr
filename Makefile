@@ -105,11 +105,12 @@ $(BUILD)/test_lds_bus_hooks: tests/adapter/lds_bus_hooks_test.cpp src/adapter/bu
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/runtime/request_trace.cpp src/adapter/bus_hooks.h src/adapter/adapter.h src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
-test-adapter: $(BUILD)/test_association_context $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_context_pool $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
+test-adapter: $(BUILD)/test_context_pool_association $(BUILD)/test_association_context $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_context_pool $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed; do $(BUILD)/test_association_context $$scenario; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
 	$(BUILD)/test_context_pool saturation
+	@set -e; for scenario in capacity capacity_raw reuse nested concurrent fork_full fork_live fork_generation early; do $(BUILD)/test_context_pool_association $$scenario; done
 	$(BUILD)/test_cold_patch
 	@set -e; for case in normal failure overlap same_storage closing_create creating_during_destroy null_success output_race late_destroy distinct_storage capacity callback_bad callback_null readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight prediction_cached_inflight; do result=0; $(BUILD)/test_session_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 	$(BUILD)/test_session_early_init
@@ -341,6 +342,8 @@ test-lds: $(BUILD)/test_lds_association_channel $(BUILD)/test_data_patch $(BUILD
 	@set -e; for scenario in position_first sideband_first mismatch late_conflict pre_stopped malformed_recovery first_bus startup_bus bus_reconnect; do $(BUILD)/test_worker_lds_source $$scenario; done
 
 $(BUILD)/test_association_context: tests/adapter/association_context_test.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/adapter/adapter.h $(LDS_HEADERS) | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
+$(BUILD)/test_context_pool_association: tests/adapter/context_pool_association_test.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/adapter/adapter.h $(LDS_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_runtime_lds_association: tests/adapter/runtime_lds_association_test.cpp src/runtime/runtime.cpp src/runtime/worker.h $(ASSIST_WORKER) src/runtime/assist_worker.h $(RUNTIME_SUPPORT) $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) src/runtime/loader.cpp $(BUILD)/core_host.o $(STORAGE_HEADERS)
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/runtime/runtime.cpp,$^) -ldl -pthread -lrt -lm -o $@

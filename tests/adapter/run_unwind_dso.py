@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'endpoint', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context', 'context-pool'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'endpoint', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context', 'context-pool', 'context-pool-association', 'small-stack'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -204,7 +204,7 @@ def main():
                      'reader_conflict', 'reader_mismatch', 'frame_reuse', 'provenance_failed')
             fixture, access = 'association_context', 'association_context_dso_access.h'
             macro, marker = '-DMX5_ASSOCIATION_CONTEXT_DSO_TEST', 'PASS association context '
-    elif args.suite == 'context-pool':
+    elif args.suite in ('context-pool', 'context-pool-association'):
         names = {
             'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
             'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
@@ -216,6 +216,24 @@ def main():
         cases = ('saturation',)
         fixture, access = 'context_pool', 'context_pool_dso_access.h'
         macro, marker = '-DMX5_CONTEXT_POOL_DSO_TEST', 'PASS context pool capacity '
+        if args.suite == 'context-pool-association':
+            names.pop('PUBLISH')
+            names['FAULT'] = '_ZN3mx57adapter7faultedEv'
+            names['DECODE_POSITION'] = '_ZN3mx57adapter15decode_positionEPKvPNS0_13PositionInputE'
+            cases = ('capacity', 'capacity_raw', 'reuse', 'nested', 'concurrent',
+                     'fork_full', 'fork_live', 'fork_generation', 'early')
+            fixture, access = 'context_pool_association', 'context_pool_association_dso_access.h'
+            macro, marker = '-DMX5_CONTEXT_POOL_ASSOCIATION_DSO_TEST', 'PASS context pool association '
+    elif args.suite == 'small-stack':
+        names = {
+            'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
+            'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+            'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
+            'VEHICLE_SEND': 'mx5_send_vehicle_data',
+        }
+        cases = ('small16', 'small24')
+        fixture, access = 'small_stack', None
+        macro, marker = '-DMX5_SMALL_STACK_DSO_TEST', 'PASS small stack '
     elif args.suite == 'runtime-assist':
         names = {
             'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
@@ -247,10 +265,12 @@ def main():
                     for name in exported), 'Archive runtime symbol leaked into preload exports')
     (build / 'unwind_offsets.h').write_text(''.join(
         '#define TEST_' + label + ' 0x%xu\n' % offset for label, offset in offsets.items()))
-    names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
+    names = [fixture + '_test.cpp', 'run_unwind_dso.py']
+    if access:
+        names.append(access)
     if args.suite == 'endpoint':
         names += ['bus_endpoint_relay.S', 'request_wire_dso_access.h']
-    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context', 'context-pool'):
+    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context', 'context-pool', 'context-pool-association', 'small-stack'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
     for root, directories, files in os.walk(repo / 'src'):
@@ -270,7 +290,7 @@ def main():
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
     if args.suite == 'endpoint':
         command.append(str(build / 'source/tests/adapter/bus_endpoint_relay.S'))
-    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context', 'context-pool'):
+    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context', 'context-pool', 'context-pool-association', 'small-stack'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
     if args.suite == 'provenance-context':
         # The authored one-shot Ledger belongs to the caller. All adapter calls

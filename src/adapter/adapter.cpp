@@ -43,6 +43,21 @@ struct ThreadState {
 // The shim must be loaded at process startup; only bounded slot references
 // and counters live in initial-exec TLS. No dynamic allocation occurs in hooks.
 static __thread ThreadState tls __attribute__((tls_model("initial-exec")));
+void context_after_fork() {
+    // fork copies the process pool, but only the calling thread survives.
+    // Keep its live frames and reclaim orphan slots in the child's private
+    // copy. This is pool bookkeeping, not general post-fork OEM readiness.
+    const unsigned depth=tls.depth<CONTEXT_DEPTH_LIMIT?tls.depth:unsigned(CONTEXT_DEPTH_LIMIT);
+    for(unsigned i=0;i<CONTEXT_SLOT_COUNT;++i) {
+        bool retained=false;
+        for(unsigned n=0;n<depth;++n)
+            if(tls.slots[n]==&context_slots[i])retained=true;
+        if(!retained)__atomic_store_n(&context_slots[i].occupied,0,__ATOMIC_RELEASE);
+    }
+    // A copied parent prediction is not a child-process candidate. Keep the
+    // captured raw frame for forwarding, but revoke its selection generation.
+    invalidate();
+}
 ContextSlot* acquire_context_slot() {
     // One bounded pass: if every claim loses, retain OEM forwarding and report
     // unavailable observation instead of waiting inside an OEM callback.
@@ -176,6 +191,12 @@ bool configure(SendFunction next, const Options& opt) {
         next == &mx5_send_vehicle_data) return false;
     if (opt.allow_assist && (!opt.clock || !opt.provenance || !opt.max_snapshot_age_ns))
         return false;
+    const int saved_errno=errno;
+    // Best effort at initialization, outside OEM hooks. If libc cannot
+    // register the handler, a fork child may retain orphan slots; exhaustion
+    // still records CONTEXT_UNAVAILABLE and forwards the OEM call unchanged.
+    (void)pthread_atfork(0,0,context_after_fork);
+    errno=saved_errno;
     next_send = next; options = opt; configured = true; return true;
 }
 bool prepare_bus_hooks(const BusBindings& bindings) {
