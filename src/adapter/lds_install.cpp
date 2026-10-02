@@ -15,7 +15,7 @@
 namespace {
 namespace A=mx5::adapter;
 namespace D=A::data_patch;
-enum ModuleId { SERVICE,LDS,DRIVER,BUS,RAW,COMMON,MODULE_COUNT };
+enum ModuleId { SERVICE,LDS,DRIVER,BUS,RAW,COMMON,PTHREAD,MODULE_COUNT };
 struct ModuleSpec { const char* anchor;const char* hash; };
 // Exact NA 74.00.324A. Use the live service dependency scope.
 const ModuleSpec modules[]={
@@ -25,6 +25,7 @@ const ModuleSpec modules[]={
     {"JCIDBUS_conn_create","b44b2f462c09376747a380ee3010501e952f557759898fad01a0fdcd573d375f"},
     {"dbus_message_get_type","07b06516d6ba93bbfa9db1e817278c7c96bd86fdd0f9dc48c917b1c100a8fe6b"},
     {"MEM_Copy","637cc53cd0621ec7fed24be2519b3e208191dd22954d2442d70e854413874b0d"},
+    {"pthread_mutex_lock","fc4b5aba8cdfe17322543ea639cc4a1dee82d99543e9c03b33f662f6b3b723f1"},
 };
 struct FunctionSpec {
     ModuleId owner;const char* name;uintptr_t offset;uint32_t prefix[2];
@@ -49,6 +50,8 @@ const FunctionSpec functions[]={
     {BUS,"JCIDBUS_obj_path_msg_function",0x20484,{0xe92d4800,0xe28db004}},
     {BUS,"JCIDBUS_signal_handler",0x2098c,{0xe92d4800,0xe28db004}},
     {RAW,"dbus_connection_send",0xb82c,{0xe92d41f0,0xe1a04000}},
+    {RAW,"dbus_message_lock",0x13268,{0xe92d4010,0xe1a04000}},
+    {PTHREAD,"pthread_mutex_lock",0x83b8,{0xe92d41f0,0xe1a05000}},
     {BUS,"JCIDBUS_reply_create_msg",0xff34,{0xe92d4800,0xe28db004}},
     {BUS,"JCIDBUS_reply_create",0x10380,{0xe92d4810,0xe28db008}},
     {RAW,"dbus_bus_register",0x89ac,{0xe92d47f0,0xe59f4178}},
@@ -141,6 +144,15 @@ A::InstallResult check_context(const Module* m,size_t page) {
        !range(l,l.base+0x16680,24,PF_R|PF_W,page) ||
        !range(l,l.base+0x16538,sizeof(A::LdsDescriptor),PF_R|PF_W,page))
         return A::MODULE_MISMATCH;
+    // Verify locations and their relocation, not live values. A cold service
+    // may legally precede libdbus thread initialization. No initializer runs
+    // here and no equality/lock-success claim is inferred from these globals.
+    const Module& raw=m[RAW];
+    if(!range(raw,raw.base+0x347a8,4,PF_R|PF_W,page) ||
+       !range(raw,raw.base+0x34860,4,PF_R|PF_W,page) ||
+       !range(raw,raw.base+0x3470c,4,PF_R|PF_W,page))return A::MODULE_MISMATCH;
+    if(*reinterpret_cast<const uintptr_t*>(raw.base+0x3470c)!=raw.base+0x347a8)
+        return A::NEXT_CHAIN_MISMATCH;
     const A::LdsDescriptor& d=*reinterpret_cast<const A::LdsDescriptor*>(l.base+0x16538);
     if(!range(l,uintptr_t(d.name),12,PF_R|PF_X,page) ||
        std::memcmp(d.name,"GetPosition",12) ||
@@ -160,7 +172,12 @@ A::InstallResult check_context(const Module* m,size_t page) {
         {LDS,0x47fc,0xebfffb89},{LDS,0x4894,0xebfffb0f},
         {SERVICE,0x41e8,0xebfffcf1},{SERVICE,0x4380,0xebfffc1f},
         {SERVICE,0x4020,0xebfffd63},{SERVICE,0x40fc,0xebfffcc0},
-        {SERVICE,0x3e64,0xebfffdd2},{SERVICE,0x3f74,0xebfffd22}
+        {SERVICE,0x3e64,0xebfffdd2},{SERVICE,0x3f74,0xebfffd22},
+        {RAW,0xb704,0xebffe728},{RAW,0xb834,0xe5900004},{RAW,0xb840,0xeb003c1a},
+        {RAW,0x1a8b0,0xe59f302c},{RAW,0x1a8b4,0xe3500000},{RAW,0x1a8bc,0x012fff1e},
+        {RAW,0x1a8d8,0xe1520001},{RAW,0x1a8dc,0x112fff1e},{RAW,0x1a8e0,0xea002aa8},
+        {RAW,0x25388,0xeaff7f80},
+        {RAW,0x5190,0xe28fc600},{RAW,0x5194,0xe28cca2f},{RAW,0x5198,0xe5bcf3b4}
     };
     for(unsigned i=0;i<sizeof calls/sizeof calls[0];++i) {
         const Module& mod=m[calls[i].owner];const uintptr_t address=mod.base+calls[i].address;
@@ -206,6 +223,8 @@ A::InstallResult make_plan(const Module* m,size_t page,D::Plan& plan) {
         {SERVICE,0x1460c,DRIVER,0x5c24,reinterpret_cast<uintptr_t>(&mx5_lds_register)},
         {SERVICE,0x1462c,LDS,0x5424,reinterpret_cast<uintptr_t>(&mx5_lds_read)},
         {SERVICE,0x14634,LDS,0x413c,reinterpret_cast<uintptr_t>(&mx5_lds_initialize)},
+        {RAW,0x34600,RAW,0x13268,reinterpret_cast<uintptr_t>(&mx5_lds_message_lock)},
+        {RAW,0x3454c,PTHREAD,0x83b8,reinterpret_cast<uintptr_t>(&mx5_lds_native_mutex_lock)},
     };
     static_assert(sizeof slots/sizeof slots[0]<=D::Plan::SLOT_CAPACITY,"slot capacity");
     for(unsigned i=0;i<sizeof slots/sizeof slots[0];++i) {
@@ -240,6 +259,7 @@ void bindings(const A::LdsInstallOptions& in,const Module* m,Setup& s) {
     LDS_FUNCTION(path,BUS,0x20484);LDS_FUNCTION(method_build,BUS,0x19ac8);
     LDS_FUNCTION(reply_create,BUS,0x10380);LDS_FUNCTION(reply_message,BUS,0xff34);
     LDS_FUNCTION(send,RAW,0xb82c);
+    LDS_FUNCTION(message_lock,RAW,0x13268);LDS_FUNCTION(native_mutex_lock,PTHREAD,0x83b8);
     LDS_FUNCTION(raw.type,RAW,0x1353c);LDS_FUNCTION(raw.serial,RAW,0x13298);
     LDS_FUNCTION(raw.reply_serial,RAW,0x132c8);LDS_FUNCTION(raw.sender,RAW,0x14344);
     LDS_FUNCTION(raw.destination,RAW,0x14304);LDS_FUNCTION(raw.path,RAW,0x14078);
@@ -259,6 +279,11 @@ void bindings(const A::LdsInstallOptions& in,const Module* m,Setup& s) {
     b.routes[8]=b.routes[4];
     b.sites=A::LdsCacheSites{l+0x5444,l+0x5454,l+0x545c,l+0x576c,l+0x577c,l+0x5784,l+0x4800,l+0x4898};
     b.clock=in.clock;b.emit=in.emit;b.user=in.user;
+    const uintptr_t raw=m[RAW].base;
+    b.send_sites=A::LdsSendSites{raw+0xb708,raw+0xb844,
+        reinterpret_cast<const uint32_t*>(raw+0x347a8),
+        reinterpret_cast<const uint32_t*>(raw+0x34860),4,0xabcdef};
+    b.publish_locked=in.publish_locked;b.invalidate_locked=in.invalidate_locked;
     A::BusBindings& bus=s.bus;
 #define BUS_FUNCTION(field,id,offset) bus.field=function<decltype(bus.field)>(m,id,offset)
     BUS_FUNCTION(create,BUS,0xb8c4);BUS_FUNCTION(connect,BUS,0xb360);
@@ -291,7 +316,8 @@ InstallResult install_lds_v74(const LdsInstallOptions& in) {
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     if(installed)return ALREADY_INSTALLED;
     if(!in.service_handle || !in.verify_file_hash || !in.verified_cold_start ||
-       !in.begin_patch || !in.end_patch || !in.clock || !in.emit)
+       !in.begin_patch || !in.end_patch || !in.clock || !in.emit ||
+       bool(in.publish_locked)!=bool(in.invalidate_locked))
         return INVALID_INSTALL_ARGUMENT;
     const long page=sysconf(_SC_PAGESIZE);
     if(page<=0 || (page&(page-1)))return MEMORY_PROTECTION_FAILED;

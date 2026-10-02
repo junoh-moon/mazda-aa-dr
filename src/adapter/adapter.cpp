@@ -23,6 +23,7 @@ struct Context {
     Provenance provenance;
     runtime::request_trace::Result request_result;
     runtime::request_trace::Trace request_trace;
+    runtime::lds_association::Owned lds_association;
     bool decoded;
 };
 struct ThreadState { uint32_t depth, send_depth; Context frames[8]; };
@@ -71,6 +72,16 @@ void emit(const Observation& event) {
 }
 Context* context() {
     return tls.depth && tls.depth <= 8 ? &tls.frames[tls.depth - 1] : 0;
+}
+bool association_matches(const PositionContext& c,const runtime::lds_association::Owned& value) {
+    namespace L=runtime::lds_association;
+    return c.request_result==runtime::request_trace::OK &&
+        value.result==L::MATCHED_LOCKED_FOR_SEND && value.stage==L::LOCKED_FOR_SEND &&
+        value.call_sequence==c.call_sequence && value.prediction_generation==c.prediction_generation &&
+        value.view_revision && value.layout_version==1 && value.source_instance && value.record_sequence &&
+        value.locked_observed_ns && value.request_id && value.request_epoch && value.worker_id && value.worker_epoch &&
+        value.request_id==c.request_trace.request.id && value.request_epoch==c.request_trace.request.epoch &&
+        value.worker_id==c.request_trace.worker.id && value.worker_epoch==c.request_trace.worker.epoch;
 }
 Reason choose_dr(Context& ctx, uint64_t time,
                  const runtime::session_trace::Snapshot& session, uint8_t bytes[48]) {
@@ -207,14 +218,28 @@ void position_enter(void* manager, const void* input) {
     const int before = previous_mode.exchange(ctx.original_mode, std::memory_order_acq_rel);
     if (before != ctx.original_mode) invalidate();
     ctx.generation = generation();
-    if (ctx.decoded && options.provenance) {
+    if (ctx.decoded) {
         const PositionContext input_context={event.position,ctx.request_result,
-            ctx.request_trace,ctx.sequence,ctx.generation};
-        if (!options.provenance(manager, input_context, &ctx.provenance, options.user))
-            ctx.provenance.exact_request = false;
+            ctx.request_trace,ctx.sequence,ctx.generation,0};
+        if (options.association_reader) {
+            const bool matched=options.association_reader(input_context,&ctx.lds_association,options.user);
+            if (!matched || !association_matches(input_context,ctx.lds_association)) {
+                namespace L=runtime::lds_association;
+                const L::Result result=matched?L::CONFLICT:ctx.lds_association.result;
+                ctx.lds_association=L::Owned();
+                if(result==L::CONFLICT || result==L::PAYLOAD_MISMATCH)ctx.lds_association.result=result;
+            }
+        }
+        if (options.provenance) {
+            const PositionContext qualified_context={event.position,ctx.request_result,
+                ctx.request_trace,ctx.sequence,ctx.generation,&ctx.lds_association};
+            if (!options.provenance(manager,qualified_context,&ctx.provenance,options.user))
+                ctx.provenance = Provenance();
+        }
     }
     event.call_sequence = ctx.sequence; event.prediction_generation = ctx.generation;
     event.original_mode = ctx.original_mode; event.provenance = ctx.provenance;
+    event.lds_association = ctx.lds_association;
     event.mono_ns = now();
     if (mode() != OFF) emit(event);
     errno = saved_errno;
@@ -243,6 +268,7 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
         event.call_sequence = ctx->sequence; event.original_mode = ctx->original_mode;
         event.prediction_generation = ctx->generation; event.provenance = ctx->provenance;
         event.request_result = ctx->request_result; event.request_trace = ctx->request_trace;
+        event.lds_association = ctx->lds_association;
     }
     uint8_t replacement[48];
     VehicleData local = VehicleData();

@@ -28,7 +28,7 @@ mkdir -p "$build"
     src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/request_hooks.cpp \
     src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $veneer \
     src/runtime/request_trace.cpp src/runtime/request_observer.cpp src/runtime/config.cpp \
-    src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/core_bridge.cpp src/runtime/assist_worker.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp \
+    src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/core_bridge.cpp src/runtime/assist_worker.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp \
     src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp \
     -Wl,--wrap=__atomic_fetch_add_8 -Wl,--wrap=__atomic_fetch_sub_8 \
     -Wl,--wrap=__atomic_store_1 "$atomic" -pthread -ldl -lrt -lm \

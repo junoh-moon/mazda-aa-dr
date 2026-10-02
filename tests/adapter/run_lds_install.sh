@@ -15,7 +15,7 @@ stock=$(CDPATH= cd -- "$MX5DR_LDS_STOCK" && pwd)
 qemu=${QEMU_ARM:-qemu-arm}
 for owner in jci/lds/svcjcilds.so jci/lib/libjcilds-dbus.so \
              jci/lib/libjcilds-driver.so jci/lib/libjcidbus.so \
-             jci/lib/libjcicommon.so usr/lib/libdbus-1.so.3 lib/ld-linux.so.3; do
+             jci/lib/libjcicommon.so usr/lib/libdbus-1.so.3 lib/libpthread.so.0 lib/ld-linux.so.3; do
     [ -r "$stock/$owner" ] || {
         echo "SKIP LDS cold installer: incomplete private runtime ($owner)" >&2
         exit 77
@@ -40,7 +40,7 @@ original_hashes() {
     (cd "$stock" && sha256sum \
         jci/lds/svcjcilds.so jci/lib/libjcilds-dbus.so \
         jci/lib/libjcilds-driver.so jci/lib/libjcidbus.so \
-        jci/lib/libjcicommon.so usr/lib/libdbus-1.so.3)
+        jci/lib/libjcicommon.so usr/lib/libdbus-1.so.3 lib/libpthread.so.0)
 }
 source_hashes() {
     sha256sum tests/adapter/run_lds_install.sh tests/adapter/lds_install_test.cpp \
@@ -108,17 +108,18 @@ if ! run_logged build "${CROSS_COMPILE}g++" --sysroot="$QEMU_SYSROOT" \
     exit 1
 fi
 sha256sum "$output/lds-install-test" > "$output/fixture.sha256"
-scenarios='positive-local positive-global retain-local retain-global repeat
-invalid-0 invalid-1 invalid-2 invalid-3 invalid-4 invalid-5 invalid-6
-hash-0 hash-1 hash-2 hash-3 hash-4 hash-5
+scenarios='positive-local positive-global retain-local retain-global repeat unthreaded-publisher
+invalid-0 invalid-1 invalid-2 invalid-3 invalid-4 invalid-5 invalid-6 invalid-7 invalid-8
+hash-0 hash-1 hash-2 hash-3 hash-4 hash-5 hash-6
 chain-0 chain-1 chain-2 chain-3 chain-4 chain-5 chain-6 chain-7 chain-8 chain-9
 chain-10 chain-11 chain-12 chain-13 chain-14 chain-15 chain-16 chain-17 chain-18 chain-19
-chain-20 chain-21 chain-22 chain-23 chain-24 denied-lease
+chain-20 chain-21 chain-22 chain-23 chain-24 chain-25 chain-26 denied-lease
 registration-0 registration-1 registration-2 registration-3 registration-4
 registration-5 registration-6 registration-7 registration-8 registration-9
 unload-baseline descriptor-0 descriptor-1 descriptor-2 descriptor-3
 cache-literal-0 cache-literal-1 cache-literal-2 cache-literal-3
-function-prefix caller-word register-word protect-0 protect-1 protect-2
+function-prefix caller-word register-word protect-0 protect-1 protect-2 protect-3
+pthread-prefix message-prefix native-caller message-caller native-wrapper generation-pointer
 lease-chain-change preoccupied-bus'
 printf '%s\n' $scenarios > "$output/scenarios.txt"
 for scenario in $scenarios; do
@@ -133,4 +134,4 @@ for scenario in $scenarios; do
         printf 'FAIL LDS install %s (see %s)\n' "$scenario" "$output/$scenario.log" >&2
     fi
 done
-[ "$total" -eq 71 ] && [ "$failed" -eq 0 ]
+[ "$total" -eq 84 ] && [ "$failed" -eq 0 ]

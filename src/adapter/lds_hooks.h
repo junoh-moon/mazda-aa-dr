@@ -1,6 +1,7 @@
 #ifndef MX5_ADAPTER_LDS_HOOKS_H
 #define MX5_ADAPTER_LDS_HOOKS_H
 #include "runtime/lds_sideband.h"
+#include "runtime/lds_association.h"
 #include <stdint.h>
 
 namespace mx5 { namespace adapter {
@@ -32,6 +33,24 @@ struct LdsMessageApi {
     const char* (*interface_name)(void*);
     const char* (*member)(void*);
 };
+struct LdsSendSites {
+    uintptr_t message_lock_return,native_lock_return;
+    const uint32_t *current_generation,*initialized_generation;
+    uintptr_t connection_mutex_offset,uninitialized_mutex;
+};
+// An observation at the original message-lock return, never send completion
+// or physical sensor qualification. Every value is owned; no OEM pointer escapes.
+struct LdsLockedSend {
+    runtime::lds_association::Stage stage;
+    int32_t reply_type;
+    uint64_t observed_ns;
+    runtime::lds_sideband::WireIdentity wire;
+    runtime::lds_sideband::Lineage field_lineage;
+    PositionInput position;
+};
+enum LdsLockedLoss : uint32_t { LOCKED_CHAIN_CONFLICT=1,LOCKED_SEND_FAILED=2 };
+typedef void (*LdsPublishLocked)(const LdsLockedSend&,void*);
+typedef void (*LdsInvalidateLocked)(LdsLockedLoss,void*);
 struct LdsBindings {
     void (*initialize)(); void (*clear)();
     // The original Open callback word is forwarded unchanged, never invoked
@@ -58,6 +77,13 @@ struct LdsBindings {
     // No original mutex or borrowed OEM pointer is retained in this value.
     void (*emit)(const runtime::lds_sideband::Record&,void*);
     void* user;
+    void (*message_lock)(void*);
+    int32_t (*native_mutex_lock)(void*);
+    LdsSendSites send_sites;
+    // Optional pair, bounded/nonthrowing memory operations only. These may
+    // execute under the original connection mutex; no I/O or waiting here.
+    LdsPublishLocked publish_locked;
+    LdsInvalidateLocked invalidate_locked;
 };
 // Installer-owned cold preparation is immutable even after transaction rollback.
 // Partial-publication wrappers always forward; only activate enables metadata.
@@ -81,4 +107,6 @@ extern "C" void* mx5_lds_method_build(void*);
 extern "C" void* mx5_lds_reply_create(void*,void*);
 extern "C" void* mx5_lds_reply_message(void*,void*);
 extern "C" int32_t mx5_lds_send(void*,void*,uint32_t*);
+extern "C" void mx5_lds_message_lock(void*);
+extern "C" int32_t mx5_lds_native_mutex_lock(void*);
 #endif

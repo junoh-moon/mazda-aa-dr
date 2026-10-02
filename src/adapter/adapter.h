@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "runtime/request_trace.h"
+#include "runtime/lds_association.h"
 
 namespace mx5 { namespace adapter {
 
@@ -52,6 +53,7 @@ struct Observation {
     // Observation only; successful association grants no ASSIST qualification.
     runtime::request_trace::Result request_result;
     runtime::request_trace::Trace request_trace;
+    runtime::lds_association::Owned lds_association;
     runtime::session_trace::Snapshot send_session; // Actual send storage lookup.
     bool has_payload;
     uint8_t original[48], outgoing[48];
@@ -72,7 +74,12 @@ struct PositionContext {
     runtime::request_trace::Result request_result;
     const runtime::request_trace::Trace& request_trace;
     uint32_t call_sequence,prediction_generation;
+    // Borrowed only while the provenance reader runs. No mapped/OEM pointer is
+    // retained; POSITION and this frame's SEND own the same value.
+    const runtime::lds_association::Owned* lds_association;
 };
+typedef bool (*AssociationReader)(const PositionContext&,
+                                  runtime::lds_association::Owned*,void* user);
 typedef bool (*ProvenanceReader)(void* manager, const PositionContext&,
                                  Provenance*, void* user);
 typedef runtime::request_trace::Result (*RequestReader)(const void* oem_position,
@@ -87,6 +94,7 @@ struct Options {
     bool allow_assist; // Explicit verified deployment gate, false by default.
     RequestReader request_reader; // Optional live raw-pointer association.
     SessionReader session_reader; // Optional actual send argument observation.
+    AssociationReader association_reader; // Optional memory-only before-reply lookup.
 };
 
 // Initialization only: before installation / before OEM producers start.

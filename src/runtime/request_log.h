@@ -5,7 +5,9 @@
 #include <cstring>
 
 namespace mx5 { namespace runtime {
-enum { REQUEST_JSON_CAPACITY = 6144, OBSERVATION_JSON_CAPACITY = 6144 };
+// A complete escaped request plus the owned LDS association and SEND payload
+// needs more than the request-only buffer. Formatting stays on the worker.
+enum { REQUEST_JSON_CAPACITY = 6144, OBSERVATION_JSON_CAPACITY = 8192 };
 namespace request_log_detail {
 class Json {
     char* out_;size_t cap_,used_;bool ok_;

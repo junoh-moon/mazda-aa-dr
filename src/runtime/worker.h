@@ -17,5 +17,10 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
 // physical provider or rewrites an already captured callback's provenance.
 void* run_worker_inputs(const char* root,const char* motion_channel,const char* lds_channel,
                        uid_t lds_uid,AssistWorker* assist,LdsRequestSource* source);
+// The same production loop with an explicit association control channel for
+// isolated tests. Normal entry points select the fixed product channel.
+void* run_worker_association(const char* root,const char* motion_channel,const char* lds_channel,
+                       uid_t lds_uid,AssistWorker* assist,LdsRequestSource* source,
+                       const char* association_channel);
 } }
 #endif

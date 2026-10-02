@@ -21,6 +21,8 @@ struct LdsInstallOptions {
     uint64_t (*clock)(void*);
     void (*emit)(const runtime::lds_sideband::Record&,void*);
     void* user;
+    LdsPublishLocked publish_locked;
+    LdsInvalidateLocked invalidate_locked;
 };
 
 InstallResult install_lds_v74(const LdsInstallOptions&);

@@ -1,10 +1,14 @@
 // Authored installer witness; actual config parser, Sender/Receiver and tap.
 // The separate loader fixture exercises the real dlopen interposer/lease.
 #include <limits.h>
-static char tap_config[PATH_MAX],tap_disable[PATH_MAX],tap_channel[80];
+static char tap_config[PATH_MAX],tap_disable[PATH_MAX],tap_channel[80],association_channel[80],association_directory[PATH_MAX];
 #define MX5_LDS_CONFIG_PATH tap_config
 #define MX5_LDS_DISABLE_PATH tap_disable
 #define MX5_LDS_CHANNEL tap_channel
+#define MX5_LDS_ASSOCIATION_CHANNEL association_channel
+#define MX5_LDS_ASSOCIATION_DIRECTORY association_directory
+#include "runtime/lds_association_channel.h"
+#include "runtime/lds_association_protocol.h"
 #include "../../src/sensors/lds_tap.cpp"
 #include <assert.h>
 #include <errno.h>
@@ -13,10 +17,21 @@ static char tap_config[PATH_MAX],tap_disable[PATH_MAX],tap_channel[80];
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 namespace TestAdapter=mx5::adapter;
 namespace TestSideband=mx5::runtime::lds_sideband;
 namespace TestTap=mx5::sensors;
+namespace TestAssociation=mx5::runtime::lds_association;
+namespace TestRequest=mx5::runtime::request_trace;
+namespace mx5 { namespace runtime { namespace lds_association {
+struct AssociationTestAccess {
+    static const protocol::Map* map(const Registry& registry) {
+        const unsigned token=registry.active_.load();
+        return token?static_cast<const protocol::Map*>(registry.views_[(token&3)-1].mapping):0;
+    }
+};
+} } }
 namespace {
 unsigned installs,begins,ends;
 bool cold=true;
@@ -37,6 +52,75 @@ void emit_witness() {
 }
 void write_file(const char* path,const char* value) {
     FILE* out=fopen(path,"w");assert(out);assert(fputs(value,out)>=0);assert(!fclose(out));
+}
+TestAdapter::LdsLockedSend locked_example() {
+    TestAdapter::LdsLockedSend r=TestAdapter::LdsLockedSend();
+    r.stage=TestAssociation::LOCKED_FOR_SEND;r.reply_type=2;r.observed_ns=captured.clock(captured.user);
+    TestSideband::copy_text(&r.wire.server_guid,"authored-transport-guid");
+    TestSideband::copy_text(&r.wire.client_unique,":1.2");
+    TestSideband::copy_text(&r.wire.server_unique,":1.1");r.wire.destination=r.wire.client_unique;
+    r.wire.request_serial=r.wire.reply_serial=7;r.wire.response_serial=19;
+    const TestSideband::Record source=example();r.field_lineage=source.field_lineage;r.position=source.position;
+    return r;
+}
+bool read_locked(TestAssociation::Registry& registry,const TestAdapter::LdsLockedSend& r,TestAssociation::Owned* out) {
+    TestRequest::Trace trace=TestRequest::Trace();trace.request=TestRequest::Token{11,2};trace.worker=TestRequest::Token{12,2};
+    trace.issue.observed_ns=r.observed_ns-1;trace.issue.wire.observed_ns=trace.issue.observed_ns;
+    trace.issue.wire.known=trace.issue.wire.endpoint_matched=true;trace.issue.wire.serial=r.wire.request_serial;
+    trace.issue.endpoint.server_guid=r.wire.server_guid;trace.issue.endpoint.unique_name=r.wire.client_unique;
+    TestSideband::copy_text(&trace.issue.route.destination,"com.jci.lds.data");
+    TestSideband::copy_text(&trace.issue.route.path,"/com/jci/lds/data");
+    TestSideband::copy_text(&trace.issue.route.interface_name,"com.jci.lds.data");
+    TestSideband::copy_text(&trace.issue.route.member,"GetPosition");
+    trace.reply.wire.known=true;trace.reply.wire.type=2;trace.reply.wire.serial=r.wire.response_serial;
+    trace.reply.wire.reply_serial=r.wire.reply_serial;trace.reply.wire.sender=r.wire.server_unique;
+    trace.reply.wire.observed_ns=r.observed_ns+1;
+    const TestAdapter::PositionContext context={r.position,TestRequest::OK,trace,5,9,0};
+    return registry.read(context,out);
+}
+void check_association(const char* name,TestAssociation::Registry& registry,TestSideband::Receiver& receiver,uint64_t instance) {
+    const bool failed=!strcmp(name,"association_failed");
+    registry.drain(captured.clock(captured.user));
+    const TestAdapter::LdsLockedSend r=locked_example();TestAssociation::Owned out;
+    // Before implementation the actual tap supplies no association callback
+    // and the real Registry cannot adopt/read anything: a behavioral RED.
+    if(captured.publish_locked)captured.publish_locked(r,captured.user);
+    errno=E2BIG;const bool matched=read_locked(registry,r,&out);assert(errno==E2BIG);
+    assert(matched==!failed);
+    assert(captured.publish_locked && captured.invalidate_locked);
+    if(failed) {
+        assert(out.result==TestAssociation::UNAVAILABLE);
+        emit_witness();TestSideband::Record side;TestSideband::Diagnostic d;
+        assert(receiver.receive(&side,&d)==TestSideband::RECORD && side.source_instance==instance && side.sequence==2);
+        return;
+    }
+    assert(out.result==TestAssociation::MATCHED_LOCKED_FOR_SEND && out.stage==TestAssociation::LOCKED_FOR_SEND);
+    assert(out.source_instance==instance && out.record_sequence==1 && out.cache_lifetime==3 && out.write_sequence==4);
+    assert(out.fields[0].write_sequence==4 && out.fields[1].write_sequence==0);
+    auto wrong=r;wrong.position.latitude_deg+=1;assert(!read_locked(registry,wrong,&out) && out.result==TestAssociation::PAYLOAD_MISMATCH);
+    assert(read_locked(registry,r,&out));
+    if(!strcmp(name,"association_invalidate")) {
+        errno=E2BIG;captured.invalidate_locked(TestAdapter::LOCKED_CHAIN_CONFLICT,captured.user);assert(errno==E2BIG);
+        assert(!read_locked(registry,r,&out));return;
+    }
+    if(!strcmp(name,"association_fork")) {
+        const auto* map=TestAssociation::AssociationTestAccess::map(registry);assert(map);
+        uint32_t before[TestAssociation::protocol::WORDS];
+        for(unsigned i=0;i<TestAssociation::protocol::WORDS;++i)before[i]=map->words[i].load();
+        const pid_t child=fork();assert(child>=0);
+        if(!child) {
+            auto other=r;other.wire.request_serial=other.wire.reply_serial=8;other.wire.response_serial=20;++other.observed_ns;
+            errno=E2BIG;captured.publish_locked(other,captured.user);
+            captured.invalidate_locked(TestAdapter::LOCKED_SEND_FAILED,captured.user);captured.emit(example(),captured.user);
+            _exit(errno==E2BIG?0:9);
+        }
+        int status=0;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
+        for(unsigned i=0;i<TestAssociation::protocol::WORDS;++i)assert(map->words[i].load()==before[i]);
+        assert(read_locked(registry,r,&out));
+        TestSideband::Record side;TestSideband::Diagnostic d;
+        assert(receiver.receive(&side,&d)==TestSideband::EMPTY);
+        emit_witness();assert(receiver.receive(&side,&d)==TestSideband::RECORD && side.source_instance==instance && side.sequence==2);
+    }
 }
 }
 namespace mx5 { namespace runtime {
@@ -60,6 +144,9 @@ int main(int argc,char** argv) {
     assert(snprintf(tap_config,sizeof tap_config,"%s/config",root)>0);
     assert(snprintf(tap_disable,sizeof tap_disable,"%s/disabled",root)>0);
     assert(snprintf(tap_channel,sizeof tap_channel,"mx5dr.lds.tap.%ld",(long)getpid())>0);
+    assert(snprintf(association_channel,sizeof association_channel,"mx5dr.lds.assoc.tap.%ld",(long)getpid())>0);
+    assert(snprintf(association_directory,sizeof association_directory,"%s%s",root,
+        !strcmp(name,"association_failed")?"/missing":"")>0);
     write_file(tap_config,"mode=SHADOW\n");
     bool expected_enabled=true;
     if(!strcmp(name,"off")) { write_file(tap_config,"mode=OFF\n");expected_enabled=false; }
@@ -77,7 +164,9 @@ int main(int argc,char** argv) {
     else if(!strcmp(name,"rollback_failed"))install_result=TestAdapter::NEXT_CHAIN_MISMATCH;
     else if(!strcmp(name,"cold_lost"))cold=false;
     else assert(!strcmp(name,"normal")||!strcmp(name,"late_receiver")||!strcmp(name,"sender_failed")||
-                !strcmp(name,"unrequested")||!strcmp(name,"null_handle")||!strcmp(name,"repeated"));
+                !strcmp(name,"unrequested")||!strcmp(name,"null_handle")||!strcmp(name,"repeated")||
+                !strcmp(name,"association")||!strcmp(name,"association_fork")||
+                !strcmp(name,"association_failed")||!strcmp(name,"association_invalidate"));
 
     const bool unrequested=!strcmp(name,"unrequested");
     if(!unrequested) {
@@ -86,6 +175,8 @@ int main(int argc,char** argv) {
         assert(errno==EDOM);
     }
     TestSideband::Receiver receiver;const bool late=!strcmp(name,"late_receiver");
+    TestAssociation::Registry registry;const bool association=!strncmp(name,"association",11);
+    if(association)assert(registry.open_channel(association_channel,geteuid()));
     const bool sender_fail=!strcmp(name,"sender_failed");
     const bool null_handle=!strcmp(name,"null_handle");
     if(expected_enabled&&!unrequested&&!late&&!sender_fail)assert(receiver.open_channel(tap_channel,geteuid()));
@@ -115,6 +206,7 @@ int main(int argc,char** argv) {
             assert(result.dropped_before==unsigned(late) && result.observed_ns>0);
             assert(result.field_lineage.fields[0].write_sequence==4);
             assert(diagnostic.sender_pid==getpid() && diagnostic.sender_uid==geteuid());
+            if(association)check_association(name,registry,receiver,result.source_instance);
         }
         if(!strcmp(name,"repeated")) {
             errno=E2BIG;mx5::runtime::loader_bootstrap(&service);assert(errno==E2BIG && installs==1);

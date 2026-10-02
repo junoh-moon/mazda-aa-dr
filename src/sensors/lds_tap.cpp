@@ -2,8 +2,11 @@
 #include "adapter/lds_install.h"
 #include "runtime/config.h"
 #include "runtime/sha256.h"
+#include "runtime/lds_association_channel.h"
+#include <atomic>
 #include <errno.h>
 #include <new>
+#include <pthread.h>
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
@@ -15,6 +18,12 @@
 #endif
 #ifndef MX5_LDS_CHANNEL
 #define MX5_LDS_CHANNEL mx5::runtime::lds_sideband::CHANNEL_NAME
+#endif
+#ifndef MX5_LDS_ASSOCIATION_CHANNEL
+#define MX5_LDS_ASSOCIATION_CHANNEL mx5::runtime::lds_association::CHANNEL_NAME
+#endif
+#ifndef MX5_LDS_ASSOCIATION_DIRECTORY
+#define MX5_LDS_ASSOCIATION_DIRECTORY "/tmp"
 #endif
 namespace mx5 { namespace sensors {
 struct LdsTapReport {
@@ -32,9 +41,19 @@ const LdsTapReport& lds_tap_report() { return report; }
 namespace {
 namespace A=mx5::adapter;
 namespace S=mx5::runtime::lds_sideband;
+namespace L=mx5::runtime::lds_association;
 namespace T=mx5::sensors;
 bool policy_decided,allowed,bootstrap_attempted;
-alignas(S::Sender) unsigned char sender_storage[sizeof(S::Sender)];
+struct TapState {
+    S::Sender sender;
+    L::Publisher publisher;
+    std::atomic<unsigned> child_disabled;
+    TapState():sender(),publisher(),child_disabled(0) {}
+};
+alignas(TapState) unsigned char tap_storage[sizeof(TapState)];
+std::atomic<TapState*> retained_state(0);
+static_assert(ATOMIC_POINTER_LOCK_FREE==2 && ATOMIC_INT_LOCK_FREE==2,
+              "Child fork fence must use lock-free local atomics");
 struct Errno {
     const int value;
     Errno():value(errno) {}
@@ -46,10 +65,35 @@ uint64_t clock_ns(void*) {
     if(clock_gettime(CLOCK_MONOTONIC,&time) || time.tv_sec<0)return 0;
     return uint64_t(time.tv_sec)*1000000000ULL+uint64_t(time.tv_nsec);
 }
+void child_after_fork() {
+    // The storage is private to this process; the inherited mapping is shared.
+    // Only revoke local admission: no parent-map write, close/unmap or lock.
+    TapState* state=retained_state.load(std::memory_order_acquire);
+    if(state) {
+        state->child_disabled.store(1,std::memory_order_release);
+        state->publisher.disable_after_fork();
+    }
+}
+void publish_locked(const A::LdsLockedSend& record,void* user) {
+    const Errno saved;
+    TapState* state=static_cast<TapState*>(user);
+    if(state && !state->child_disabled.load(std::memory_order_acquire))state->publisher.publish(record);
+}
+void invalidate_locked(A::LdsLockedLoss,void* user) {
+    const Errno saved;
+    TapState* state=static_cast<TapState*>(user);
+    if(state && !state->child_disabled.load(std::memory_order_acquire))state->publisher.invalidate();
+}
 void emit(const S::Record& record,void* user) {
     // Actual hooks call only after the original Path returns and cache unlocks.
     // No retry, persistent file, worker thread or producer qualification here.
-    if(user)static_cast<S::Sender*>(user)->try_send(record);
+    const Errno saved;
+    TapState* state=static_cast<TapState*>(user);
+    if(!state || state->child_disabled.load(std::memory_order_acquire))return;
+    state->sender.try_send(record);
+    // FD transfer is post-Path only, never in the two lock observers. The
+    // Publisher bounds offers to one attempt/second, including absent peers.
+    state->publisher.offer(MX5_LDS_ASSOCIATION_CHANNEL,clock_ns(0));
 }
 void diagnostic(const char* state) {
     char line[192];
@@ -84,18 +128,26 @@ void loader_bootstrap(void* handle) {
         T::report.installation=A::INVALID_INSTALL_ARGUMENT;
         diagnostic("invalid_handle");return;
     }
-    // Retain this object and its socket until process exit. A prepared target
-    // and emit userdata can remain reachable after partial publication/rollback.
-    S::Sender* sender=new(sender_storage)S::Sender();
-    if(!sender->open_channel(MX5_LDS_CHANNEL)) {
+    // No destructor: immutable hook userdata survives partial publication and
+    // rollback. Map/FD preparation and atfork registration occur off the lease.
+    TapState* state=new(tap_storage)TapState();
+    retained_state.store(state,std::memory_order_release);
+    const uint64_t instance=clock_ns(0); // observation instance, not measurement time
+    if(!instance || !state->sender.open_channel(MX5_LDS_CHANNEL,instance)) {
         T::report.state=T::LdsTapReport::SENDER_FAILED;
         diagnostic("sender_unavailable");return;
     }
+    if(pthread_atfork(0,0,child_after_fork)==0)
+        state->publisher.prepare(instance,MX5_LDS_ASSOCIATION_DIRECTORY);
+    else state->publisher.disable_after_fork();
+    // Missing map backing or fork admission disables only supplementary
+    // association. The original installation and v1 Sender remain available.
     A::LdsInstallOptions options=A::LdsInstallOptions();
     options.service_handle=handle;options.verify_file_hash=mx5_verify_file_sha256;
     options.verified_cold_start=true;
     options.begin_patch=loader_begin_patch;options.end_patch=loader_end_patch;
-    options.clock=clock_ns;options.emit=emit;options.user=sender;
+    options.clock=clock_ns;options.emit=emit;options.user=state;
+    options.publish_locked=publish_locked;options.invalidate_locked=invalidate_locked;
     T::report.install_attempted=true;T::report.state=T::LdsTapReport::INSTALLING;
     T::report.installation=A::install_lds_v74(options);
     const bool installed=T::report.installation==A::INSTALL_OK;

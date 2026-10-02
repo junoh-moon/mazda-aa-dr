@@ -57,6 +57,8 @@ RELAY lds_test_unlock_update,mx5_lds_mutex_unlock
 RELAY lds_test_unlock_service,mx5_lds_mutex_unlock
 RELAY lds_test_copy_read,mx5_lds_mem_copy
 RELAY lds_test_copy_update,mx5_lds_mem_copy
+RELAY lds_test_message_lock,mx5_lds_message_lock
+RELAY lds_test_native_lock,mx5_lds_native_mutex_lock
 #if defined(__linux__)
 .section .note.GNU-stack,"",%progbits
 #endif

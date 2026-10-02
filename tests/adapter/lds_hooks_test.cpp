@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
+#include <stddef.h>
 
 namespace A=mx5::adapter;
 namespace S=mx5::runtime::lds_sideband;
@@ -26,6 +27,8 @@ void lds_test_unlock_update(void*); extern char lds_test_unlock_update_return;
 void lds_test_unlock_service(void*); extern char lds_test_unlock_service_return;
 void* lds_test_copy_read(void*,const void*,unsigned); extern char lds_test_copy_read_return;
 void* lds_test_copy_update(void*,const void*,unsigned); extern char lds_test_copy_update_return;
+void lds_test_message_lock(void*); extern char lds_test_message_lock_return;
+int32_t lds_test_native_lock(void*); extern char lds_test_native_lock_return;
 }
 namespace {
 struct Cache {
@@ -54,12 +57,36 @@ uint64_t tick=100;
 S::Record records[32]; unsigned record_count;
 A::LdsGeneric dispatch;
 void* dispatch_descriptor;
-int connection,other_connection,method,reply,object;
+pthread_mutex_t send_mutex=PTHREAD_MUTEX_INITIALIZER,other_mutex=PTHREAD_MUTEX_INITIALIZER;
+struct Connection { uintptr_t padding;void* mutex; };
+Connection connection={0,&send_mutex},other_connection={0,&other_mutex};
+int method,reply,object;
+uint32_t current_generation=1,initialized_generation=1;
+bool locked_test,send_held,skip_native,native_wrong_pc,message_wrong_pc,native_failure;
+bool native_twice,message_twice,generation_change,mutex_change,throw_send,extra_send;
+bool bad_reply,bad_destination,bad_endpoint,clock_missing,bad_type,nested_send;
+unsigned native_calls,message_locks,locked_count,invalidations;
+A::LdsLockedLoss last_loss;
+A::LdsLockedSend locked_values[8];
+int32_t native_mutex_lock(void* value) {
+    ++native_calls;assert(value==connection.mutex);
+    if(native_failure) { errno=ENOTTY;return EBUSY; }
+    if(!send_held) { assert(!pthread_mutex_lock(static_cast<pthread_mutex_t*>(value)));send_held=true; }
+    errno=ENOTTY;return 0;
+}
+void message_lock(void* value);
+void published(const A::LdsLockedSend& value,void*) {
+    assert(send_held && !held && locked_count<8);
+    assert(pthread_mutex_trylock(&send_mutex)==EBUSY);
+    locked_values[locked_count++]=value;errno=ENFILE;
+}
+void invalidated(A::LdsLockedLoss loss,void*) { ++invalidations;last_loss=loss;errno=ENFILE; }
 struct Message { int type; uint32_t serial,reply_serial;const char *sender,*destination,*path,*interface_name,*member; };
 Message request={1,7,0,":1.2",":1.1","/com/jci/lds/data","com.jci.lds.data","GetPosition"};
 Message nested_request={1,8,0,":1.3",":1.1","/com/jci/lds/data","com.jci.lds.data","GetPosition"};
 Message response={2,0,7,":1.1",":1.2",0,0,0};
-uint64_t clock_ns(void*) { errno=ERANGE;return ++tick; }
+void message_lock(void* value) { assert(value==&response);++message_locks;errno=ECHRNG; }
+uint64_t clock_ns(void*) { errno=ERANGE;return clock_missing?0:++tick; }
 void emit(const S::Record& value,void*) {
     assert(!held);assert(record_count<32);records[record_count++]=value;errno=EDOM;
 }
@@ -148,8 +175,30 @@ void* reply_message(void* r,void* raw) {
 }
 int32_t send(void* raw,void* message,uint32_t* serial) {
     assert(raw==(send_other_connection?&other_connection:&connection) && message==&response);
-    ++sends;response.serial=send_failure?0:response.reply_serial+12;
+    ++sends;response.serial=(!locked_test && send_failure)?0:response.reply_serial+12;
     if(serial)*serial=response.serial;
+    if(locked_test) {
+        const bool threaded=current_generation==initialized_generation && connection.mutex &&
+            uintptr_t(connection.mutex)!=0xabcdef;
+        if(threaded && !skip_native) {
+            const int32_t result=native_wrong_pc?mx5_lds_native_mutex_lock(connection.mutex):lds_test_native_lock(connection.mutex);
+            assert(result==(native_failure?EBUSY:0) && errno==ENOTTY);
+            if(native_twice)assert(lds_test_native_lock(connection.mutex)==0);
+        }
+        if(generation_change)++current_generation;
+        void* saved_mutex=connection.mutex;
+        if(mutex_change)connection.mutex=&other_mutex;
+        if(bad_reply)response.reply_serial+=1;
+        if(bad_destination)response.destination=":1.999";
+        if(bad_type)response.type=3;
+        if(nested_send) { nested_send=false;assert(mx5_lds_send(raw,message,0)==1); }
+        if(message_wrong_pc)mx5_lds_message_lock(message);else lds_test_message_lock(message);
+        assert(errno==ECHRNG);
+        if(message_twice)lds_test_message_lock(message);
+        connection.mutex=saved_mutex;
+        if(send_held) { send_held=false;assert(!pthread_mutex_unlock(static_cast<pthread_mutex_t*>(saved_mutex))); }
+        if(throw_send)throw 23;
+    }
     errno=ETIMEDOUT;return send_failure?0:1;
 }
 int32_t path(void* raw,void* message,void* c) {
@@ -161,6 +210,7 @@ int32_t path(void* raw,void* message,void* c) {
     if(throw_path)throw 19;
     void* response_message=mx5_lds_reply_message(r,message);
     assert(mx5_lds_send(send_other_connection?&other_connection:raw,response_message,0)==(send_failure?0:1));
+    if(extra_send)assert(mx5_lds_send(raw,response_message,0)==1);
     errno=EACCES;return 0;
 }
 int32_t message_type(void* p) { return static_cast<Message*>(p)->type; }
@@ -188,6 +238,10 @@ A::LdsBindings bindings() {
     b.sites.read_lock=uintptr_t(&lds_test_lock_read_return);b.sites.read_copy=uintptr_t(&lds_test_copy_read_return);b.sites.read_unlock=uintptr_t(&lds_test_unlock_read_return);
     b.sites.update_lock=uintptr_t(&lds_test_lock_update_return);b.sites.update_copy=uintptr_t(&lds_test_copy_update_return);b.sites.update_unlock=uintptr_t(&lds_test_unlock_update_return);
     b.sites.service_lock=uintptr_t(&lds_test_lock_service_return);b.sites.service_unlock=uintptr_t(&lds_test_unlock_service_return);
+    b.message_lock=message_lock;b.native_mutex_lock=native_mutex_lock;
+    b.send_sites=A::LdsSendSites{uintptr_t(&lds_test_message_lock_return),uintptr_t(&lds_test_native_lock_return),
+        &current_generation,&initialized_generation,offsetof(Connection,mutex),0xabcdef};
+    if(locked_test) { b.publish_locked=published;b.invalidate_locked=invalidated; }
     return b;
 }
 void query() { assert(mx5_lds_path(&connection,&request,&connection)==0);assert(errno==EACCES); }
@@ -205,6 +259,7 @@ B::Snapshot read_bus_endpoint(const void* object,R::Endpoint* e,uintptr_t* key) 
         if(e) {
             S::copy_text(&e->server_guid,"authored-server-address-guid");
             S::copy_text(&e->unique_name,":1.1");
+            if(bad_endpoint)e->server_guid.complete=false;
         }
         if(key)*key=uintptr_t(&connection);
     }
@@ -240,6 +295,8 @@ void preparation() {
     errno=E2BIG;assert(!A::activate_lds_hooks() && errno==E2BIG);
     A::LdsBindings invalid=bindings();invalid.registration=0;
     assert(!A::prepare_lds_hooks(invalid));
+    invalid=bindings();invalid.message_lock=0;assert(!A::prepare_lds_hooks(invalid));
+    invalid=bindings();invalid.native_mutex_lock=0;assert(!A::prepare_lds_hooks(invalid));
     assert(A::prepare_lds_hooks(bindings()));
     A::LdsBindings replacement=bindings();replacement.routes[0].callback=other;
     assert(!A::prepare_lds_hooks(replacement));
@@ -482,10 +539,72 @@ void emit_hook_record() {
     char line[S::JSON_CAPACITY];assert(S::format_record(line,sizeof line,record,diagnostic));
     puts(line);mx5_lds_clear();
 }
+void locked_case(const char* scenario) {
+    locked_test=true;endpoint_available=true;
+    if(!strcmp(scenario,"locked_pair")) {
+        A::LdsBindings b=bindings();b.invalidate_locked=0;
+        assert(!A::prepare_lds_hooks(b));return;
+    }
+    if(!strcmp(scenario,"locked_inactive")) {
+        assert(A::prepare_lds_hooks(bindings()));mx5_lds_initialize();
+        assert(mx5_lds_set_callback(&object,generic,&descriptor)==13);query();
+        assert(native_calls==1 && message_locks==1 && sends==1 && !locked_count && !record_count && !invalidations);
+        mx5_lds_clear();return;
+    }
+    initialize_observer();register_three();callbacks[0](0);
+    const bool unknown=!strcmp(scenario,"locked_unknown");
+    if(unknown) { mx5_lds_clear();mx5_lds_initialize(); }
+    if(!strcmp(scenario,"locked_unthreaded")) { initialized_generation=0;connection.mutex=reinterpret_cast<void*>(0xabcdef); }
+    if(!strcmp(scenario,"locked_null"))connection.mutex=0;
+    if(!strcmp(scenario,"locked_generation"))generation_change=true;
+    if(!strcmp(scenario,"locked_mutex"))mutex_change=true;
+    if(!strcmp(scenario,"locked_native_pc"))native_wrong_pc=true;
+    if(!strcmp(scenario,"locked_message_pc"))message_wrong_pc=true;
+    if(!strcmp(scenario,"locked_native_fail"))native_failure=true;
+    if(!strcmp(scenario,"locked_no_native"))skip_native=true;
+    if(!strcmp(scenario,"locked_native_twice"))native_twice=true;
+    if(!strcmp(scenario,"locked_message_twice"))message_twice=true;
+    if(!strcmp(scenario,"locked_reply"))bad_reply=true;
+    if(!strcmp(scenario,"locked_destination"))bad_destination=true;
+    if(!strcmp(scenario,"locked_endpoint"))bad_endpoint=true;
+    if(!strcmp(scenario,"locked_failed_send"))send_failure=true;
+    if(!strcmp(scenario,"locked_unwind"))throw_send=true;
+    if(!strcmp(scenario,"locked_extra_send"))extra_send=true;
+    if(!strcmp(scenario,"locked_clock"))clock_missing=true;
+    if(!strcmp(scenario,"locked_type"))bad_type=true;
+    if(!strcmp(scenario,"locked_zero_request"))request.serial=0;
+    if(!strcmp(scenario,"locked_endpoint_changed"))endpoint_after=A::ENDPOINT_MISMATCH;
+    if(!strcmp(scenario,"locked_snapshot"))write_after_snapshot=true;
+    if(!strcmp(scenario,"locked_nested_send"))nested_send=true;
+    const bool nested=!strcmp(scenario,"locked_nested_send");
+    if(throw_send) { try {query();assert(false);}catch(int e){assert(e==23);} }
+    else query();
+    const bool positive=!strcmp(scenario,"locked") || unknown || message_twice || send_failure || throw_send || extra_send ||
+        clock_missing || !strcmp(scenario,"locked_snapshot");
+    assert(locked_count==unsigned(positive));
+    if(positive) {
+        const A::LdsLockedSend& p=locked_values[0];
+        assert(p.stage==mx5::runtime::lds_association::LOCKED_FOR_SEND && p.reply_type==2 &&
+            (clock_missing?p.observed_ns==0:p.observed_ns>0));
+        assert(p.wire.request_serial==7 && p.wire.reply_serial==7 && p.wire.response_serial==19);
+        assert(!strcmp(p.wire.server_guid.bytes,"authored-server-address-guid") && !strcmp(p.wire.client_unique.bytes,":1.2"));
+        assert(!strcmp(p.wire.server_unique.bytes,":1.1") && !strcmp(p.wire.destination.bytes,":1.2"));
+        assert(p.field_lineage.write_sequence==(unknown?0u:1u));
+        assert(p.position.utc_seconds==(unknown?0u:123u));
+        if(!strcmp(scenario,"locked_snapshot"))assert(p.position.latitude_deg==12.5 && cache.latitude==15.5f);
+        assert(invalidations==unsigned(message_twice||send_failure||throw_send||extra_send));
+        if(send_failure)assert(last_loss==A::LOCKED_SEND_FAILED);
+    }
+    assert(sends==(extra_send||nested?2u:1u));
+    assert(message_locks==(message_twice||extra_send||nested?2u:1u));
+    if(!throw_send)assert(record_count==1 && (records[0].flags&S::RAW_SEND_CALLED));
+    mx5_lds_clear();
+}
 int main(int argc,char** argv) {
     const char* test=argc==2?argv[1]:"chain";
     if(!strcmp(test,"--emit")) { emit_hook_record();return 0; }
-    if(!strcmp(test,"chain"))chain();
+    if(!strncmp(test,"locked",6))locked_case(test);
+    else if(!strcmp(test,"chain"))chain();
     else if(!strcmp(test,"prepare"))preparation();
     else if(!strcmp(test,"inactive"))inactive();
     else if(!strcmp(test,"register"))registration_contract(false);

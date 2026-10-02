@@ -22,12 +22,14 @@
 #include "lds_sideband.h"
 #include "lds_request_source.h"
 #include "lds_source_bus.h"
+#include "lds_association_channel.h"
 #include "navigation/channel.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <locale.h>
 #include <math.h>
+#include <new>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -47,7 +49,41 @@ volatile uint32_t audit_fault = 0;
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
+namespace LA=mx5::runtime::lds_association;
+// Construct off the callback on the worker; retain until process exit. A later
+// DSO constructor/destructor must not reset or free state an OEM callback uses.
+alignas(LA::Registry) unsigned char association_storage[sizeof(LA::Registry)];
+std::atomic<LA::Registry*> association_owner(0);
+std::atomic<unsigned> association_started(0);
+void association_child() {
+  LA::Registry* owner=association_owner.load(std::memory_order_acquire);
+  if(owner)owner->disable_after_fork();
+}
+LA::Registry* prepare_association_owner() {
+  unsigned expected=0;
+  if(!association_started.compare_exchange_strong(expected,1))return 0;
+  LA::Registry* owner=new(association_storage)LA::Registry();
+  if(pthread_atfork(0,0,association_child))owner->disable_after_fork();
+  association_owner.store(owner,std::memory_order_release);
+  return owner;
+}
+void retire_association() {
+  LA::Registry* owner=association_owner.load(std::memory_order_acquire);
+  if(owner)owner->retire();
+}
+bool read_inline_association(const A::PositionContext& context,
+                             mx5::runtime::lds_association::Owned* out,void*) {
+  *out=LA::Owned();
+  LA::Registry* owner=association_owner.load(std::memory_order_acquire);
+  if(!owner || queue.closed() || __sync_fetch_and_add(&audit_fault,0))return false;
+  const bool matched=owner->read(context,out);
+  if(queue.closed() || __sync_fetch_and_add(&audit_fault,0)) {
+    *out=LA::Owned();return false;
+  }
+  return matched;
+}
 void disable_mutation() {
+  retire_association();
   if (__sync_bool_compare_and_swap(&audit_fault, 0, 1))
     A::set_mode(A::OBSERVE);
 }
@@ -62,14 +98,20 @@ void sink(const A::Observation *o, void *) {
 }
 void freeze_capture() {
   queue.close();
+  retire_association();
   A::set_mode(A::OBSERVE);
 }
 bool pop(A::Observation *out) { return queue.pop(out); }
 
 // No live provenance or sensor freshness is fabricated from polling. SCRUB
 // uses only the original request mode; custom DR remains a separate gate.
-bool provenance(void *, const A::PositionContext&, A::Provenance *out, void *) {
+bool provenance(void *, const A::PositionContext& context, A::Provenance *out, void *) {
   memset(out, 0, sizeof *out);
+  if(!context.lds_association ||
+     context.lds_association->result!=LA::MATCHED_LOCKED_FOR_SEND)return false;
+  // TODO: qualify provider, receiver and physical sensor time/quality through
+  // their independent verified source. An exact observed wire association
+  // alone cannot supply epochs or physical qualification for live ASSIST.
   return false;
 }
 void hex48(const uint8_t *p, char *out) {
@@ -86,9 +128,43 @@ void json_number(double x, char out[48]) {
   else
     strcpy(out, "null");
 }
+bool format_association(char* out,size_t capacity,const LA::Owned& o) {
+  const char* result=0;
+  switch(o.result) {
+    case LA::UNAVAILABLE:result="unavailable";break;
+    case LA::MATCHED_LOCKED_FOR_SEND:result="matched_locked_for_send";break;
+    case LA::CONFLICT:result="conflict";break;
+    case LA::PAYLOAD_MISMATCH:result="payload_mismatch";break;
+    default:return false;
+  }
+  mx5::runtime::request_log_detail::Json j(out,capacity);
+  j.add("{\"result\":\"");j.add(result);j.add("\"");
+  if(o.result==LA::MATCHED_LOCKED_FOR_SEND) {
+    j.add(",\"stage\":\"locked_for_send\"");
+    j.number("call",o.call_sequence);j.number("generation",o.prediction_generation);
+    j.number("revision",o.view_revision);j.number("layout",o.layout_version);
+    j.number("source_instance",o.source_instance);j.number("record_sequence",o.record_sequence);
+    j.number("locked_observed_ns",o.locked_observed_ns);j.number("map_loss_epoch",o.map_loss_epoch);
+    j.number("cache_lifetime",o.cache_lifetime);j.number("write_sequence",o.write_sequence);
+    char pair[128];
+    snprintf(pair,sizeof pair,",\"request\":[%llu,%llu],\"worker\":[%llu,%llu]",
+        (unsigned long long)o.request_id,(unsigned long long)o.request_epoch,
+        (unsigned long long)o.worker_id,(unsigned long long)o.worker_epoch);
+    j.add(pair);j.add(",\"fields\":[");
+    for(unsigned i=0;i<9;++i) {
+      snprintf(pair,sizeof pair,"%s[%llu,%llu]",i?",":"",
+          (unsigned long long)o.fields[i].write_sequence,(unsigned long long)o.fields[i].observed_ns);
+      j.add(pair);
+    }
+    j.add("]");
+  }
+  j.add("}");return j.ok();
+}
 bool format_observation(char* line,size_t capacity,const A::Observation& o) {
   char request[mx5::runtime::REQUEST_JSON_CAPACITY];
   if(!mx5::runtime::format_request_trace(request,sizeof request,o.request_result,o.request_trace))return false;
+  char association[1536];
+  if(!format_association(association,sizeof association,o.lds_association))return false;
   int n;
   if(o.kind==A::Observation::POSITION) {
     char lat[48],lon[48],h[48],v[48],horizontal[48],vertical[48];
@@ -98,9 +174,9 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
     n=snprintf(line,capacity,
       "{\"kind\":\"position\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,"
       "\"mode\":%d,\"utc_s\":%llu,\"lat\":%s,\"lon\":%s,\"heading\":%s,\"kmh\":%s,"
-      "\"altitude_m\":%d,\"horizontal\":%s,\"vertical\":%s,\"request\":%s}",
+      "\"altitude_m\":%d,\"horizontal\":%s,\"vertical\":%s,\"request\":%s,\"lds_association\":%s}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
-      (unsigned long long)o.position.utc_seconds,lat,lon,h,v,o.position.altitude_m,horizontal,vertical,request);
+      (unsigned long long)o.position.utc_seconds,lat,lon,h,v,o.position.altitude_m,horizontal,vertical,request,association);
   } else {
     char a[97]="",b[97]="";
     char session[200];
@@ -109,9 +185,9 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
     n=snprintf(line,capacity,
       "{\"kind\":\"send\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,\"mode\":%d,"
       "\"type\":%u,\"length\":%u,\"choice\":%u,\"reason\":%u,\"result\":%d,"
-      "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s,\"send_session\":%s}",
+      "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s,\"send_session\":%s,\"lds_association\":%s}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
-      o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request,session);
+      o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request,session,association);
   }
   return n>0 && size_t(n)<capacity;
 }
@@ -569,16 +645,23 @@ template<class Receiver> static unsigned drain_lds(Journal& journal,Receiver& re
   }
   return drained;
 }
-void* run_worker_inputs(const char* root,const char* motion_channel,const char* lds_channel,
-                       uid_t lds_uid,AssistWorker* assist,LdsRequestSource* supplied_source) {
+void* run_worker_association(const char* root,const char* motion_channel,const char* lds_channel,
+                       uid_t lds_uid,AssistWorker* assist,LdsRequestSource* supplied_source,
+                       const char* association_channel) {
+  LA::Registry* associations=prepare_association_owner();
   LdsRequestSource local_source;
   LdsRequestSource& source=supplied_source?*supplied_source:local_source;
   // Stop on every exit, including startup failures before the main loop.
   struct StopAssist {
     AssistWorker* worker;
     LdsRequestSource* source;
-    ~StopAssist() { if(worker)worker->stop();source->reset(clock_ns(0)); }
-  } stop_assist={assist,&source};
+    LA::Registry* associations;
+    ~StopAssist() {
+      if(associations) { associations->retire();associations->close_channel(); }
+      if(worker)worker->stop();
+      source->reset(clock_ns(0));
+    }
+  } stop_assist={assist,&source,associations};
   // An explicit stop survives same-boot service restarts. Do not rotate or
   // append even a boot record after an acknowledged capture was closed.
   if(stop_requested(root)) { freeze_capture();return 0; }
@@ -603,6 +686,9 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
            boot_result);
   j.line(line);
   j.flush();
+  // Optional observation transport failure must not suppress raw capture.
+  if(associations && !j.failed && !__sync_fetch_and_add(&audit_fault,0))
+    associations->open_channel(association_channel,lds_uid);
   lds_sideband::Receiver lds;
   if(!j.failed) {
     const bool opened=lds.open_channel(lds_channel,lds_uid);
@@ -665,7 +751,10 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
     // Subsequent observed changes still retire the window and reject old input.
     const ModelSession::Update session_update=source_session.update(A::read_issue_session(),cutoff);
     const bool bus_changed=source_bus.update(A::read_position_bus());
-    if(session_update==ModelSession::CHANGED || bus_changed)source.reset(cutoff);
+    if(session_update==ModelSession::CHANGED || bus_changed) {
+      source.reset(cutoff);
+      if(associations)associations->retire();
+    }
     bool stopping=false;
     if(cutoff>=last_stop_check && cutoff-last_stop_check>=1000000000ULL) {
       last_stop_check=cutoff;
@@ -683,6 +772,8 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
       }
     }
     if(shadow)sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
+    if(associations && !stopping && !j.failed && !__sync_fetch_and_add(&audit_fault,0))
+      associations->drain(cutoff);
     A::Observation o;
     unsigned drained = 0;
     while (drained++ < 256 && pop(&o)) {
@@ -838,6 +929,11 @@ void* run_worker_channels(const char* root,const char* motion_channel,const char
                          uid_t lds_uid,AssistWorker* assist) {
   return run_worker_inputs(root,motion_channel,lds_channel,lds_uid,assist,0);
 }
+void* run_worker_inputs(const char* root,const char* motion_channel,const char* lds_channel,
+                       uid_t lds_uid,AssistWorker* assist,LdsRequestSource* source) {
+  return run_worker_association(root,motion_channel,lds_channel,lds_uid,assist,source,
+                               lds_association::CHANNEL_NAME);
+}
 } }
 
 namespace {
@@ -869,6 +965,7 @@ void bootstrap(void *h) {
     io.runtime.sink = sink;
     io.runtime.clock = clock_ns;
     io.runtime.provenance = provenance;
+    io.runtime.association_reader = read_inline_association;
     io.runtime.max_snapshot_age_ns = 500000000ULL;
     io.runtime.allow_assist = false;
     io.observe_requests = true;

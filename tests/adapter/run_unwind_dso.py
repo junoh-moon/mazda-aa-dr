@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'endpoint', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'endpoint', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -181,7 +181,7 @@ def main():
                  'early_measured_reanchor')
         fixture, access = 'assist_publication', 'assist_dso_access.h'
         macro, marker = '-DMX5_ASSIST_DSO_TEST', 'PASS assist publication '
-    elif args.suite == 'provenance-context':
+    elif args.suite in ('provenance-context', 'association-context'):
         names = {
             'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
             'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
@@ -194,6 +194,13 @@ def main():
         cases = ('captured', 'nested', 'failure', 'missing', 'invalidate', 'unqualified', 'malformed')
         fixture, access = 'provenance_context', 'provenance_context_dso_access.h'
         macro, marker = '-DMX5_PROVENANCE_CONTEXT_DSO_TEST', 'PASS provenance context '
+        if args.suite == 'association-context':
+            cases = ('captured', 'nested', 'mutate_after', 'nested_missing', 'wrong_call',
+                     'wrong_generation', 'wrong_request', 'wrong_worker', 'wrong_stage',
+                     'unavailable', 'missing', 'malformed', 'request_failed',
+                     'reader_conflict', 'reader_mismatch', 'frame_reuse', 'provenance_failed')
+            fixture, access = 'association_context', 'association_context_dso_access.h'
+            macro, marker = '-DMX5_ASSOCIATION_CONTEXT_DSO_TEST', 'PASS association context '
     elif args.suite == 'runtime-assist':
         names = {
             'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
@@ -228,7 +235,7 @@ def main():
     names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
     if args.suite == 'endpoint':
         names += ['bus_endpoint_relay.S', 'request_wire_dso_access.h']
-    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context'):
+    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
     for root, directories, files in os.walk(repo / 'src'):
@@ -248,7 +255,7 @@ def main():
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
     if args.suite == 'endpoint':
         command.append(str(build / 'source/tests/adapter/bus_endpoint_relay.S'))
-    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context'):
+    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
     if args.suite == 'provenance-context':
         # The authored one-shot Ledger belongs to the caller. All adapter calls

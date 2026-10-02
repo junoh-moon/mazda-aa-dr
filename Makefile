@@ -16,9 +16,10 @@ SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
 LDS_SIDEBAND = src/runtime/lds_sideband.cpp
 LDS_REQUEST_SOURCE = src/runtime/lds_request_source.cpp
-LDS_HEADERS = src/runtime/lds_sideband.h src/sensors/lds_lineage.h
+LDS_ASSOCIATION = src/runtime/lds_association_channel.cpp
+LDS_HEADERS = src/runtime/lds_sideband.h src/sensors/lds_lineage.h src/runtime/lds_association.h src/runtime/lds_association_channel.h src/runtime/lds_association_protocol.h
 LDS_HOOKS = src/adapter/lds_hooks.cpp src/sensors/lds_lineage.cpp
-LDS_TAP = $(LDS_HOOKS) $(LDS_SIDEBAND) $(RUNTIME_SUPPORT) src/sensors/lds_tap.cpp src/adapter/lds_install.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/runtime/loader.cpp
+LDS_TAP = $(LDS_HOOKS) $(LDS_SIDEBAND) $(LDS_ASSOCIATION) $(RUNTIME_SUPPORT) src/sensors/lds_tap.cpp src/adapter/lds_install.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/runtime/loader.cpp
 LDS_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm-lds/%.o,$(LDS_TAP))
 STORAGE_HEADERS = src/runtime/storage.h src/runtime/boot_id.h
 HOST_DBUS_FLAGS = $(shell pkg-config --cflags dbus-1)
@@ -30,7 +31,7 @@ ARM_CPPFLAGS = -Isrc -I$(ARM_SYSROOT)/usr/include/dbus-1.0 -I$(ARM_SYSROOT)/usr/
 ARM_CXXFLAGS = -std=c++11 -Os -Wall -Wextra -Werror -fPIC -fvisibility=hidden -fno-exceptions -fno-rtti -fno-omit-frame-pointer -ftls-model=initial-exec $(ARM_FLAGS)
 ARM_DEPFLAGS = -MMD -MP -MF $(@:.o=.d).tmp -MT $@
 ASSIST_WORKER = src/runtime/assist_worker.cpp
-ARM_SOURCES = $(ASSIST_WORKER) src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) src/runtime/runtime.cpp src/runtime/core_bridge.cpp $(NAVIGATION)
+ARM_SOURCES = $(ASSIST_WORKER) src/runtime/loader.cpp $(ADAPTER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) src/runtime/runtime.cpp src/runtime/core_bridge.cpp $(NAVIGATION)
 ARM_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(ARM_SOURCES)) $(BUILD)/arm/src/core/dr_core.o $(BUILD)/arm/src/adapter/arm_veneer.o $(BUILD)/arm/src/adapter/request_veneer.o
 COLLECTOR_OBJECTS = $(BUILD)/arm/src/collector/collector.o $(BUILD)/arm/src/runtime/config.o
 GUARD_OBJECTS = $(BUILD)/arm/src/guard/guard.o $(BUILD)/arm/src/runtime/sha256.o
@@ -64,13 +65,13 @@ $(BUILD)/test_request_status: tests/runtime/test_request_status.cpp src/runtime/
 $(BUILD)/test_journal_queue: tests/runtime/test_journal_queue.cpp src/runtime/journal_queue.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
 $(BUILD)/test_journal: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/motion_batch.h tests/runtime/test_journal.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_journal.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_worker_session: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_worker_session.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_worker_session.cpp -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_worker_session.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_reset: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_reset.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_input: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_input.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
-	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
+	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
 $(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
@@ -102,8 +103,9 @@ $(BUILD)/test_lds_bus_hooks: tests/adapter/lds_bus_hooks_test.cpp src/adapter/bu
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/runtime/request_trace.cpp src/adapter/bus_hooks.h src/adapter/adapter.h src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
-test-adapter: $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
+test-adapter: $(BUILD)/test_association_context $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
+	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed; do $(BUILD)/test_association_context $$scenario; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
 	$(BUILD)/test_cold_patch
 	@set -e; for case in normal failure overlap same_storage closing_create creating_during_destroy null_success output_race late_destroy distinct_storage capacity callback_bad callback_null readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight prediction_cached_inflight; do result=0; $(BUILD)/test_session_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
@@ -115,7 +117,8 @@ test-adapter: $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_l
 	$(BUILD)/test_bus_early_init
 	$(BUILD)/test_lds_bus_hooks
 	@set -e; for case in normal position_source position_sources_concurrent signal signal_reuse failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed prediction_entry_create prediction_entry_connect prediction_entry_disconnect prediction_entry_free prediction_entry_closed prediction_entry_signal prediction_exit_create prediction_exit_connect prediction_exit_disconnect prediction_exit_free prediction_exit_closed prediction_exit_signal; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
-test-runtime: $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
+	@set -e; for scenario in adopted freeze audit journal_failure pre_stopped fork journal bounds; do $(BUILD)/test_runtime_lds_association $$scenario; done
 	$(BUILD)/test_assist_worker
 	@set -e; for scenario in publication source_fault unqualified recovery audit journal_failure pre_stopped unhooked shadow; do $(BUILD)/test_runtime_assist $$scenario; done
 	$(BUILD)/test_runtime
@@ -299,7 +302,7 @@ $(BUILD)/test_runtime_assist: tests/adapter/runtime_assist_test.cpp src/runtime/
 
 # Sideband receipt is a separate bounded journal input. Keep every fixture that
 # compiles the real worker linked against the same production implementation.
-$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist $(BUILD)/test_worker_lds $(BUILD)/test_worker_lds_source: $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/lds_request_source.h src/runtime/lds_source_bus.h
+$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist $(BUILD)/test_worker_lds $(BUILD)/test_worker_lds_source $(BUILD)/test_runtime_lds_association: $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/lds_request_source.h src/runtime/lds_source_bus.h
 
 $(BUILD)/test_data_patch: tests/adapter/data_patch_test.cpp src/adapter/data_patch.h src/adapter/adapter.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
@@ -317,16 +320,24 @@ $(BUILD)/test_lds_source_bus: tests/runtime/test_lds_source_bus.cpp src/runtime/
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -lrt -o $@
 $(BUILD)/test_lds_install: tests/adapter/lds_install_test.cpp src/adapter/lds_install.cpp src/adapter/lds_install.h src/adapter/data_patch.h src/adapter/lds_hooks.h $(LDS_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -ldl -o $@
-$(BUILD)/test_lds_tap: tests/sensors/test_lds_tap.cpp src/sensors/lds_tap.cpp $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) src/adapter/lds_install.h src/runtime/loader.h src/runtime/config.h src/runtime/sha256.h $(LDS_HEADERS) | $(BUILD)
+$(BUILD)/test_lds_tap: tests/sensors/test_lds_tap.cpp src/sensors/lds_tap.cpp $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_ASSOCIATION) src/adapter/lds_install.h src/runtime/loader.h src/runtime/config.h src/runtime/sha256.h $(LDS_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/sensors/lds_tap.cpp,$^) -pthread -lrt -o $@
 
-test-lds: $(BUILD)/test_data_patch $(BUILD)/test_lds_hooks $(BUILD)/test_lds_sideband $(BUILD)/test_worker_lds $(BUILD)/test_lds_request_source $(BUILD)/test_lds_source_bus $(BUILD)/test_worker_lds_source $(BUILD)/test_lds_install $(BUILD)/test_lds_tap
+test-lds: $(BUILD)/test_lds_association_channel $(BUILD)/test_data_patch $(BUILD)/test_lds_hooks $(BUILD)/test_lds_sideband $(BUILD)/test_worker_lds $(BUILD)/test_lds_request_source $(BUILD)/test_lds_source_bus $(BUILD)/test_worker_lds_source $(BUILD)/test_lds_install $(BUILD)/test_lds_tap
+	@set -e; for scenario in basic exact capacity invalidation fork stop allocation scalar_bits old_offer loss borrowing exhaustion fd_validation drain_bound malformed_map concurrent retirement_scheduled; do $(BUILD)/test_lds_association_channel $$scenario; done
 	$(BUILD)/test_data_patch
 	$(BUILD)/test_lds_sideband
 	$(BUILD)/test_lds_request_source
 	$(BUILD)/test_lds_source_bus
 	$(BUILD)/test_lds_install
-	@set -e; for scenario in off invalid missing_mode missing_config disabled marker_symlink marker_error observe scrub install_failed rollback_failed cold_lost normal late_receiver sender_failed unrequested null_handle repeated; do $(BUILD)/test_lds_tap $$scenario; done
-	@set -e; for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind; do $(BUILD)/test_lds_hooks $$scenario; done
+	@set -e; for scenario in off invalid missing_mode missing_config disabled marker_symlink marker_error observe scrub install_failed rollback_failed cold_lost normal late_receiver sender_failed unrequested null_handle repeated association association_fork association_failed association_invalidate; do $(BUILD)/test_lds_tap $$scenario; done
+	@set -e; for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind locked locked_pair locked_unknown locked_unthreaded locked_null locked_generation locked_mutex locked_native_pc locked_message_pc locked_native_fail locked_no_native locked_native_twice locked_message_twice locked_reply locked_destination locked_endpoint locked_failed_send locked_unwind locked_extra_send locked_inactive locked_clock locked_type locked_zero_request locked_endpoint_changed locked_snapshot locked_nested_send; do $(BUILD)/test_lds_hooks $$scenario; done
 	@set -e; for scenario in capture occupied pre_stopped bounded malformed wrong_uid; do $(BUILD)/test_worker_lds $$scenario; done
 	@set -e; for scenario in position_first sideband_first mismatch late_conflict pre_stopped malformed_recovery first_bus startup_bus bus_reconnect; do $(BUILD)/test_worker_lds_source $$scenario; done
+
+$(BUILD)/test_association_context: tests/adapter/association_context_test.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/adapter/adapter.h $(LDS_HEADERS) | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
+$(BUILD)/test_runtime_lds_association: tests/adapter/runtime_lds_association_test.cpp src/runtime/runtime.cpp src/runtime/worker.h $(ASSIST_WORKER) src/runtime/assist_worker.h $(RUNTIME_SUPPORT) $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) src/runtime/loader.cpp $(BUILD)/core_host.o $(STORAGE_HEADERS)
+	$(CXX) $(CXX_WARN) $(filter-out %.h src/runtime/runtime.cpp,$^) -ldl -pthread -lrt -lm -o $@
+$(BUILD)/test_lds_association_channel: tests/runtime/test_lds_association_channel.cpp $(LDS_ASSOCIATION) $(LDS_HEADERS) src/adapter/adapter.h src/adapter/lds_hooks.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -Wl,--wrap=pwrite -Wl,--wrap=mmap -pthread -lrt -o $@

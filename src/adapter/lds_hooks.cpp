@@ -77,10 +77,12 @@ struct CallbackFrame;
 struct Operation;
 struct PathFrame;
 struct GenericFrame;
+struct SendFrame;
 __thread CallbackFrame* callback_frame __attribute__((tls_model("initial-exec")));
 __thread Operation* operation __attribute__((tls_model("initial-exec")));
 __thread PathFrame* path_frame __attribute__((tls_model("initial-exec")));
 __thread GenericFrame* generic_frame __attribute__((tls_model("initial-exec")));
+__thread SendFrame* send_frame __attribute__((tls_model("initial-exec")));
 struct Hold { bool held; Operation* owner; };
 __thread Hold hold __attribute__((tls_model("initial-exec")));
 
@@ -122,12 +124,12 @@ struct PathFrame {
     GenericFrame* outer_generic;
     void *raw_connection,*request,*connection,*method,*reply,*message;
     unsigned builds,replies,messages,sends;
-    bool eligible;
+    bool eligible,published,invalidated,returned;
     B::Snapshot bus;
     R::Endpoint endpoint;
     A::EndpointMatch pre_match;
     S::Record record;
-    PathFrame(void* raw,void* req,void* c):previous(path_frame),outer_generic(generic_frame),raw_connection(raw),request(req),connection(c),method(0),reply(0),message(0),builds(0),replies(0),messages(0),sends(0),eligible(false),bus(),endpoint(),pre_match(A::ENDPOINT_UNAVAILABLE),record() {
+    PathFrame(void* raw,void* req,void* c):previous(path_frame),outer_generic(generic_frame),raw_connection(raw),request(req),connection(c),method(0),reply(0),message(0),builds(0),replies(0),messages(0),sends(0),eligible(false),published(false),invalidated(false),returned(false),bus(),endpoint(),pre_match(A::ENDPOINT_UNAVAILABLE),record() {
         path_frame=this;generic_frame=0;
         if(!req)return;
         const char* p=original.raw.path(req);
@@ -144,7 +146,61 @@ struct PathFrame {
         pre_match=A::bus_endpoint_matches(c,bus,uintptr_t(raw));
         if(pre_match==A::ENDPOINT_MISMATCH)record.flags|=S::CHAIN_CONFLICT;
     }
-    ~PathFrame() { const Errno saved;path_frame=previous;generic_frame=outer_generic; }
+    void invalidate(A::LdsLockedLoss loss) {
+        if(published && !invalidated) { invalidated=true;original.invalidate_locked(loss,original.user); }
+    }
+    void conflict() { record.flags|=S::CHAIN_CONFLICT;invalidate(A::LOCKED_CHAIN_CONFLICT); }
+    ~PathFrame() {
+        const Errno saved;
+        if(!returned)invalidate(A::LOCKED_CHAIN_CONFLICT);
+        path_frame=previous;generic_frame=outer_generic;
+    }
+};
+bool text_complete(const R::Text& text) {
+    return text.known && text.complete && text.bytes[0] && memchr(text.bytes,0,sizeof text.bytes);
+}
+void* connection_mutex(void* connection) {
+    void* value=0;
+    if(connection)memcpy(&value,static_cast<const char*>(connection)+original.send_sites.connection_mutex_offset,sizeof value);
+    return value;
+}
+struct SendFrame {
+    SendFrame* previous;
+    PathFrame* path;
+    void *connection,*message,*mutex;
+    uint32_t generation;
+    unsigned native_calls,message_calls,ordinal;
+    int32_t native_result;
+    bool eligible,returned;
+    SendFrame(void* c,void* m):previous(send_frame),path(path_frame),connection(c),message(m),mutex(0),
+        generation(0),native_calls(0),message_calls(0),ordinal(0),native_result(-1),eligible(false),returned(false) {
+        // Even an unrelated nested send masks the outer frame.
+        send_frame=this;
+        if(!active() || !path || !path->eligible)return;
+        ordinal=++path->sends;
+        if(ordinal!=1 || c!=path->raw_connection || !m || m!=path->message)path->conflict();
+        if(!original.publish_locked || (path->record.flags&S::CHAIN_CONFLICT) ||
+           !(path->record.flags&S::SNAPSHOT_KNOWN) || path->builds!=1 || path->replies!=1 ||
+           path->messages!=1 || path->sends!=1 || path->pre_match!=A::ENDPOINT_MATCH ||
+           !path->record.wire.request_serial || !text_complete(path->record.wire.client_unique) ||
+           !text_complete(path->endpoint.server_guid) || !text_complete(path->endpoint.unique_name))return;
+        generation=__atomic_load_n(original.send_sites.current_generation,__ATOMIC_ACQUIRE);
+        const uint32_t initialized=__atomic_load_n(original.send_sites.initialized_generation,__ATOMIC_ACQUIRE);
+        mutex=connection_mutex(c);
+        eligible=generation && generation==initialized && mutex &&
+            uintptr_t(mutex)!=original.send_sites.uninitialized_mutex;
+    }
+    bool same() const { return eligible && send_frame==this && path_frame==path; }
+    bool unchanged() const {
+        return same() && connection_mutex(connection)==mutex &&
+            __atomic_load_n(original.send_sites.current_generation,__ATOMIC_ACQUIRE)==generation &&
+            __atomic_load_n(original.send_sites.initialized_generation,__ATOMIC_ACQUIRE)==generation;
+    }
+    ~SendFrame() {
+        const Errno saved;
+        if(!returned && path)path->invalidate(A::LOCKED_SEND_FAILED);
+        send_frame=previous;
+    }
 };
 struct GenericFrame {
     GenericFrame* previous;
@@ -183,7 +239,7 @@ void snapshot(Operation& op) {
     PathFrame* p=op.response;
     if(!p || p!=path_frame || !op.mode || !op.utc || !op.latitude || !op.longitude ||
        !op.altitude || !op.heading || !op.velocity || !op.horizontal || !op.vertical)return;
-    if(p->record.flags&S::SNAPSHOT_KNOWN) { p->record.flags|=S::CHAIN_CONFLICT;return; }
+    if(p->record.flags&S::SNAPSHOT_KNOWN) { p->conflict();return; }
     A::PositionInput& value=p->record.position;
     value.mode=*op.mode;value.utc_seconds=*op.utc;value.latitude_deg=*op.latitude;
     value.longitude_deg=*op.longitude;value.altitude_m=*op.altitude;
@@ -196,6 +252,12 @@ void snapshot(Operation& op) {
     p->record.flags|=S::SNAPSHOT_KNOWN;
 }
 bool complete(const A::LdsBindings& b) {
+    // Data slots are patched even when the optional publisher is unavailable.
+    // Immutable original targets must therefore always be forwardable.
+    if(!b.message_lock || !b.native_mutex_lock)return false;
+    if(bool(b.publish_locked)!=bool(b.invalidate_locked))return false;
+    if(b.publish_locked && (!b.send_sites.message_lock_return || !b.send_sites.native_lock_return ||
+       !b.send_sites.current_generation || !b.send_sites.initialized_generation))return false;
     if(!b.initialize || !b.clear || !b.driver_open || !b.registration || !b.read || !b.update ||
        !b.lock || !b.unlock || !b.copy || !b.set_callback || !b.generic || !b.service || !b.path ||
        !b.method_build || !b.reply_create || !b.reply_message || !b.send || !b.descriptor ||
@@ -334,13 +396,15 @@ extern "C" int32_t mx5_lds_path(void* raw,void* message,void* connection) {
     PathFrame scope(raw,message,connection);errno=entry_errno;
     const int32_t result=original.path(raw,message,connection);
     const Errno saved;
+    scope.returned=true;
+    if(result)scope.invalidate(A::LOCKED_CHAIN_CONFLICT);
     if(scope.eligible && !hold.held) {
         scope.record.flags|=S::PATH_RETURNED;scope.record.path_result=result;
         if(scope.pre_match==A::ENDPOINT_MATCH &&
            A::bus_endpoint_matches(connection,scope.bus,uintptr_t(raw))==A::ENDPOINT_MATCH) {
             scope.record.wire.server_guid=scope.endpoint.server_guid;
             scope.record.wire.server_unique=scope.endpoint.unique_name;
-        }
+        } else scope.invalidate(A::LOCKED_CHAIN_CONFLICT);
         scope.record.observed_ns=now();original.emit(scope.record,original.user);
     }
     return result;
@@ -350,7 +414,7 @@ extern "C" void* mx5_lds_method_build(void* request) {
     const Errno saved;
     PathFrame* p=path_frame;
     if(p && p->eligible) {
-        if(++p->builds!=1 || request!=p->request)p->record.flags|=S::CHAIN_CONFLICT;
+        if(++p->builds!=1 || request!=p->request)p->conflict();
         else p->method=result;
     }
     return result;
@@ -360,7 +424,7 @@ extern "C" void* mx5_lds_reply_create(void* method,void* request) {
     const Errno saved;
     PathFrame* p=path_frame;
     if(p && p->eligible) {
-        if(++p->replies!=1 || !method || method!=p->method || request!=p->request)p->record.flags|=S::CHAIN_CONFLICT;
+        if(++p->replies!=1 || !method || method!=p->method || request!=p->request)p->conflict();
         else p->reply=result;
     }
     return result;
@@ -370,21 +434,24 @@ extern "C" void* mx5_lds_reply_message(void* reply,void* request) {
     const Errno saved;
     PathFrame* p=path_frame;
     if(p && p->eligible) {
-        if(++p->messages!=1 || !reply || reply!=p->reply || request!=p->request)p->record.flags|=S::CHAIN_CONFLICT;
+        if(++p->messages!=1 || !reply || reply!=p->reply || request!=p->request)p->conflict();
         else p->message=result;
     }
     return result;
 }
 extern "C" int32_t mx5_lds_send(void* connection,void* message,uint32_t* serial) {
-    ready();const int32_t result=original.send(connection,message,serial);
+    ready();const int entry_errno=errno;
+    SendFrame scope(connection,message);errno=entry_errno;
+    const int32_t result=original.send(connection,message,serial);
     const Errno saved;
-    PathFrame* p=path_frame;
+    scope.returned=true;
+    PathFrame* p=scope.path;
     if(p && p->eligible) {
-        if(++p->sends!=1) {
-            p->record.flags|=S::CHAIN_CONFLICT;return result;
-        }
-        if(connection!=p->raw_connection || !message || message!=p->message)
-            p->record.flags|=S::CHAIN_CONFLICT;
+        if(!result)p->invalidate(A::LOCKED_SEND_FAILED);
+        else if(p->published && !scope.unchanged())p->invalidate(A::LOCKED_CHAIN_CONFLICT);
+        // A nested extra send invalidates the association but must not erase
+        // the first call's original raw send result from the after-Path record.
+        if(scope.ordinal!=1)return result;
         p->record.flags|=S::RAW_SEND_CALLED;
         p->record.send_result=result;
         if(result)p->record.flags|=S::RAW_SEND_SUCCEEDED;
@@ -394,6 +461,49 @@ extern "C" int32_t mx5_lds_send(void* connection,void* message,uint32_t* serial)
         p->record.wire.reply_serial=original.raw.reply_serial(message);
         S::copy_text(&p->record.wire.destination,original.raw.destination(message));
         p->record.flags|=S::REPLY_KNOWN;
+    }
+    return result;
+}
+extern "C" void mx5_lds_message_lock(void* message) {
+    ready();
+    const uintptr_t caller=uintptr_t(__builtin_extract_return_addr(__builtin_return_address(0)));
+    SendFrame* frame=send_frame;
+    original.message_lock(message);
+    const Errno saved;
+    if(!frame || !frame->same() || message!=frame->message ||
+       caller!=original.send_sites.message_lock_return)return;
+    PathFrame& p=*frame->path;
+    if(++frame->message_calls!=1) { p.conflict();return; }
+    if(!frame->unchanged() || frame->native_calls!=1 || frame->native_result ||
+       (p.record.flags&S::CHAIN_CONFLICT) || p.sends!=1)return;
+    const A::EndpointMatch endpoint=A::bus_endpoint_matches(p.connection,p.bus,uintptr_t(frame->connection));
+    if(endpoint!=A::ENDPOINT_MATCH) { if(endpoint==A::ENDPOINT_MISMATCH)p.conflict();return; }
+    A::LdsLockedSend value=A::LdsLockedSend();
+    value.stage=mx5::runtime::lds_association::LOCKED_FOR_SEND;
+    value.reply_type=original.raw.type(message);
+    value.wire=p.record.wire;
+    value.wire.server_guid=p.endpoint.server_guid;
+    value.wire.server_unique=p.endpoint.unique_name;
+    value.wire.response_serial=original.raw.serial(message);
+    value.wire.reply_serial=original.raw.reply_serial(message);
+    S::copy_text(&value.wire.destination,original.raw.destination(message));
+    if(value.reply_type!=2 || !value.wire.response_serial ||
+       value.wire.reply_serial!=value.wire.request_serial || !text_complete(value.wire.destination) ||
+       strcmp(value.wire.destination.bytes,value.wire.client_unique.bytes)) { p.conflict();return; }
+    value.observed_ns=now();value.field_lineage=p.record.field_lineage;value.position=p.record.position;
+    p.published=true;original.publish_locked(value,original.user);
+}
+extern "C" int32_t mx5_lds_native_mutex_lock(void* mutex) {
+    ready();
+    const uintptr_t caller=uintptr_t(__builtin_extract_return_addr(__builtin_return_address(0)));
+    SendFrame* frame=send_frame;
+    const bool match=frame && frame->same() && frame->mutex==mutex &&
+        caller==original.send_sites.native_lock_return;
+    const int32_t result=original.native_mutex_lock(mutex);
+    const Errno saved;
+    if(match && frame->same()) {
+        ++frame->native_calls;frame->native_result=result;
+        if(frame->native_calls!=1)frame->path->conflict();
     }
     return result;
 }
