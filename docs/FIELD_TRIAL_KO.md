@@ -1,5 +1,11 @@
 # 한 번의 실차 기회를 위한 통합 시험 준비
 
+**설치 중단 — 2026-10-02:** 아래에 기록된 `v0.3.10-shadow.1`·`.2`
+ZIP은 LDS 반복 종료 결함 때문에 사용 중단했습니다. 새 AA 문맥 풀 소스도
+차량용 ZIP으로 발행하지 않았습니다. 아래 절차는 준비·과거 기록이며 현재
+설치나 주행 지시가 아닙니다. [현재 상태](STATUS_KO.md)와
+[수정 후보 검증](../validation/AA_CONTEXT_POOL_2026-10-02.md)을 확인하십시오.
+
 **2026-10-02 실제 첫 시도는 자료 수집 여부를 판정할 수 없었습니다.**
 v0.3.9-shadow.1을 설치한 뒤 차량 점화 OFF/ON과 주행이 있었고, 후속
 v0.3.9-shadow.2 회수는 성공했지만 trace·collector JSONL 파일은
@@ -13,8 +19,8 @@ v0.3.9-shadow.2 회수는 성공했지만 trace·collector JSONL 파일은
 제약을 반영한 숫자 메뉴와 저장 공간·계산 진단을 포함합니다.
 차량 USB 포트는 하나이고 허브를 사용할 수 없으므로 설치·회수 USB와 AA 연결을
 주차 중에 번갈아 연결합니다. AA 연결 중 셸이나 상태 명령을 요구하지 않습니다.
-현재 파일은 [v0.3.10-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)의
-`mazda-aa-dr-v0.3.10-shadow.2.zip`입니다. 소스는
+마지막 공개 파일 기록은 [사용 중단한 v0.3.10-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)의
+`mazda-aa-dr-v0.3.10-shadow.2.zip`입니다. 해당 소스는
 `be96c6de6619d8e9053a327fd16e9df718384ca4`, ZIP의 SHA-256은
 `76d6049db04631352ee7b37cb5f4f0294ad9b36e123dc8ad05b062a1a59d4148`입니다.
 [최종 ZIP·발행 검증](../validation/RELEASE_V0310_SHADOW2_2026-10-02.md)과
