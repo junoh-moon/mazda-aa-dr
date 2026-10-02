@@ -126,6 +126,7 @@ struct PendingInput {
     void* workspace;
     uint32_t lifetime,sequence,route;
     T::Presence presence;
+    T::RmcStatus status;
     uint32_t state;
 };
 static_assert(sizeof(PendingInput)<=32,"Only small parser ownership state may live in TLS");
@@ -134,6 +135,7 @@ __thread PendingInput pending_input __attribute__((tls_model("initial-exec")));
 void poison_input() {
     pending_input.workspace=0;
     pending_input.presence=T::UNKNOWN;
+    pending_input.status=T::RMC_UNKNOWN;
     pending_input.state=(pending_input.state&INPUT_EXHAUSTED)|INPUT_POISONED;
 }
 struct ParseInput {
@@ -144,22 +146,23 @@ struct ParseInput {
         if(pending_input.sequence==UINT32_MAX)pending_input.state|=INPUT_EXHAUSTED;
         else sequence=++pending_input.sequence;
         const uint32_t exhausted=pending_input.state&INPUT_EXHAUSTED;
-        pending_input.workspace=0;pending_input.presence=T::UNKNOWN;
+        pending_input.workspace=0;pending_input.presence=T::UNKNOWN;pending_input.status=T::RMC_UNKNOWN;
         pending_input.lifetime=lifetime;
         pending_input.state=INPUT_RUNNING|exhausted|(uncertain?INPUT_POISONED:0);
     }
-    void completed(bool verified,void* workspace,uint32_t route,T::Presence presence) {
+    void completed(bool verified,void* workspace,uint32_t route,T::Tokens tokens) {
         returned=true;
         if(!sequence || pending_input.sequence!=sequence || pending_input.state!=INPUT_RUNNING) {
             poison_input();return;
         }
         pending_input.state=0;
         // The exact reader dispatches only original IDs 0..8. Only RMC's
-        // two IDs carry this lexical course field; PRESENT is not validity.
+        // two IDs carry these lexical tokens; neither PRESENT nor A is validity.
         if(!verified || !workspace || route>8 || !original.routes[route].callback ||
            (lifetime&3)!=2 || input_lifetime.load(std::memory_order_acquire)!=lifetime)return;
         pending_input.workspace=workspace;pending_input.route=route;
-        pending_input.presence=route==0 || route==6?presence:T::UNKNOWN;
+        pending_input.presence=route==0 || route==6?tokens.course:T::UNKNOWN;
+        pending_input.status=route==0 || route==6?tokens.status:T::RMC_UNKNOWN;
         pending_input.state=INPUT_READY;
     }
     ~ParseInput() { const Errno saved;if(!returned)poison_input(); }
@@ -172,22 +175,26 @@ struct CallbackFrame {
     void* destination;
     bool have_read;
     T::Presence heading_presence;
+    T::RmcStatus heading_rmc_status;
     uint32_t input_sequence,input_epoch;
-    CallbackFrame(const A::LdsRoute& r,unsigned id,void* workspace,uintptr_t caller):previous(callback_frame),route(r),read(),destination(0),have_read(false),heading_presence(T::UNKNOWN),input_sequence(0),input_epoch(0) {
+    CallbackFrame(const A::LdsRoute& r,unsigned id,void* workspace,uintptr_t caller):previous(callback_frame),route(r),read(),destination(0),have_read(false),heading_presence(T::UNKNOWN),heading_rmc_status(T::RMC_UNKNOWN),input_sequence(0),input_epoch(0) {
         if(!previous && pending_input.state==INPUT_READY &&
            caller==original.input.dispatch_return && workspace==pending_input.workspace &&
            id==pending_input.route && input_lifetime.load(std::memory_order_acquire)==pending_input.lifetime) {
-            heading_presence=pending_input.presence;input_sequence=pending_input.sequence;
+            heading_presence=pending_input.presence;heading_rmc_status=pending_input.status;
+            input_sequence=pending_input.sequence;
             input_epoch=pending_input.lifetime;pending_input.state=0;
-            pending_input.workspace=0;pending_input.presence=T::UNKNOWN;
+            pending_input.workspace=0;pending_input.presence=T::UNKNOWN;pending_input.status=T::RMC_UNKNOWN;
         } else if(previous || pending_input.state)poison_input();
         callback_frame=this;
     }
-    T::Presence take_course() {
-        const T::Presence result=callback_frame==this && input_sequence && pending_input.sequence==input_sequence &&
-            pending_input.state==0 && input_lifetime.load(std::memory_order_acquire)==input_epoch ?
-            heading_presence:T::UNKNOWN;
-        input_sequence=0;heading_presence=T::UNKNOWN;
+    T::Tokens take_input() {
+        T::Tokens result={T::UNKNOWN,T::RMC_UNKNOWN};
+        if(callback_frame==this && input_sequence && pending_input.sequence==input_sequence &&
+           pending_input.state==0 && input_lifetime.load(std::memory_order_acquire)==input_epoch)
+            result=T::Tokens{heading_presence,heading_rmc_status};
+        // Both values are owned by the same invocation and burned together.
+        input_sequence=0;heading_presence=T::UNKNOWN;heading_rmc_status=T::RMC_UNKNOWN;
         return result;
     }
     ~CallbackFrame() { const Errno saved;callback_frame=previous; }
@@ -348,6 +355,7 @@ void snapshot(Operation& op) {
     p->record.field_lineage.lifetime=lineage.lifetime;
     p->record.field_lineage.write_sequence=lineage.write_sequence;
     p->record.field_lineage.heading_presence=lineage.heading_presence;
+    p->record.field_lineage.heading_rmc_status=lineage.heading_rmc_status;
     for(unsigned i=0;i<L::FIELD_COUNT;++i)p->record.field_lineage.fields[i]=lineage.fields[i];
     p->record.flags|=S::SNAPSHOT_KNOWN;
 }
@@ -419,17 +427,17 @@ extern "C" uint32_t mx5_lds_parse_sentence(char* input,void* workspace,uint32_t 
     const int entry_errno=errno;
     ParseInput scope;
     const bool verified=caller==original.input.parse_return;
-    T::Presence presence=T::UNKNOWN;
+    T::Tokens tokens={T::UNKNOWN,T::RMC_UNKNOWN};
     // The exact original reader calls with an assembled NUL-terminated string.
     // Its third word is preserved, not promoted into a readable-buffer length.
     if(verified && input && workspace) {
         size_t size=0;
         while(size<T::SCAN_LIMIT && input[size])++size;
-        if(size<T::SCAN_LIMIT)presence=T::classify(input,size+1);
+        if(size<T::SCAN_LIMIT)tokens=T::classify_rmc(input,size+1);
     }
     errno=entry_errno;
     const uint32_t result=original.input.parse_sentence(input,workspace,word);
-    const Errno saved;scope.completed(verified,workspace,result,presence);return result;
+    const Errno saved;scope.completed(verified,workspace,result,tokens);return result;
 }
 extern "C" int mx5_lds_select(int n,fd_set* r,fd_set* w,fd_set* e,timeval* timeout) {
     const uintptr_t caller=uintptr_t(__builtin_return_address(0));
@@ -438,7 +446,7 @@ extern "C" int mx5_lds_select(int n,fd_set* r,fd_set* w,fd_set* e,timeval* timeo
         const Errno saved;
         if(callback_frame || (pending_input.state&INPUT_RUNNING))poison_input();
         else {
-            pending_input.workspace=0;pending_input.presence=T::UNKNOWN;
+            pending_input.workspace=0;pending_input.presence=T::UNKNOWN;pending_input.status=T::RMC_UNKNOWN;
             pending_input.state&=INPUT_EXHAUSTED;
         }
     }
@@ -515,13 +523,13 @@ extern "C" void* mx5_lds_mem_copy(void* dst,const void* src,unsigned bytes) {
         // A claim belongs to its first actual cache write. A second write,
         // even after another verified read in the same callback, cannot reuse
         // that input. Unverified writes burn the claim without promoting it.
-        const T::Presence claimed=callback_frame?callback_frame->take_course():T::UNKNOWN;
+        const T::Tokens claimed=callback_frame?callback_frame->take_input():T::Tokens{T::UNKNOWN,T::RMC_UNKNOWN};
         if(!hold.held) { unknown_lifecycle();return result; }
         if(cache_ready()) {
             const bool matched=operation && hold.owner==operation && operation->kind==WRITE &&
                 caller==original.sites.update_copy && src==operation->buffer && bytes==48 && operation->verified;
-            const T::Presence presence=matched && operation->input_callback==callback_frame?claimed:T::UNKNOWN;
-            ledger->commit(matched?&operation->read:0,matched?operation->mask:0,now(),presence);
+            const T::Tokens tokens=matched && operation->input_callback==callback_frame?claimed:T::Tokens{T::UNKNOWN,T::RMC_UNKNOWN};
+            ledger->commit(matched?&operation->read:0,matched?operation->mask:0,now(),tokens.course,tokens.status);
         }
     } else if(hold.held && operation && hold.owner==operation && operation->kind==READ &&
               caller==original.sites.read_copy && src==original.current_cache &&

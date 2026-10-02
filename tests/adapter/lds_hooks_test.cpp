@@ -56,7 +56,7 @@ bool send_other_connection,send_failure,build_failure,nested_path,throw_path;
 bool initialize_query,initialize_throw;
 bool endpoint_available;
 bool course_test;
-bool repeat_rmc,repeat_copy;
+bool repeat_rmc,repeat_copy,suppress_rmc_write;
 unsigned parser_calls,checkpoint_calls;
 std::atomic<unsigned> driver_closes(0);
 bool close_block;
@@ -171,6 +171,7 @@ void rmc(void* workspace) {
     if(cancel_rmc) { assert(!pthread_cancel(pthread_self()));pthread_testcancel();assert(false); }
     if(nested_gsa)callbacks[2](0);
     if(rmc_action) { void (*action)()=rmc_action;rmc_action=0;action(); }
+    if(suppress_rmc_write) { errno=E2BIG;return; }
     p.mode=1;p.utc=123;p.latitude=12.5f;p.longitude=34.5f;p.heading=67;p.velocity=89;
     if(course_test)p.heading=float(*static_cast<uint32_t*>(workspace));
     if(wrong_read_buffer) { Cache different=p;assert(lds_test_update_rmc(&different)==100); }
@@ -674,15 +675,20 @@ void course_values() {
     assert(record_count==1 && locked_count==1 && cache.heading==0);
     assert(records[0].field_lineage.write_sequence==1 && records[0].field_lineage.fields[L::HEADING].write_sequence==1);
     assert(records[0].field_lineage.heading_presence==T::EMPTY);
+    assert(records[0].field_lineage.heading_rmc_status==T::RMC_A);
     assert(locked_values[0].field_lineage.heading_presence==T::EMPTY);
+    assert(locked_values[0].field_lineage.heading_rmc_status==T::RMC_A);
     checkpoint_input();
     parse_input(zero,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
     assert(cache.heading==0 && records[1].field_lineage.write_sequence==2);
     assert(records[1].field_lineage.heading_presence==T::PRESENT);
+    assert(records[1].field_lineage.heading_rmc_status==T::RMC_A);
     assert(locked_values[1].field_lineage.heading_presence==T::PRESENT);
+    assert(locked_values[1].field_lineage.heading_rmc_status==T::RMC_A);
     // A rejected parse really ran, but no callback/cache write follows it.
     parse_input(empty,&workspace,14);checkpoint_input();query();
     assert(records[2].field_lineage.write_sequence==2 && records[2].field_lineage.heading_presence==T::PRESENT);
+    assert(records[2].field_lineage.heading_rmc_status==T::RMC_A);
     mx5_lds_driver_close();assert(errno==ECHILD && driver_closes==1);
     mx5_lds_clear();
 }
@@ -710,9 +716,11 @@ void course_nested_callback() {
     assert(records[0].field_lineage.write_sequence==2);
     assert(records[0].field_lineage.fields[L::HEADING].write_sequence==2);
     assert(records[0].field_lineage.heading_presence==T::UNKNOWN);
+    assert(records[0].field_lineage.heading_rmc_status==T::RMC_UNKNOWN);
     nested_gsa=false;checkpoint_input();
     parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
     assert(records[1].field_lineage.heading_presence==T::EMPTY);
+    assert(records[1].field_lineage.heading_rmc_status==T::RMC_A);
     mx5_lds_clear();
 }
 void* close_thread(void*) { mx5_lds_driver_close();assert(errno==ECHILD);return 0; }
@@ -729,6 +737,7 @@ void course_boundary_overlap() {
     parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
     assert(callback_calls==1 && records[0].field_lineage.write_sequence==1);
     assert(records[0].field_lineage.heading_presence==T::UNKNOWN);
+    assert(records[0].field_lineage.heading_rmc_status==T::RMC_UNKNOWN);
     barrier(&close_release);assert(!pthread_join(thread,0));
     close_block=false;assert(driver_closes==3);
     // A later isolated boundary and checkpoint can establish a new observation
@@ -736,11 +745,16 @@ void course_boundary_overlap() {
     mx5_lds_driver_close();checkpoint_input();
     parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
     assert(records[1].field_lineage.heading_presence==T::EMPTY);
+    assert(records[1].field_lineage.heading_rmc_status==T::RMC_A);
     assert(!pthread_barrier_destroy(&close_entered));
     assert(!pthread_barrier_destroy(&close_release));mx5_lds_clear();
 }
 void presence(T::Presence expected) {
     query();assert(record_count && records[record_count-1].field_lineage.heading_presence==expected);
+    // These existing controls all use complete status-A frames. A rejected
+    // binding must clear both tokens; this does not equate lexical unknowns.
+    assert(records[record_count-1].field_lineage.heading_rmc_status==
+        (expected==T::UNKNOWN?T::RMC_UNKNOWN:T::RMC_A));
 }
 void course_identity() {
     course_test=true;initialize_observer();register_three();
@@ -823,8 +837,12 @@ void* independent_parse(void*) {
     parse_input(action_frame,&action_workspace);lds_test_dispatch(callbacks[0],&action_workspace);return 0;
 }
 void newer_heading_write() {
+    // The original GGA-shaped callback has already retained the earlier A
+    // cache read when this separate reader thread commits a new V assignment.
+    action_frame[14]='V';
     pthread_t thread;assert(!pthread_create(&thread,0,independent_parse,0));assert(!pthread_join(thread,0));
-    presence(T::PRESENT);
+    query();assert(records[record_count-1].field_lineage.heading_presence==T::PRESENT);
+    assert(records[record_count-1].field_lineage.heading_rmc_status==T::RMC_V);
 }
 void course_saved_read() {
     course_test=true;initialize_observer();register_three();
@@ -834,6 +852,8 @@ void course_saved_read() {
     gga_action=newer_heading_write;callbacks[4](0);presence(T::EMPTY);
     assert(record_count==3 && records[1].field_lineage.write_sequence==2 && records[2].field_lineage.write_sequence==3);
     assert(records[2].field_lineage.fields[L::HEADING].write_sequence==1 && cache.heading==0);
+    assert(records[1].field_lineage.heading_rmc_status==T::RMC_V &&
+           records[2].field_lineage.heading_rmc_status==T::RMC_A);
     mx5_lds_clear();
 }
 void course_routes() {
@@ -885,10 +905,76 @@ void course_one_commit(bool repeated_copy) {
     parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);presence(T::EMPTY);
     mx5_lds_clear();
 }
+void status_values() {
+    course_test=locked_test=endpoint_available=true;initialize_observer();register_three();
+    char a[]="$GPRMC,120000,A,3500,N,13500,E,10,0*00";
+    char v[]="$GPRMC,120000,V,3500,N,13500,E,10,0*00";
+    uint32_t workspace=40;
+    parse_input(a,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(records[0].field_lineage.heading_rmc_status==T::RMC_A);
+    assert(locked_values[0].field_lineage.heading_rmc_status==T::RMC_A);
+    parse_input(v,&workspace,14);checkpoint_input();query();
+    assert(records[1].field_lineage.write_sequence==1 && records[1].field_lineage.heading_rmc_status==T::RMC_A);
+    parse_input(v,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(cache.heading==0 && records[2].field_lineage.write_sequence==2);
+    assert(records[2].field_lineage.heading_presence==T::PRESENT && records[2].field_lineage.heading_rmc_status==T::RMC_V);
+    assert(locked_values[2].field_lineage.heading_rmc_status==T::RMC_V);
+    char empty[]="$GPRMC,120000,,3500,N,13500,E,10,*00";
+    char other_status[]="$GPRMC,120000,AA,3500,N,13500,E,10,0*00";
+    char short_a[]="$GPRMC,120000,A*00";
+    char* const frames[]={empty,other_status,short_a};
+    const T::RmcStatus statuses[]={T::RMC_EMPTY,T::RMC_OTHER,T::RMC_A};
+    const T::Presence courses[]={T::EMPTY,T::PRESENT,T::UNKNOWN};
+    for(unsigned i=0;i<3;++i) {
+        parse_input(frames[i],&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+        assert(records[3+i].field_lineage.heading_rmc_status==statuses[i]);
+        assert(records[3+i].field_lineage.heading_presence==courses[i]);
+        assert(locked_values[3+i].field_lineage.heading_rmc_status==statuses[i]);
+    }
+    assert(callback_calls==5 && parser_calls==6);mx5_lds_clear();
+}
+void status_inheritance() {
+    course_test=true;initialize_observer();register_three();
+    char a[]="$GPRMC,120000,A,3500,N,13500,E,10,0*00";
+    char v[]="$GPRMC,120000,V,3500,N,13500,E,10,0*00";
+    uint32_t workspace=40;
+    parse_input(a,&workspace);lds_test_dispatch(callbacks[0],&workspace);presence(T::PRESENT);
+    // No reply/query is made for V or the following intermediate commits.
+    parse_input(v,&workspace);lds_test_dispatch(callbacks[0],&workspace);
+    callbacks[4](0);callbacks[2](0);callbacks[4](0);query();
+    const S::Lineage& last=records[1].field_lineage;
+    assert(record_count==2 && callback_calls==5 && last.write_sequence==5);
+    assert(last.heading_rmc_status==T::RMC_V && last.heading_presence==T::PRESENT);
+    assert(last.fields[L::UTC].write_sequence==2 && last.fields[L::HEADING].write_sequence==2 && last.fields[L::VELOCITY].write_sequence==2);
+    assert(last.fields[L::MODE].write_sequence==5 && last.fields[L::HORIZONTAL].write_sequence==4);
+    assert(records[0].field_lineage.heading_rmc_status==T::RMC_A);
+    mx5_lds_clear();
+}
+void status_no_commit() {
+    course_test=true;initialize_observer();register_three();
+    char a[]="$GPRMC,120000,A,3500,N,13500,E,10,0*00";
+    char v[]="$GPRMC,120000,V,3500,N,13500,E,10,0*00";
+    uint32_t workspace=40;
+    parse_input(a,&workspace);lds_test_dispatch(callbacks[0],&workspace);presence(T::PRESENT);
+    parse_input(v,&workspace);checkpoint_input();presence(T::PRESENT);
+    assert(callback_calls==1 && records[1].field_lineage.write_sequence==1);
+    parse_input(v,&workspace);suppress_rmc_write=true;
+    lds_test_dispatch(callbacks[0],&workspace);presence(T::PRESENT);
+    assert(callback_calls==2 && records[2].field_lineage.write_sequence==1);
+    suppress_rmc_write=false;
+    lds_test_dispatch(callbacks[0],&workspace);presence(T::UNKNOWN);
+    assert(records[3].field_lineage.write_sequence==2);
+    parse_input(v,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(records[4].field_lineage.heading_rmc_status==T::RMC_V && records[4].field_lineage.write_sequence==3);
+    mx5_lds_clear();
+}
 int main(int argc,char** argv) {
     const char* test=argc==2?argv[1]:"chain";
     if(!strcmp(test,"--emit")) { emit_hook_record();return 0; }
-    if(!strcmp(test,"course_values"))course_values();
+    if(!strcmp(test,"status_values"))status_values();
+    else if(!strcmp(test,"status_inheritance"))status_inheritance();
+    else if(!strcmp(test,"status_no_commit"))status_no_commit();
+    else if(!strcmp(test,"course_values"))course_values();
     else if(!strcmp(test,"course_bindings"))course_bindings();
     else if(!strcmp(test,"course_nested_callback"))course_nested_callback();
     else if(!strcmp(test,"course_boundary_overlap"))course_boundary_overlap();

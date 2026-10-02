@@ -303,16 +303,69 @@ static void heading_presence() {
     r=record(42,4200);r.field_lineage.fields[5]={0,0};r.field_lineage.heading_presence=N::EMPTY;
     CHECK(!f.publisher.publish(r));
 }
+static void rmc_status() {
+    // The producer and read-only adopter must retain every lexical state.
+    {
+        Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
+        f.setup();f.adopt();L::Owned o;
+        for(unsigned value=0;value<5;++value) {
+            auto r=record(20+value,2000+100*value);
+            r.field_lineage.heading_rmc_status=N::RmcStatus(value);
+            CHECK(f.publisher.publish(r));CHECK(lookup(f.registry,r,&o));
+            CHECK(o.heading_rmc_status==N::RmcStatus(value));
+            const auto m=L::AssociationTestAccess::map(f.publisher);
+            CHECK(m->words[P::HEADER+value*P::RECORD_WORDS+130].load()==value);
+            for(unsigned word=131;word<P::RECORD_WORDS;++word)
+                CHECK(m->words[P::HEADER+value*P::RECORD_WORDS+word].load()==0);
+        }
+        auto r=record(40,4000);r.field_lineage.heading_rmc_status=N::RMC_A;
+        CHECK(f.publisher.publish(r));CHECK(lookup(f.registry,r,&o));const L::Owned old=o;
+        r.field_lineage.heading_rmc_status=N::RMC_V;CHECK(f.publisher.publish(r));
+        CHECK(!lookup(f.registry,r,&o));CHECK(o.result==L::CONFLICT);
+        CHECK(old.heading_rmc_status==N::RMC_A);
+    }
+    // Separate healthy windows expose either missing validation guard.
+    for(unsigned fault=0;fault<2;++fault) {
+        Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
+        f.setup();auto r=record(41,4100);r.field_lineage.heading_rmc_status=N::RMC_A;
+        CHECK(f.publisher.publish(r));f.adopt(4110);L::Owned o;
+        CHECK(lookup(f.registry,r,&o));const L::Owned saved=o;
+        const auto m=L::AssociationTestAccess::map(f.publisher);const unsigned loss=m->words[P::LOSS].load();
+        auto bad=record(42,4200);bad.field_lineage.heading_rmc_status=N::RMC_A;
+        if(fault==0)bad.field_lineage.heading_rmc_status=N::RmcStatus(5);
+        else bad.field_lineage.fields[5]={0,0};
+        CHECK(!f.publisher.publish(bad));CHECK(m->words[P::LOSS].load()==loss+1);
+        CHECK(!lookup(f.registry,r,&o));CHECK(o.result==L::UNAVAILABLE);
+        CHECK(!f.publisher.publish(record(43,4300)));
+        auto recovered=record(44,4400);recovered.field_lineage.heading_rmc_status=N::RMC_V;
+        CHECK(f.publisher.publish(recovered));CHECK(lookup(f.registry,recovered,&o));
+        CHECK(o.heading_rmc_status==N::RMC_V&&o.map_loss_epoch==loss+1);
+        CHECK(saved.heading_rmc_status==N::RMC_A&&saved.map_loss_epoch==loss);
+    }
+    // A malformed shared record must also be rejected at the consumer boundary.
+    for(unsigned fault=0;fault<2;++fault) {
+        Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
+        f.setup();auto r=record();r.field_lineage.heading_rmc_status=N::RMC_A;
+        CHECK(f.publisher.publish(r));f.adopt();L::Owned o;CHECK(lookup(f.registry,r,&o));
+        auto m=L::AssociationTestAccess::map(f.publisher);
+        if(fault==0)m->words[P::HEADER+130].store(5);
+        else {m->words[P::HEADER+P::ORIGINS+4*5].store(0);m->words[P::HEADER+P::ORIGINS+4*5+1].store(0);}
+        CHECK(!lookup(f.registry,r,&o));CHECK(o.result==L::UNAVAILABLE);
+        CHECK(o.heading_rmc_status==N::RMC_UNKNOWN);
+    }
+}
 static void protocol_version() {
-    Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
-    f.setup();CHECK(f.publisher.publish(record()));L::Owned o;
-    const int fd=L::AssociationTestAccess::fd(f.publisher);
-    send_offer(f.channel,f.publisher,&fd,1,P::OFFER_BYTES,1);f.registry.drain(1010);
-    CHECK(!lookup(f.registry,record(),&o));
-    auto map=L::AssociationTestAccess::map(f.publisher);map->words[P::LAYOUT].store(1);
-    send_offer(f.channel,f.publisher,&fd,1);f.registry.drain(1020);CHECK(!lookup(f.registry,record(),&o));
-    map->words[P::LAYOUT].store(P::VERSION);f.adopt(1030);
-    CHECK(lookup(f.registry,record(),&o));CHECK(o.layout_version==2);
+    for(unsigned legacy=1;legacy<=2;++legacy) {
+        Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
+        f.setup();CHECK(f.publisher.publish(record()));L::Owned o;
+        const int fd=L::AssociationTestAccess::fd(f.publisher);
+        send_offer(f.channel,f.publisher,&fd,1,P::OFFER_BYTES,legacy);f.registry.drain(1010);
+        CHECK(!lookup(f.registry,record(),&o));
+        auto map=L::AssociationTestAccess::map(f.publisher);map->words[P::LAYOUT].store(legacy);
+        send_offer(f.channel,f.publisher,&fd,1);f.registry.drain(1020);CHECK(!lookup(f.registry,record(),&o));
+        map->words[P::LAYOUT].store(P::VERSION);f.adopt(1030);
+        CHECK(lookup(f.registry,record(),&o));CHECK(o.layout_version==3);
+    }
 }
 enum BadFd { GOOD_FD,WRITABLE_FD,LINKED_FD,LARGE_FD,SHORT_FD,EMPTY_FD,MODE_FD };
 static void fd_rejected_then_adopted(unsigned rights_count,BadFd kind) {
@@ -480,6 +533,7 @@ int main(int argc,char** argv) {
     else if(!std::strcmp(argv[1],"malformed_map"))malformed_map();else if(!std::strcmp(argv[1],"concurrent"))concurrent();
     else if(!std::strcmp(argv[1],"retirement_scheduled"))retirement_scheduled();
     else if(!std::strcmp(argv[1],"heading_presence"))heading_presence();
+    else if(!std::strcmp(argv[1],"rmc_status"))rmc_status();
     else if(!std::strcmp(argv[1],"protocol_version"))protocol_version();else CHECK(false);
     std::printf("PASS LDS association %s %u checks\n",argv[1],checks);
 }

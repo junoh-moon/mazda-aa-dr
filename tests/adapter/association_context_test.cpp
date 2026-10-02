@@ -24,7 +24,8 @@ const char* const scenarios[]={
     "captured","nested","mutate_after","nested_missing","wrong_call","wrong_generation",
     "wrong_request","wrong_worker","wrong_stage","unavailable","missing","malformed",
     "request_failed","reader_conflict","reader_mismatch","frame_reuse","provenance_failed",
-    "presence_empty","presence_present","legacy_layout","invalid_presence","presence_without_origin"};
+    "presence_empty","presence_present","legacy_layout","invalid_presence","presence_without_origin",
+    "status_empty","status_a","status_v","status_other","invalid_status","status_without_origin","legacy_layout_v2"};
 const char* scenario;
 unsigned reads[2],lookups[2],checks[2],sends,position_count[2],send_count[2];
 bool seen[2];
@@ -63,6 +64,8 @@ L::Owned identity(unsigned n,uint32_t generation) {
         out.fields[i].write_sequence=52-i;out.fields[i].observed_ns=98-i;
     }
     out.heading_presence=is("presence_empty")?C::EMPTY:is("presence_present")?C::PRESENT:C::UNKNOWN;
+    out.heading_rmc_status=is("status_empty")?C::RMC_EMPTY:is("status_a")?C::RMC_A:
+        is("status_v")?C::RMC_V:is("status_other")?C::RMC_OTHER:C::RMC_UNKNOWN;
     return out;
 }
 void same_owned(const L::Owned& a,const L::Owned& b) {
@@ -79,10 +82,12 @@ void same_owned(const L::Owned& a,const L::Owned& b) {
         assert(a.fields[i].observed_ns==b.fields[i].observed_ns);
     }
     assert(a.heading_presence==b.heading_presence);
+    assert(a.heading_rmc_status==b.heading_rmc_status);
 }
 bool expected_match(unsigned n) {
     return is("captured")||is("nested")||is("mutate_after")||is("provenance_failed")||
-        is("presence_empty")||is("presence_present")||
+        is("presence_empty")||is("presence_present")||is("status_empty")||is("status_a")||
+        is("status_v")||is("status_other")||
         ((is("nested_missing")||is("frame_reuse"))&&n==0);
 }
 // A rejected association keeps only the conflict/mismatch classification.
@@ -91,7 +96,8 @@ L::Owned expected(unsigned n) {
     L::Owned out=L::Owned();
     if(is("wrong_call")||is("wrong_generation")||is("wrong_request")||is("wrong_worker")||
        is("wrong_stage")||is("reader_conflict")||is("legacy_layout")||
-       is("invalid_presence")||is("presence_without_origin"))out.result=L::CONFLICT;
+       is("invalid_presence")||is("presence_without_origin")||is("invalid_status")||
+       is("status_without_origin")||is("legacy_layout_v2"))out.result=L::CONFLICT;
     else if(is("reader_mismatch"))out.result=L::PAYLOAD_MISMATCH;
     return out;
 }
@@ -117,6 +123,11 @@ bool association(const A::PositionContext& c,L::Owned* out,void*) {
     if(is("wrong_worker"))++out->worker_epoch;
     if(is("wrong_stage"))out->stage=L::NO_STAGE;
     if(is("legacy_layout"))out->layout_version=1; // Deliberately old, not the current protocol constant.
+    if(is("legacy_layout_v2"))out->layout_version=2;
+    if(is("invalid_status"))out->heading_rmc_status=static_cast<C::RmcStatus>(5);
+    if(is("status_without_origin")) {
+        out->heading_rmc_status=C::RMC_A;out->fields[S::HEADING]=S::FieldOrigin();
+    }
     if(is("invalid_presence"))out->heading_presence=static_cast<C::Presence>(3);
     if(is("presence_without_origin")) {
         out->heading_presence=C::PRESENT;out->fields[S::HEADING]=S::FieldOrigin();

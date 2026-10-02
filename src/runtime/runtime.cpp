@@ -164,6 +164,10 @@ bool format_association(char* out,size_t capacity,const LA::Owned& o) {
     const char* presence=origin&&state==mx5::sensors::nmea_course_token::EMPTY?"empty":
         origin&&state==mx5::sensors::nmea_course_token::PRESENT?"present":"unknown";
     j.add(",\"heading_presence\":\"");j.add(presence);j.add("\"");
+    const auto status=o.heading_rmc_status;
+    const char* labels[]={"unknown","empty","a","v","other"};
+    const char* rmc=origin&&status<=mx5::sensors::nmea_course_token::RMC_OTHER?labels[status]:"unknown";
+    j.add(",\"heading_rmc_status\":\"");j.add(rmc);j.add("\"");
   }
   j.add("}");return j.ok();
 }

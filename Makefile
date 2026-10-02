@@ -107,7 +107,7 @@ $(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_pool_association $(BUILD)/test_association_context $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_context_pool $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
-	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed presence_empty presence_present legacy_layout invalid_presence presence_without_origin; do $(BUILD)/test_association_context $$scenario; done
+	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed presence_empty presence_present legacy_layout invalid_presence presence_without_origin status_empty status_a status_v status_other invalid_status status_without_origin legacy_layout_v2; do $(BUILD)/test_association_context $$scenario; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
 	$(BUILD)/test_context_pool saturation
 	@set -e; for scenario in capacity capacity_raw reuse nested concurrent fork_full fork_live fork_nested fork_unavailable fork_depth9 fork_generation early; do $(BUILD)/test_context_pool_association $$scenario; done
@@ -189,8 +189,8 @@ test-sensors: $(BUILD)/test_vim_source $(BUILD)/test_vim_tap $(BUILD)/test_lds_l
 	$(BUILD)/test_vim_source
 	$(BUILD)/test_vim_tap
 	$(BUILD)/test_lds_lineage
-	@set -e; for scenario in presence not_validity fields frames capacity limit immutable guard_page; do $(BUILD)/test_nmea_course_token $$scenario; done
-	@set -e; for scenario in assignment exact_read unknown_reset invalid; do $(BUILD)/test_lds_course_lineage $$scenario; done
+	@set -e; for scenario in presence not_validity fields frames capacity limit immutable guard_page status status_bounds; do $(BUILD)/test_nmea_course_token $$scenario; done
+	@set -e; for scenario in assignment exact_read unknown_reset invalid status_inheritance status_invalid; do $(BUILD)/test_lds_course_lineage $$scenario; done
 $(BUILD)/test_lds_lineage: tests/sensors/test_lds_lineage.cpp src/sensors/lds_lineage.cpp src/sensors/lds_lineage.h src/sensors/nmea_course_token.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -o $@
 $(BUILD)/test_nmea_course_token: tests/sensors/test_nmea_course_token.cpp src/sensors/nmea_course_token.cpp src/sensors/nmea_course_token.h | $(BUILD)
@@ -337,14 +337,14 @@ $(BUILD)/test_lds_tap: tests/sensors/test_lds_tap.cpp src/sensors/lds_tap.cpp $(
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/sensors/lds_tap.cpp,$^) -pthread -lrt -o $@
 
 test-lds: $(BUILD)/test_lds_association_channel $(BUILD)/test_data_patch $(BUILD)/test_lds_hooks $(BUILD)/test_lds_sideband $(BUILD)/test_worker_lds $(BUILD)/test_lds_request_source $(BUILD)/test_lds_source_bus $(BUILD)/test_worker_lds_source $(BUILD)/test_lds_install $(BUILD)/test_lds_tap
-	@set -e; for scenario in basic exact capacity invalidation fork stop allocation scalar_bits old_offer loss borrowing exhaustion fd_validation drain_bound malformed_map concurrent retirement_scheduled heading_presence protocol_version; do $(BUILD)/test_lds_association_channel $$scenario; done
+	@set -e; for scenario in basic exact capacity invalidation fork stop allocation scalar_bits old_offer loss borrowing exhaustion fd_validation drain_bound malformed_map concurrent retirement_scheduled heading_presence rmc_status protocol_version; do $(BUILD)/test_lds_association_channel $$scenario; done
 	$(BUILD)/test_data_patch
 	$(BUILD)/test_lds_sideband
 	$(BUILD)/test_lds_request_source
 	$(BUILD)/test_lds_source_bus
 	$(BUILD)/test_lds_install
 	@set -e; for scenario in off invalid missing_mode missing_config disabled marker_symlink marker_error observe scrub install_failed rollback_failed cold_lost normal late_receiver sender_failed unrequested null_handle repeated association association_fork association_failed association_invalidate; do $(BUILD)/test_lds_tap $$scenario; done
-	@set -e; for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind locked locked_pair locked_unknown locked_unthreaded locked_null locked_generation locked_mutex locked_native_pc locked_message_pc locked_native_fail locked_no_native locked_native_twice locked_message_twice locked_reply locked_destination locked_endpoint locked_failed_send locked_unwind locked_extra_send locked_inactive locked_clock locked_type locked_zero_request locked_endpoint_changed locked_snapshot locked_nested_send course_values course_bindings course_nested_callback course_boundary_overlap course_identity course_parse_nested course_unwind course_cancel course_open course_close course_reset course_write_boundary course_saved_read course_routes course_callback_parse course_inactive course_one_commit course_copy_twice; do $(BUILD)/test_lds_hooks $$scenario; done
+	@set -e; for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind locked locked_pair locked_unknown locked_unthreaded locked_null locked_generation locked_mutex locked_native_pc locked_message_pc locked_native_fail locked_no_native locked_native_twice locked_message_twice locked_reply locked_destination locked_endpoint locked_failed_send locked_unwind locked_extra_send locked_inactive locked_clock locked_type locked_zero_request locked_endpoint_changed locked_snapshot locked_nested_send course_values course_bindings course_nested_callback course_boundary_overlap course_identity course_parse_nested course_unwind course_cancel course_open course_close course_reset course_write_boundary course_saved_read course_routes course_callback_parse course_inactive course_one_commit course_copy_twice status_values status_inheritance status_no_commit; do $(BUILD)/test_lds_hooks $$scenario; done
 	@set -e; for scenario in capture occupied pre_stopped bounded malformed wrong_uid; do $(BUILD)/test_worker_lds $$scenario; done
 	@set -e; for scenario in position_first sideband_first mismatch late_conflict pre_stopped malformed_recovery first_bus startup_bus bus_reconnect; do $(BUILD)/test_worker_lds_source $$scenario; done
 

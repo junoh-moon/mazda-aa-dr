@@ -306,6 +306,29 @@ static void heading_presence() {
         CHECK(joined.record.field_lineage.heading_presence==T::UNKNOWN);
     }
 }
+static void rmc_status() {
+    namespace T=mx5::sensors::nmea_course_token;
+    for(unsigned value=0;value<5;++value)for(unsigned reverse=0;reverse<2;++reverse) {
+        Source s;auto o=position();o.position.heading_deg=0;auto r=record(o);
+        r.field_lineage.heading_rmc_status=T::RmcStatus(value);
+        if(reverse) {s.sideband(r,diagnostic(),1000);s.position(o,1001);}
+        else {s.position(o,1000);s.sideband(r,diagnostic(),1001);}
+        Source::JoinedReply joined;CHECK(s.lookup(o,&joined)==Source::MATCHED);
+        CHECK(joined.record.field_lineage.heading_rmc_status==T::RmcStatus(value));
+        CHECK(joined.observation.position.heading_deg==0&&!joined.observation.provenance.verified_lds);
+        r.field_lineage.heading_rmc_status=value==T::RMC_A?T::RMC_V:T::RMC_A;
+        s.sideband(r,diagnostic(),1002);clean_output(s,o,Source::CONFLICT);CHECK(!s.current(joined));
+    }
+    for(unsigned missing_origin=0;missing_origin<2;++missing_origin) {
+        Source s;const auto o=position();auto r=record(o);s.position(o,1000);
+        r.field_lineage.heading_rmc_status=missing_origin?T::RMC_A:T::RmcStatus(5);
+        if(missing_origin)r.field_lineage.fields[5]={0,0};
+        s.sideband(r,diagnostic(),1001);clean_output(s,o,Source::WAITING);
+        CHECK(s.status().rejected==1);s.sideband(record(o),diagnostic(),1002);
+        Source::JoinedReply joined;CHECK(s.lookup(o,&joined)==Source::MATCHED);
+        CHECK(joined.record.field_lineage.heading_rmc_status==T::RMC_UNKNOWN);
+    }
+}
 int main(int argc,char** argv) {
     const char* wanted=argc>1?argv[1]:"all";
     struct Test { const char* name;void(*run)(); };
@@ -315,7 +338,7 @@ int main(int argc,char** argv) {
         {"aliases",identity_aliases},{"causal",causal_issue},
         {"payloads",payloads},{"unavailable",unavailable},{"loss",loss_and_flags},
         {"retention",retirement},{"capacity",capacity},{"clocks",clocks},{"exhaustion",exhaustion_errno},
-        {"heading",heading_presence}
+        {"heading",heading_presence},{"rmc_status",rmc_status}
     };
     unsigned ran=0;
     for(unsigned i=0;i<sizeof cases/sizeof cases[0];++i)

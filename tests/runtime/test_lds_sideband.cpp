@@ -34,7 +34,7 @@ static L::Record example() {
 static void codec() {
     L::Record r=example(),out=L::Record();unsigned char bytes[L::RECORD_SIZE],again[L::RECORD_SIZE];
     CHECK(L::encode(r,bytes));CHECK(!memcmp(bytes,"MXLD",4));
-    CHECK(bytes[4]==2&&bytes[5]==0&&bytes[6]==128&&bytes[7]==2);
+    CHECK(bytes[4]==3&&bytes[5]==0&&bytes[6]==128&&bytes[7]==2);
     CHECK(bytes[8]==1&&bytes[16]==1&&bytes[40]==111&&bytes[56]==23&&bytes[60]==31);
     for(unsigned i=568;i<L::RECORD_SIZE;++i)CHECK(bytes[i]==0);
     CHECK(L::decode(bytes,sizeof bytes,&out));CHECK(L::encode(out,again));CHECK(!memcmp(bytes,again,sizeof bytes));
@@ -70,7 +70,7 @@ static void heading_presence() {
         CHECK(L::encode(r,bytes));CHECK(L::decode(bytes,sizeof bytes,&out));
         CHECK(out.field_lineage.heading_presence==N::Presence(value));
         CHECK(out.position.heading_deg==0&&out.field_lineage.fields[5].write_sequence==1);
-        CHECK(bytes[4]==2&&bytes[568]==value);
+        CHECK(bytes[4]==3&&bytes[568]==value);
         bytes[568]=3;CHECK(!L::decode(bytes,sizeof bytes,&out));
         CHECK(out.source_instance==0);
         // Legacy v1 really lacked the field; never infer presence from heading0.
@@ -83,6 +83,45 @@ static void heading_presence() {
     invalid.field_lineage.heading_presence=N::Presence(3);CHECK(!L::encode(invalid,bytes));
     invalid.field_lineage.heading_presence=N::EMPTY;invalid.field_lineage.fields[5]={0,0};
     CHECK(!L::encode(invalid,bytes));
+}
+static void rmc_status() {
+    static const char* labels[]={"unknown","empty","a","v","other"};
+    for(unsigned value=0;value<5;++value) {
+        L::Record r=example(),out=L::Record();unsigned char bytes[L::RECORD_SIZE];
+        r.field_lineage.heading_presence=N::PRESENT;
+        r.field_lineage.heading_rmc_status=N::RmcStatus(value);
+        CHECK(L::encode(r,bytes));CHECK(bytes[4]==3&&bytes[572]==value);
+        CHECK(bytes[573]==0&&bytes[574]==0&&bytes[575]==0);
+        CHECK(L::decode(bytes,sizeof bytes,&out));
+        CHECK(out.field_lineage.heading_rmc_status==N::RmcStatus(value));
+        CHECK(out.position.mode==r.position.mode&&out.position.heading_deg==r.position.heading_deg);
+        const L::Diagnostic d={L::RECEIVE_OK,200,0,0,105};char output[L::JSON_CAPACITY],expected[80];
+        snprintf(expected,sizeof expected,"\"heading_rmc_status\":\"%s\"",labels[value]);
+        CHECK(L::format_record(output,sizeof output,out,d));CHECK(strstr(output,expected));
+        // v2 preserved presence, but status was reserved and cannot be inferred.
+        bytes[4]=2;memset(bytes+572,0,68);CHECK(L::decode(bytes,sizeof bytes,&out));
+        CHECK(out.field_lineage.heading_presence==N::PRESENT);
+        CHECK(out.field_lineage.heading_rmc_status==N::RMC_UNKNOWN);
+        CHECK(L::format_record(output,sizeof output,out,d));
+        CHECK(strstr(output,"\"heading_rmc_status\":\"unknown\""));
+        bytes[572]=2;CHECK(!L::decode(bytes,sizeof bytes,&out));CHECK(out.source_instance==0);
+        bytes[4]=1;memset(bytes+568,0,72);CHECK(L::decode(bytes,sizeof bytes,&out));
+        CHECK(out.field_lineage.heading_presence==N::UNKNOWN);
+        CHECK(out.field_lineage.heading_rmc_status==N::RMC_UNKNOWN);
+    }
+    L::Record r=example(),out=L::Record();unsigned char bytes[L::RECORD_SIZE];
+    r.field_lineage.heading_rmc_status=N::RmcStatus(5);CHECK(!L::encode(r,bytes));
+    const L::Diagnostic d={L::RECEIVE_OK,200,0,0,105};char output[L::JSON_CAPACITY];
+    CHECK(!L::format_record(output,sizeof output,r,d));
+    r.field_lineage.heading_rmc_status=N::RMC_A;CHECK(L::encode(r,bytes));
+    bytes[572]=5;CHECK(!L::decode(bytes,sizeof bytes,&out));CHECK(out.source_instance==0);
+    bytes[572]=2;bytes[576]=1;CHECK(!L::decode(bytes,sizeof bytes,&out));
+    bytes[576]=0;memset(bytes+360+5*16,0,16);
+    CHECK(!L::decode(bytes,sizeof bytes,&out));CHECK(out.source_instance==0);
+    bytes[572]=0;CHECK(L::decode(bytes,sizeof bytes,&out));
+    CHECK(out.field_lineage.heading_rmc_status==N::RMC_UNKNOWN);
+    r.field_lineage.fields[5]={0,0};CHECK(!L::encode(r,bytes));
+    r.field_lineage.heading_rmc_status=N::RMC_UNKNOWN;CHECK(L::encode(r,bytes));
 }
 static void credentials() {
     L::Record r=example(),out;unsigned char bytes[L::RECORD_SIZE];CHECK(L::encode(r,bytes));
@@ -158,7 +197,8 @@ int main(int argc,char** argv) {
         const L::Record r=example();const L::Diagnostic d={L::RECEIVE_OK,200,0,0,105};
         char output[L::JSON_CAPACITY];CHECK(L::format_record(output,sizeof output,r,d));puts(output);return 0;
     }
+    if(argc==2&&!strcmp(argv[1],"--rmc-status")) {rmc_status();return 0;}
     if(argc==2&&!strcmp(argv[1],"--heading")) {heading_presence();formatter();return 0;}
-    CHECK(argc==1);alarm(10);heading_presence();codec();credentials();channel();formatter();
+    CHECK(argc==1);alarm(10);rmc_status();heading_presence();codec();credentials();channel();formatter();
     printf("LDS sideband: %u checks passed\n",checks);return 0;
 }

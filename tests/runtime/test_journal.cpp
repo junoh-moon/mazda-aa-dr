@@ -246,6 +246,31 @@ static void heading_presence_journal() {
   }
   puts("heading presence journal: POSITION/SEND 8 cases, exact/N-1/canary PASS");
 }
+static void rmc_status_journal() {
+  namespace T=mx5::sensors::nmea_course_token;
+  const char* labels[]={"unknown","empty","a","v","other","unknown"};
+  for(unsigned kind=0;kind<2;++kind)for(unsigned value=0;value<7;++value) {
+    A::Observation o=long_route_event();o.kind=kind?A::Observation::SEND:A::Observation::POSITION;
+    LA::Owned& a=o.lds_association;a.result=LA::MATCHED_LOCKED_FOR_SEND;
+    a.stage=LA::LOCKED_FOR_SEND;a.cache_lifetime=a.write_sequence=UINT64_MAX;
+    a.source_instance=a.record_sequence=a.locked_observed_ns=a.map_loss_epoch=UINT64_MAX;
+    a.request_id=a.request_epoch=a.worker_id=a.worker_epoch=UINT64_MAX;
+    a.call_sequence=a.prediction_generation=a.view_revision=a.layout_version=UINT32_MAX;
+    for(unsigned i=0;i<9;++i)a.fields[i]={UINT64_MAX,UINT64_MAX};
+    a.heading_presence=T::PRESENT;a.heading_rmc_status=T::RmcStatus(value);
+    if(value==6) {a.heading_rmc_status=T::RMC_A;a.fields[5]={0,0};}
+    char output[mx5::runtime::OBSERVATION_JSON_CAPACITY];
+    assert(format_observation(output,sizeof output,o));
+    const std::string expected=std::string("\"heading_rmc_status\":\"")+(value==6?"unknown":labels[value])+"\"";
+    assert(strstr(output,expected.c_str()));
+    const size_t n=strlen(output);
+    char exact[mx5::runtime::OBSERVATION_JSON_CAPACITY+2];memset(exact,0x5a,sizeof exact);
+    assert(format_observation(exact+1,n+1,o));assert(exact[0]==0x5a&&exact[n+2]==0x5a);
+    memset(exact,0x5a,sizeof exact);
+    assert(!format_observation(exact+1,n,o));assert(exact[0]==0x5a&&exact[n+1]==0x5a);
+  }
+  puts("RMC status journal: POSITION/SEND 14 cases, exact/N-1/canary PASS");
+}
 static void route_capture_tail(const char* root,const std::string& logs) {
   arm_test_mode();
   const A::Observation event=long_route_event();
@@ -598,6 +623,7 @@ static int run() {
 }
 }
 int main(int argc,char** argv) {
+  if(argc==2 && !strcmp(argv[1],"--rmc-status")) {rmc_status_journal();return 0;}
   if(argc==2 && !strcmp(argv[1],"--heading-presence")) {heading_presence_journal();return 0;}
   if(argc==2 && !strcmp(argv[1],"--emit-positions")) {position_journal();return 0;}
   if(argc==3 && !strcmp(argv[1],"--real-storage")) {
@@ -620,6 +646,7 @@ int main(int argc,char** argv) {
   request_journal(emit_requests);
   if(emit_requests)return 0;
   heading_presence_journal();
+  rmc_status_journal();
   A::Options opt = A::Options();
   assert(A::configure(unused_next, opt));
   if(argc==2 && !strcmp(argv[1],"--late-adapter-fault")) {

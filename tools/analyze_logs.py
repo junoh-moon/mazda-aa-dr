@@ -193,6 +193,7 @@ class LdsLinks:
         self.finished_sideband = Counter()
         self.finished_assignment_patterns = Counter()
         self.finished_heading_presence = Counter()
+        self.finished_heading_rmc_status = Counter()
         self.attachments = []
         self.attachment_total = 0
         self.records = Counter()
@@ -202,11 +203,12 @@ class LdsLinks:
 
     def begin(self):
         if self.session_index:
-            counts, sideband, attachments, patterns, presence = self.current()
+            counts, sideband, attachments, patterns, presence, rmc_status = self.current()
             self.finished.update(counts)
             self.finished_sideband.update(sideband)
             self.finished_assignment_patterns.update(patterns)
             self.finished_heading_presence.update(presence)
+            self.finished_heading_rmc_status.update(rmc_status)
             self.attachment_total += len(attachments)
             self.attachments.extend(attachments[:max(0, self.attachment_limit-len(self.attachments))])
         self.session_index += 1
@@ -307,6 +309,9 @@ class LdsLinks:
         presence = lineage.get('heading_presence', 'unknown')
         if type(presence) is not str or presence not in ('unknown', 'empty', 'present'):
             return False
+        rmc_status = lineage.get('heading_rmc_status', 'unknown')
+        if type(rmc_status) is not str or rmc_status not in ('unknown', 'empty', 'a', 'v', 'other'):
+            return False
         if (not isinstance(sequences, list) or not isinstance(clocks, list) or
                 len(sequences) != 9 or len(clocks) != 9 or
                 not all(cls.uint(v) and v <= lineage['write_sequence'] for v in sequences) or
@@ -314,7 +319,7 @@ class LdsLinks:
                 any(s == 0 and c != 0 for s, c in zip(sequences, clocks)) or
                 (lineage['lifetime'] == 0 and lineage['write_sequence'] != 0)):
             return False
-        if presence != 'unknown' and not sequences[5]:
+        if (presence != 'unknown' or rmc_status != 'unknown') and not sequences[5]:
             return False
         return cls.payload(position)
 
@@ -425,7 +430,7 @@ class LdsLinks:
 
     def current(self):
         counts, sideband, attachments = self.unkeyed.copy(), Counter(), []
-        patterns, presence_counts = Counter(), Counter()
+        patterns, presence_counts, rmc_status_counts = Counter(), Counter(), Counter()
         for key, entry in self.entries.items():
             count, row, record = entry['positions'], entry['position'], entry['record']
             if not count:
@@ -460,24 +465,30 @@ class LdsLinks:
                 # or a new assignment identity cannot fill this information.
                 presence = record['field_lineage'].get('heading_presence', 'unknown')
                 presence_counts[presence] += 1
+                # Status belongs to the HEADING assignment. A newer numeric
+                # MODE may have been written by GGA/GSA; it cannot recover the
+                # earlier RMC token or qualify the current receiver.
+                rmc_status = record['field_lineage'].get('heading_rmc_status', 'unknown')
+                rmc_status_counts[rmc_status] += 1
                 attachments.append(dict(recorded_session=self.session_index, call=row['call'],
                     generation=row['generation'], source_instance=record['source_instance'],
                     sequence=record['sequence'], sender_pid=record['sender_pid'], sender_uid=record['sender_uid'],
                     path_result=record['path_result'], send_result=record['send_result'], flags=record['flags'],
                     wire_key=list(key), field_lineage=record['field_lineage'],
                     assignment_coverage=coverage, known_field_assignments=origins,
-                    heading_presence=presence))
+                    heading_presence=presence, heading_rmc_status=rmc_status))
             counts[state] += count
             if record is not None:
                 sideband[state] += 1
-        return counts, sideband, attachments, patterns, presence_counts
+        return counts, sideband, attachments, patterns, presence_counts, rmc_status_counts
 
     def report(self):
-        counts, sideband, attachments, patterns, presence = self.current()
+        counts, sideband, attachments, patterns, presence, rmc_status = self.current()
         counts.update(self.finished)
         sideband.update(self.finished_sideband)
         patterns.update(self.finished_assignment_patterns)
         presence.update(self.finished_heading_presence)
+        rmc_status.update(self.finished_heading_rmc_status)
         total = self.attachment_total + len(attachments)
         shown = self.attachments + attachments[:max(0, self.attachment_limit-len(self.attachments))]
         return dict(position_links=dict(counts), sideband_links=dict(sideband),
@@ -487,6 +498,8 @@ class LdsLinks:
                     assignment_patterns=dict(patterns),
                     heading_presence=dict(presence),
                     heading_presence_scope='lexical_course_token_only_not_numeric_or_quality',
+                    heading_rmc_status=dict(rmc_status),
+                    heading_rmc_status_scope='lexical_status_of_heading_assignment_not_receiver_quality',
                     assignment_scope='matched_wire_payload_retained_field_origins_not_producer_or_assist',
                     producer_time_status='unknown', association_only=True, assist_ready=False)
 

@@ -31,7 +31,8 @@ def sideband():
                   request_serial=23, response_serial=31, reply_serial=23),
         field_lineage=dict(association_only=True, lifetime=2, write_sequence=3,
             field_write_sequences=[1, 1, 3, 3, 3, 1, 1, 2, 2],
-            field_observed_ns=[100]*9, heading_presence='unknown'),
+            field_observed_ns=[100]*9, heading_presence='unknown',
+            heading_rmc_status='unknown'),
         position=dict(snapshot_known=True, **{key: p[key] for key in
             ('mode', 'utc_s', 'lat', 'lon', 'altitude_m', 'heading', 'kmh', 'horizontal', 'vertical')}))
 
@@ -49,6 +50,92 @@ class LdsSideband(unittest.TestCase):
         self.assertEqual(report['request_observation']['lds_sideband_matching'],
                          'exact_wire_key_diagnostic_only')
         return report['lds_sideband']
+
+    def test_rmc_status_survives_numeric_mode_recovery_in_either_arrival_order(self):
+        # Authored final snapshot: numeric MODE is back to 1, while HEADING
+        # still belongs to an earlier V RMC. No intermediate V query is needed.
+        for value in ('unknown', 'empty', 'a', 'v', 'other'):
+            for first in (False, True):
+                with self.subTest(status=value, sideband_first=first):
+                    p, row = position(), sideband()
+                    p['mode'] = row['position']['mode'] = 1
+                    row['field_lineage']['heading_rmc_status'] = value
+                    _, report = observe(*((row, p) if first else (p, row)))
+                    linked = self.linked(report)
+                    self.assertEqual(linked.get('heading_rmc_status'), {value: 1})
+                    self.assertEqual(linked['attachments'][0].get('heading_rmc_status'), value)
+                    self.assertEqual(linked['position_links'], {'matched': 1})
+                    self.assertFalse(linked['assist_ready'])
+                    self.assertEqual(linked['producer_time_status'], 'unknown')
+
+    def test_rmc_status_legacy_absence_is_unknown_without_mutating_raw(self):
+        row = sideband()
+        row['field_lineage'].pop('heading_rmc_status', None)
+        _, report = observe(position(), row)
+        linked = self.linked(report)
+        self.assertEqual(linked.get('heading_rmc_status'), {'unknown': 1})
+        self.assertEqual(linked['attachments'][0].get('heading_rmc_status'), 'unknown')
+        self.assertNotIn('heading_rmc_status', row['field_lineage'])
+
+    def test_rmc_status_malformed_metadata_preserves_raw_and_model(self):
+        from test_motion_logs import valid_shadow
+        p, model = position(), valid_shadow()
+        _, baseline = observe(p, model)
+        for value in (None, True, 0, 5, [], {}, 'valid', 'A', 'V'):
+            with self.subTest(value=value):
+                row = sideband()
+                row['field_lineage']['heading_rmc_status'] = value
+                a, report = observe(p, row, model)
+                self.assertIn('lds_sideband_malformed', [i['code'] for i in a.issues])
+                self.assertEqual(a.counts['position'], 1)
+                self.assertEqual(report['shadow'], baseline['shadow'])
+                self.assertEqual(self.linked(report)['attachments'], [])
+
+    def test_rmc_status_requires_its_heading_assignment(self):
+        for value in ('unknown', 'empty', 'a', 'v', 'other'):
+            with self.subTest(value=value):
+                row = sideband()
+                row['field_lineage']['heading_rmc_status'] = value
+                row['field_lineage']['field_write_sequences'][5] = 0
+                row['field_lineage']['field_observed_ns'][5] = 0
+                a, report = observe(position(), row)
+                self.assertEqual(bool(self.linked(report)['attachments']), value == 'unknown')
+                self.assertEqual(a.counts['position'], 1)
+
+    def test_rmc_status_conflict_withdraws_counts_and_next_boot_recovers(self):
+        first, conflict = sideband(), sideband()
+        first['field_lineage']['heading_rmc_status'] = 'a'
+        conflict['field_lineage']['heading_rmc_status'] = 'v'
+        a, report = observe(position(), first, conflict)
+        linked = self.linked(report)
+        self.assertEqual(linked['position_links'], {'conflict': 1})
+        self.assertEqual(linked.get('heading_rmc_status'), {})
+        for row in (boot(), position(), conflict):
+            a.consume(row, 'new-observed-boot')
+        self.assertEqual(self.linked(a.report()).get('heading_rmc_status'), {'v': 1})
+
+    def test_rmc_status_counts_survive_session_boundary(self):
+        a = audit.Auditor()
+        for value in ('a', 'v'):
+            row = sideband()
+            row['field_lineage']['heading_rmc_status'] = value
+            for item in (boot(), position(), row):
+                a.consume(item, 'two-observed-boots')
+        self.assertEqual(self.linked(a.report()).get('heading_rmc_status'), {'a': 1, 'v': 1})
+
+    def test_rmc_status_never_labels_unrelated_field_origins_or_receiver_quality(self):
+        row = sideband()
+        row['field_lineage']['heading_rmc_status'] = 'a'
+        row['field_lineage']['field_write_sequences'][1] = 2
+        _, report = observe(position(), row)
+        linked = self.linked(report)
+        attached = linked['attachments'][0]
+        self.assertEqual(attached.get('heading_rmc_status'), 'a')
+        self.assertNotIn('utc_rmc_status', attached)
+        self.assertNotIn('receiver_valid', attached)
+        self.assertEqual(linked.get('heading_rmc_status_scope'),
+                         'lexical_status_of_heading_assignment_not_receiver_quality')
+        self.assertEqual(report['request_observation']['qualification'], 'not_established')
 
     def test_heading_presence_is_independent_of_numeric_zero_and_arrival_order(self):
         for value in ('unknown', 'empty', 'present'):

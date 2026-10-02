@@ -12,7 +12,7 @@ namespace mx5 { namespace runtime { namespace lds_sideband {
 
 // Observation transport only. Neither credentials nor field assignment clocks
 // establish producer measurement time, receiver quality or ASSIST provenance.
-enum { RECORD_SIZE=640, JSON_CAPACITY=4096, DRAIN_LIMIT=16, WIRE_VERSION=2 };
+enum { RECORD_SIZE=640, JSON_CAPACITY=4096, DRAIN_LIMIT=16, WIRE_VERSION=3 };
 // Exact NA 74.00.324A normal/WCP services use cmu, whose shipped UID is zero.
 // This is a local account boundary; it does not authenticate the LDS executable.
 static const uid_t LDS_UID=0;
@@ -32,6 +32,8 @@ struct Lineage {
     uint64_t lifetime,write_sequence;
     FieldOrigin fields[sensors::lds_lineage::FIELD_COUNT];
     sensors::nmea_course_token::Presence heading_presence;
+    // Lexical RMC status owned by this HEADING assignment, never receiver quality.
+    sensors::nmea_course_token::RmcStatus heading_rmc_status;
 };
 struct Record {
     // Sender supplies the first three fields, unrelated to cache/bus lifetimes.
@@ -45,7 +47,8 @@ struct Record {
 void copy_text(Text*,const char* borrowed);
 // Explicit little-endian fields; no native padding, pointers or Snapshot owner.
 // Encoding preserves IEEE double bits, including nonfinite diagnostic inputs.
-// Emit v2; legacy v1 decodes with UNKNOWN presence because it had no such field.
+// Emit v3; v1 lacks presence/status, and v2 lacks status. Decode absent
+// metadata as UNKNOWN without inference from numeric heading or MODE.
 bool encode(const Record&,unsigned char out[RECORD_SIZE]);
 bool decode(const unsigned char*,size_t,Record*);
 

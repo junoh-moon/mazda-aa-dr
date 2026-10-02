@@ -204,7 +204,8 @@ def main():
                      'unavailable', 'missing', 'malformed', 'request_failed',
                      'reader_conflict', 'reader_mismatch', 'frame_reuse', 'provenance_failed',
                      'presence_empty', 'presence_present', 'legacy_layout', 'invalid_presence',
-                     'presence_without_origin')
+                     'presence_without_origin', 'status_empty', 'status_a', 'status_v',
+                     'status_other', 'invalid_status', 'status_without_origin', 'legacy_layout_v2')
             fixture, access = 'association_context', 'association_context_dso_access.h'
             macro, marker = '-DMX5_ASSOCIATION_CONTEXT_DSO_TEST', 'PASS association context '
     elif args.suite in ('context-pool', 'context-pool-association'):

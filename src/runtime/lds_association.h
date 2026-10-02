@@ -21,6 +21,8 @@ struct Owned {
     uint64_t cache_lifetime,write_sequence;
     sensors::lds_lineage::FieldOrigin fields[sensors::lds_lineage::FIELD_COUNT];
     sensors::nmea_course_token::Presence heading_presence;
+    // Lexical RMC status owned by this HEADING assignment, never receiver quality.
+    sensors::nmea_course_token::RmcStatus heading_rmc_status;
 };
 static_assert(sizeof(Owned)<=256,"Bounded per-callback LDS association");
 

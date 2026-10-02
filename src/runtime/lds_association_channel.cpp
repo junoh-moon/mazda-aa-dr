@@ -55,6 +55,9 @@ bool valid(const adapter::LdsLockedSend& r) {
     if(r.field_lineage.heading_presence>sensors::nmea_course_token::PRESENT ||
        (r.field_lineage.heading_presence!=sensors::nmea_course_token::UNKNOWN&&
         !r.field_lineage.fields[sensors::lds_lineage::HEADING].write_sequence))return false;
+    if(r.field_lineage.heading_rmc_status>sensors::nmea_course_token::RMC_OTHER ||
+       (r.field_lineage.heading_rmc_status!=sensors::nmea_course_token::RMC_UNKNOWN&&
+        !r.field_lineage.fields[sensors::lds_lineage::HEADING].write_sequence))return false;
     for(unsigned i=0;i<9;++i)if(r.field_lineage.fields[i].write_sequence>r.field_lineage.write_sequence||
         (!r.field_lineage.fields[i].write_sequence&&r.field_lineage.fields[i].observed_ns))return false;
     return true;
@@ -69,6 +72,7 @@ void encode(const adapter::LdsLockedSend& r,uint32_t* w) {
     for(unsigned i=0;i<9;++i) { put(w,P::ORIGINS+4*i,r.field_lineage.fields[i].write_sequence);put(w,P::ORIGINS+4*i+2,r.field_lineage.fields[i].observed_ns); }
     position_words(w+P::POSITION,r.position);
     w[P::HEADING_PRESENCE]=uint32_t(r.field_lineage.heading_presence);
+    w[P::HEADING_RMC_STATUS]=uint32_t(r.field_lineage.heading_rmc_status);
 }
 bool context(const adapter::PositionContext& c,uint32_t* key) {
     const Q::Trace& t=c.request_trace;
@@ -397,6 +401,9 @@ bool Registry::read(const adapter::PositionContext& c,Owned* out) {
             const uint32_t presence=selected[P::HEADING_PRESENCE];
             if(presence>sensors::nmea_course_token::PRESENT ||
                (presence&&!pair(selected,P::ORIGINS+4*sensors::lds_lineage::HEADING)))break;
+            const uint32_t status=selected[P::HEADING_RMC_STATUS];
+            if(status>sensors::nmea_course_token::RMC_OTHER ||
+               (status&&!pair(selected,P::ORIGINS+4*sensors::lds_lineage::HEADING)))break;
             answer.result=MATCHED_LOCKED_FOR_SEND;answer.stage=LOCKED_FOR_SEND;
             answer.call_sequence=c.call_sequence;answer.prediction_generation=c.prediction_generation;
             answer.view_revision=v.revision;answer.layout_version=P::VERSION;answer.source_instance=v.instance;
@@ -406,6 +413,7 @@ bool Registry::read(const adapter::PositionContext& c,Owned* out) {
             answer.cache_lifetime=pair(selected,P::LIFETIME);answer.write_sequence=pair(selected,P::WRITE);
             for(unsigned i=0;i<9;++i) { answer.fields[i].write_sequence=pair(selected,P::ORIGINS+4*i);answer.fields[i].observed_ns=pair(selected,P::ORIGINS+4*i+2); }
             answer.heading_presence=static_cast<sensors::nmea_course_token::Presence>(presence);
+            answer.heading_rmc_status=static_cast<sensors::nmea_course_token::RmcStatus>(status);
             match=true;break;
         }
     }

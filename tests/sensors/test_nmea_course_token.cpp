@@ -105,21 +105,69 @@ static void protected_read_bound() {
     char* const terminated=memory+page-good.size()-1;
     memcpy(terminated,good.c_str(),good.size()+1);
     CHECK(N::classify(terminated,good.size()+1)==N::PRESENT);
+    CHECK(N::classify_rmc(terminated,good.size()+1).status==N::RMC_A);
     char* const limited=memory+page-N::SCAN_LIMIT;
     memset(limited,'x',N::SCAN_LIMIT);
     // accessible is exactly the readable region; no probe beyond the cap.
     CHECK(N::classify(limited,N::SCAN_LIMIT)==N::UNKNOWN);
+    CHECK(N::classify_rmc(limited,N::SCAN_LIMIT).status==N::RMC_UNKNOWN);
     char* const short_value=memory+page-8;
     memcpy(short_value,"$GPRMC,1",8);
     CHECK(N::classify(short_value,8)==N::UNKNOWN);
+    CHECK(N::classify_rmc(short_value,8).status==N::RMC_UNKNOWN);
     CHECK(munmap(memory,size_t(page)*2)==0);
+}
+static void status_tokens() {
+    const char* tokens[]={"A","V","","a","v","AA","V "," ","N","nan"};
+    const N::RmcStatus expected[]={N::RMC_A,N::RMC_V,N::RMC_EMPTY,
+        N::RMC_OTHER,N::RMC_OTHER,N::RMC_OTHER,N::RMC_OTHER,N::RMC_OTHER,
+        N::RMC_OTHER,N::RMC_OTHER};
+    for(unsigned i=0;i<sizeof tokens/sizeof *tokens;++i) {
+        const std::string frame=std::string("$GPRMC,120000,")+tokens[i]+",3500,N,13500,E,10,0*00";
+        errno=EDOM;const N::Tokens actual=N::classify_rmc(frame.c_str(),frame.size()+1);
+        CHECK(errno==EDOM);CHECK(actual.status==expected[i]);CHECK(actual.course==N::PRESENT);
+        CHECK(N::classify(frame.c_str(),frame.size()+1)==actual.course);
+    }
+    const std::string empty=sentence("");
+    const N::Tokens value=N::classify_rmc(empty.c_str(),empty.size()+1);
+    CHECK(value.course==N::EMPTY && value.status==N::RMC_A);
+    CHECK(N::classify_rmc("$GNRMC,1,V*ff",14).status==N::RMC_V); // syntax, not XOR or numeric validity
+}
+static void status_boundaries() {
+    const char* short_frames[]={"$GPRMC,1,A*00","$GPRMC,1,V*00","$GPRMC,1,*00","$GPRMC,1*00"};
+    const N::RmcStatus expected[]={N::RMC_A,N::RMC_V,N::RMC_EMPTY,N::RMC_UNKNOWN};
+    for(unsigned i=0;i<4;++i) {
+        const N::Tokens value=N::classify_rmc(short_frames[i],strlen(short_frames[i])+1);
+        CHECK(value.course==N::UNKNOWN);CHECK(value.status==expected[i]);
+    }
+    const std::string frame=sentence("0");
+    for(size_t n=0;n<=frame.size();++n) {
+        const N::Tokens value=N::classify_rmc(frame.c_str(),n);
+        CHECK(value.course==N::UNKNOWN && value.status==N::RMC_UNKNOWN);
+    }
+    const std::string malformed[]={frame+"\n",frame+frame,frame+"\r\n"+frame,
+        "$GPRMC,1,A*GG","$GPRMC,1,A*0","$GPGGA,1,A*00"};
+    for(unsigned i=0;i<sizeof malformed/sizeof *malformed;++i) {
+        const N::Tokens value=N::classify_rmc(malformed[i].c_str(),malformed[i].size()+1);
+        CHECK(value.course==N::UNKNOWN && value.status==N::RMC_UNKNOWN);
+    }
+    std::string joined=frame;joined.push_back(0);joined+="$GPRMC,1,V*00";
+    const std::string before=joined;
+    CHECK(N::classify_rmc(joined.data(),joined.size()).status==N::RMC_A);
+    CHECK(joined==before);
+    const std::string limit=sentence(std::string(N::SCAN_LIMIT-1-sentence("").size(),'x'));
+    CHECK(N::classify_rmc(limit.c_str(),limit.size()+1).status==N::RMC_A);
+    const std::string over=limit+" ";
+    CHECK(N::classify_rmc(over.c_str(),over.size()+1).status==N::RMC_UNKNOWN);
+    CHECK(N::classify_rmc(0,100).status==N::RMC_UNKNOWN);
 }
 struct Case { const char* name;void(*run)(); };
 static const Case cases[]={
     {"presence",distinguishes_presence},{"not_validity",presence_not_validity},
     {"fields",field_boundaries},{"frames",frame_boundaries},
     {"capacity",truncated_and_capacity},{"limit",exact_scan_limit},
-    {"immutable",first_nul_and_immutable},{"guard_page",protected_read_bound}
+    {"immutable",first_nul_and_immutable},{"guard_page",protected_read_bound},
+    {"status",status_tokens},{"status_bounds",status_boundaries}
 };
 int main(int argc,char** argv) {
     if(argc>2)return 2;

@@ -159,6 +159,9 @@ bool association_matches(const PositionContext& c,const runtime::lds_association
         value.heading_presence<=sensors::nmea_course_token::PRESENT &&
         (value.heading_presence==sensors::nmea_course_token::UNKNOWN ||
          value.fields[sensors::lds_lineage::HEADING].write_sequence) &&
+        value.heading_rmc_status<=sensors::nmea_course_token::RMC_OTHER &&
+        (value.heading_rmc_status==sensors::nmea_course_token::RMC_UNKNOWN ||
+         value.fields[sensors::lds_lineage::HEADING].write_sequence) &&
         value.locked_observed_ns && value.request_id && value.request_epoch && value.worker_id && value.worker_epoch &&
         value.request_id==c.request_trace.request.id && value.request_epoch==c.request_trace.request.epoch &&
         value.worker_id==c.request_trace.worker.id && value.worker_epoch==c.request_trace.worker.epoch;

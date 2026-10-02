@@ -111,7 +111,7 @@ void encode(unsigned char raw[72],const A::PositionInput& p) {
     std::memcpy(raw+40,&p.heading_deg,8);std::memcpy(raw+48,&p.velocity_kmh,8);
     std::memcpy(raw+56,&p.horizontal,8);std::memcpy(raw+64,&p.vertical,8);
 }
-A::LdsLockedSend record(unsigned sequence,C::Presence presence) {
+A::LdsLockedSend record(unsigned sequence,C::Presence presence,C::RmcStatus status) {
     A::LdsLockedSend row=A::LdsLockedSend();
     row.stage=L::LOCKED_FOR_SEND;row.reply_type=2;
     row.wire.server_guid=Q::copy_text("runtime-transport-guid");
@@ -125,7 +125,7 @@ A::LdsLockedSend record(unsigned sequence,C::Presence presence) {
     row.position.latitude_deg=37;row.position.longitude_deg=127;
     row.position.altitude_m=-23;row.position.heading_deg=presence==C::UNKNOWN?42:0;
     row.position.velocity_kmh=36;row.position.horizontal=1.25;row.position.vertical=2.5;
-    row.field_lineage.heading_presence=presence;
+    row.field_lineage.heading_presence=presence;row.field_lineage.heading_rmc_status=status;
     return row;
 }
 void check_owned(const A::Observation& o,const A::LdsLockedSend& row,
@@ -151,10 +151,12 @@ void check_owned(const A::Observation& o,const A::LdsLockedSend& row,
         assert(owned.fields[i].observed_ns==row.field_lineage.fields[i].observed_ns);
     }
     assert(owned.heading_presence==row.field_lineage.heading_presence);
+    assert(owned.heading_rmc_status==row.field_lineage.heading_rmc_status);
 }
-bool callback(L::Publisher& publisher,bool publish=true,C::Presence presence=C::UNKNOWN) {
+bool callback(L::Publisher& publisher,bool publish=true,C::Presence presence=C::UNKNOWN,
+              C::RmcStatus status=C::RMC_UNKNOWN) {
     const unsigned sequence=++callbacks;
-    A::LdsLockedSend row=record(sequence,presence);
+    A::LdsLockedSend row=record(sequence,presence,status);
     Q::Issue issue=Q::Issue();
     issue.observed_ns=clock_ns(0);
     issue.connection=R::bus_trace::Snapshot{R::bus_trace::CONNECTED,11,3};
@@ -243,6 +245,9 @@ void check_journal_association(const std::string& journal,const A::Observation& 
     const L::Owned& o=matched.lds_association;
     const char* presence=o.heading_presence==C::EMPTY?"empty":o.heading_presence==C::PRESENT?"present":"unknown";
     assert(position.find(std::string("\"heading_presence\":\"")+presence+"\"")!=std::string::npos);
+    const char* status[]={"unknown","empty","a","v","other"};
+    assert(o.heading_rmc_status<=C::RMC_OTHER);
+    assert(position.find(std::string("\"heading_rmc_status\":\"")+status[o.heading_rmc_status]+"\"")!=std::string::npos);
     const char* names[]={"call","generation","revision","layout","source_instance",
         "record_sequence","locked_observed_ns","map_loss_epoch","cache_lifetime","write_sequence"};
     const uint64_t values[]={o.call_sequence,o.prediction_generation,o.view_revision,o.layout_version,
@@ -446,6 +451,7 @@ int main(int argc,char** argv) {
     assert(!callback(publisher));
     const A::Observation before_adoption=last_position;
     A::Observation matched=A::Observation();
+    A::Observation status_rows[5];
     A::Observation presence_rows[3]; // Filled by actual callbacks before adopted-case journal checks.
     Running running=Running();running.root=root;
     R::LdsRequestSource source;
@@ -469,6 +475,12 @@ int main(int argc,char** argv) {
                 assert(last_position.lds_association.heading_presence==values[i]);
                 assert(last_send.lds_association.heading_presence==values[i]);
                 if(i<2)assert(last_position.position.heading_deg==0);
+            }
+            for(unsigned i=0;i<5;++i) {
+                assert(callback(publisher,true,C::PRESENT,C::RmcStatus(i)));status_rows[i]=last_position;
+                assert(last_position.lds_association.heading_rmc_status==C::RmcStatus(i));
+                assert(last_send.lds_association.heading_rmc_status==C::RmcStatus(i));
+                assert(last_position.position.heading_deg==0);
             }
         } else if(boundary_case!=NO_BOUNDARY) {
             idle_gate.store(1,std::memory_order_release);wait_gate(2);
@@ -530,8 +542,10 @@ int main(int argc,char** argv) {
         assert(journal.find("\"kind\":\"position\"")!=std::string::npos);
         assert(journal.find("\"kind\":\"send\"")!=std::string::npos);
         if(scenario=="journal")check_journal_association(journal,before_adoption,matched);
-        if(scenario=="adopted")for(unsigned i=0;i<3;++i)
-            check_journal_association(journal,before_adoption,presence_rows[i]);
+        if(scenario=="adopted") {
+            for(unsigned i=0;i<3;++i)check_journal_association(journal,before_adoption,presence_rows[i]);
+            for(unsigned i=0;i<5;++i)check_journal_association(journal,before_adoption,status_rows[i]);
+        }
         if(scenario!="journal_failure") {
             assert(journal.find("\"kind\":\"capture_end\"")!=std::string::npos);
             assert(!read_file(logs+"/capture.done").empty());

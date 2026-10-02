@@ -35,6 +35,8 @@ struct Snapshot {
     FieldOrigin fields[FIELD_COUNT];
     // Lexical course presence for the HEADING assignment, never numeric quality.
     nmea_course_token::Presence heading_presence;
+    // Lexical RMC status belonging to the HEADING assignment, not last receipt.
+    nmea_course_token::RmcStatus heading_rmc_status;
 private:
     const Ledger* owner_;
     friend class Ledger;
@@ -71,12 +73,13 @@ public:
     // Every actual cache write consumes one sequence, even if lineage is
     // unknown. assigned_mask == 0 is a verified copy-only write, not a no-write
     // query. An unsupported writer is not represented by an empty mask.
-    // heading_presence applies only when HEADING is assigned and must be bound
-    // to that actual parser/callback/write. Other masks inherit the actual
-    // read's presence. Missing binding stays UNKNOWN; no numeric inference.
+    // Both lexical values apply only when HEADING is assigned and must be bound
+    // together to that actual parser/callback/write. Other masks inherit the
+    // actual read's metadata. Missing binding stays UNKNOWN; no numeric inference.
     CommitResult commit(const Snapshot* actual_read_copy,
                         uint32_t assigned_mask, uint64_t observed_ns,
-                        nmea_course_token::Presence heading_presence=nmea_course_token::UNKNOWN);
+                        nmea_course_token::Presence heading_presence=nmea_course_token::UNKNOWN,
+                        nmea_course_token::RmcStatus heading_rmc_status=nmea_course_token::RMC_UNKNOWN);
 
 private:
     Ledger(const Ledger&) = delete;

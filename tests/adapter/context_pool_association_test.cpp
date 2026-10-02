@@ -121,6 +121,7 @@ void same_owned(const L::Owned& a,const L::Owned& b) {
         assert(a.fields[i].observed_ns==b.fields[i].observed_ns);
     }
     assert(a.heading_presence==b.heading_presence);
+    assert(a.heading_rmc_status==b.heading_rmc_status);
 }
 uint64_t clock_fn(void*) {assert(active);errno=EAGAIN;return 1000000+active->id;}
 R::Result request(const void* raw,R::Trace* out,void*) {
@@ -145,6 +146,7 @@ bool association(const A::PositionContext& c,L::Owned* out,void*) {
         value.fields[i].observed_ns=800000+active->id*16+i;
     }
     value.heading_presence=static_cast<C::Presence>(active->id%3);
+    value.heading_rmc_status=static_cast<C::RmcStatus>(active->id%5);
     active->owned=value;*out=value;errno=ENOTTY;return true;
 }
 bool provenance(void* manager,const A::PositionContext& c,A::Provenance* out,void*) {

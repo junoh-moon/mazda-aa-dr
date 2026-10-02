@@ -51,7 +51,7 @@ else
     echo 'SKIP: original LDS cold installer needs private MX5DR_LDS_STOCK'
 fi
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/adapter/lds_hooks_test.cpp tests/adapter/lds_relay.S src/adapter/lds_hooks.cpp src/sensors/lds_lineage.cpp src/sensors/nmea_course_token.cpp src/runtime/lds_sideband.cpp -pthread -lrt -o "$build/lds-hooks-test"
-for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind locked locked_pair locked_unknown locked_unthreaded locked_null locked_generation locked_mutex locked_native_pc locked_message_pc locked_native_fail locked_no_native locked_native_twice locked_message_twice locked_reply locked_destination locked_endpoint locked_failed_send locked_unwind locked_extra_send locked_inactive locked_clock locked_type locked_zero_request locked_endpoint_changed locked_snapshot locked_nested_send course_values course_bindings course_nested_callback course_boundary_overlap course_identity course_parse_nested course_unwind course_cancel course_open course_close course_reset course_write_boundary course_saved_read course_routes course_callback_parse course_inactive course_one_commit course_copy_twice; do
+for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind locked locked_pair locked_unknown locked_unthreaded locked_null locked_generation locked_mutex locked_native_pc locked_message_pc locked_native_fail locked_no_native locked_native_twice locked_message_twice locked_reply locked_destination locked_endpoint locked_failed_send locked_unwind locked_extra_send locked_inactive locked_clock locked_type locked_zero_request locked_endpoint_changed locked_snapshot locked_nested_send course_values course_bindings course_nested_callback course_boundary_overlap course_identity course_parse_nested course_unwind course_cancel course_open course_close course_reset course_write_boundary course_saved_read course_routes course_callback_parse course_inactive course_one_commit course_copy_twice status_values status_inheritance status_no_commit; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/lds-hooks-test" "$scenario"
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_lds_sideband.cpp src/runtime/lds_sideband.cpp -pthread -lrt -o "$build/lds-sideband-test"
@@ -63,7 +63,7 @@ MX5DR_LDS_FIXTURE="qemu-arm -L $QEMU_SYSROOT $build/lds-sideband-test" \
 qemu-arm -L "$QEMU_SYSROOT" "$build/core-test"
 "${CROSS_COMPILE}gcc" -std=c99 $warn -pedantic $arch -Isrc/core -c src/core/dr_core.c -o "$build/core.o"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_lds_association_channel.cpp src/runtime/lds_association_channel.cpp -Wl,--wrap=pwrite -Wl,--wrap=mmap -pthread -lrt -o "$build/lds-association-channel-test"
-for scenario in basic exact capacity invalidation fork stop allocation scalar_bits old_offer loss borrowing exhaustion fd_validation drain_bound malformed_map concurrent retirement_scheduled heading_presence protocol_version; do
+for scenario in basic exact capacity invalidation fork stop allocation scalar_bits old_offer loss borrowing exhaustion fd_validation drain_bound malformed_map concurrent retirement_scheduled heading_presence rmc_status protocol_version; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/lds-association-channel-test" "$scenario"
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/adapter/runtime_lds_association_test.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" -ldl -pthread -lrt -lm -o "$build/runtime-lds-association-test"
@@ -183,11 +183,11 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/vim-parser-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_lds_lineage.cpp src/sensors/lds_lineage.cpp -o "$build/lds-lineage-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/lds-lineage-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_nmea_course_token.cpp src/sensors/nmea_course_token.cpp -o "$build/nmea-course-token-test"
-for scenario in presence not_validity fields frames capacity limit immutable guard_page; do
+for scenario in presence not_validity fields frames capacity limit immutable guard_page status status_bounds; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/nmea-course-token-test" "$scenario"
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_lds_course_lineage.cpp src/sensors/lds_lineage.cpp -o "$build/lds-course-lineage-test"
-for scenario in assignment exact_read unknown_reset invalid; do
+for scenario in assignment exact_read unknown_reset invalid status_inheritance status_invalid; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/lds-course-lineage-test" "$scenario"
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/sensors/test_vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/sha256.cpp src/runtime/config.cpp -ldl -pthread -lrt -o "$build/vim-tap-test"
