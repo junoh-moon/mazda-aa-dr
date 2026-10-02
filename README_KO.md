@@ -2,24 +2,25 @@
 
 **AA = Android Auto, DR = Dead Reckoning(추측항법).** 2019 MX-5 ND2의 1세대 Mazda Connect **NA 74.00.324A**에서 차량 위치 전달과 터널 내 추측항법을 연구한다.
 
-**현재 설치 가능한 공개 ZIP은 없습니다.** `v0.3.10-shadow.1`·`.2`는 원본
-LDS의 반복 종료가 확인되어 사용 중단했습니다. 이후 AA 정적 TLS를 줄인
-[로컬 수정](validation/AA_CONTEXT_POOL_2026-10-02.md)은 host·ARM·순정 셸
-검사를 통과했지만 새 원본 AA 전체 실행·차량·폰 승인을 받지 않았고
-릴리즈로 발행하지 않았습니다. 지금 차량에 기존 ZIP을 설치하지 마십시오.
+**현재 공개 개발판은 [v0.3.11-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.1)입니다.**
+AA·LDS 정적 TLS 축소와 현재 LDS 응답 연결을 포함하며 전체 host·ARM,
+부분 원본 실행과 최종 ZIP 순정 셸 검사를 통과했습니다. 공개 파일을 다시
+내려받아 대조한 [발행 기록](validation/RELEASE_V0311_2026-10-02.md)을
+확인하십시오. 정상 전체 SM·실차 기동/복구·물리 센서·폰 수용은 미검증이며
+ASSIST는 비활성입니다. `v0.3.10-shadow.1`·`.2`의 사용 중단은 유지합니다.
 
 **현재 소스는 OBSERVE와 실제 센서 SHADOW 계산을 포함한 시험 후보**입니다. OFF 로딩, 폴링 프로세스 분리, 일회성 기동 보호를 구현했습니다. 실차 시험을 수행했지만 회수 archive에 수집 기록이 없어 기동·저장 경로를 조사 중입니다. 센서 동작과 휴대폰 수용은 입증되지 않았습니다. ASSIST는 비활성이며 터널 내비게이션이 완성된 상태가 아닙니다. [빈 기록 조사](validation/EMPTY_CAPTURE_2026-10-02.md)를 참조하십시오.
 
 **2026-10-01에 사용자가 v1.0 전 실차 설치·시험 기회를 한 번 허용했습니다.**
-가능한 펌웨어·오프라인 검증을 먼저 마치고 [한 번의 통합 시험](docs/FIELD_TRIAL_KO.md)을
-준비합니다. 이전 펌웨어 파일만 사용하라는 제한을 해당 기회에 한해 갱신하며,
-반복 방문이나 폰/동글 탁상 시험의 추가 승인이 아닙니다.
+그 기회는 첫 설치·주행과 빈 자료 회수에 사용됐습니다.
+[통합 시험](docs/FIELD_TRIAL_KO.md)의 남은 조건은 기존 자료·오프라인으로
+먼저 검증하며 이번 발행은 반복 방문이나 폰/동글 시험의 추가 승인이 아닙니다.
 [완료 조건](docs/V1_READINESS_KO.md)을 유지하며 물리 센서·폰/앱 수용·복구는
 아직 미검증입니다.
 
 [과거 첫 시험 절차](docs/FIRST_TRIAL_KO.md) · [통합 검증](validation/INTEGRATION_2026-09-28.md). 영구 설정에는 우리 preload를 남기지 않으며 명시적으로 예약한 한 번의 부팅에만 적용한다. [실제 SM 실행 기록](validation/SM_RETRY_2026-09-29.md)은 명시적 서비스 재시작과 지연 종료 정책을 다룬다. 물리 watchdog과 실제 CMU 복구는 미검증이다. PR 병합 상태와 해당 브랜치의 구현 상태를 구분한다.
 
-마지막 공개판 기록은 [사용 중단한 v0.3.10-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)입니다.
+이전 공개판 기록은 [사용 중단한 v0.3.10-shadow.2 설치 ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)입니다.
 원본 LDS callback·캐시의 필드 할당 출처와 응답 식별자를 관측하는 제품을
 자동 설치하고 기존 용량 제한 AA 기록에 연결합니다. 작성한 기동 경계에서
 원본 라이브러리의 응답 9건이 실제 AA worker까지 전달된

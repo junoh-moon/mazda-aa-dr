@@ -2,18 +2,22 @@
 
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
-**There is no currently installable public ZIP.** The published
-`v0.3.10-shadow.1` and `.2` packages were withdrawn after repeated original
-LDS termination. A later [AA TLS fix](validation/AA_CONTEXT_POOL_2026-10-02.md)
-passed host, ARM and stock-shell checks, but has not passed new original-AA,
-vehicle or phone validation and has not been released. Do not install the
-withdrawn ZIPs.
+**The current public development pre-release is
+[v0.3.11-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.1).**
+It includes smaller AA/LDS static TLS and current-callback LDS association.
+Full host/ARM checks, partial original-runtime execution and final-ZIP stock-shell
+checks passed. The published assets were downloaded and compared with the tested
+candidate; see [publication evidence](validation/RELEASE_V0311_2026-10-02.md).
+Whole normal SM/vehicle startup and recovery, physical sensors and phone acceptance
+remain unverified; live ASSIST stays disabled. The earlier v0.3.10-shadow.1 and .2
+packages remain withdrawn.
 
 **The local source is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. A vehicle trial was attempted, but its recovered archive contains no capture journals; startup and storage remain under investigation. Sensor operation and phone acceptance are unverified. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
 
 On 2026-10-01 the user authorized one combined vehicle installation/test before
 v1.0, after feasible firmware and offline verification. This updates the earlier
-firmware-only restriction for that trial; it does not authorize repeated visits
+firmware-only restriction for that trial, which was used by the first installation
+and drive with an empty capture. Publication does not authorize repeated visits
 or phone/dongle bench tests. See the [combined trial](docs/FIELD_TRIAL_KO.md) and
 [v1.0 criteria](docs/V1_READINESS_KO.md). Physical sensor behavior, recovery and
 phone/app acceptance remain unverified.

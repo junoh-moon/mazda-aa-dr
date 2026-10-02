@@ -1,6 +1,15 @@
 # 현재 상태와 인계 — 2026-10-02
 
-이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 설치 가능 판단보다 우선한다. 현재 공개 설치 후보는 없다. 로컬 SHADOW 소스는 OFF·폴링 분리·일회성 기동 보호를 구현했다. 호스트·ARM·부분 OEM 실행과 실제 차량 검증을 구분한다. 소스 커밋과 공개 릴리즈는 별개다.
+이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 설치 가능 판단보다 우선한다. 현재 공개 개발 사전 릴리즈는 v0.3.11-shadow.1이다. SHADOW 소스는 OFF·폴링 분리·일회성 기동 보호를 구현했다. 호스트·ARM·부분 OEM 실행과 실제 차량 검증을 구분한다. 소스 커밋과 공개 릴리즈는 별개다.
+
+**2026-10-02 최신 발행:** [v0.3.11-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.1)을
+고정 `d66ec1ef2f8e7116e5735f518da3ac27004cb1f8`에서 게시하고 공개 ZIP을
+다시 내려받아 바이트·해시·CRC·내부 manifest를 대조했습니다.
+[발행 기록](../validation/RELEASE_V0311_2026-10-02.md)을 따르십시오.
+전체 원본 SM·실차 자동 기동/복구·물리 센서·폰 수용은 미검증이며
+ASSIST는 비활성입니다. 새 ASSIST 결합·RMC 연구는 이 개발판 발행과
+별도로 계속합니다. 아래 중간 기록의 미발행 판단은 해당 검사 시점의
+기록이며 이 공개 개발판을 차량 승인이나 v1.0 완료로 표시하지 않습니다.
 
 **2026-10-02 긴급 정정:** 공개 `v0.3.10-shadow.1`과 `.2` ZIP은 설치하지 마십시오.
 원본 펌웨어의 부분 SM 에뮬레이션에서 `.2` ZIP의 LDS preload가 원본 LDS를
@@ -11,7 +20,7 @@ LDS DSO의 큰 정적 TLS가 작은 스레드 스택을 침범했을 가능성�
 전체 OEM 기동·AA·차량·폰 승인으로 세지 않습니다.
 [LDS TLS 조사](../validation/LDS_TLS_CRASH_2026-10-02.md)를 먼저 읽으십시오.
 
-**AA DSO의 후속 수정도 아직 차량용 릴리즈가 아닙니다.** 소스
+**AA DSO의 후속 수정도 차량 검증 완료를 뜻하지 않습니다.** 소스
 `943c054a826b074985421668ebe607c8edf4cdbf`는 POSITION 문맥을
 64개 전역 슬롯으로 옮겨 AA 정적 TLS를 7,284바이트에서 196바이트로
 줄였습니다. 부족·중첩 초과·중단 때 원본 송신을 유지하고 관측 실패를
@@ -25,7 +34,7 @@ LDS DSO의 큰 정적 TLS가 작은 스레드 스택을 침범했을 가능성�
 과거 [원본 AA 계산·송신](../validation/AA_PRODUCT_ASSIST_2026-10-02.md)과
 [철회·재개](../validation/AA_ASSIST_RECOVERY_2026-10-02.md)는 변경 전
 `8d5669c` 제품의 작성 입력 결과이며 새 제품의 재실행으로 세지 않습니다.
-새 설치 ZIP이나 v1.0은 발행하지 않았고 live ASSIST는 비활성입니다.
+이후 개발판 발행은 위 최신 기록을 따르며 v1.0은 미완료이고 live ASSIST는 비활성입니다.
 
 후속 `3625449`의 [새 제품 원본 LDS→AA 실행](../validation/LDS_INLINE_PRODUCT_2026-10-02.md)은
 POSITION/LOCATION 10쌍·90개 원시 필드와 현재 callback의 inline 연결 7건을
@@ -121,7 +130,7 @@ SHADOW/GPS 제외 비교·회수를 한 번에 준비해야 합니다. 설치 �
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-마지막 공개 시험판 [v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)는 위 결함으로 사용 중단 상태입니다.
+이전 공개 시험판 [v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)는 위 결함으로 사용 중단 상태입니다.
 고정 소스 `be96c6de6619d8e9053a327fd16e9df718384ca4`의 설치 ZIP·
 체크섬을 게시한 뒤 다시 내려받아 바이트·SHA·CRC·내부 source pin을
 대조했습니다. [새 발행 검증](../validation/RELEASE_V0310_SHADOW2_2026-10-02.md)은
