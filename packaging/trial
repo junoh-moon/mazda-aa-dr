@@ -106,7 +106,7 @@ finish_and_export() {
     echo "Result saved: $report"
     [ "$export_rc" = 0 ] || return "$export_rc"
     [ "$finish_rc" = 0 ] || return "$finish_rc"
-    echo 'Capture finish acknowledged and available files exported. After this menu exits, disconnect the USB while parked; the engine may then be stopped if you are finished.'
+    echo 'Capture finish acknowledged and available files exported. This menu now exits. To remove the trial, reopen the same menu and choose 4; follow the USB guide for reboot and OFF checks.'
 }
 
 last_rc=0
