@@ -2,11 +2,16 @@
 # Host-side bundle preparation. Does not execute the ARM payload.
 set -eu
 DEFAULT_MODE=OBSERVE
-case "${1:-}" in
-  --default-mode=OBSERVE|--default-mode=SHADOW) DEFAULT_MODE=${1#--default-mode=}; shift;;
-  --*) echo 'Bundle default must be OBSERVE or SHADOW' >&2; exit 2;;
-esac
-[ "$#" = 2 ] || { echo 'Usage: sh make_bundle.sh [--default-mode=OBSERVE|SHADOW] built/libmx5dr.so new-output-directory' >&2; exit 2; }
+SHELL_ONLY=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --shell-only) SHELL_ONLY=1; shift;;
+    --default-mode=OBSERVE|--default-mode=SHADOW) DEFAULT_MODE=${1#--default-mode=}; shift;;
+    --*) echo 'Unknown bundle option' >&2; exit 2;;
+    *) break;;
+  esac
+done
+[ "$#" = 2 ] || { echo 'Usage: sh make_bundle.sh [--shell-only] [--default-mode=OBSERVE|SHADOW] built/libmx5dr.so new-output-directory' >&2; exit 2; }
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 lib=$1; dest=$2
 build_dir=$(dirname -- "$lib")
@@ -25,9 +30,13 @@ cp "$build_dir/libmx5dr-ldstap.so" "$dest/libmx5dr-ldstap.so"
 cp "$build_dir/mx5dr-guard" "$dest/mx5dr-guard"
 cp "$build_dir/mx5dr-collector" "$dest/mx5dr-collector"
 cp "$build_dir/mx5dr-sha256" "$dest/mx5dr-sha256"
-cp -R "$HERE/usb-entry/mp3" "$HERE/usb-entry/js" "$dest/"
-cp "$HERE/usb-entry/NOTICE.md" "$dest/USB_ENTRY_NOTICE.md"
-cp "$HERE/USB_START_KO.md" "$dest/INSTALL_KO.md"
+if [ "$SHELL_ONLY" = 1 ]; then
+  cp "$HERE/SHELL_START_KO.md" "$dest/INSTALL_KO.md"
+else
+  cp -R "$HERE/usb-entry/mp3" "$HERE/usb-entry/js" "$dest/"
+  cp "$HERE/usb-entry/NOTICE.md" "$dest/USB_ENTRY_NOTICE.md"
+  cp "$HERE/USB_START_KO.md" "$dest/INSTALL_KO.md"
+fi
 (cd "$dest" && sha256sum mx5dr-sha256 > mx5dr-sha256.sha256)
 (cd "$dest" && sha256sum mx5dr-collector > mx5dr-collector.sha256)
 (cd "$dest" && sha256sum mx5dr-guard > mx5dr-guard.sha256)
