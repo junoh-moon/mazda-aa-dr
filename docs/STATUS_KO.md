@@ -39,6 +39,13 @@ POSITION/LOCATION 10쌍·90개 원시 필드와 현재 callback의 inline 연결
 이 fixture의 association_reader는 null이며 물리 공급부 완료로 합치지 않습니다.
 부분 SM 기동, 물리 자격과 폰 수용은 계속 남습니다.
 
+같은 제품의 [빈 방위각 원본 실행](../validation/LDS_COURSE_PRESENCE_2026-10-02.md)은
+독립적인 두 reader 이력에서 빈 course가 0도로 바뀌어 새 할당·원본 응답·
+AA 송신까지 전달됨을 확인했습니다. 선택한 여덟 응답의 정확한 연결과
+원본 송신을 대조했지만, 현재 할당 출처만으로 빈 입력과 실제 북쪽 0도를
+구별할 수 없습니다. 입력 token 존재 정보의 제품 연결은 후속 미구현 작업이며,
+관측된 새 쓰기를 물리 측정 자격으로 승격하지 않습니다.
+
 후속 `01cb939`의 [새 전체 검사](../validation/LDS_INLINE_FULL_2026-10-02.md)는
 같은 제품 입력에서 여섯 바이너리를 다시 빌드하고 host Python 592개·C/C++,
 전체 ARM Python 118개·C/C++, 실제 AA DSO 13개 suite·190사례와 원본
