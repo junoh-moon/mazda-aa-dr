@@ -81,6 +81,14 @@ overload의 failure memory order 오류 다섯 건으로 중단됐습니다. 이
 object 컴파일과 host 17사례/499 assertion·ARM 17사례/499 assertion을
 통과했습니다. 이것도 아직 전체 제품 검사를 대신하지 않습니다.
 
+수정 pin `d4d8c58`에서는 여섯 ARM 제품과 사적 SHADOW bundle을 새로
+만들었습니다. 이후 전체 host 실행은 collector 검사에서 `fork` 문자열을
+`__register_atfork` 등록 함수와 혼동하여 실패했고 ARM 전체는 시작하지
+않았습니다. 등록과 실제 process/polling 함수의 import를 구분하도록 검사기를
+고쳐 같은 host 바이너리 대조와 금지 함수 음성 대조 두 검사를 통과했습니다.
+이 부분 실행을 전체 통과로 세지 않습니다. 후속 `master`의 AA 문맥 풀과
+병합한 제품은 별도로 다시 빌드·검증합니다.
+
 실제 사전 설치된 Claude CLI로 정적 반대 관점 리뷰, C++ 회귀 코드 작성,
 AA 저장 구조 설계 비교를 수행했습니다. 생성된 코드는 검토·보완 후 직접
 실행했습니다. 실패 provenance 필드의 잔류를 실제 assertion 실패로 확인하고

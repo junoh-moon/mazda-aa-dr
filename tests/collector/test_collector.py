@@ -14,6 +14,16 @@ BUILD = Path(os.environ.get('MX5DR_TEST_BUILD', REPO / 'build'))
 COLLECTOR = BUILD / 'test_collector'
 
 
+def polling_imports(report):
+    # nm suffixes symbol versions with @. Registering a child cleanup callback
+    # is not an import of fork(): match functions, not substrings of the report.
+    symbols = {line.split()[-1].split('@', 1)[0]
+               for line in report.splitlines() if line.split()}
+    calls = {'fork', 'vfork', '__fork', '__libc_fork', 'posix_spawn',
+             'posix_spawnp', 'waitpid', '__waitpid'}
+    return {name for name in symbols if name.startswith('dbus_') or name in calls}
+
+
 class CollectorTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -141,12 +151,20 @@ class CollectorTests(unittest.TestCase):
 
     def test_preload_runtime_has_no_polling_imports(self):
         imports = subprocess.check_output(['nm', '-u', str(BUILD / 'test_journal')], text=True)
-        for symbol in ('dbus_', 'posix_spawn', 'waitpid', 'fork'):
-            self.assertNotIn(symbol, imports)
+        self.assertEqual(polling_imports(imports), set())
         needed = subprocess.check_output(['readelf', '-d', str(BUILD / 'test_journal')], text=True)
         self.assertNotIn('libdbus', needed)
         collector_needed = subprocess.check_output(['readelf', '-d', str(COLLECTOR)], text=True)
         self.assertIn('libdbus', collector_needed)
+
+    def test_atfork_registration_does_not_hide_process_or_dbus_imports(self):
+        allowed = ' U __register_atfork@GLIBC_2.3.2\n U pthread_atfork@GLIBC_2.2.5\n'
+        self.assertEqual(polling_imports(allowed), set())
+        for name in ('fork', 'vfork', '__fork', '__libc_fork', 'posix_spawn',
+                     'posix_spawnp', 'waitpid', '__waitpid', 'dbus_connection_send'):
+            with self.subTest(name=name):
+                self.assertEqual(polling_imports(allowed + ' U ' + name + '@GLIBC_2.4\n'),
+                                 {name})
 
     def test_separate_collector_trace_does_not_create_fake_aa_session(self):
         p = self.spawn('--samples', '1')
