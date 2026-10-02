@@ -98,9 +98,10 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
     n=snprintf(line,capacity,
       "{\"kind\":\"position\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,"
       "\"mode\":%d,\"utc_s\":%llu,\"lat\":%s,\"lon\":%s,\"heading\":%s,\"kmh\":%s,"
-      "\"altitude_m\":%d,\"horizontal\":%s,\"vertical\":%s,\"request\":%s}",
+      "\"altitude_m\":%d,\"horizontal\":%s,\"vertical\":%s,\"reason\":%u,\"request\":%s}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
-      (unsigned long long)o.position.utc_seconds,lat,lon,h,v,o.position.altitude_m,horizontal,vertical,request);
+      (unsigned long long)o.position.utc_seconds,lat,lon,h,v,o.position.altitude_m,horizontal,vertical,
+      unsigned(o.reason),request);
   } else {
     char a[97]="",b[97]="";
     char session[200];
@@ -391,6 +392,10 @@ bool drain_capture_tail(Journal& j) {
     for(unsigned n=0;n<256 && pop(&o);++n) {
       char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
       if(format_observation(line,sizeof line,o))j.line(line);else j.fail();
+      if(o.kind==A::Observation::POSITION && o.reason==A::CONTEXT_UNAVAILABLE) {
+        j.line("{\"kind\":\"capture_incomplete\",\"reason\":\"adapter_context_unavailable\",\"assist_ready\":false}");
+        disable_mutation();
+      }
     }
     if(queue.drained())return true;
     const struct timespec pause={0,1000000};
@@ -408,6 +413,13 @@ bool finish_capture(Journal& j,const char* boot_id,uint64_t cutoff,uint64_t now,
   // A producer may have returned its failed reservation before the sink's
   // disable_mutation call. The closed+drained acquire covers its sticky loss.
   if(queue.lost())disable_mutation();
+  // A callback can fault after queue.close, when its sink can no longer record
+  // a row. Preserve this final observed failure before the durable stop ack.
+  // This snapshot cannot certify that no OEM callback will run after the ack.
+  if(A::faulted()) {
+    j.line("{\"kind\":\"capture_incomplete\",\"reason\":\"adapter_fault\",\"assist_ready\":false}");
+    disable_mutation();
+  }
   char line[400];
   snprintf(line,sizeof line,
       "{\"kind\":\"capture_end\",\"schema\":1,\"mono_ns\":%llu,\"boot_id\":\"%s\","
@@ -656,6 +668,7 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
   AssistState last_assist_state=ASSIST_WAITING_SOURCE;
   uint64_t drain_calls=0;
   bool source_disabled=false;
+  bool adapter_fault_reported=false;
   mx5::runtime::WorkerTick model_tick;
   for (;;) {
     const uint64_t cutoff=clock_ns(0);
@@ -688,9 +701,25 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
     while (drained++ < 256 && pop(&o)) {
       if(!format_observation(line,sizeof line,o)) { j.fail();continue; }
       j.line(line);
+      if(o.kind==A::Observation::POSITION && o.reason==A::CONTEXT_UNAVAILABLE) {
+        // A pool miss keeps the raw input but cannot establish a usable
+        // POSITION context. Revoke mutation and all later MODEL/source input.
+        j.line("{\"kind\":\"capture_incomplete\",\"reason\":\"adapter_context_unavailable\",\"assist_ready\":false}");
+        adapter_fault_reported=true;
+        disable_mutation();
+        continue;
+      }
       if (o.kind == A::Observation::POSITION) {
-        if(!source_disabled && !j.failed && !__sync_fetch_and_add(&audit_fault,0))
-          source.position(o,clock_ns(0));
+        if(!source_disabled && !j.failed && !__sync_fetch_and_add(&audit_fault,0)) {
+          // A lifecycle may change while this turn drains 256 queued rows.
+          // Recheck before each source admission, as SHADOW does below.
+          const uint64_t position_cutoff=clock_ns(0);
+          const ModelSession::Update update=
+              source_session.update(A::read_issue_session(),position_cutoff);
+          const bool bus_update=source_bus.update(A::read_position_bus());
+          if(update==ModelSession::CHANGED || bus_update)source.reset(position_cutoff);
+          source.position(o,position_cutoff);
+        }
         if(shadow && !__sync_fetch_and_add(&audit_fault,0)) {
           sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
           const char* reason=model_session.reject(o);
@@ -705,10 +734,14 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
         }
       }
     }
+    if(!adapter_fault_reported && A::faulted()) {
+      j.line("{\"kind\":\"capture_incomplete\",\"reason\":\"adapter_fault\",\"assist_ready\":false}");
+      adapter_fault_reported=true;
+      disable_mutation();
+    }
     // Resolve owned records on this worker without waiting for the other half
     // or modifying the original POSITION/SEND. This does not qualify time,
     // sensor freshness, receiver identity or the already completed callback.
-    if(lds.active()&&!j.failed)drain_lds(j,lds,source_disabled?0:&source);
     uint64_t now = clock_ns(0);
     if(!source_disabled && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
       source.reset(now);source_disabled=true;
@@ -720,6 +753,7 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
           j.line("{\"kind\":\"shadow_disabled\",\"reason\":\"audit_fault\",\"assist_ready\":false}");
           shadow=false; // Permanent for this worker, even if a fault flag changes.
     }
+    if(lds.active()&&!j.failed)drain_lds(j,lds,source_disabled?0:&source);
     if(shadow)sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
     const bool bus_boundary=model_bus.since_ns()>model_session.since_ns();
     if(capture && !j.failed)drain_motion(j,motion_batch,motion,navigation,holdout,

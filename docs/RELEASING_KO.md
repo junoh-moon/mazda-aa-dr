@@ -124,7 +124,7 @@ SHADOW 통합 시험은 아래 모드를 `SHADOW`로 명시하십시오. 기존 
 검사한 바이너리와 동일한 build 디렉터리를 사용하십시오.
 
 ```bash
-python3 tools/make_usb_zip.py --build-dir "$RELEASE_BUILD" --default-mode OBSERVE \
+python3 tools/make_usb_zip.py --build-dir "$RELEASE_BUILD" --default-mode SHADOW \
   --output "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
 unzip -t "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
 mkdir "$RELEASE_WORK/unpacked"

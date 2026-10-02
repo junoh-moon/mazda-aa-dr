@@ -148,24 +148,27 @@ class ArmReleaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     build_arm.check_elf(path)
 
-    def test_lds_small_thread_rejects_large_preload_tls(self):
-        path = self.build / 'libmx5dr-ldstap.so'
-        data = bytearray(elf_header(path.name))
-        # Add an ELF32 PT_TLS header without changing the synthetic PT_LOAD.
-        struct.pack_into('<H', data, 44, 2)
-        tls_offset = len(data)
-        data.extend(struct.pack('<IIIIIIII', 7, tls_offset, 0, 0, 0,
-                                build_arm.LDS_TLS_REGRESSION_LIMIT + 1, 4, 8))
-        path.write_bytes(data)
-        with self.assertRaisesRegex(ValueError, 'thread-local storage exceeds regression limit'):
-            build_arm.check_elf(path)
-        struct.pack_into('<I', data, tls_offset + 20, build_arm.LDS_TLS_REGRESSION_LIMIT - 7)
-        path.write_bytes(data)
-        build_arm.check_elf(path)
-        struct.pack_into('<I', data, tls_offset + 20, build_arm.LDS_TLS_REGRESSION_LIMIT - 6)
-        path.write_bytes(data)
-        with self.assertRaisesRegex(ValueError, 'thread-local storage exceeds regression limit'):
-            build_arm.check_elf(path)
+    def test_small_thread_rejects_large_preload_tls(self):
+        for name, limit in (('libmx5dr-ldstap.so', build_arm.LDS_TLS_REGRESSION_LIMIT),
+                            ('libmx5dr.so', build_arm.AA_TLS_REGRESSION_LIMIT)):
+            with self.subTest(name=name):
+                path = self.build / name
+                data = bytearray(elf_header(path.name))
+                # Add an ELF32 PT_TLS header without changing the synthetic PT_LOAD.
+                struct.pack_into('<H', data, 44, 2)
+                tls_offset = len(data)
+                data.extend(struct.pack('<IIIIIIII', 7, tls_offset, 0, 0, 0,
+                                        limit + 1, 4, 8))
+                path.write_bytes(data)
+                with self.assertRaisesRegex(ValueError, 'thread-local storage exceeds regression limit'):
+                    build_arm.check_elf(path)
+                struct.pack_into('<I', data, tls_offset + 20, limit - 7)
+                path.write_bytes(data)
+                build_arm.check_elf(path)
+                struct.pack_into('<I', data, tls_offset + 20, limit - 6)
+                path.write_bytes(data)
+                with self.assertRaisesRegex(ValueError, 'thread-local storage exceeds regression limit'):
+                    build_arm.check_elf(path)
 
     def test_different_toolchain_record_rejected(self):
         self.record['toolchain']['commit'] = '0' * 40

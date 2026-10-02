@@ -257,6 +257,51 @@ static void route_general_worker(const char* root,const std::string& logs) {
   assert(!rmdir((logs+"/capture.stop").c_str()));
   puts("Long route: ordinary worker and capture tail retain the entire row");
 }
+static void context_loss_worker(const char* root,const std::string& logs) {
+  assert(!unlink((logs+"/trace.0.jsonl").c_str()) || errno==ENOENT);
+  arm_test_mode();config.mode=1;config.max_log_bytes=65536;
+  A::Observation event=A::Observation();event.kind=A::Observation::POSITION;
+  event.reason=A::CONTEXT_UNAVAILABLE;event.request_result=A::R::NOT_FOUND;
+  event.call_sequence=19;event.prediction_generation=A::generation();
+  event.mono_ns=clock_ns(0);event.original_mode=event.position.mode=0;
+  sink(&event,0);
+  pthread_t thread;assert(!pthread_create(&thread,0,route_worker,const_cast<char*>(root)));
+  bool found=false;
+  for(unsigned attempt=0;attempt<150&&!found;++attempt) {
+    usleep(20000);
+    const std::string journal=storage_read(logs+"/trace.0.jsonl");
+    found=journal.find("\"reason\":13")!=std::string::npos &&
+          journal.find("\"reason\":\"adapter_context_unavailable\"")!=std::string::npos;
+  }
+  assert(found && audit_fault && A::mode()==A::OBSERVE);
+  assert(!mkdir((logs+"/capture.stop").c_str(),0700));
+  assert(!pthread_join(thread,0) && queue.drained());
+  assert(!unlink((logs+"/capture.done").c_str()));
+  assert(!rmdir((logs+"/capture.stop").c_str()));
+  puts("Context loss: raw POSITION and failure marker survive, mutation disabled");
+}
+static void adapter_fault_worker(const char* root,const std::string& logs) {
+  assert(!unlink((logs+"/trace.0.jsonl").c_str()) || errno==ENOENT);
+  arm_test_mode();config.mode=1;config.max_log_bytes=65536;
+  A::position_leave(); // No active scope: sticky fault with no observation row.
+  assert(A::faulted());
+  pthread_t thread;assert(!pthread_create(&thread,0,route_worker,const_cast<char*>(root)));
+  bool found=false;
+  for(unsigned attempt=0;attempt<150&&!found;++attempt) {
+    usleep(20000);
+    found=storage_read(logs+"/trace.0.jsonl").find(
+        "\"reason\":\"adapter_fault\"")!=std::string::npos;
+  }
+  assert(found && audit_fault && A::mode()==A::OBSERVE);
+  assert(!mkdir((logs+"/capture.stop").c_str(),0700));
+  assert(!pthread_join(thread,0) && queue.drained());
+  const std::string final=storage_read(logs+"/trace.0.jsonl");
+  assert(final.rfind("\"reason\":\"adapter_fault\"") <
+         final.find("\"kind\":\"capture_end\""));
+  assert(!unlink((logs+"/capture.done").c_str()));
+  assert(!rmdir((logs+"/capture.stop").c_str()));
+  puts("Adapter fault without a row: worker records incomplete capture");
+}
 // Authored snapshots reproduce the independently observed partial-cache shape:
 // GSA changes quality alone; GGA changes altitude/coordinates before RMC time
 // and motion. This exercises the real formatter, not an OEM parser replacement.
@@ -545,9 +590,42 @@ int main(int argc,char** argv) {
     d.rejected.receive_seq=3;d.rejected.received_ns=1000000000;d.rejected.reverse=1;
     char line[1200];assert(format_motion_rejected(line,sizeof line,d));puts(line);return 0;
   }
-  cadence_tests();
   A::Options opt = A::Options();
   assert(A::configure(unused_next, opt));
+  if(argc==2 && !strcmp(argv[1],"--late-adapter-fault")) {
+    char fault_root[]="/tmp/mx5dr-late-fault-XXXXXX";
+    assert(mkdtemp(fault_root));
+    const std::string fault_logs=std::string(fault_root)+"/logs";
+    assert(!mkdir(fault_logs.c_str(),0700));
+    arm_test_mode();config.max_log_bytes=65536;
+    freeze_capture();assert(queue.drained());
+    A::position_leave(); // Fault after the final queue has closed.
+    assert(A::faulted());
+    const char* boot="12345678-1234-1234-1234-123456789abc";
+    { Journal journal(fault_root);assert(finish_capture(journal,boot,100,101)); }
+    const std::string final=storage_read(fault_logs+"/trace.0.jsonl");
+    assert(final.find("\"reason\":\"adapter_fault\"") <
+           final.find("\"kind\":\"capture_end\""));
+    assert(final.find("\"audit_fault\":1")!=std::string::npos);
+    assert(!unlink((fault_logs+"/capture.done").c_str()));
+    assert(!unlink((fault_logs+"/trace.0.jsonl").c_str()));
+    assert(!rmdir(fault_logs.c_str())&&!rmdir(fault_root));
+    puts("Late adapter fault: incomplete marker precedes durable stop acknowledgement");
+    return 0;
+  }
+  if(argc==2 && !strcmp(argv[1],"--adapter-fault")) {
+    char fault_root[]="/tmp/mx5dr-adapter-fault-XXXXXX";
+    assert(mkdtemp(fault_root));
+    const std::string fault_logs=std::string(fault_root)+"/logs";
+    assert(!mkdir(fault_logs.c_str(),0700));
+    context_loss_worker(fault_root,fault_logs);
+    adapter_fault_worker(fault_root,fault_logs);
+    for(unsigned i=0;i<3;++i)
+      unlink((fault_logs+"/trace."+char('0'+i)+".jsonl").c_str());
+    assert(!rmdir(fault_logs.c_str())&&!rmdir(fault_root));
+    return 0;
+  }
+  cadence_tests();
   config.max_log_bytes = 64;
   config.max_log_files = 3;
   char tmp[] = "/tmp/mx5dr-journal-XXXXXX";

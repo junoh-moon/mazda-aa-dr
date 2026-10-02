@@ -60,6 +60,68 @@ class RequestJournal(unittest.TestCase):
                 self.assertEqual(rows[index].get('altitude_m'), altitude)
                 self.assertIs(type(rows[index]['altitude_m']), int)
 
+    def test_context_pool_loss_keeps_raw_position_inconclusive(self):
+        position, _ = self.bus_rows()
+        lost = dict(position, reason=13)
+        auditor = audit.Auditor()
+        auditor.consume(lost, 'pool-loss')
+        self.assertEqual(auditor.report()['status'], 'inconclusive')
+        self.assertIn('adapter_context_unavailable',
+                      {issue['code'] for issue in auditor.issues})
+        # Even an otherwise complete wire identity must not admit a lost
+        # POSITION as a successful source association.
+        self.assertFalse(auditor.lds.entries)
+        self.assertEqual(self.position_rows()[0]['reason'], 0)
+
+    def test_context_pool_failure_marker_and_send_are_inconclusive(self):
+        rows = [json.loads(s) for s in subprocess.check_output(
+            shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+            + ['--emit-requests'], text=True).splitlines()]
+        auditor = audit.Auditor()
+        auditor.consume(dict(rows[1], reason=13), 'pool-send')
+        auditor.consume(dict(kind='capture_incomplete', reason='adapter_context_unavailable',
+                             assist_ready=False), 'pool-marker')
+        self.assertEqual(auditor.reasons['CONTEXT_UNAVAILABLE'], 1)
+        self.assertEqual(auditor.report()['status'], 'inconclusive')
+        self.assertTrue({'adapter_context_unavailable', 'capture_incomplete'}.issubset(
+            {issue['code'] for issue in auditor.issues}))
+
+    def test_malformed_send_after_context_loss_is_not_a_copy_violation(self):
+        rows = [json.loads(s) for s in subprocess.check_output(
+            shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+            + ['--emit-requests'], text=True).splitlines()]
+        for reason in (4, 13):  # The older bad-length row and the corrected row.
+            with self.subTest(reason=reason):
+                auditor = audit.Auditor()
+                auditor.consume(dict(rows[0], reason=13), 'lost-position')
+                auditor.consume(dict(rows[2], reason=reason, length=47), 'short-send')
+                self.assertNotIn('request_copy_mismatch',
+                                 {issue['code'] for issue in auditor.issues})
+                self.assertEqual(auditor.report()['status'], 'inconclusive')
+
+    def test_failed_position_cannot_authorize_pass_or_mutation(self):
+        rows = [json.loads(s) for s in subprocess.check_output(
+            shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+            + ['--emit-requests'], text=True).splitlines()]
+        for choice, reason in ((0, 0), (1, 13)):
+            with self.subTest(choice=choice, reason=reason):
+                auditor = audit.Auditor()
+                auditor.consume(dict(rows[0], reason=13), 'lost-position')
+                auditor.consume(dict(rows[1], choice=choice, reason=reason), 'impossible-send')
+                self.assertIn('context_unavailable_send_inconsistent',
+                              {issue['code'] for issue in auditor.issues})
+                self.assertEqual(auditor.report()['status'], 'violation')
+
+    def test_extra_location_fault_is_inconclusive(self):
+        rows = [json.loads(s) for s in subprocess.check_output(
+            shlex.split(os.environ.get('MX5DR_JOURNAL_FIXTURE', str(ROOT / 'build/test_journal')))
+            + ['--emit-requests'], text=True).splitlines()]
+        auditor = audit.Auditor()
+        auditor.consume(rows[0], 'position')
+        auditor.consume(dict(rows[1], reason=3), 'second-location')
+        self.assertIn('extra_location', {issue['code'] for issue in auditor.issues})
+        self.assertEqual(auditor.report()['status'], 'inconclusive')
+
     @staticmethod
     def wire_record():
         return dict(issue=dict(known=True, observed_ns=101, serial=23, conflict=False, endpoint_matched=False),

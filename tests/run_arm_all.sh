@@ -148,6 +148,9 @@ python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --suite provenance-context --output-dir "$build/provenance-context-dso"
 python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
+    --suite context-pool --output-dir "$build/context-pool-dso"
+python3 tests/adapter/run_unwind_dso.py --library "$preload" \
+    --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
     --suite session --output-dir "$build/session-dso"
 python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \

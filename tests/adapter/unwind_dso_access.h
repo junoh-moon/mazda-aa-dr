@@ -21,6 +21,9 @@ static bool dso_configure(SendFunction next,const Options& options) {
 static bool dso_mode(Mode mode) {
     return reinterpret_cast<bool(*)(Mode)>(test_dso_base+TEST_MODE)(mode);
 }
+static bool dso_faulted() {
+    return reinterpret_cast<bool(*)()>(test_dso_base+TEST_FAULT)();
+}
 static int32_t dso_send(void* owner,VehicleData* data) {
     return reinterpret_cast<SendFunction>(test_dso_base+TEST_SEND)(owner,data);
 }
@@ -29,6 +32,7 @@ static void dso_position(void* owner,const void* input) {
 }
 #define configure dso_configure
 #define set_mode dso_mode
+#define faulted dso_faulted
 #define send_vehicle_data dso_send
 #define mx5_position_veneer dso_position
 #define mx5_position_trampoline (*reinterpret_cast<void**>(test_dso_base+TEST_TRAMPOLINE))

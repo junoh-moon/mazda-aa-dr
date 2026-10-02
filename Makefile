@@ -49,6 +49,8 @@ $(BUILD)/test_adapter: $(ADAPTER) src/adapter/adapter.h tests/adapter/adapter_te
 	$(CXX) $(CXX_WARN) $(ADAPTER) tests/adapter/adapter_test.cpp -ldl -pthread -o $@
 $(BUILD)/test_provenance_context: src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.h src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h tests/adapter/provenance_context_test.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
+$(BUILD)/test_context_pool: src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.h src/runtime/request_trace.cpp src/runtime/request_trace.h tests/adapter/context_pool_test.cpp | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
 $(BUILD)/test_request_trace: src/runtime/request_trace.cpp src/runtime/request_trace.h tests/runtime/test_request_trace.cpp | $(BUILD)
@@ -102,9 +104,10 @@ $(BUILD)/test_lds_bus_hooks: tests/adapter/lds_bus_hooks_test.cpp src/adapter/bu
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/runtime/request_trace.cpp src/adapter/bus_hooks.h src/adapter/adapter.h src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
-test-adapter: $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
+test-adapter: $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_context_pool $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
+	$(BUILD)/test_context_pool saturation
 	$(BUILD)/test_cold_patch
 	@set -e; for case in normal failure overlap same_storage closing_create creating_during_destroy null_success output_race late_destroy distinct_storage capacity callback_bad callback_null readers throw_create throw_destroy throw_status cancel_create cancel_destroy cancel_status prediction_destroy prediction_recreate prediction_create_failure prediction_destroy_failure prediction_status prediction_create_inflight prediction_destroy_inflight prediction_status_inflight prediction_cached_inflight; do result=0; $(BUILD)/test_session_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 	$(BUILD)/test_session_early_init
@@ -125,6 +128,8 @@ test-runtime: $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/
 	$(BUILD)/test_request_status
 	$(BUILD)/test_journal_queue
 	$(BUILD)/test_journal
+	$(BUILD)/test_journal --adapter-fault
+	$(BUILD)/test_journal --late-adapter-fault
 	@set -e; for scenario in startup during query invalid healthy; do $(BUILD)/test_journal --storage $$scenario; done
 	$(BUILD)/test_model_session
 	$(BUILD)/test_model_session_reset

@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--cross-prefix', required=True)
     parser.add_argument('--sysroot', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'endpoint', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context'), default='position')
+    parser.add_argument('--suite', choices=('position', 'request', 'request-wire', 'endpoint', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'context-pool'), default='position')
     args = parser.parse_args()
     library = args.library.resolve()
     build = args.output_dir.resolve()
@@ -40,12 +40,15 @@ def main():
     names = {
         'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
         'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+        'FAULT': '_ZN3mx57adapter7faultedEv',
         # Use the exact C GOT entry too, not only the adapter's C++ helper.
         'SEND': 'mx5_send_vehicle_data',
         'POSITION': 'mx5_position_veneer', 'TRAMPOLINE': 'mx5_position_trampoline',
     }
     cases = ('throw_position', 'throw_send', 'nested_throw', 'cancel_position', 'cancel_send',
-             'throw_enter', 'cancel_enter', 'nested_send')
+             'throw_enter', 'cancel_enter', 'nested_send', 'small_stack',
+             'deep_nested', 'deep_throw', 'deep_cancel', 'deep_small_stack',
+             'deep_small_overflow')
     fixture = 'veneer_unwind'
     access = 'unwind_dso_access.h'
     macro = '-DMX5_UNWIND_DSO_TEST'
@@ -194,6 +197,18 @@ def main():
         cases = ('captured', 'nested', 'failure', 'missing', 'invalidate', 'unqualified', 'malformed')
         fixture, access = 'provenance_context', 'provenance_context_dso_access.h'
         macro, marker = '-DMX5_PROVENANCE_CONTEXT_DSO_TEST', 'PASS provenance context '
+    elif args.suite == 'context-pool':
+        names = {
+            'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
+            'MODE': '_ZN3mx57adapter8set_modeENS0_4ModeE',
+            'GENERATION': '_ZN3mx57adapter10generationEv',
+            'PUBLISH': '_ZN3mx57adapter16publish_snapshotERKNS0_10DrSnapshotE',
+            'POSITION_ENTER': 'mx5_position_enter', 'POSITION_LEAVE': 'mx5_position_leave',
+            'VEHICLE_SEND': 'mx5_send_vehicle_data',
+        }
+        cases = ('saturation',)
+        fixture, access = 'context_pool', 'context_pool_dso_access.h'
+        macro, marker = '-DMX5_CONTEXT_POOL_DSO_TEST', 'PASS context pool capacity '
     elif args.suite == 'runtime-assist':
         names = {
             'CONFIGURE': '_ZN3mx57adapter9configureEPFiPvPNS0_11VehicleDataEERKNS0_7OptionsE',
@@ -228,7 +243,7 @@ def main():
     names = [fixture + '_test.cpp', access, 'run_unwind_dso.py']
     if args.suite == 'endpoint':
         names += ['bus_endpoint_relay.S', 'request_wire_dso_access.h']
-    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context'):
+    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'context-pool'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
     for root, directories, files in os.walk(repo / 'src'):
@@ -248,7 +263,7 @@ def main():
                str(build / 'source/tests/adapter' / (fixture + '_test.cpp'))]
     if args.suite == 'endpoint':
         command.append(str(build / 'source/tests/adapter/bus_endpoint_relay.S'))
-    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context'):
+    elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'context-pool'):
         command.append(str(build / 'source/tests/adapter' / (fixture + '_fixture.S')))
     if args.suite == 'provenance-context':
         # The authored one-shot Ledger belongs to the caller. All adapter calls
@@ -267,7 +282,8 @@ def main():
     for case in cases:
         run = ['qemu-arm', '-L', str(args.sysroot), '-E', 'LD_PRELOAD=' + str(library),
                '-E', 'MX5_UNWIND_LIBRARY=' + str(library), str(executable), case]
-        result = subprocess.run(run, env=environment, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(run, env=environment, capture_output=True, text=True,
+                                timeout=60 if args.suite == 'context-pool' else 20)
         (build / (case + '.log')).write_text(result.stdout + result.stderr)
         require(result.returncode == 0 and (marker + case + ':') in result.stdout,
                 'Failed case ' + case + ': ' + repr(result))

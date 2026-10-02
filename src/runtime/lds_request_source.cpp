@@ -160,6 +160,11 @@ void LdsRequestSource::refresh(Entry& e) {
 void LdsRequestSource::position(const adapter::Observation& o,uint64_t now) {
     if(now)advance(now);
     count(status_.positions);
+    if(o.kind==adapter::Observation::POSITION && o.reason!=adapter::PASS) {
+        // A failed adapter context invalidates the whole evidence window.
+        // A complete one-shot wire trace cannot repair the missing callback.
+        retire(now_);count(status_.rejected);return;
+    }
     if(status_.exhausted||o.kind!=adapter::Observation::POSITION||
        !position_clock(o,now_,status_.floor_ns)) { count(status_.rejected);return; }
     Key incoming;const bool keyed=key(o,&incoming);
@@ -228,7 +233,7 @@ void LdsRequestSource::sideband(const L::Record& r,const L::Diagnostic& d,uint64
 }
 LdsRequestSource::Result LdsRequestSource::lookup(const adapter::Observation& o,JoinedReply* out) const {
     if(out)*out=JoinedReply();
-    if(status_.exhausted||o.kind!=adapter::Observation::POSITION||
+    if(status_.exhausted||o.kind!=adapter::Observation::POSITION||o.reason!=adapter::PASS||
        !position_clock(o,now_,status_.floor_ns))return UNAVAILABLE;
     for(unsigned i=0;i<CAPACITY;++i) {
         const Entry& e=entries_[i];if(!e.used||!e.has_position||!identity(e.observation,o))continue;

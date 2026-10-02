@@ -234,6 +234,16 @@ class HoldoutReferences(unittest.TestCase):
                 self.assertIn('holdout_reference_ambiguous', codes(a))
                 self.assertEqual(a.holdout_position['count'], 1)
 
+    def test_failed_adapter_position_cannot_be_holdout_reference(self):
+        raw = reference_position(202, 8, 200)
+        raw['reason'] = 13
+        a = consume([holdout(), raw, identified_holdout('COMPARED'),
+                     identified_holdout('END')])
+        self.assertEqual(self.links(a), {'legacy_without_identity': 1,
+                                         'raw_unavailable': 1, 'no_reference': 1})
+        self.assertIn('holdout_reference_unavailable', codes(a))
+        self.assertEqual(a.report()['status'], 'inconclusive')
+
     def test_late_duplicates_reclassify_all_matches_once(self):
         raw = reference_position()
         a = consume([raw, identified_holdout(), identified_holdout('END'),
