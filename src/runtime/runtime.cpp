@@ -808,7 +808,12 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
           const ModelSession::Update update=
               source_session.update(A::read_issue_session(),position_cutoff);
           const bool bus_update=source_bus.update(A::read_position_bus());
-          if(update==ModelSession::CHANGED || bus_update)source.reset(position_cutoff);
+          if(update==ModelSession::CHANGED || bus_update) {
+            source.reset(position_cutoff);
+            // This inner poll consumes the transition. The next outer poll
+            // may already see the new baseline, so retire the map here too.
+            if(associations)associations->retire();
+          }
           source.position(o,position_cutoff);
         }
         if(shadow && !__sync_fetch_and_add(&audit_fault,0)) {

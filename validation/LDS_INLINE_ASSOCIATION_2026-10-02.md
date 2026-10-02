@@ -89,6 +89,15 @@ object 컴파일과 host 17사례/499 assertion·ARM 17사례/499 assertion을
 이 부분 실행을 전체 통과로 세지 않습니다. 후속 `master`의 AA 문맥 풀과
 병합한 제품은 별도로 다시 빌드·검증합니다.
 
+병합 뒤 실제 worker의 POSITION 배출 중 bus·session 변경을 소비하는 내부
+재검사가 map 철회를 놓치는 두 반례를 재현했습니다. 실제 outer snapshot을
+얻은 뒤 원래 disconnect/destroy wrapper를 호출하는 작성한 순서 제어로,
+내부의 실제 revision 변경·resolver reset 1회·POSITION 1회를 확인했습니다.
+기존 코드에서는 앞서 캡처한 요청의 map 조회가 여전히 연결 성공이었습니다.
+내부 경계에서도 map을 함께 철회한 후 host·고정 ARM 각각 10사례가
+통과했고 두 반례의 조회는 `UNAVAILABLE`로 바뀌었습니다. 이 소스 링크
+검사는 실제 제품 DSO·전체 OEM 기동의 실행 결과와 구분합니다.
+
 실제 사전 설치된 Claude CLI로 정적 반대 관점 리뷰, C++ 회귀 코드 작성,
 AA 저장 구조 설계 비교를 수행했습니다. 생성된 코드는 검토·보완 후 직접
 실행했습니다. 실패 provenance 필드의 잔류를 실제 assertion 실패로 확인하고

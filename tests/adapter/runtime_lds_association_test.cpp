@@ -2,6 +2,8 @@
 // shared-map handoff, one-shot request Ledger and adapter. No physical source
 // qualification, original firmware execution or ASSIST enablement is claimed.
 #include "adapter/lds_hooks.h"
+#include "adapter/bus_hooks.h"
+#include "adapter/session_hooks.h"
 #include "runtime/worker.h"
 #include <cassert>
 #include <cerrno>
@@ -15,8 +17,24 @@
 #include <string>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+// These test-only scheduling seams preserve each real snapshot and sleep.
+// Delay a completed outer read across a real lifecycle call, then let the
+// unmodified worker's inner POSITION check consume the new boundary.
+namespace mx5 { namespace adapter {
+runtime::session_trace::Snapshot scheduled_issue_session();
+runtime::bus_trace::Boundary scheduled_position_bus();
+} }
+static int scheduled_nanosleep(const timespec*,timespec*);
+#define read_issue_session scheduled_issue_session
+#define read_position_bus scheduled_position_bus
+#define nanosleep scheduled_nanosleep
 #include "../../src/runtime/runtime.cpp"
+#undef nanosleep
+#undef read_position_bus
+#undef read_issue_session
+#include "../runtime/model_bus_fixture.h"
 
 #ifdef NDEBUG
 #error Runtime LDS association regressions require assertions
@@ -32,6 +50,26 @@ unsigned request_reads,sends,callbacks;
 A::Observation last_position,last_send;
 A::VehicleData* borrowed;
 unsigned char original_payload[48];
+enum BoundaryCase { NO_BOUNDARY, BUS_BOUNDARY, SESSION_BOUNDARY };
+BoundaryCase boundary_case=NO_BOUNDARY;
+thread_local bool runtime_owner=false;
+std::atomic<unsigned> idle_gate(0),boundary_step(0);
+uint64_t outer_revision,inner_revision;
+unsigned lifecycle_calls;
+int session_handle;
+void* session_storage;
+void session_status(void*,void*) {}
+int32_t session_create(const char*,void*,const A::SessionCallbacks*,void** out) {
+    *out=&session_handle;return 0;
+}
+int32_t session_destroy(void** out) {
+    assert(*out==&session_handle);*out=0;++lifecycle_calls;return 0;
+}
+void wait_gate(unsigned expected) {
+    const uint64_t deadline=clock_ns(0)+2000*MS;
+    while(idle_gate.load(std::memory_order_acquire)!=expected&&clock_ns(0)<deadline)usleep(1000);
+    assert(idle_gate.load(std::memory_order_acquire)==expected);
+}
 
 Q::Result request_reader(const void* raw,Q::Trace* out,void*) {
     ++request_reads;
@@ -221,10 +259,11 @@ void check_journal_association(const std::string& journal,const A::Observation& 
     }
     fields+="]";assert(position.find(fields)!=std::string::npos);
 }
-struct Running { const char* root;char motion[96],sideband[96],association[96]; };
+struct Running { const char* root;char motion[96],sideband[96],association[96];R::LdsRequestSource* source; };
 void* run(void* raw) {
     Running& r=*static_cast<Running*>(raw);
-    return R::run_worker_association(r.root,r.motion,r.sideband,geteuid(),0,0,r.association);
+    runtime_owner=true;
+    return R::run_worker_association(r.root,r.motion,r.sideband,geteuid(),0,r.source,r.association);
 }
 void wait_boot(const std::string& trace) {
     const uint64_t deadline=clock_ns(0)+2000*MS;
@@ -322,17 +361,77 @@ void formatter_bounds() {
     std::puts("PASS runtime LDS association bounds: actual worker capacity, exact/N-1 and canaries");
 }
 }
+static int scheduled_nanosleep(const timespec* delay,timespec* remaining) {
+    if(runtime_owner) {
+        unsigned pending=1;
+        if(idle_gate.compare_exchange_strong(pending,2)) {
+            while(idle_gate.load(std::memory_order_acquire)!=3)usleep(1000);
+        } else if(idle_gate.load(std::memory_order_acquire)==3&&
+                  boundary_step.load(std::memory_order_acquire)==3) {
+            idle_gate.store(4,std::memory_order_release);
+            while(idle_gate.load(std::memory_order_acquire)!=5)usleep(1000);
+        }
+    }
+    return ::nanosleep(delay,remaining);
+}
+namespace mx5 { namespace adapter {
+runtime::session_trace::Snapshot scheduled_issue_session() {
+    const runtime::session_trace::Snapshot actual=read_issue_session();
+    if(runtime_owner&&boundary_case==SESSION_BOUNDARY) {
+        const unsigned step=boundary_step.load(std::memory_order_acquire);
+        if(step==1) {
+            outer_revision=actual.revision;
+            assert(actual.result==runtime::session_trace::OBSERVED);
+            assert(!mx5_session_destroy(&session_storage));
+            boundary_step.store(2,std::memory_order_release);
+        } else if(step==2) {
+            inner_revision=actual.revision;assert(inner_revision!=outer_revision);
+            boundary_step.store(3,std::memory_order_release);
+        }
+    }
+    return actual;
+}
+runtime::bus_trace::Boundary scheduled_position_bus() {
+    const runtime::bus_trace::Boundary actual=read_position_bus();
+    if(runtime_owner&&boundary_case==BUS_BOUNDARY) {
+        const unsigned step=boundary_step.load(std::memory_order_acquire);
+        if(step==1) {
+            outer_revision=actual.revision;
+            assert(actual.connection.result==runtime::bus_trace::CONNECTED);
+            mx5_bus_disconnect(&bus_fixture::handles[0]);++lifecycle_calls;
+            boundary_step.store(2,std::memory_order_release);
+        } else if(step==2) {
+            inner_revision=actual.revision;assert(inner_revision!=outer_revision);
+            assert(actual.connection.result==runtime::bus_trace::NONE);
+            assert(read_bus_connection(&bus_fixture::handles[0]).result==runtime::bus_trace::DISCONNECTED);
+            boundary_step.store(3,std::memory_order_release);
+        }
+    }
+    return actual;
+}
+} }
 int main(int argc,char** argv) {
     assert(argc==2);alarm(15);
     const std::string scenario=argv[1];
     if(scenario=="bounds") { formatter_bounds();return 0; }
     assert(scenario=="adopted"||scenario=="journal"||scenario=="freeze"||scenario=="audit"||
-           scenario=="journal_failure"||scenario=="pre_stopped"||scenario=="fork");
+           scenario=="journal_failure"||scenario=="pre_stopped"||scenario=="fork"||
+           scenario=="drain_bus"||scenario=="drain_session");
+    if(scenario=="drain_bus")boundary_case=BUS_BOUNDARY;
+    if(scenario=="drain_session")boundary_case=SESSION_BOUNDARY;
     for(unsigned i=0;i<48;++i)original_payload[i]=static_cast<unsigned char>(i+1);
     A::Options options=A::Options();options.clock=clock_ns;options.request_reader=request_reader;
     options.association_reader=read_inline_association;options.provenance=provenance;options.sink=observe;
     assert(!options.allow_assist&&A::configure(original_send,options)&&A::set_mode(A::OBSERVE));
     assert(!A::set_mode(A::ASSIST)); // Association alone never enables mutation.
+    if(boundary_case==BUS_BOUNDARY)bus_fixture::prepare();
+    if(boundary_case==SESSION_BOUNDARY) {
+        const A::SessionBindings bindings={session_create,session_destroy,session_status};
+        assert(A::prepare_session_hooks(bindings));
+        A::SessionCallbacks callbacks=A::SessionCallbacks();
+        callbacks.entry[1]=reinterpret_cast<uintptr_t>(session_status);
+        assert(!mx5_session_create("fixture",0,&callbacks,&session_storage));
+    }
     config.mode=1;hook_installed=true;
     char root[]="/tmp/mx5-runtime-association-XXXXXX";assert(mkdtemp(root));
     const std::string logs=std::string(root)+"/logs",trace=logs+"/trace.0.jsonl";
@@ -342,6 +441,9 @@ int main(int argc,char** argv) {
     const A::Observation before_adoption=last_position;
     A::Observation matched=A::Observation();
     Running running=Running();running.root=root;
+    R::LdsRequestSource source;
+    if(boundary_case!=NO_BOUNDARY)running.source=&source;
+    bool boundary_rejected=true;
     ::snprintf(running.motion,sizeof running.motion,"mx5-assoc-motion-%ld",long(getpid()));
     ::snprintf(running.sideband,sizeof running.sideband,"mx5-assoc-side-%ld",long(getpid()));
     ::snprintf(running.association,sizeof running.association,"mx5-assoc-map-%ld",long(getpid()));
@@ -353,7 +455,28 @@ int main(int argc,char** argv) {
         assert(before_adoption.lds_association.result==L::UNAVAILABLE);
         assert(!before_adoption.provenance.exact_request); // Never retroactively mutated.
         const L::Owned retained=last_position.lds_association;
-        if(scenario=="freeze") {
+        if(boundary_case!=NO_BOUNDARY) {
+            idle_gate.store(1,std::memory_order_release);wait_gate(2);
+            // All prior rows drained before this idle boundary. This new real
+            // callback queues exactly one POSITION/SEND pair for the next turn.
+            L::Owned before=L::Owned();assert(read_captured(matched,&before));
+            const uint64_t retirements=source.status().retirements;
+            const uint64_t positions=source.status().positions;
+            assert(callback(publisher));
+            boundary_step.store(1,std::memory_order_release);
+            idle_gate.store(3,std::memory_order_release);wait_gate(4);
+            assert(boundary_step.load(std::memory_order_acquire)==3&&lifecycle_calls==1);
+            // The pause is after the complete turn: the inner check really
+            // consumed the boundary and reset the historical resolver.
+            assert(source.status().retirements==retirements+1);
+            assert(source.status().positions==positions+1);
+            L::Owned after=L::Owned();boundary_rejected=!read_captured(matched,&after);
+            std::fprintf(stderr,"worker drain %s: outer_actual_revision=%llu inner_actual_revision=%llu source_resets=1 positions=1 captured_before=%u captured_after=%u\n",
+                scenario.c_str(),static_cast<unsigned long long>(outer_revision),
+                static_cast<unsigned long long>(inner_revision),unsigned(before.result),unsigned(after.result));
+            if(boundary_rejected)assert(after.result==L::UNAVAILABLE);
+            idle_gate.store(5,std::memory_order_release);
+        } else if(scenario=="freeze") {
             freeze_capture();assert(!callback(publisher));
         } else if(scenario=="audit") {
             disable_mutation();assert(!callback(publisher));
@@ -399,5 +522,6 @@ int main(int argc,char** argv) {
     }
     assert(request_reads==callbacks&&sends==callbacks);
     remove_logs(logs);assert(!rmdir(root));
+    assert(boundary_rejected); // Real inner lifecycle consumption must also retire the adopted map.
     std::printf("PASS runtime LDS association %s: %u one-shot callbacks; actual worker, physical qualification unknown\n",argv[1],callbacks);
 }
