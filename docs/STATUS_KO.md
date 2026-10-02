@@ -43,8 +43,12 @@ POSITION/LOCATION 10쌍·90개 원시 필드와 현재 callback의 inline 연결
 독립적인 두 reader 이력에서 빈 course가 0도로 바뀌어 새 할당·원본 응답·
 AA 송신까지 전달됨을 확인했습니다. 선택한 여덟 응답의 정확한 연결과
 원본 송신을 대조했지만, 현재 할당 출처만으로 빈 입력과 실제 북쪽 0도를
-구별할 수 없습니다. 입력 token 존재 정보의 제품 연결은 후속 미구현 작업이며,
-관측된 새 쓰기를 물리 측정 자격으로 승격하지 않습니다.
+구별할 수 없습니다. 후속 [course 입력 존재 정보](../validation/LDS_COURSE_METADATA_2026-10-02.md)는
+원본 parser→callback→실제 캐시 복사에 `unknown`·`empty`·`present`를
+연결하고 같은 응답의 AA 소유 기록까지 전달합니다. 집중 host·ARM 검사와
+원본 설치기 96사례는 통과했으나 새 여섯 제품 전체 검사·원본 통합 실행은
+남아 있습니다. 관측된 새 쓰기나 token 존재를 물리 측정 자격으로 승격하지
+않으며 live ASSIST는 계속 비활성입니다.
 
 후속 `01cb939`의 [새 전체 검사](../validation/LDS_INLINE_FULL_2026-10-02.md)는
 같은 제품 입력에서 여섯 바이너리를 다시 빌드하고 host Python 592개·C/C++,

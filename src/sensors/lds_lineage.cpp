@@ -2,7 +2,8 @@
 
 namespace mx5 { namespace sensors { namespace lds_lineage {
 
-Snapshot::Snapshot() : lifetime(0), write_sequence(0), fields(), owner_(0) {}
+Snapshot::Snapshot() : lifetime(0), write_sequence(0), fields(),
+    heading_presence(nmea_course_token::UNKNOWN), owner_(0) {}
 
 Ledger::Ledger() : current_(), lifetime_high_water_(0), exhausted_(false) {
     current_.owner_ = this;
@@ -21,6 +22,7 @@ bool Ledger::begin_lifetime(uint64_t lifetime) {
 Snapshot Ledger::snapshot() const { return current_; }
 
 void Ledger::clear_fields() {
+    current_.heading_presence=nmea_course_token::UNKNOWN;
     for (unsigned i = 0; i < FIELD_COUNT; ++i) {
         current_.fields[i].write_sequence = 0;
         current_.fields[i].observed_ns = 0;
@@ -30,6 +32,9 @@ void Ledger::clear_fields() {
 bool Ledger::valid_read(const Snapshot& read) const {
     if (read.owner_ != this || read.lifetime != current_.lifetime ||
         read.write_sequence > current_.write_sequence) return false;
+    if (read.heading_presence>nmea_course_token::PRESENT ||
+        (read.heading_presence!=nmea_course_token::UNKNOWN &&
+         !read.fields[HEADING].write_sequence)) return false;
     for (unsigned i = 0; i < FIELD_COUNT; ++i) {
         const FieldOrigin& origin = read.fields[i];
         if (origin.write_sequence > read.write_sequence ||
@@ -39,7 +44,8 @@ bool Ledger::valid_read(const Snapshot& read) const {
 }
 
 CommitResult Ledger::commit(const Snapshot* read, uint32_t mask,
-                            uint64_t observed_ns) {
+                            uint64_t observed_ns,
+                            nmea_course_token::Presence heading_presence) {
     if (!current_.lifetime) return INACTIVE;
     if (exhausted_ || current_.write_sequence == UINT64_MAX) {
         clear_fields();
@@ -67,6 +73,11 @@ CommitResult Ledger::commit(const Snapshot* read, uint32_t mask,
             current_.fields[i] = read->fields[i];
         }
     }
+    // The actual read owns inherited metadata. A fresh heading assignment
+    // without a separately bound token stays unknown, even if its value is 0.
+    current_.heading_presence=(mask & (uint32_t(1)<<HEADING)) ?
+        (heading_presence<=nmea_course_token::PRESENT ? heading_presence : nmea_course_token::UNKNOWN) :
+        read->heading_presence;
     return COMMITTED;
 }
 

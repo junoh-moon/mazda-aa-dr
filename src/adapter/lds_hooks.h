@@ -3,6 +3,7 @@
 #include "runtime/lds_sideband.h"
 #include "runtime/lds_association.h"
 #include <stdint.h>
+#include <sys/select.h>
 
 namespace mx5 { namespace adapter {
 typedef void (*LdsCallback)(void*);
@@ -51,6 +52,17 @@ struct LdsLockedSend {
 enum LdsLockedLoss : uint32_t { LOCKED_CHAIN_CONFLICT=1,LOCKED_SEND_FAILED=2 };
 typedef void (*LdsPublishLocked)(const LdsLockedSend&,void*);
 typedef void (*LdsInvalidateLocked)(LdsLockedLoss,void*);
+struct LdsInputBindings {
+    // Parse's third word is opaque, not a readable length. Only the verified
+    // original reader call site supplies the assembled terminated sentence.
+    // A subsequent verified reader select discards pending ownership; it is
+    // not evidence of callback execution or cache assignment.
+    uint32_t (*parse_sentence)(char*,void*,uint32_t);
+    int (*select)(int,fd_set*,fd_set*,fd_set*,timeval*);
+    // Original Close has no defined result; normal return is only a boundary.
+    void (*driver_close)();
+    uintptr_t parse_return,select_return,dispatch_return;
+};
 struct LdsBindings {
     void (*initialize)(); void (*clear)();
     // The original Open callback word is forwarded unchanged, never invoked
@@ -84,6 +96,7 @@ struct LdsBindings {
     // execute under the original connection mutex; no I/O or waiting here.
     LdsPublishLocked publish_locked;
     LdsInvalidateLocked invalidate_locked;
+    LdsInputBindings input;
 };
 // Installer-owned cold preparation is immutable even after transaction rollback.
 // Partial-publication wrappers always forward; only activate enables metadata.
@@ -95,6 +108,9 @@ bool activate_lds_hooks();
 extern "C" void mx5_lds_initialize();
 extern "C" void mx5_lds_clear();
 extern "C" int32_t mx5_lds_driver_open(uintptr_t);
+extern "C" void mx5_lds_driver_close();
+extern "C" uint32_t mx5_lds_parse_sentence(char*,void*,uint32_t);
+extern "C" int mx5_lds_select(int,fd_set*,fd_set*,fd_set*,timeval*);
 extern "C" int32_t mx5_lds_register(uint32_t,mx5::adapter::LdsCallback);
 extern "C" int32_t mx5_lds_read(void*);
 extern "C" int32_t mx5_lds_update(const void*);

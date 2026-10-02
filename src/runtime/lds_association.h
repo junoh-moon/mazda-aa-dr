@@ -20,6 +20,7 @@ struct Owned {
     uint64_t request_id,request_epoch,worker_id,worker_epoch;
     uint64_t cache_lifetime,write_sequence;
     sensors::lds_lineage::FieldOrigin fields[sensors::lds_lineage::FIELD_COUNT];
+    sensors::nmea_course_token::Presence heading_presence;
 };
 static_assert(sizeof(Owned)<=256,"Bounded per-callback LDS association");
 

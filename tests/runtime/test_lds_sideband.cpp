@@ -8,6 +8,7 @@
 #include <limits>
 #include <unistd.h>
 namespace L=mx5::runtime::lds_sideband;
+namespace N=mx5::sensors::nmea_course_token;
 namespace mx5 { namespace runtime { namespace lds_sideband {
 struct SenderTestAccess {
     static void dropped(Sender& s,uint32_t n) { s.dropped_.store(n); }
@@ -33,7 +34,7 @@ static L::Record example() {
 static void codec() {
     L::Record r=example(),out=L::Record();unsigned char bytes[L::RECORD_SIZE],again[L::RECORD_SIZE];
     CHECK(L::encode(r,bytes));CHECK(!memcmp(bytes,"MXLD",4));
-    CHECK(bytes[4]==1&&bytes[5]==0&&bytes[6]==128&&bytes[7]==2);
+    CHECK(bytes[4]==2&&bytes[5]==0&&bytes[6]==128&&bytes[7]==2);
     CHECK(bytes[8]==1&&bytes[16]==1&&bytes[40]==111&&bytes[56]==23&&bytes[60]==31);
     for(unsigned i=568;i<L::RECORD_SIZE;++i)CHECK(bytes[i]==0);
     CHECK(L::decode(bytes,sizeof bytes,&out));CHECK(L::encode(out,again));CHECK(!memcmp(bytes,again,sizeof bytes));
@@ -61,6 +62,27 @@ static void codec() {
     L::Text t;char borrowed[80];memset(borrowed,'q',sizeof borrowed);borrowed[79]=0;
     L::copy_text(&t,borrowed);CHECK(t.known&&!t.complete&&strlen(t.bytes)==63);
     memset(borrowed,'r',63);CHECK(t.bytes[0]=='q');L::copy_text(&t,0);CHECK(!t.known&&!t.complete);
+}
+static void heading_presence() {
+    for(unsigned value=0;value<=2;++value) {
+        L::Record r=example(),out=L::Record();unsigned char bytes[L::RECORD_SIZE];
+        r.field_lineage.heading_presence=N::Presence(value);r.position.heading_deg=0;
+        CHECK(L::encode(r,bytes));CHECK(L::decode(bytes,sizeof bytes,&out));
+        CHECK(out.field_lineage.heading_presence==N::Presence(value));
+        CHECK(out.position.heading_deg==0&&out.field_lineage.fields[5].write_sequence==1);
+        CHECK(bytes[4]==2&&bytes[568]==value);
+        bytes[568]=3;CHECK(!L::decode(bytes,sizeof bytes,&out));
+        CHECK(out.source_instance==0);
+        // Legacy v1 really lacked the field; never infer presence from heading0.
+        bytes[4]=1;memset(bytes+568,0,72);
+        CHECK(L::decode(bytes,sizeof bytes,&out));CHECK(out.field_lineage.heading_presence==N::UNKNOWN);
+        CHECK(out.position.heading_deg==0&&out.field_lineage.fields[5].write_sequence==1);
+        bytes[568]=1;CHECK(!L::decode(bytes,sizeof bytes,&out));
+    }
+    L::Record invalid=example();unsigned char bytes[L::RECORD_SIZE];
+    invalid.field_lineage.heading_presence=N::Presence(3);CHECK(!L::encode(invalid,bytes));
+    invalid.field_lineage.heading_presence=N::EMPTY;invalid.field_lineage.fields[5]={0,0};
+    CHECK(!L::encode(invalid,bytes));
 }
 static void credentials() {
     L::Record r=example(),out;unsigned char bytes[L::RECORD_SIZE];CHECK(L::encode(r,bytes));
@@ -104,6 +126,11 @@ static void formatter() {
     L::Record r=example();L::Diagnostic d={L::RECEIVE_OK,200,0,0,105};
     char output[L::JSON_CAPACITY];CHECK(L::format_record(output,sizeof output,r,d));
     CHECK(strstr(output,"\"association_only\":true"));CHECK(strstr(output,"\"assist_ready\":false"));
+    CHECK(strstr(output,"\"heading_presence\":\"unknown\""));
+    r.field_lineage.heading_presence=N::EMPTY;
+    CHECK(L::format_record(output,sizeof output,r,d));CHECK(strstr(output,"\"heading_presence\":\"empty\""));
+    r.field_lineage.heading_presence=N::PRESENT;
+    CHECK(L::format_record(output,sizeof output,r,d));CHECK(strstr(output,"\"heading_presence\":\"present\""));
     r.source_instance=r.sequence=r.dropped_before=r.observed_ns=UINT64_MAX;r.flags=255;
     r.path_result=r.send_result=r.reply_type=INT32_MIN;
     r.wire.request_serial=r.wire.response_serial=r.wire.reply_serial=UINT32_MAX;
@@ -131,6 +158,7 @@ int main(int argc,char** argv) {
         const L::Record r=example();const L::Diagnostic d={L::RECEIVE_OK,200,0,0,105};
         char output[L::JSON_CAPACITY];CHECK(L::format_record(output,sizeof output,r,d));puts(output);return 0;
     }
-    CHECK(argc==1);alarm(10);codec();credentials();channel();formatter();
+    if(argc==2&&!strcmp(argv[1],"--heading")) {heading_presence();formatter();return 0;}
+    CHECK(argc==1);alarm(10);heading_presence();codec();credentials();channel();formatter();
     printf("LDS sideband: %u checks passed\n",checks);return 0;
 }

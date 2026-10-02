@@ -192,6 +192,7 @@ class LdsLinks:
         self.finished = Counter()
         self.finished_sideband = Counter()
         self.finished_assignment_patterns = Counter()
+        self.finished_heading_presence = Counter()
         self.attachments = []
         self.attachment_total = 0
         self.records = Counter()
@@ -201,10 +202,11 @@ class LdsLinks:
 
     def begin(self):
         if self.session_index:
-            counts, sideband, attachments, patterns = self.current()
+            counts, sideband, attachments, patterns, presence = self.current()
             self.finished.update(counts)
             self.finished_sideband.update(sideband)
             self.finished_assignment_patterns.update(patterns)
+            self.finished_heading_presence.update(presence)
             self.attachment_total += len(attachments)
             self.attachments.extend(attachments[:max(0, self.attachment_limit-len(self.attachments))])
         self.session_index += 1
@@ -302,12 +304,17 @@ class LdsLinks:
                 not all(k in position for k in cls.POSITION_FIELDS)):
             return False
         sequences, clocks = lineage.get('field_write_sequences'), lineage.get('field_observed_ns')
+        presence = lineage.get('heading_presence', 'unknown')
+        if type(presence) is not str or presence not in ('unknown', 'empty', 'present'):
+            return False
         if (not isinstance(sequences, list) or not isinstance(clocks, list) or
                 len(sequences) != 9 or len(clocks) != 9 or
                 not all(cls.uint(v) and v <= lineage['write_sequence'] for v in sequences) or
                 not all(cls.uint(v) for v in clocks) or
                 any(s == 0 and c != 0 for s, c in zip(sequences, clocks)) or
                 (lineage['lifetime'] == 0 and lineage['write_sequence'] != 0)):
+            return False
+        if presence != 'unknown' and not sequences[5]:
             return False
         return cls.payload(position)
 
@@ -418,7 +425,7 @@ class LdsLinks:
 
     def current(self):
         counts, sideband, attachments = self.unkeyed.copy(), Counter(), []
-        patterns = Counter()
+        patterns, presence_counts = Counter(), Counter()
         for key, entry in self.entries.items():
             count, row, record = entry['positions'], entry['position'], entry['record']
             if not count:
@@ -449,22 +456,28 @@ class LdsLinks:
                 state = 'matched'
                 coverage, origins = self.assignment_pattern(record['field_lineage'])
                 patterns[coverage + '/' + origins] += 1
+                # Legacy absence carries no lexical evidence. A numeric zero
+                # or a new assignment identity cannot fill this information.
+                presence = record['field_lineage'].get('heading_presence', 'unknown')
+                presence_counts[presence] += 1
                 attachments.append(dict(recorded_session=self.session_index, call=row['call'],
                     generation=row['generation'], source_instance=record['source_instance'],
                     sequence=record['sequence'], sender_pid=record['sender_pid'], sender_uid=record['sender_uid'],
                     path_result=record['path_result'], send_result=record['send_result'], flags=record['flags'],
                     wire_key=list(key), field_lineage=record['field_lineage'],
-                    assignment_coverage=coverage, known_field_assignments=origins))
+                    assignment_coverage=coverage, known_field_assignments=origins,
+                    heading_presence=presence))
             counts[state] += count
             if record is not None:
                 sideband[state] += 1
-        return counts, sideband, attachments, patterns
+        return counts, sideband, attachments, patterns, presence_counts
 
     def report(self):
-        counts, sideband, attachments, patterns = self.current()
+        counts, sideband, attachments, patterns, presence = self.current()
         counts.update(self.finished)
         sideband.update(self.finished_sideband)
         patterns.update(self.finished_assignment_patterns)
+        presence.update(self.finished_heading_presence)
         total = self.attachment_total + len(attachments)
         shown = self.attachments + attachments[:max(0, self.attachment_limit-len(self.attachments))]
         return dict(position_links=dict(counts), sideband_links=dict(sideband),
@@ -472,6 +485,8 @@ class LdsLinks:
                     duplicates=self.records['duplicates'], attachments=shown, omitted_attachments=total-len(shown),
                     state_capacity=self.capacity, scope='same_trace_group_and_recorded_session',
                     assignment_patterns=dict(patterns),
+                    heading_presence=dict(presence),
+                    heading_presence_scope='lexical_course_token_only_not_numeric_or_quality',
                     assignment_scope='matched_wire_payload_retained_field_origins_not_producer_or_assist',
                     producer_time_status='unknown', association_only=True, assist_ready=False)
 

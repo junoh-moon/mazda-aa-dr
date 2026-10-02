@@ -36,6 +36,7 @@ namespace L=mx5::runtime::lds_association;
 namespace A=mx5::adapter;
 namespace Q=mx5::runtime::request_trace;
 namespace P=mx5::runtime::lds_association::protocol;
+namespace N=mx5::sensors::nmea_course_token;
 namespace mx5 { namespace runtime { namespace lds_association {
 struct AssociationTestAccess {
     static protocol::Map* map(Publisher& p) { return static_cast<protocol::Map*>(p.mapping_); }
@@ -242,9 +243,9 @@ static void exhaustion() {
       L::AssociationTestAccess::gate(f.registry,0x7fffffff);CHECK(!lookup(f.registry,record(),&o));
       L::AssociationTestAccess::gate(f.registry,0);CHECK(lookup(f.registry,record(),&o)); }
 }
-static void send_offer(const char* channel,L::Publisher& p,const int* fds,unsigned count,unsigned size=P::OFFER_BYTES) {
+static void send_offer(const char* channel,L::Publisher& p,const int* fds,unsigned count,unsigned size=P::OFFER_BYTES,unsigned version=P::VERSION) {
     const auto m=L::AssociationTestAccess::map(p);
-    uint32_t words[8]={P::OFFER_MAGIC,P::VERSION,P::MAP_BYTES,m->words[P::INSTANCE].load(),m->words[P::INSTANCE+1].load(),
+    uint32_t words[8]={P::OFFER_MAGIC,version,P::MAP_BYTES,m->words[P::INSTANCE].load(),m->words[P::INSTANCE+1].load(),
         uint32_t(getpid()),m->words[P::CREATED].load(),m->words[P::CREATED+1].load()};
     unsigned char bytes[P::OFFER_BYTES+1]={0};
     for(unsigned i=0;i<8;++i)for(unsigned j=0;j<4;++j)bytes[i*4+j]=static_cast<unsigned char>(words[i]>>(j*8));
@@ -259,6 +260,34 @@ static void send_offer(const char* channel,L::Publisher& p,const int* fds,unsign
         memcpy(CMSG_DATA(c),fds,count*sizeof(int));
     }
     CHECK(sendmsg(sock,&message,MSG_NOSIGNAL)==ssize_t(size));CHECK(close(sock)==0);
+}
+static void heading_presence() {
+    Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
+    f.setup();f.adopt();L::Owned o;
+    for(unsigned value=0;value<=2;++value) {
+        auto r=record(20+value,2000+100*value);r.position.heading_deg=0;
+        r.field_lineage.heading_presence=N::Presence(value);
+        CHECK(f.publisher.publish(r));CHECK(lookup(f.registry,r,&o));
+        CHECK(o.heading_presence==N::Presence(value));CHECK(o.fields[5].write_sequence==3);
+    }
+    auto r=record(40,4000);r.field_lineage.heading_presence=N::EMPTY;
+    CHECK(f.publisher.publish(r));CHECK(lookup(f.registry,r,&o));const L::Owned old=o;
+    r.field_lineage.heading_presence=N::PRESENT;CHECK(f.publisher.publish(r));
+    CHECK(!lookup(f.registry,r,&o));CHECK(o.result==L::CONFLICT);CHECK(old.heading_presence==N::EMPTY);
+    r=record(41,4100);r.field_lineage.heading_presence=N::Presence(3);CHECK(!f.publisher.publish(r));
+    r=record(42,4200);r.field_lineage.fields[5]={0,0};r.field_lineage.heading_presence=N::EMPTY;
+    CHECK(!f.publisher.publish(r));
+}
+static void protocol_version() {
+    Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
+    f.setup();CHECK(f.publisher.publish(record()));L::Owned o;
+    const int fd=L::AssociationTestAccess::fd(f.publisher);
+    send_offer(f.channel,f.publisher,&fd,1,P::OFFER_BYTES,1);f.registry.drain(1010);
+    CHECK(!lookup(f.registry,record(),&o));
+    auto map=L::AssociationTestAccess::map(f.publisher);map->words[P::LAYOUT].store(1);
+    send_offer(f.channel,f.publisher,&fd,1);f.registry.drain(1020);CHECK(!lookup(f.registry,record(),&o));
+    map->words[P::LAYOUT].store(P::VERSION);f.adopt(1030);
+    CHECK(lookup(f.registry,record(),&o));CHECK(o.layout_version==2);
 }
 enum BadFd { GOOD_FD,WRITABLE_FD,LINKED_FD,LARGE_FD,SHORT_FD,EMPTY_FD,MODE_FD };
 static void fd_rejected_then_adopted(unsigned rights_count,BadFd kind) {
@@ -399,6 +428,8 @@ int main(int argc,char** argv) {
     else if(!std::strcmp(argv[1],"borrowing"))borrowing();else if(!std::strcmp(argv[1],"exhaustion"))exhaustion();
     else if(!std::strcmp(argv[1],"fd_validation"))fd_validation();else if(!std::strcmp(argv[1],"drain_bound"))drain_bound();
     else if(!std::strcmp(argv[1],"malformed_map"))malformed_map();else if(!std::strcmp(argv[1],"concurrent"))concurrent();
-    else if(!std::strcmp(argv[1],"retirement_scheduled"))retirement_scheduled();else CHECK(false);
+    else if(!std::strcmp(argv[1],"retirement_scheduled"))retirement_scheduled();
+    else if(!std::strcmp(argv[1],"heading_presence"))heading_presence();
+    else if(!std::strcmp(argv[1],"protocol_version"))protocol_version();else CHECK(false);
     std::printf("PASS LDS association %s %u checks\n",argv[1],checks);
 }

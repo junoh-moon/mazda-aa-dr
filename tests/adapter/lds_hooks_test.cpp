@@ -6,13 +6,18 @@
 #include <string.h>
 #include <pthread.h>
 #include <stddef.h>
+#include <atomic>
 
 namespace A=mx5::adapter;
 namespace S=mx5::runtime::lds_sideband;
 namespace L=mx5::sensors::lds_lineage;
 namespace B=mx5::runtime::bus_trace;
 namespace R=mx5::runtime::request_trace;
+namespace T=mx5::sensors::nmea_course_token;
 extern "C" {
+uint32_t lds_test_parse(char*,void*,uint32_t); extern char lds_test_parse_return;
+int lds_test_checkpoint(int,fd_set*,fd_set*,fd_set*,timeval*); extern char lds_test_checkpoint_return;
+void lds_test_dispatch(A::LdsCallback,void*); extern char lds_test_dispatch_return;
 int lds_test_read_rmc(void*); extern char lds_test_read_rmc_return;
 int lds_test_read_gga(void*); extern char lds_test_read_gga_return;
 int lds_test_read_gsa(void*); extern char lds_test_read_gsa_return;
@@ -50,6 +55,41 @@ bool cancel_cleaned;
 bool send_other_connection,send_failure,build_failure,nested_path,throw_path;
 bool initialize_query,initialize_throw;
 bool endpoint_available;
+bool course_test;
+bool repeat_rmc,repeat_copy;
+unsigned parser_calls,checkpoint_calls;
+std::atomic<unsigned> driver_closes(0);
+bool close_block;
+pthread_barrier_t close_entered,close_release;
+uint32_t parser_result,parser_heading,parser_word;
+char* parser_input;
+void* parser_workspace;
+int parser_entry_errno;
+void (*parser_action)();
+void (*rmc_action)();
+void (*gga_action)();
+void (*update_action)();
+uint32_t parse_sentence(char* input,void* workspace,uint32_t word) {
+    ++parser_calls;parser_entry_errno=errno;
+    assert(input==parser_input && workspace==parser_workspace && word==parser_word);
+    const uint32_t result=parser_result,heading=parser_heading;
+    void (*action)()=parser_action;parser_action=0;
+    if(action)action();
+    if(!result || result==6)*static_cast<uint32_t*>(workspace)=heading;
+    errno=EILSEQ;return result;
+}
+int checkpoint(int n,fd_set* r,fd_set* w,fd_set* e,timeval* t) {
+    ++checkpoint_calls;assert(n==0 && !r && !w && !e && t);
+    assert(t->tv_sec==3 && t->tv_usec==7);errno=EINTR;return -1;
+}
+void barrier(pthread_barrier_t* b) {
+    const int r=pthread_barrier_wait(b);assert(!r || r==PTHREAD_BARRIER_SERIAL_THREAD);
+}
+void driver_close() {
+    const unsigned ordinal=driver_closes.fetch_add(1);
+    if(close_block && !ordinal) { barrier(&close_entered);barrier(&close_release); }
+    errno=ECHILD;
+}
 unsigned endpoint_matches;
 A::EndpointMatch endpoint_before=A::ENDPOINT_MATCH,endpoint_after=A::ENDPOINT_MATCH;
 Cache retained_read;
@@ -116,23 +156,31 @@ int32_t read_current(void* d) {
 }
 int32_t update_current(const void* s) {
     if(!s)return 120;
-    lds_test_lock_update(&mutex,"fixture",2);lds_test_copy_update(&cache,s,48);lds_test_unlock_update(&mutex);
+    lds_test_lock_update(&mutex,"fixture",2);
+    if(update_action) { void (*action)()=update_action;update_action=0;action(); }
+    lds_test_copy_update(&cache,s,48);
+    if(repeat_copy)lds_test_copy_update(&cache,s,48);
+    lds_test_unlock_update(&mutex);
     errno=ENODATA;return 100;
 }
-void rmc(void*) {
+void rmc(void* workspace) {
     ++callback_calls;Cache p=Cache();
     Cache* destination=(throw_rmc||cancel_rmc)?&retained_read:&p;
     if(!missing_read)assert(lds_test_read_rmc(destination)==100);
     if(throw_rmc)throw 17;
     if(cancel_rmc) { assert(!pthread_cancel(pthread_self()));pthread_testcancel();assert(false); }
     if(nested_gsa)callbacks[2](0);
+    if(rmc_action) { void (*action)()=rmc_action;rmc_action=0;action(); }
     p.mode=1;p.utc=123;p.latitude=12.5f;p.longitude=34.5f;p.heading=67;p.velocity=89;
+    if(course_test)p.heading=float(*static_cast<uint32_t*>(workspace));
     if(wrong_read_buffer) { Cache different=p;assert(lds_test_update_rmc(&different)==100); }
     else assert(lds_test_update_rmc(&p)==100);
+    if(repeat_rmc) { assert(lds_test_read_rmc(&p)==100);assert(lds_test_update_rmc(&p)==100); }
     errno=E2BIG;
 }
 void gga(void*) {
     ++callback_calls;Cache p;assert(lds_test_read_gga(&p)==100);
+    if(gga_action) { void (*action)()=gga_action;gga_action=0;action(); }
     p.mode=2;p.latitude=15.5f;p.longitude=37.5f;p.altitude=-42;
     assert(lds_test_update_gga(&p)==100);errno=E2BIG;
 }
@@ -239,6 +287,8 @@ A::LdsBindings bindings() {
     b.sites.update_lock=uintptr_t(&lds_test_lock_update_return);b.sites.update_copy=uintptr_t(&lds_test_copy_update_return);b.sites.update_unlock=uintptr_t(&lds_test_unlock_update_return);
     b.sites.service_lock=uintptr_t(&lds_test_lock_service_return);b.sites.service_unlock=uintptr_t(&lds_test_unlock_service_return);
     b.message_lock=message_lock;b.native_mutex_lock=native_mutex_lock;
+    b.input=A::LdsInputBindings{parse_sentence,checkpoint,driver_close,
+        uintptr_t(&lds_test_parse_return),uintptr_t(&lds_test_checkpoint_return),uintptr_t(&lds_test_dispatch_return)};
     b.send_sites=A::LdsSendSites{uintptr_t(&lds_test_message_lock_return),uintptr_t(&lds_test_native_lock_return),
         &current_generation,&initialized_generation,offsetof(Connection,mutex),0xabcdef};
     if(locked_test) { b.publish_locked=published;b.invalidate_locked=invalidated; }
@@ -600,10 +650,258 @@ void locked_case(const char* scenario) {
     if(!throw_send)assert(record_count==1 && (records[0].flags&S::RAW_SEND_CALLED));
     mx5_lds_clear();
 }
+void parse_input(char* input,uint32_t* workspace,uint32_t result=0,uint32_t heading=0,bool wrong_caller=false) {
+    parser_input=input;parser_workspace=workspace;parser_word=777;
+    parser_result=result;parser_heading=heading;
+    const unsigned before=parser_calls;errno=EBUSY;
+    const uint32_t returned=wrong_caller?mx5_lds_parse_sentence(input,workspace,parser_word):
+        lds_test_parse(input,workspace,parser_word);
+    assert(returned==result);
+    assert(parser_calls==before+1 && parser_entry_errno==EBUSY && errno==EILSEQ);
+}
+void checkpoint_input() {
+    timeval timeout={3,7};const unsigned before=checkpoint_calls;
+    assert(lds_test_checkpoint(0,0,0,0,&timeout)==-1);
+    assert(checkpoint_calls==before+1 && errno==EINTR && timeout.tv_sec==3 && timeout.tv_usec==7);
+}
+void course_values() {
+    course_test=locked_test=endpoint_available=true;initialize_observer();
+    assert(mx5_lds_driver_open(0x1234)==104 && errno==ENOSPC);register_three();
+    char empty[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    char zero[]="$GPRMC,120001,A,3500,N,13500,E,10,0,011026,,,A*00";
+    uint32_t workspace=37;
+    parse_input(empty,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(record_count==1 && locked_count==1 && cache.heading==0);
+    assert(records[0].field_lineage.write_sequence==1 && records[0].field_lineage.fields[L::HEADING].write_sequence==1);
+    assert(records[0].field_lineage.heading_presence==T::EMPTY);
+    assert(locked_values[0].field_lineage.heading_presence==T::EMPTY);
+    checkpoint_input();
+    parse_input(zero,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(cache.heading==0 && records[1].field_lineage.write_sequence==2);
+    assert(records[1].field_lineage.heading_presence==T::PRESENT);
+    assert(locked_values[1].field_lineage.heading_presence==T::PRESENT);
+    // A rejected parse really ran, but no callback/cache write follows it.
+    parse_input(empty,&workspace,14);checkpoint_input();query();
+    assert(records[2].field_lineage.write_sequence==2 && records[2].field_lineage.heading_presence==T::PRESENT);
+    mx5_lds_driver_close();assert(errno==ECHILD && driver_closes==1);
+    mx5_lds_clear();
+}
+void course_bindings() {
+    // Each newly published data slot must have a forwardable immutable target
+    // and each observation must have its exact supported call site.
+    for(unsigned i=0;i<6;++i) {
+        A::LdsBindings b=bindings();
+        if(i==0)b.input.parse_sentence=0;
+        if(i==1)b.input.select=0;
+        if(i==2)b.input.driver_close=0;
+        if(i==3)b.input.parse_return=0;
+        if(i==4)b.input.select_return=0;
+        if(i==5)b.input.dispatch_return=0;
+        errno=E2BIG;assert(!A::prepare_lds_hooks(b) && errno==E2BIG);
+    }
+    assert(A::prepare_lds_hooks(bindings()));
+}
+void course_nested_callback() {
+    course_test=true;initialize_observer();register_three();nested_gsa=true;
+    char frame[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=42;
+    parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(callback_calls==2 && cache.heading==0);
+    assert(records[0].field_lineage.write_sequence==2);
+    assert(records[0].field_lineage.fields[L::HEADING].write_sequence==2);
+    assert(records[0].field_lineage.heading_presence==T::UNKNOWN);
+    nested_gsa=false;checkpoint_input();
+    parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(records[1].field_lineage.heading_presence==T::EMPTY);
+    mx5_lds_clear();
+}
+void* close_thread(void*) { mx5_lds_driver_close();assert(errno==ECHILD);return 0; }
+void course_boundary_overlap() {
+    course_test=true;initialize_observer();register_three();
+    close_block=true;
+    assert(!pthread_barrier_init(&close_entered,0,2));
+    assert(!pthread_barrier_init(&close_release,0,2));
+    pthread_t thread;assert(!pthread_create(&thread,0,close_thread,0));
+    barrier(&close_entered); // First original Close is still executing.
+    mx5_lds_driver_close();mx5_lds_driver_close();
+    char frame[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=42;
+    parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(callback_calls==1 && records[0].field_lineage.write_sequence==1);
+    assert(records[0].field_lineage.heading_presence==T::UNKNOWN);
+    barrier(&close_release);assert(!pthread_join(thread,0));
+    close_block=false;assert(driver_closes==3);
+    // A later isolated boundary and checkpoint can establish a new observation
+    // epoch. The overlapping callbacks themselves remain ordinary forwards.
+    mx5_lds_driver_close();checkpoint_input();
+    parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);query();
+    assert(records[1].field_lineage.heading_presence==T::EMPTY);
+    assert(!pthread_barrier_destroy(&close_entered));
+    assert(!pthread_barrier_destroy(&close_release));mx5_lds_clear();
+}
+void presence(T::Presence expected) {
+    query();assert(record_count && records[record_count-1].field_lineage.heading_presence==expected);
+}
+void course_identity() {
+    course_test=true;initialize_observer();register_three();
+    char empty[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    char zero[]="$GPRMC,120001,A,3500,N,13500,E,10,0,011026,,,A*00";
+    uint32_t a=37,b=41;
+    parse_input(empty,&a);callbacks[0](&a);presence(T::UNKNOWN); // Wrong dispatch PC.
+    checkpoint_input();
+    parse_input(empty,&a,0,0,true);lds_test_dispatch(callbacks[0],&a);presence(T::UNKNOWN);
+    checkpoint_input();
+    parse_input(empty,&a);lds_test_dispatch(callbacks[0],&b);presence(T::UNKNOWN);
+    assert(cache.heading==41);checkpoint_input();
+    parse_input(empty,&a);lds_test_dispatch(callbacks[2],&a); // Wrong route consumes uncertainty.
+    lds_test_dispatch(callbacks[0],&a);presence(T::UNKNOWN);checkpoint_input();
+    parse_input(empty,&a);lds_test_dispatch(callbacks[0],&a);presence(T::EMPTY);
+    lds_test_dispatch(callbacks[0],&a);presence(T::UNKNOWN); // One claim only.
+    parse_input(zero,&a);lds_test_dispatch(callbacks[0],&a);presence(T::PRESENT); // Same address, new call.
+    parse_input(empty,&a);parse_input(zero,&a); // Unconsumed input must not become latest-wins.
+    lds_test_dispatch(callbacks[0],&a);presence(T::UNKNOWN);
+    timeval timeout={3,7};assert(mx5_lds_select(0,0,0,0,&timeout)==-1); // Wrong checkpoint PC.
+    parse_input(empty,&a);lds_test_dispatch(callbacks[0],&a);presence(T::UNKNOWN);
+    checkpoint_input();parse_input(empty,&a);lds_test_dispatch(callbacks[0],&a);presence(T::EMPTY);
+    parse_input(empty,&a);checkpoint_input();lds_test_dispatch(callbacks[0],&a);presence(T::UNKNOWN);
+    mx5_lds_clear();
+}
+char action_frame[]="$GPRMC,120002,A,3500,N,13500,E,10,0,011026,,,A*00";
+uint32_t action_workspace;
+void inner_parse() {
+    parser_input=action_frame;parser_workspace=&action_workspace;parser_result=0;parser_heading=0;parser_word=99;
+    assert(lds_test_parse(action_frame,&action_workspace,99)==0 && errno==EILSEQ);
+    lds_test_dispatch(callbacks[0],&action_workspace);
+}
+void parse_throw() { throw 31; }
+void parse_cancel() { assert(!pthread_cancel(pthread_self()));pthread_testcancel();assert(false); }
+void cancelled_parse_cleanup(void*) {
+    lds_test_dispatch(callbacks[0],&action_workspace);presence(T::UNKNOWN);cancel_cleaned=true;
+}
+void* cancelled_parse(void*) {
+    pthread_cleanup_push(cancelled_parse_cleanup,0);
+    parse_input(action_frame,&action_workspace);
+    pthread_cleanup_pop(0);return 0;
+}
+void course_parser_control(const char* name) {
+    course_test=true;initialize_observer();register_three();
+    char frame[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=37;
+    if(!strcmp(name,"course_cancel")) {
+        parser_action=parse_cancel;pthread_t thread;void* result=0;
+        assert(!pthread_create(&thread,0,cancelled_parse,0));
+        assert(!pthread_join(thread,&result) && result==PTHREAD_CANCELED && cancel_cleaned);
+    } else if(!strcmp(name,"course_unwind")) {
+        parser_action=parse_throw;
+        try { parse_input(frame,&workspace);assert(false); } catch(int value) { assert(value==31); }
+        lds_test_dispatch(callbacks[0],&workspace);presence(T::UNKNOWN);
+    } else {
+        parser_action=inner_parse;
+        parser_input=frame;parser_workspace=&workspace;parser_word=777;parser_result=0;parser_heading=0;
+        const unsigned before=parser_calls;assert(lds_test_parse(frame,&workspace,777)==0 && errno==EILSEQ);
+        assert(parser_calls==before+2);
+        lds_test_dispatch(callbacks[0],&workspace);presence(T::UNKNOWN);
+        assert(callback_calls==2);
+    }
+    checkpoint_input();parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);presence(T::EMPTY);
+    mx5_lds_clear();
+}
+void course_lifecycle(const char* name) {
+    course_test=true;initialize_observer();register_three();
+    char frame[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=37;const A::LdsCallback retained=callbacks[0];
+    parse_input(frame,&workspace);
+    if(!strcmp(name,"course_open")) { assert(mx5_lds_driver_open(0x1234)==104 && errno==ENOSPC);register_three(); }
+    else if(!strcmp(name,"course_reset")) { mx5_lds_clear();mx5_lds_initialize(); }
+    else if(!strcmp(name,"course_write_boundary"))update_action=mx5_lds_driver_close;
+    else mx5_lds_driver_close();
+    lds_test_dispatch(retained,&workspace);presence(T::UNKNOWN);
+    checkpoint_input();parse_input(frame,&workspace);lds_test_dispatch(retained,&workspace);presence(T::EMPTY);
+    mx5_lds_clear();
+}
+void* independent_parse(void*) {
+    parse_input(action_frame,&action_workspace);lds_test_dispatch(callbacks[0],&action_workspace);return 0;
+}
+void newer_heading_write() {
+    pthread_t thread;assert(!pthread_create(&thread,0,independent_parse,0));assert(!pthread_join(thread,0));
+    presence(T::PRESENT);
+}
+void course_saved_read() {
+    course_test=true;initialize_observer();register_three();
+    char frame[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=37;
+    parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);presence(T::EMPTY);
+    gga_action=newer_heading_write;callbacks[4](0);presence(T::EMPTY);
+    assert(record_count==3 && records[1].field_lineage.write_sequence==2 && records[2].field_lineage.write_sequence==3);
+    assert(records[2].field_lineage.fields[L::HEADING].write_sequence==1 && cache.heading==0);
+    mx5_lds_clear();
+}
+void course_routes() {
+    course_test=true;initialize_observer();register_three();
+    assert(mx5_lds_register(1,rmc)==100 && mx5_lds_register(6,rmc)==100);
+    char frame[]="$GNRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=37;
+    parse_input(frame,&workspace,6);lds_test_dispatch(callbacks[6],&workspace);presence(T::EMPTY);
+    // The numeric result is a route, not generic success. An authored mismatch
+    // between the lexical RMC frame and another original sentence ID cannot
+    // turn that other route into evidence about an RMC course token.
+    parse_input(frame,&workspace,1);lds_test_dispatch(callbacks[1],&workspace);presence(T::UNKNOWN);
+    assert(records[1].field_lineage.fields[L::HEADING].write_sequence==2);
+    mx5_lds_clear();
+}
+void course_callback_parse() {
+    course_test=true;initialize_observer();register_three();
+    char frame[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=37;
+    parse_input(frame,&workspace);rmc_action=inner_parse;
+    lds_test_dispatch(callbacks[0],&workspace);presence(T::UNKNOWN);
+    assert(callback_calls==2 && records[0].field_lineage.write_sequence==2);
+    checkpoint_input();parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);presence(T::EMPTY);
+    // An input epoch change during the original parser also invalidates the
+    // earlier lexical observation, even when the parser returns normally.
+    parser_action=mx5_lds_driver_close;parse_input(frame,&workspace);
+    lds_test_dispatch(callbacks[0],&workspace);presence(T::UNKNOWN);
+    mx5_lds_clear();
+}
+void course_inactive() {
+    course_test=true;assert(A::prepare_lds_hooks(bindings()));mx5_lds_initialize();
+    assert(mx5_lds_set_callback(&object,generic,&descriptor)==13);
+    register_three();assert(callbacks[0]==rmc);
+    char frame[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=37;
+    parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);checkpoint_input();
+    query();assert(!record_count && sends==1 && cache.heading==0);
+    mx5_lds_driver_close();assert(driver_closes==1 && errno==ECHILD);
+    mx5_lds_clear();assert(errno==EFBIG);
+}
+void course_one_commit(bool repeated_copy) {
+    course_test=true;initialize_observer();register_three();
+    repeat_copy=repeated_copy;repeat_rmc=!repeated_copy;
+    char frame[]="$GPRMC,120000,A,3500,N,13500,E,10,,011026,,,A*00";
+    uint32_t workspace=37;
+    parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);presence(T::UNKNOWN);
+    assert(callback_calls==1 && records[0].field_lineage.write_sequence==2 && cache.heading==0);
+    repeat_copy=repeat_rmc=false;
+    parse_input(frame,&workspace);lds_test_dispatch(callbacks[0],&workspace);presence(T::EMPTY);
+    mx5_lds_clear();
+}
 int main(int argc,char** argv) {
     const char* test=argc==2?argv[1]:"chain";
     if(!strcmp(test,"--emit")) { emit_hook_record();return 0; }
-    if(!strncmp(test,"locked",6))locked_case(test);
+    if(!strcmp(test,"course_values"))course_values();
+    else if(!strcmp(test,"course_bindings"))course_bindings();
+    else if(!strcmp(test,"course_nested_callback"))course_nested_callback();
+    else if(!strcmp(test,"course_boundary_overlap"))course_boundary_overlap();
+    else if(!strcmp(test,"course_identity"))course_identity();
+    else if(!strcmp(test,"course_parse_nested") || !strcmp(test,"course_unwind") || !strcmp(test,"course_cancel"))course_parser_control(test);
+    else if(!strcmp(test,"course_open") || !strcmp(test,"course_close") || !strcmp(test,"course_reset") || !strcmp(test,"course_write_boundary"))course_lifecycle(test);
+    else if(!strcmp(test,"course_saved_read"))course_saved_read();
+    else if(!strcmp(test,"course_routes"))course_routes();
+    else if(!strcmp(test,"course_callback_parse"))course_callback_parse();
+    else if(!strcmp(test,"course_inactive"))course_inactive();
+    else if(!strcmp(test,"course_one_commit"))course_one_commit(false);
+    else if(!strcmp(test,"course_copy_twice"))course_one_commit(true);
+    else if(!strncmp(test,"locked",6))locked_case(test);
     else if(!strcmp(test,"chain"))chain();
     else if(!strcmp(test,"prepare"))preparation();
     else if(!strcmp(test,"inactive"))inactive();

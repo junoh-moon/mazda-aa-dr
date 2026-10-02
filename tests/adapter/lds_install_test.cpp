@@ -45,7 +45,11 @@ static const Module modules[]={
     {"usr/lib/libdbus-1.so.3","dbus_connection_send",0xb82c,
      "07b06516d6ba93bbfa9db1e817278c7c96bd86fdd0f9dc48c917b1c100a8fe6b"},
     {"lib/libpthread.so.0","pthread_mutex_lock",0x83b8,
-     "fc4b5aba8cdfe17322543ea639cc4a1dee82d99543e9c03b33f662f6b3b723f1"}
+     "fc4b5aba8cdfe17322543ea639cc4a1dee82d99543e9c03b33f662f6b3b723f1"},
+    {"jci/lib/libjcilds-nmea.so","LDS_NMEA_ParseSentence",0x2244,
+     "4a882a4938c82891fb9fcf35e597e35cf5ae35d24690181d99b9789b7cb31059"},
+    {"lib/libc.so.6","select",0xb9f90,
+     "398c50696f97d95d98917bb5be0f9ffcd4d77f2bad78a8f68933e025438cae41"}
 };
 enum {MODULE_COUNT=sizeof modules/sizeof modules[0]};
 struct Slot {unsigned module;uintptr_t offset;};
@@ -54,7 +58,7 @@ static const Slot slots[]={
     {1,0x16358},{1,0x16364},{1,0x16388},{1,0x163e8},{1,0x163f8},{1,0x16418},
     {1,0x16498},{1,0x164b8},{3,0x346d0},{3,0x34240},{3,0x34274},{3,0x34304},
     {3,0x343d4},{3,0x34400},{3,0x34474},{3,0x34560},{3,0x345ec},{3,0x34604},
-    {3,0x34654},{5,0x34600},{5,0x3454c}
+    {3,0x34654},{5,0x34600},{5,0x3454c},{0,0x146fc},{2,0x152bc},{2,0x15224}
 };
 enum {SLOT_COUNT=sizeof slots/sizeof slots[0]};
 static unsigned begins,ends,hashes,emits;
@@ -236,7 +240,8 @@ static uintptr_t replacement(unsigned i) {
         uintptr_t(mx5_bus_signal),uintptr_t(mx5_bus_free),uintptr_t(mx5_lds_send),
         uintptr_t(mx5_lds_reply_message),uintptr_t(mx5_bus_connect),uintptr_t(mx5_lds_reply_create),
         uintptr_t(mx5_bus_disconnect),uintptr_t(mx5_bus_create),uintptr_t(mx5_bus_register),
-        uintptr_t(mx5_lds_method_build),uintptr_t(mx5_lds_message_lock),uintptr_t(mx5_lds_native_mutex_lock)
+        uintptr_t(mx5_lds_method_build),uintptr_t(mx5_lds_message_lock),uintptr_t(mx5_lds_native_mutex_lock),
+        uintptr_t(mx5_lds_driver_close),uintptr_t(mx5_lds_parse_sentence),uintptr_t(mx5_lds_select)
     };
     static_assert(sizeof values/sizeof values[0]==SLOT_COUNT,"all replacement contracts");
     require(i<SLOT_COUNT,"replacement bounds");return values[i];
@@ -421,11 +426,21 @@ static void run_case(const char* scenario) {
         original_word=*corrupt;
         write_code_word(corrupt,original_word^(!std::strcmp(scenario,"pthread-prefix")?0x00100000u:1u));
         f.refresh_code_hashes();expected=A::ORIGINAL_BYTES_MISMATCH;
+    } else if(!std::strncmp(scenario,"input-",6)) {
+        if(!std::strcmp(scenario,"input-close-prefix"))corrupt=reinterpret_cast<uintptr_t*>(f.bases[2]+0x5808);
+        if(!std::strcmp(scenario,"input-parser-prefix"))corrupt=reinterpret_cast<uintptr_t*>(f.bases[7]+0x2244);
+        if(!std::strcmp(scenario,"input-select-prefix"))corrupt=reinterpret_cast<uintptr_t*>(f.bases[8]+0xb9f90);
+        if(!std::strcmp(scenario,"input-parser-call"))corrupt=reinterpret_cast<uintptr_t*>(f.bases[2]+0x3fd8);
+        if(!std::strcmp(scenario,"input-select-call"))corrupt=reinterpret_cast<uintptr_t*>(f.bases[2]+0x3df4);
+        if(!std::strcmp(scenario,"input-dispatch-call"))corrupt=reinterpret_cast<uintptr_t*>(f.bases[2]+0x44fc);
+        require(corrupt!=0,"known parser ownership instruction");
+        original_word=*corrupt;write_code_word(corrupt,original_word^1u);
+        f.refresh_code_hashes();expected=A::ORIGINAL_BYTES_MISMATCH;
     } else if(!std::strncmp(scenario,"protect-",8)) {
 #ifndef MX5DR_LDS_WRAP_MPROTECT
         require(false,"protect cases require -DMX5DR_LDS_WRAP_MPROTECT and --wrap=mprotect");
 #endif
-        protection_failure=case_index(scenario,"protect-",4)+1;
+        protection_failure=case_index(scenario,"protect-",5)+1;
         lease_reached=true;expected=A::MEMORY_PROTECTION_FAILED;
     } else if(!std::strcmp(scenario,"lease-chain-change")) {
         begin_change=f.address(17);begin_value=f.before[17]+4;
@@ -471,9 +486,9 @@ static void run_case(const char* scenario) {
         return;
     }
     require(begins==1 && ends==1 && restored,"one successful cold lease");
-    require(hashes>=MODULE_COUNT && hash_seen==((1u<<MODULE_COUNT)-1),"all seven original owners verified");
+    require(hashes>=MODULE_COUNT && hash_seen==((1u<<MODULE_COUNT)-1),"all original owners verified");
     for(unsigned i=0;i<SLOT_COUNT;++i)
-        require(*f.address(i)==replacement(i) && *f.address(i)!=f.before[i],"all 27 exact data slots published");
+        require(*f.address(i)==replacement(i) && *f.address(i)!=f.before[i],"all 30 exact data slots published");
     f.descriptor_unchanged();f.code_unchanged();
     if(!std::strncmp(scenario,"registration-",13)) {
         original_registration_route(f,case_index(scenario,"registration-",10));return;

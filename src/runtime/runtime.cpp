@@ -157,6 +157,13 @@ bool format_association(char* out,size_t capacity,const LA::Owned& o) {
       j.add(pair);
     }
     j.add("]");
+    // Preserve raw POSITION/SEND even if supplemental metadata is unavailable.
+    // Neither a zero heading nor a new origin sequence implies token presence.
+    const auto state=o.heading_presence;
+    const bool origin=o.fields[mx5::sensors::lds_lineage::HEADING].write_sequence!=0;
+    const char* presence=origin&&state==mx5::sensors::nmea_course_token::EMPTY?"empty":
+        origin&&state==mx5::sensors::nmea_course_token::PRESENT?"present":"unknown";
+    j.add(",\"heading_presence\":\"");j.add(presence);j.add("\"");
   }
   j.add("}");return j.ok();
 }

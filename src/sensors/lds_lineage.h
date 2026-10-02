@@ -2,6 +2,7 @@
 #define MX5_LDS_LINEAGE_H
 
 #include <stdint.h>
+#include "sensors/nmea_course_token.h"
 
 namespace mx5 { namespace sensors { namespace lds_lineage {
 
@@ -32,6 +33,8 @@ struct Snapshot {
     uint64_t lifetime;
     uint64_t write_sequence;
     FieldOrigin fields[FIELD_COUNT];
+    // Lexical course presence for the HEADING assignment, never numeric quality.
+    nmea_course_token::Presence heading_presence;
 private:
     const Ledger* owner_;
     friend class Ledger;
@@ -68,8 +71,12 @@ public:
     // Every actual cache write consumes one sequence, even if lineage is
     // unknown. assigned_mask == 0 is a verified copy-only write, not a no-write
     // query. An unsupported writer is not represented by an empty mask.
+    // heading_presence applies only when HEADING is assigned and must be bound
+    // to that actual parser/callback/write. Other masks inherit the actual
+    // read's presence. Missing binding stays UNKNOWN; no numeric inference.
     CommitResult commit(const Snapshot* actual_read_copy,
-                        uint32_t assigned_mask, uint64_t observed_ns);
+                        uint32_t assigned_mask, uint64_t observed_ns,
+                        nmea_course_token::Presence heading_presence=nmea_course_token::UNKNOWN);
 
 private:
     Ledger(const Ledger&) = delete;

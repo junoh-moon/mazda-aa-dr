@@ -84,7 +84,10 @@ void copy_text(Text* out,const char* borrowed) {
 }
 bool encode(const Record& r,unsigned char out[RECORD_SIZE]) {
     if(!out||!r.source_instance||!r.sequence||r.flags>255)return false;
-    memset(out,0,RECORD_SIZE);memcpy(out,"MXLD",4);put(out+4,1,2);put(out+6,RECORD_SIZE,2);
+    const auto presence=r.field_lineage.heading_presence;
+    if(presence>sensors::nmea_course_token::PRESENT ||
+       (presence!=sensors::nmea_course_token::UNKNOWN&&!r.field_lineage.fields[sensors::lds_lineage::HEADING].write_sequence))return false;
+    memset(out,0,RECORD_SIZE);memcpy(out,"MXLD",4);put(out+4,WIRE_VERSION,2);put(out+6,RECORD_SIZE,2);
     put(out+8,r.source_instance,8);put(out+16,r.sequence,8);put(out+24,r.dropped_before,8);
     put(out+32,r.observed_ns,8);put(out+40,r.flags,4);put(out+44,uint32_t(r.path_result),4);
     put(out+48,uint32_t(r.send_result),4);put(out+52,uint32_t(r.reply_type),4);
@@ -101,13 +104,17 @@ bool encode(const Record& r,unsigned char out[RECORD_SIZE]) {
     put_double(out+520,r.position.latitude_deg);put_double(out+528,r.position.longitude_deg);
     put_double(out+536,r.position.heading_deg);put_double(out+544,r.position.velocity_kmh);
     put_double(out+552,r.position.horizontal);put_double(out+560,r.position.vertical);
+    put(out+568,uint32_t(presence),4);
     return true;
 }
 bool decode(const unsigned char* p,size_t n,Record* out) {
     if(!out)return false;
     *out=Record();
-    if(!p||n!=RECORD_SIZE||memcmp(p,"MXLD",4)||get(p+4,2)!=1||get(p+6,2)!=RECORD_SIZE||
-       !zero(p+68,4)||!zero(p+568,72))return false;
+    if(!p||n!=RECORD_SIZE||memcmp(p,"MXLD",4)||get(p+6,2)!=RECORD_SIZE||
+       !zero(p+68,4))return false;
+    const uint64_t version=get(p+4,2);
+    if((version!=1&&version!=WIRE_VERSION)||!zero(p+572,68)||
+       (version==1&&!zero(p+568,4)))return false;
     Record r=Record();
     r.source_instance=get(p+8,8);r.sequence=get(p+16,8);r.dropped_before=get(p+24,8);
     r.observed_ns=get(p+32,8);r.flags=uint32_t(get(p+40,4));
@@ -121,6 +128,10 @@ bool decode(const unsigned char* p,size_t n,Record* out) {
         r.field_lineage.fields[i].write_sequence=get(p+360+16*i,8);
         r.field_lineage.fields[i].observed_ns=get(p+368+16*i,8);
     }
+    const uint64_t presence=version==1?0:get(p+568,4);
+    if(presence>sensors::nmea_course_token::PRESENT ||
+       (presence&&!r.field_lineage.fields[sensors::lds_lineage::HEADING].write_sequence))return false;
+    r.field_lineage.heading_presence=static_cast<sensors::nmea_course_token::Presence>(presence);
     r.position.mode=int32_t(get(p+504,4));r.position.altitude_m=int32_t(get(p+508,4));
     r.position.utc_seconds=get(p+512,8);r.position.latitude_deg=get_double(p+520);
     r.position.longitude_deg=get_double(p+528);r.position.heading_deg=get_double(p+536);
@@ -230,6 +241,10 @@ bool Sender::try_send(const Record& input) {
     return true;
 }
 bool format_record(char* out,size_t cap,const Record& r,const Diagnostic& d) {
+    const auto state=r.field_lineage.heading_presence;
+    if(state>sensors::nmea_course_token::PRESENT)return false;
+    const char* presence=state==sensors::nmea_course_token::EMPTY?"empty":
+        state==sensors::nmea_course_token::PRESENT?"present":"unknown";
     request_log_detail::Json j(out,cap);
     j.add("{\"kind\":\"lds_sideband\",\"schema\":1,\"association_only\":true,\"assist_ready\":false,\"producer_time_status\":\"unknown\"");
     j.number("mono_ns",d.received_ns);j.signed_number("sender_pid",d.sender_pid,true);j.number("sender_uid",d.sender_uid);
@@ -243,6 +258,7 @@ bool format_record(char* out,size_t cap,const Record& r,const Diagnostic& d) {
     // Json::number prefixes a comma; begin this object with its literal first key.
     j.add("\"association_only\":true");j.number("lifetime",r.field_lineage.lifetime);j.number("write_sequence",r.field_lineage.write_sequence);
     j.add(",\"field_write_sequences\":");array(j,r,false);j.add(",\"field_observed_ns\":");array(j,r,true);
+    j.add(",\"heading_presence\":\"");j.add(presence);j.add("\"");
     j.add("},\"position\":{\"snapshot_known\":");j.add(r.flags&SNAPSHOT_KNOWN?"true":"false");
     j.signed_number("mode",r.position.mode,true);j.number("utc_s",r.position.utc_seconds);
     add_number(j,"lat",r.position.latitude_deg);add_number(j,"lon",r.position.longitude_deg);

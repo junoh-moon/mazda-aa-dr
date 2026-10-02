@@ -31,7 +31,7 @@ def sideband():
                   request_serial=23, response_serial=31, reply_serial=23),
         field_lineage=dict(association_only=True, lifetime=2, write_sequence=3,
             field_write_sequences=[1, 1, 3, 3, 3, 1, 1, 2, 2],
-            field_observed_ns=[100]*9),
+            field_observed_ns=[100]*9, heading_presence='unknown'),
         position=dict(snapshot_known=True, **{key: p[key] for key in
             ('mode', 'utc_s', 'lat', 'lon', 'altitude_m', 'heading', 'kmh', 'horizontal', 'vertical')}))
 
@@ -49,6 +49,73 @@ class LdsSideband(unittest.TestCase):
         self.assertEqual(report['request_observation']['lds_sideband_matching'],
                          'exact_wire_key_diagnostic_only')
         return report['lds_sideband']
+
+    def test_heading_presence_is_independent_of_numeric_zero_and_arrival_order(self):
+        for value in ('unknown', 'empty', 'present'):
+            for first in (False, True):
+                with self.subTest(presence=value, sideband_first=first):
+                    p, row = position(), sideband()
+                    p['heading'] = row['position']['heading'] = 0
+                    row['field_lineage']['heading_presence'] = value
+                    _, report = observe(*( (row, p) if first else (p, row)))
+                    linked = self.linked(report)
+                    self.assertEqual(linked['heading_presence'], {value: 1})
+                    self.assertEqual(linked['attachments'][0]['heading_presence'], value)
+                    self.assertFalse(linked['assist_ready'])
+
+    def test_legacy_heading_presence_remains_unknown(self):
+        p, row = position(), sideband()
+        p['heading'] = row['position']['heading'] = 0
+        del row['field_lineage']['heading_presence']
+        _, report = observe(p, row)
+        self.assertEqual(self.linked(report)['heading_presence'], {'unknown': 1})
+        self.assertEqual(self.linked(report)['attachments'][0]['heading_presence'], 'unknown')
+        self.assertNotIn('heading_presence', row['field_lineage'])
+
+    def test_heading_malformed_metadata_preserves_raw_and_model(self):
+        from test_motion_logs import valid_shadow
+        p, model = position(), valid_shadow()
+        _, baseline = observe(p, model)
+        for value in (None, True, 0, 3, [], {}, 'valid', 'EMPTY'):
+            with self.subTest(value=value):
+                row = sideband()
+                row['field_lineage']['heading_presence'] = value
+                a, report = observe(p, row, model)
+                self.assertIn('lds_sideband_malformed', [i['code'] for i in a.issues])
+                self.assertEqual(a.counts['position'], 1)
+                self.assertEqual(report['shadow'], baseline['shadow'])
+                self.assertEqual(self.linked(report)['attachments'], [])
+
+    def test_heading_presence_requires_an_observed_heading_origin(self):
+        for value in ('empty', 'present', 'unknown'):
+            row = sideband()
+            row['field_lineage']['heading_presence'] = value
+            row['field_lineage']['field_write_sequences'][5] = 0
+            row['field_lineage']['field_observed_ns'][5] = 0
+            a, report = observe(position(), row)
+            self.assertEqual(bool(self.linked(report)['attachments']), value == 'unknown')
+            self.assertEqual(a.counts['position'], 1)
+
+    def test_heading_metadata_conflict_revokes_and_next_boot_recovers(self):
+        first, conflict = sideband(), sideband()
+        first['field_lineage']['heading_presence'] = 'empty'
+        conflict['field_lineage']['heading_presence'] = 'present'
+        a, report = observe(position(), first, conflict)
+        self.assertEqual(self.linked(report)['position_links'], {'conflict': 1})
+        self.assertEqual(self.linked(report)['heading_presence'], {})
+        for row in (boot(), position(), conflict):
+            a.consume(row, 'fresh-observed-boot')
+        linked = self.linked(a.report())
+        self.assertEqual(linked['heading_presence'], {'present': 1})
+
+    def test_heading_presence_count_survives_session_boundary(self):
+        a = audit.Auditor()
+        for value in ('empty', 'present'):
+            row = sideband()
+            row['field_lineage']['heading_presence'] = value
+            for item in (boot(), position(), row):
+                a.consume(item, 'two-observed-boots')
+        self.assertEqual(self.linked(a.report())['heading_presence'], {'empty': 1, 'present': 1})
 
     def test_actual_cpp_formatter_roundtrip_uses_path_return_zero(self):
         fixture = shlex.split(os.environ.get('MX5DR_LDS_FIXTURE',

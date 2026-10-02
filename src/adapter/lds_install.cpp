@@ -15,7 +15,7 @@
 namespace {
 namespace A=mx5::adapter;
 namespace D=A::data_patch;
-enum ModuleId { SERVICE,LDS,DRIVER,BUS,RAW,COMMON,PTHREAD,MODULE_COUNT };
+enum ModuleId { SERVICE,LDS,DRIVER,BUS,RAW,COMMON,PTHREAD,NMEA,LIBC,MODULE_COUNT };
 struct ModuleSpec { const char* anchor;const char* hash; };
 // Exact NA 74.00.324A. Use the live service dependency scope.
 const ModuleSpec modules[]={
@@ -26,6 +26,8 @@ const ModuleSpec modules[]={
     {"dbus_message_get_type","07b06516d6ba93bbfa9db1e817278c7c96bd86fdd0f9dc48c917b1c100a8fe6b"},
     {"MEM_Copy","637cc53cd0621ec7fed24be2519b3e208191dd22954d2442d70e854413874b0d"},
     {"pthread_mutex_lock","fc4b5aba8cdfe17322543ea639cc4a1dee82d99543e9c03b33f662f6b3b723f1"},
+    {"LDS_NMEA_ParseSentence","4a882a4938c82891fb9fcf35e597e35cf5ae35d24690181d99b9789b7cb31059"},
+    {"select","398c50696f97d95d98917bb5be0f9ffcd4d77f2bad78a8f68933e025438cae41"},
 };
 struct FunctionSpec {
     ModuleId owner;const char* name;uintptr_t offset;uint32_t prefix[2];
@@ -35,6 +37,9 @@ const FunctionSpec functions[]={
     {SERVICE,"GetServiceInterfaces",0x5f6c,{0xe59f0000,0xe12fff1e}},
     {LDS,"LDS_DBUS_UpdateCurrentPosition",0x574c,{0xe92d4010,0xe2504000}},
     {DRIVER,"LDS_DRIVER_Open",0x4e6c,{0xe92d41f0,0xe24dd018}},
+    {DRIVER,"LDS_DRIVER_Close",0x5808,{0xe92d41f0,0xe59f438c}},
+    {NMEA,"LDS_NMEA_ParseSentence",0x2244,{0xe92d4ff0,0xe3500000}},
+    {LIBC,"select",0xb9f90,{0xe51fc038,0xe79fc00c}},
     {LDS,"LDS_DBUS_Position_Data_Interface_Clear",0x4460,{0xe52de004,0xe59f00bc}},
     {DRIVER,"LDS_DRIVER_RegisterLocationCallback",0x5c24,{0xe52de004,0xe2512000}},
     {LDS,"LDS_DBUS_GetCurrentPosition",0x5424,{0xe92d4010,0xe2504000}},
@@ -173,6 +178,8 @@ A::InstallResult check_context(const Module* m,size_t page) {
         {SERVICE,0x41e8,0xebfffcf1},{SERVICE,0x4380,0xebfffc1f},
         {SERVICE,0x4020,0xebfffd63},{SERVICE,0x40fc,0xebfffcc0},
         {SERVICE,0x3e64,0xebfffdd2},{SERVICE,0x3f74,0xebfffd22},
+        {DRIVER,0x3df4,0xebfffc54},{DRIVER,0x3fd8,0xebfffc4d},
+        {DRIVER,0x44f8,0xe1a0e00f},{DRIVER,0x44fc,0xe12fff1c},
         {RAW,0xb704,0xebffe728},{RAW,0xb834,0xe5900004},{RAW,0xb840,0xeb003c1a},
         {RAW,0x1a8b0,0xe59f302c},{RAW,0x1a8b4,0xe3500000},{RAW,0x1a8bc,0x012fff1e},
         {RAW,0x1a8d8,0xe1520001},{RAW,0x1a8dc,0x112fff1e},{RAW,0x1a8e0,0xea002aa8},
@@ -225,6 +232,9 @@ A::InstallResult make_plan(const Module* m,size_t page,D::Plan& plan) {
         {SERVICE,0x14634,LDS,0x413c,reinterpret_cast<uintptr_t>(&mx5_lds_initialize)},
         {RAW,0x34600,RAW,0x13268,reinterpret_cast<uintptr_t>(&mx5_lds_message_lock)},
         {RAW,0x3454c,PTHREAD,0x83b8,reinterpret_cast<uintptr_t>(&mx5_lds_native_mutex_lock)},
+        {DRIVER,0x152bc,NMEA,0x2244,reinterpret_cast<uintptr_t>(&mx5_lds_parse_sentence)},
+        {DRIVER,0x15224,LIBC,0xb9f90,reinterpret_cast<uintptr_t>(&mx5_lds_select)},
+        {SERVICE,0x146fc,DRIVER,0x5808,reinterpret_cast<uintptr_t>(&mx5_lds_driver_close)},
     };
     static_assert(sizeof slots/sizeof slots[0]<=D::Plan::SLOT_CAPACITY,"slot capacity");
     for(unsigned i=0;i<sizeof slots/sizeof slots[0];++i) {
@@ -252,6 +262,8 @@ void bindings(const A::LdsInstallOptions& in,const Module* m,Setup& s) {
 #define LDS_FUNCTION(field,id,offset) b.field=function<decltype(b.field)>(m,id,offset)
     LDS_FUNCTION(initialize,LDS,0x413c);LDS_FUNCTION(clear,LDS,0x4460);
     LDS_FUNCTION(driver_open,DRIVER,0x4e6c);LDS_FUNCTION(registration,DRIVER,0x5c24);
+    LDS_FUNCTION(input.driver_close,DRIVER,0x5808);
+    LDS_FUNCTION(input.parse_sentence,NMEA,0x2244);LDS_FUNCTION(input.select,LIBC,0xb9f90);
     LDS_FUNCTION(read,LDS,0x5424);LDS_FUNCTION(update,LDS,0x574c);
     LDS_FUNCTION(lock,SERVICE,0x7aa0);LDS_FUNCTION(unlock,SERVICE,0x7b48);
     LDS_FUNCTION(copy,COMMON,0xce20);LDS_FUNCTION(set_callback,BUS,0x1fe3c);
@@ -266,6 +278,9 @@ void bindings(const A::LdsInstallOptions& in,const Module* m,Setup& s) {
     LDS_FUNCTION(raw.interface_name,RAW,0x14144);LDS_FUNCTION(raw.member,RAW,0x141c8);
 #undef LDS_FUNCTION
     const uintptr_t l=m[LDS].base,svc=m[SERVICE].base;
+    b.input.parse_return=m[DRIVER].base+0x3fdc;
+    b.input.select_return=m[DRIVER].base+0x3df8;
+    b.input.dispatch_return=m[DRIVER].base+0x4500;
     b.descriptor=reinterpret_cast<const A::LdsDescriptor*>(l+0x16538);
     b.current_cache=reinterpret_cast<void*>(l+0x16860);
     b.current_mutex=reinterpret_cast<void*>(l+0x16680);

@@ -11,6 +11,7 @@ namespace S=mx5::runtime::lds_sideband;
 namespace L=mx5::sensors::lds_lineage;
 namespace R=mx5::runtime::request_trace;
 namespace B=mx5::runtime::bus_trace;
+namespace T=mx5::sensors::nmea_course_token;
 A::LdsBindings original;
 std::atomic<unsigned> preparation(0); // 0 empty, 1 copying, 2 prepared, 3 active.
 alignas(L::Ledger) unsigned char ledger_storage[sizeof(L::Ledger)];
@@ -32,6 +33,41 @@ bool active() { return preparation.load(std::memory_order_acquire)==3; }
 // already-held original cache mutex, including applying this deferred reset.
 std::atomic<unsigned> lifecycle(0),cache_users(0);
 unsigned applied_lifetime;
+// Observation boundary only, with the same busy/known/unknown low-bit states.
+// No thread writes another thread's pending parse payload.
+std::atomic<uint32_t> input_lifetime(2),input_users(0);
+struct InputBoundary {
+    uint32_t token;
+    InputBoundary():token(0) {
+        const uint32_t users=input_users.fetch_add(1,std::memory_order_acq_rel);
+        if(users==UINT32_MAX) { input_lifetime.store(UINT32_MAX,std::memory_order_release);return; }
+        uint32_t before=input_lifetime.load(std::memory_order_acquire);
+        if(before>=UINT32_MAX-3) { input_lifetime.store(UINT32_MAX,std::memory_order_release);return; }
+        const uint32_t next=((before>>2)+1)*4+1;
+        if(!input_lifetime.compare_exchange_strong(before,next,std::memory_order_acq_rel,std::memory_order_acquire)) {
+            input_lifetime.fetch_or(3,std::memory_order_acq_rel);return;
+        }
+        token=next;
+        if(users || (before&3)==1)input_lifetime.fetch_or(3,std::memory_order_acq_rel);
+    }
+    void completed() {
+        if(!token)return;
+        if(input_users.load(std::memory_order_acquire)!=1) {
+            input_lifetime.fetch_or(3,std::memory_order_acq_rel);return;
+        }
+        uint32_t expected=token;
+        input_lifetime.compare_exchange_strong(expected,token+1,std::memory_order_acq_rel,std::memory_order_acquire);
+        token=0;
+    }
+    ~InputBoundary() {
+        const Errno saved;
+        if(token) {
+            uint32_t expected=token;
+            input_lifetime.compare_exchange_strong(expected,token+2,std::memory_order_acq_rel,std::memory_order_acquire);
+        }
+        input_users.fetch_sub(1,std::memory_order_acq_rel);
+    }
+};
 void unknown_lifecycle() { lifecycle.fetch_or(3,std::memory_order_acq_rel); }
 struct Lifecycle {
     unsigned token;
@@ -85,6 +121,49 @@ __thread GenericFrame* generic_frame __attribute__((tls_model("initial-exec")));
 __thread SendFrame* send_frame __attribute__((tls_model("initial-exec")));
 struct Hold { bool held; Operation* owner; };
 __thread Hold hold __attribute__((tls_model("initial-exec")));
+enum { INPUT_RUNNING=1,INPUT_READY=2,INPUT_POISONED=4,INPUT_EXHAUSTED=8 };
+struct PendingInput {
+    void* workspace;
+    uint32_t lifetime,sequence,route;
+    T::Presence presence;
+    uint32_t state;
+};
+static_assert(sizeof(PendingInput)<=32,"Only small parser ownership state may live in TLS");
+__thread PendingInput pending_input __attribute__((tls_model("initial-exec")));
+
+void poison_input() {
+    pending_input.workspace=0;
+    pending_input.presence=T::UNKNOWN;
+    pending_input.state=(pending_input.state&INPUT_EXHAUSTED)|INPUT_POISONED;
+}
+struct ParseInput {
+    uint32_t sequence,lifetime;
+    bool returned;
+    ParseInput():sequence(0),lifetime(input_lifetime.load(std::memory_order_acquire)),returned(false) {
+        const bool uncertain=pending_input.state || callback_frame;
+        if(pending_input.sequence==UINT32_MAX)pending_input.state|=INPUT_EXHAUSTED;
+        else sequence=++pending_input.sequence;
+        const uint32_t exhausted=pending_input.state&INPUT_EXHAUSTED;
+        pending_input.workspace=0;pending_input.presence=T::UNKNOWN;
+        pending_input.lifetime=lifetime;
+        pending_input.state=INPUT_RUNNING|exhausted|(uncertain?INPUT_POISONED:0);
+    }
+    void completed(bool verified,void* workspace,uint32_t route,T::Presence presence) {
+        returned=true;
+        if(!sequence || pending_input.sequence!=sequence || pending_input.state!=INPUT_RUNNING) {
+            poison_input();return;
+        }
+        pending_input.state=0;
+        // The exact reader dispatches only original IDs 0..8. Only RMC's
+        // two IDs carry this lexical course field; PRESENT is not validity.
+        if(!verified || !workspace || route>8 || !original.routes[route].callback ||
+           (lifetime&3)!=2 || input_lifetime.load(std::memory_order_acquire)!=lifetime)return;
+        pending_input.workspace=workspace;pending_input.route=route;
+        pending_input.presence=route==0 || route==6?presence:T::UNKNOWN;
+        pending_input.state=INPUT_READY;
+    }
+    ~ParseInput() { const Errno saved;if(!returned)poison_input(); }
+};
 
 struct CallbackFrame {
     CallbackFrame* previous;
@@ -92,7 +171,25 @@ struct CallbackFrame {
     L::Snapshot read;
     void* destination;
     bool have_read;
-    explicit CallbackFrame(const A::LdsRoute& r):previous(callback_frame),route(r),read(),destination(0),have_read(false) { callback_frame=this; }
+    T::Presence heading_presence;
+    uint32_t input_sequence,input_epoch;
+    CallbackFrame(const A::LdsRoute& r,unsigned id,void* workspace,uintptr_t caller):previous(callback_frame),route(r),read(),destination(0),have_read(false),heading_presence(T::UNKNOWN),input_sequence(0),input_epoch(0) {
+        if(!previous && pending_input.state==INPUT_READY &&
+           caller==original.input.dispatch_return && workspace==pending_input.workspace &&
+           id==pending_input.route && input_lifetime.load(std::memory_order_acquire)==pending_input.lifetime) {
+            heading_presence=pending_input.presence;input_sequence=pending_input.sequence;
+            input_epoch=pending_input.lifetime;pending_input.state=0;
+            pending_input.workspace=0;pending_input.presence=T::UNKNOWN;
+        } else if(previous || pending_input.state)poison_input();
+        callback_frame=this;
+    }
+    T::Presence take_course() {
+        const T::Presence result=callback_frame==this && input_sequence && pending_input.sequence==input_sequence &&
+            pending_input.state==0 && input_lifetime.load(std::memory_order_acquire)==input_epoch ?
+            heading_presence:T::UNKNOWN;
+        input_sequence=0;heading_presence=T::UNKNOWN;
+        return result;
+    }
     ~CallbackFrame() { const Errno saved;callback_frame=previous; }
 };
 enum Kind { READ,WRITE,SERVICE };
@@ -103,11 +200,12 @@ struct Operation {
     bool verified,copied,unlocked;
     L::Snapshot read;
     uint32_t mask;
+    CallbackFrame* input_callback;
     PathFrame* response;
     int32_t *mode,*altitude;
     uint64_t* utc;
     double *latitude,*longitude,*heading,*velocity,*horizontal,*vertical;
-    Operation(Kind k,const void* b):previous(operation),kind(k),buffer(b),verified(false),copied(false),unlocked(false),read(),mask(0),response(0),mode(0),altitude(0),utc(0),latitude(0),longitude(0),heading(0),velocity(0),horizontal(0),vertical(0) {
+    Operation(Kind k,const void* b):previous(operation),kind(k),buffer(b),verified(false),copied(false),unlocked(false),read(),mask(0),input_callback(0),response(0),mode(0),altitude(0),utc(0),latitude(0),longitude(0),heading(0),velocity(0),horizontal(0),vertical(0) {
         operation=this;
         if(cache_users.fetch_add(1,std::memory_order_acq_rel)==UINT32_MAX)
             lifecycle.store(UINT32_MAX,std::memory_order_release);
@@ -210,8 +308,9 @@ struct GenericFrame {
 };
 
 template<unsigned Id> void callback(void* value) {
+    const uintptr_t caller=uintptr_t(__builtin_return_address(0));
     ready();
-    CallbackFrame scope(original.routes[Id]);
+    CallbackFrame scope(original.routes[Id],Id,value,caller);
     original.routes[Id].callback(value);
 }
 const A::LdsCallback callback_wrappers[12]={callback<0>,callback<1>,callback<2>,callback<3>,callback<4>,callback<5>,callback<6>,callback<7>,callback<8>,callback<9>,callback<10>,callback<11>};
@@ -248,6 +347,7 @@ void snapshot(Operation& op) {
     const L::Snapshot lineage=cache_snapshot();
     p->record.field_lineage.lifetime=lineage.lifetime;
     p->record.field_lineage.write_sequence=lineage.write_sequence;
+    p->record.field_lineage.heading_presence=lineage.heading_presence;
     for(unsigned i=0;i<L::FIELD_COUNT;++i)p->record.field_lineage.fields[i]=lineage.fields[i];
     p->record.flags|=S::SNAPSHOT_KNOWN;
 }
@@ -255,6 +355,8 @@ bool complete(const A::LdsBindings& b) {
     // Data slots are patched even when the optional publisher is unavailable.
     // Immutable original targets must therefore always be forwardable.
     if(!b.message_lock || !b.native_mutex_lock)return false;
+    if(!b.input.parse_sentence || !b.input.select || !b.input.driver_close ||
+       !b.input.parse_return || !b.input.select_return || !b.input.dispatch_return)return false;
     if(bool(b.publish_locked)!=bool(b.invalidate_locked))return false;
     if(b.publish_locked && (!b.send_sites.message_lock_return || !b.send_sites.native_lock_return ||
        !b.send_sites.current_generation || !b.send_sites.initialized_generation))return false;
@@ -293,15 +395,54 @@ bool activate_lds_hooks() {
 
 extern "C" void mx5_lds_initialize() {
     ready();if(!active()) { original.initialize();return; }
-    Lifecycle scope(true);original.initialize();
-    const Errno saved;scope.completed();
+    InputBoundary input;Lifecycle scope(true);original.initialize();
+    const Errno saved;scope.completed();input.completed();
 }
 extern "C" void mx5_lds_clear() {
     ready();if(!active()) { original.clear();return; }
-    Lifecycle scope(false);original.clear();
+    InputBoundary input;Lifecycle scope(false);original.clear();
+    const Errno saved;input.completed();
 }
 extern "C" int32_t mx5_lds_driver_open(uintptr_t word) {
-    ready();return original.driver_open(word);
+    ready();if(!active())return original.driver_open(word);
+    InputBoundary input;const int32_t result=original.driver_open(word);
+    const Errno saved;input.completed();return result;
+}
+extern "C" void mx5_lds_driver_close() {
+    ready();if(!active()) { original.input.driver_close();return; }
+    InputBoundary input;original.input.driver_close();
+    const Errno saved;input.completed();
+}
+extern "C" uint32_t mx5_lds_parse_sentence(char* input,void* workspace,uint32_t word) {
+    const uintptr_t caller=uintptr_t(__builtin_return_address(0));
+    ready();if(!active())return original.input.parse_sentence(input,workspace,word);
+    const int entry_errno=errno;
+    ParseInput scope;
+    const bool verified=caller==original.input.parse_return;
+    T::Presence presence=T::UNKNOWN;
+    // The exact original reader calls with an assembled NUL-terminated string.
+    // Its third word is preserved, not promoted into a readable-buffer length.
+    if(verified && input && workspace) {
+        size_t size=0;
+        while(size<T::SCAN_LIMIT && input[size])++size;
+        if(size<T::SCAN_LIMIT)presence=T::classify(input,size+1);
+    }
+    errno=entry_errno;
+    const uint32_t result=original.input.parse_sentence(input,workspace,word);
+    const Errno saved;scope.completed(verified,workspace,result,presence);return result;
+}
+extern "C" int mx5_lds_select(int n,fd_set* r,fd_set* w,fd_set* e,timeval* timeout) {
+    const uintptr_t caller=uintptr_t(__builtin_return_address(0));
+    ready();
+    if(active() && caller==original.input.select_return) {
+        const Errno saved;
+        if(callback_frame || (pending_input.state&INPUT_RUNNING))poison_input();
+        else {
+            pending_input.workspace=0;pending_input.presence=T::UNKNOWN;
+            pending_input.state&=INPUT_EXHAUSTED;
+        }
+    }
+    return original.input.select(n,r,w,e,timeout);
 }
 extern "C" int32_t mx5_lds_register(uint32_t id,A::LdsCallback fn) {
     ready();
@@ -329,7 +470,7 @@ extern "C" int32_t mx5_lds_update(const void* buffer) {
     CallbackFrame* const callback=callback_frame;
     scope.verified=callback && callback->have_read && callback->destination==buffer &&
         caller==callback->route.update_caller;
-    if(scope.verified) { scope.read=callback->read;scope.mask=callback->route.assigned_mask; }
+    if(scope.verified) { scope.read=callback->read;scope.mask=callback->route.assigned_mask;scope.input_callback=callback; }
     // One actual read may authorize only its first verified update. It is not
     // ambient permission for a later call that happens to reuse stack storage.
     if(callback)callback->have_read=false;
@@ -371,11 +512,16 @@ extern "C" void* mx5_lds_mem_copy(void* dst,const void* src,unsigned bytes) {
     const Errno saved;
     if(!active())return result;
     if(dst==original.current_cache && bytes) {
+        // A claim belongs to its first actual cache write. A second write,
+        // even after another verified read in the same callback, cannot reuse
+        // that input. Unverified writes burn the claim without promoting it.
+        const T::Presence claimed=callback_frame?callback_frame->take_course():T::UNKNOWN;
         if(!hold.held) { unknown_lifecycle();return result; }
         if(cache_ready()) {
             const bool matched=operation && hold.owner==operation && operation->kind==WRITE &&
                 caller==original.sites.update_copy && src==operation->buffer && bytes==48 && operation->verified;
-            ledger->commit(matched?&operation->read:0,matched?operation->mask:0,now());
+            const T::Presence presence=matched && operation->input_callback==callback_frame?claimed:T::UNKNOWN;
+            ledger->commit(matched?&operation->read:0,matched?operation->mask:0,now(),presence);
         }
     } else if(hold.held && operation && hold.owner==operation && operation->kind==READ &&
               caller==original.sites.read_copy && src==original.current_cache &&
