@@ -39,6 +39,13 @@ POSITION/LOCATION 10쌍·90개 원시 필드와 현재 callback의 inline 연결
 이 fixture의 association_reader는 null이며 물리 공급부 완료로 합치지 않습니다.
 부분 SM 기동, 물리 자격과 폰 수용은 계속 남습니다.
 
+후속 `01cb939`의 [새 전체 검사](../validation/LDS_INLINE_FULL_2026-10-02.md)는
+같은 제품 입력에서 여섯 바이너리를 다시 빌드하고 host Python 592개·C/C++,
+전체 ARM Python 118개·C/C++, 실제 AA DSO 13개 suite·190사례와 원본
+LDS 설치기 84사례를 생략 없이 통과했습니다. 이전 실패는 그대로 보존합니다.
+첫 부분 SM VM은 240초 안에 LDS 상태를 내보내지 못해 미판정이며,
+수집 도구를 보완하고 있습니다. 새 공개 설치 ZIP이나 v1.0 발행은 아닙니다.
+
 **2026-10-02 첫 실차 회수는 빈 기록입니다.** v0.3.9-shadow.1 설치 뒤
 차량 시동 OFF/ON과 무선 AA 동글 사용이 있었고, v0.3.9-shadow.2로 다시
 회수한 archive에는 trace·collector JSONL이 전혀 없습니다. 메뉴3의
