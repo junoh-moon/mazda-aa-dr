@@ -3,14 +3,15 @@
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
 **The current public development pre-release is
-[v0.3.11-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.1).**
-It includes smaller AA/LDS static TLS and current-callback LDS association.
-Full host/ARM checks, partial original-runtime execution and final-ZIP stock-shell
-checks passed. The published assets were downloaded and compared with the tested
-candidate; see [publication evidence](validation/RELEASE_V0311_2026-10-02.md).
-Whole normal SM/vehicle startup and recovery, physical sensors and phone acceptance
-remain unverified; live ASSIST stays disabled. The earlier v0.3.10-shadow.1 and .2
-packages remain withdrawn.
+[v0.3.11-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.2).**
+It preserves lexical RMC A/V status through the LDS heading assignment into AA
+observation records. The final shell-only ZIP passed three stock BusyBox paths,
+and the published assets were downloaded and compared with the pinned candidate;
+see [publication evidence](validation/RELEASE_V0311_SHADOW2_2026-10-02.md).
+Installation requires an already authorized shell that remains accessible after
+reboot; this ZIP does not provide shell entry. Whole normal SM/vehicle startup and
+recovery, physical sensors and phone acceptance remain unverified; live ASSIST
+stays disabled. The earlier v0.3.10-shadow.1 and .2 packages remain withdrawn.
 
 **The local source is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. A vehicle trial was attempted, but its recovered archive contains no capture journals; startup and storage remain under investigation. Sensor operation and phone acceptance are unverified. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
 
@@ -63,55 +64,19 @@ and the distinct scope of earlier original-library execution.
 [v0.3.8](validation/RELEASE_V038_2026-10-01.md) and
 [v0.3.7](validation/RELEASE_V037_2026-10-01.md) retain their historical evidence.
 
-The following is the procedure for a separately verified future package, not
-an instruction to install the withdrawn ZIP. Unpack the installation ZIP's
-contents to the FAT32 USB root. **While parked,
-open your existing working diagnostic shell**, run this line, and choose `1` for a first installation
-then Enter. Change the drive letter if needed; no Shift characters are required.
+For a separately arranged trial with the current .2 shell-only ZIP, use the
+[power-state and installation instructions](packaging/SHELL_START_KO.md).
+They require an already authorized diagnostic shell that remains accessible
+after the CMU reboot. The USB menu uses `1 → 5 → 2` while parked, followed by
+the documented AA/USB switch and parked export. This publication does not grant
+another vehicle trial. Do not enter commands or change USB devices while driving.
 
-```sh
-sh /tmp/mnt/sda1/trial
-```
-
-For any separately authorized future trial, keep the car parked in neutral with
-the parking brake applied and the engine actually running. Follow the
-[power-state and installation instructions](packaging/USB_START_KO.md): after menu `1`,
-choose `5` with the same USB connected, without pressing the engine button.
-After the CMU returns, reopen the USB shell. Before moving, use menu `2` to check
-`reboot_check=new_boot_observed`,
-`startup_state=guard_committed_after_new_boot`,
-`one_boot=consumed_this_boot`, `config_mode=SHADOW`,
-`runtime_disable_next_start=absent`, nonzero `retained_bytes`, and
-`collector_poll_recent=observed`. These seven checks apply to the published
-v0.3.10-shadow.2 trial candidate; shadow.1 lacks `startup_state`,
-`config_mode`, and `runtime_disable_next_start`. A positive guard marker does
-not prove that SM received the trial path or that AA started.
-If `startup_state=new_linux_boot_arm_unconsumed` or the collector poll is
-missing immediately after the screen returns, wait 60 seconds while parked
-and run `2` once more. If any of the seven checks is still absent, export
-available evidence with `3`, then reopen the menu with the same command and
-disarm with `4`; do not proceed with that trial. A parked
-sensor-free status can exit nonzero even when these individual startup checks
-are present. Exit with `0`, then swap the USB for AA or its dongle without another
-engine/CMU restart and check normal AA/touch
-operation while parked. Menu `2` does not itself start capture. After parking,
-disconnect AA, reconnect the USB, return to the shell and choose `3` directly.
-If shell reentry requires a normal reboot, retrieve the retained previous-boot
-logs without reinstalling or rearming. A nonzero `finish_exit` means current-boot
-completion is unconfirmed; `export_exit=0` separately confirms export of available
-files, not trial success.
-Keep the archive, checksum and `trial-result.txt` together. See the
-[USB instructions](packaging/USB_START_KO.md) and [combined trial](docs/FIELD_TRIAL_KO.md).
-Do not enter commands or change USB devices while driving.
-
-The packaging supports BusyBox 1.19.2, absent sha256sum, numeric UID 0, stock
-storage aliases and read-only root; [earlier installation evidence](validation/USB_INSTALL_2026-09-29.md)
-is retained separately.
-The [OEM execution and account correction](validation/OEM_RUNTIME_2026-09-29.md)
-supersedes the earlier non-root `cmu` test assumption: stock `cmu` is UID 0,
-so the separate collector uses the existing non-root `service` account.
-Stock-kernel/OEM service execution remains incomplete; the empty field archive
-does not validate live capture.
+Historical packaging evidence for BusyBox 1.19.2, absent sha256sum, numeric UID 0,
+stock storage aliases and read-only root remains in
+[the earlier installation record](validation/USB_INSTALL_2026-09-29.md).
+The [OEM account correction](validation/OEM_RUNTIME_2026-09-29.md) records that
+stock `cmu` is UID 0 and the collector uses the existing non-root `service`
+account. Normal whole-SM and vehicle startup remain unverified.
 
 ## Goal and current implementation
 

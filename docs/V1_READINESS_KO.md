@@ -11,8 +11,8 @@ GPS 단절 중 보정 위치가 실제 AA 송신에 선택되고, GPS 복귀 시
 비활성이며 이 적용 경로는 미완료입니다. 관측·SHADOW와 연결 경계 검사는
 해당 경로를 구현하기 위한 중간 작업으로만 기록합니다.
 
-현재 [v0.3.11-shadow.1](../validation/RELEASE_V0311_2026-10-02.md)을
-SHADOW 개발 사전 릴리즈로 게시하고 공개 파일을 다시 대조했습니다.
+현재 [v0.3.11-shadow.2](../validation/RELEASE_V0311_SHADOW2_2026-10-02.md)을
+shell-only SHADOW 개발 사전 릴리즈로 게시하고 공개 파일을 다시 대조했습니다.
 발행은 아래 v1.0 미완료 조건이나 새로운 차량 시험 승인을 바꾸지 않습니다.
 
 2026-10-02 부분 OEM SM 실행에서 공개 `v0.3.10-shadow.2`의 LDS가 반복
@@ -525,7 +525,7 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
 
 | 요구사항 | 현재 근거 | 부족한 구현 또는 증거 |
 | --- | --- | --- |
-| 깨끗한 USB에 압축 해제 후 `sh install.sh` | MP3/JS·정적 해시 도구 포함. 실제 ARM BusyBox/libc에서 최종 ZIP 설치·제거·재설치 성공 | 실제 CMU 미디어의 MP3→shell 동작, 실제 저장소의 remount·내구성은 미검증 |
+| 깨끗한 USB와 설치 진입 | 현재 .2는 이미 승인된 셸을 전제로 하는 shell-only ZIP이며 진입 수단을 포함하지 않습니다. 최종 ZIP은 stock ARM BusyBox 설치·회수·실패 경계 세 경로 통과 | 실제 CMU 재부팅 뒤 셸 재접속, 전체 OEM 기동, 저장소 remount·내구성은 미검증 |
 | 정확한 펌웨어·계정·경로 | 기존 네 원본과 LDS 의존성 여섯 identity. `cmu=0`, `service=1001`, 순정 저장소·libdbus symlink 반영 | 다른 펌웨어에 일반화하지 않음. 현장 설치 정보와 대조 필요 |
 | OEM 호출 계약·터치 공존 | ARM veneer/encoder 합성 시험. 순정 커널에서 AA 후크와 터치 DSO 동시 로드. 원본 manager의 자동 LDS→native send와 OBSERVE/SCRUB 실행 | 정상 폰 연결 상태의 AA 송신·터치 입력, 수명·동시성·지연 장애의 전 범위 미검증 |
 | 자동 수집·원본 증거 보존 | 별도 collector의 실제 UID 전환·SMDB 응답. 원본 VBS callback과 AA 수신을 합성 입력으로 실행. journal·종료·회수 회귀, [주차 중 수집/계산 분리 진단](../validation/TRIAL_STATUS_REVIEW_2026-10-01.md), [MODEL 초기화 원인 기록](../validation/MODEL_RESET_REVIEW_2026-10-01.md) | 물리 센서 callback과 주행 전체의 누락·부하·로그 보관량 미검증. 상태 명령의 종료 코드 0은 항법 계산·폰 수용이 아님 |
@@ -536,7 +536,7 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
 | 휴대폰·앱 수용 | OEM LOCATION 경로의 정적 근거와 VM의 실제 native API 호출. 폰 없이도 send=0을 반환함 | Galaxy S25·동글·네이버 지도에서 위치가 반영되는 실행 증거 없음 |
 | 다음 부팅과 장애 복구 | 일회 소비 가드·설치 중단 회귀. 실제 SM에서 명시적 재시작과 지연 SIGKILL 뒤 보드 재부팅 요청 관찰 | 다른 실패 경로와 물리 watchdog·전원 차단·다음 부팅의 복구는 미검증 |
 | 기존 설정 보존 | touch 설정 편집/제거 roundtrip, 무관한 파일을 변경하지 않는 설치기 | 기존 터치와 km/L의 실제 화면·입력 결과 미검증 |
-| 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 여섯 ARM 바이너리, ZIP manifest/source commit. [v0.3.11-shadow.1](../validation/RELEASE_V0311_2026-10-02.md) 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |
+| 재현 가능한 릴리즈 | 고정 GCC 4.9.1과 여섯 ARM 바이너리, ZIP manifest/source commit. [v0.3.11-shadow.2](../validation/RELEASE_V0311_SHADOW2_2026-10-02.md) 공개 다운로드 재검사 완료 | v1.0의 최종 커밋·ZIP과 전체 조건 감사 필요 |
 
 독립 감사에서 정차 GPS·지연 수신 시 heading 상실, 자이로 보정의 수신 시각,
 단일 휠 모순과 빌드/검사의 오래된 입력·상속 환경 문제를 재현하고 수정했습니다.

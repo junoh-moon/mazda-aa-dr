@@ -2,12 +2,13 @@
 
 **AA = Android Auto, DR = Dead Reckoning(추측항법).** 2019 MX-5 ND2의 1세대 Mazda Connect **NA 74.00.324A**에서 차량 위치 전달과 터널 내 추측항법을 연구한다.
 
-**현재 공개 개발판은 [v0.3.11-shadow.1](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.1)입니다.**
-AA·LDS 정적 TLS 축소와 현재 LDS 응답 연결을 포함하며 전체 host·ARM,
-부분 원본 실행과 최종 ZIP 순정 셸 검사를 통과했습니다. 공개 파일을 다시
-내려받아 대조한 [발행 기록](validation/RELEASE_V0311_2026-10-02.md)을
-확인하십시오. 정상 전체 SM·실차 기동/복구·물리 센서·폰 수용은 미검증이며
-ASSIST는 비활성입니다. `v0.3.10-shadow.1`·`.2`의 사용 중단은 유지합니다.
+**현재 공개 개발판은 [v0.3.11-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.2)입니다.**
+RMC A/V 상태가 실제 방위각 할당을 따라 LDS→AA 기록에 남도록 했습니다.
+최종 shell-only ZIP의 BusyBox 세 경로와 공개 파일 재다운로드 검증을
+통과했습니다. [발행 기록](validation/RELEASE_V0311_SHADOW2_2026-10-02.md)에
+테스트 범위와 한계를 적었습니다. 설치에는 재부팅 뒤에도 접근 가능한
+기존 승인 셸이 필요합니다. 진입 수단은 ZIP에 없습니다. 전체 OEM 기동·실차
+복구·물리 센서·폰 수용은 미검증이고 ASSIST는 비활성입니다.
 
 **현재 소스는 OBSERVE와 실제 센서 SHADOW 계산을 포함한 시험 후보**입니다. OFF 로딩, 폴링 프로세스 분리, 일회성 기동 보호를 구현했습니다. 실차 시험을 수행했지만 회수 archive에 수집 기록이 없어 기동·저장 경로를 조사 중입니다. 센서 동작과 휴대폰 수용은 입증되지 않았습니다. ASSIST는 비활성이며 터널 내비게이션이 완성된 상태가 아닙니다. [빈 기록 조사](validation/EMPTY_CAPTURE_2026-10-02.md)를 참조하십시오.
 
@@ -53,37 +54,11 @@ guard 표식 진단, 메뉴 `5`의 순정 CMU 재부팅 요청과 확대 회수�
 [v0.3.8](validation/RELEASE_V038_2026-10-01.md)과
 [v0.3.7](validation/RELEASE_V037_2026-10-01.md)의 검증 이력은 별도로 보존합니다.
 
-아래는 새로 검증·발행한 ZIP을 위한 절차이며 현재 공개판의 설치 지시가
-아닙니다. ZIP의 내용물을 FAT32 USB 최상위에 복사하십시오. **주차 중 기존에 작동하는
-진단 셸을 열고**, 다음 한 줄로 숫자 메뉴에 들어가 최초 설치에만 `1`과 Enter를 누르십시오.
-필요하면 USB 경로의 글자만 바꾸십시오. Shift 입력은 필요하지 않습니다.
-
-```sh
-sh /tmp/mnt/sda1/trial
-```
-
-별도로 허용된 다음 시험에서는 [상세 설치 안내](packaging/USB_START_KO.md)에
-따라 중립·주차브레이크·실제 엔진 가동을 유지하고 `1` 설치 뒤 `5`로 CMU
-재부팅을 요청하십시오. 시동 버튼을 누르거나 USB를 빼지 마십시오.
-화면 복귀 후 USB·셸로 돌아와 `2`에서 새 boot ID,
-`startup_state=guard_committed_after_new_boot`, 현재 부팅의 가드 소비와
-`config_mode=SHADOW`, `runtime_disable_next_start=absent`, 전체 보존 파일의
-바이트 수와 현재 collector의 최근 poll을 확인하십시오. 이 일곱 근거는 공개
-`v0.3.10-shadow.2` 시험판에 해당하며 이전 `v0.3.10-shadow.1`에는 `startup_state`, `config_mode`,
-`runtime_disable_next_start` 출력이 없습니다. 새 부팅 직후 가드 예약이 남아 있거나
-collector poll이 아직 없으면 주차 상태에서 60초 기다린 뒤 `2`를 한 번만 다시
-확인하십시오. 여전히 일곱 근거가 모이지 않으면 `3`으로 회수하고 `4`로 예약을
-해제하십시오. 확인되면 `0`으로 종료한 뒤 추가 시동·CMU 재부팅 없이
-USB를 AA/동글로 교체하십시오.
-AA 사용 중 셸을 열 필요는 없습니다. 시험 후
-주차한 다음 AA를 분리하고 USB·셸로 돌아와 같은 메뉴의 **`3`으로 바로 회수**하십시오.
-셸 복귀에 정상 재부팅이 필요해도 재설치·재무장 없이 이전 부팅의 보존 파일을
-회수합니다. `finish_exit`가 0이 아니면 현재 부팅의 완료 미확인이고,
-`export_exit=0`은 확보 가능한 파일의 회수 성공이며 시험 성공이 아닙니다.
-archive·체크섬·`trial-result.txt`를 함께
-가져오십시오. 운전 중에는 명령을 입력하거나 USB를 바꾸지 마십시오.
-[사용 안내](packaging/USB_START_KO.md)와 [통합 시험 절차](docs/FIELD_TRIAL_KO.md)를
-따르십시오.
+현재 공개 .2 ZIP은 이미 승인된 진단 셸에 들어갈 수 있는 경우에 사용하는
+shell-only 묶음입니다. 차량에서 별도로 정한 시험을 수행하는 경우 ZIP에
+동봉한 [정확한 전원 상태·설치·재부팅·USB 교체·회수 안내](packaging/SHELL_START_KO.md)와
+[통합 시험 절차](docs/FIELD_TRIAL_KO.md)를 따르십시오. 이 발행 자체는
+추가 차량 시험 승인이 아닙니다.
 
 현재 묶음은 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
 이중 저장소 심볼릭 링크와 읽기 전용 마운트를 처리합니다.
