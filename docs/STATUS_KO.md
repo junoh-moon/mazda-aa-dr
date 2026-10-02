@@ -18,6 +18,10 @@ LDS DSO의 큰 정적 TLS가 작은 스레드 스택을 침범했을 가능성�
 기록합니다. [AA 문맥 풀 검증](../validation/AA_CONTEXT_POOL_2026-10-02.md)의
 전체 host/ARM, 실제 제품 DSO, 원본 BusyBox 설치 모의는 통과했지만
 새 AA 제품의 원본 AAPA 전체 기동·실제 스택 여유·차량·폰 검증은 없습니다.
+[원본 로더의 작은 스레드 대조](../validation/AA_STOCK_LOADER_STACK_2026-10-02.md)는
+옛 AA 제품과 TLS 전용 7,284바이트 DSO가 작성한 16 KiB 스레드의 보호
+페이지에서 실패하고 새 제품은 통과함을 확인했습니다. 실제 AAPA 스레드
+크기나 전체 OEM 실행 근거로 세지 않습니다.
 과거 [원본 AA 계산·송신](../validation/AA_PRODUCT_ASSIST_2026-10-02.md)과
 [철회·재개](../validation/AA_ASSIST_RECOVERY_2026-10-02.md)는 변경 전
 `8d5669c` 제품의 작성 입력 결과이며 새 제품의 재실행으로 세지 않습니다.
