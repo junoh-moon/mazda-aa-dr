@@ -12,7 +12,8 @@ enum Mode { OFF = 0, OBSERVE = 1, SCRUB_STALE = 2, ASSIST = 3 };
 enum Choice { ORIGINAL = 0, SCRUBBED = 1, DR_REPLACEMENT = 2 };
 enum Reason { PASS = 0, NO_CONTEXT, NESTED_CALL, EXTRA_LOCATION,
               BAD_LENGTH, DISABLED, LOCK_BUSY, NOT_UNKNOWN, NOT_READY,
-              EPOCH_MISMATCH, EXPIRED, BAD_ENCODING, BAD_PROVENANCE };
+              EPOCH_MISMATCH, EXPIRED, BAD_ENCODING, BAD_PROVENANCE,
+              CONTEXT_UNAVAILABLE };
 
 // Native OEM wrapper. Exactly 12 bytes only on the ARM32 target.
 struct VehicleData { uint32_t type; void* payload; uint32_t length; };
@@ -106,11 +107,13 @@ uint32_t invalidate(); // Bounded atomic revocation; no waits.
 // generation has already made that candidate unselectable.
 uint32_t invalidate_if_generation(uint32_t owned);
 uint32_t generation();
+bool faulted(); // Sticky observation/contract failure; never qualifies input.
 // Worker-side only; copies values, never borrowed OEM pointers.
 bool publish_snapshot(const DrSnapshot& snapshot);
 
 // Testable logic shared by the real ARM veneer and host fake OEM tests.
 void position_enter(void* manager, const void* oem_position);
+void position_aborted(); // OEM callback did not return; capture cannot qualify.
 void position_leave();
 int32_t send_vehicle_data(void* session_storage, VehicleData* data);
 bool decode_position(const void* oem_position, PositionInput* out);

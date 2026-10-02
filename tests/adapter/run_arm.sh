@@ -35,12 +35,16 @@ done
 for case in captured nested failure missing invalidate unqualified malformed; do
     qemu-arm -L "$sysroot" "$build/provenance-context-test" "$case"
 done
+"${cross}g++" $flags -I src tests/adapter/context_pool_test.cpp \
+    src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp \
+    -ldl -o "$build/context-pool-test"
+qemu-arm -L "$sysroot" "$build/context-pool-test" saturation
 qemu-arm -L "$sysroot" "$build/veneer-test"
 "${cross}g++" $flags -I src \
     src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp \
     tests/adapter/veneer_unwind_test.cpp tests/adapter/veneer_unwind_fixture.S \
     -ldl -o "$build/veneer-unwind-test"
-for case in throw_position throw_send nested_throw cancel_position cancel_send throw_enter cancel_enter nested_send; do
+for case in throw_position throw_send nested_throw cancel_position cancel_send throw_enter cancel_enter nested_send small_stack deep_nested deep_throw deep_cancel deep_small_stack deep_small_overflow; do
     qemu-arm -L "$sysroot" "$build/veneer-unwind-test" "$case"
 done
 

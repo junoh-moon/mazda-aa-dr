@@ -71,6 +71,17 @@ static void clean_output(Source& s,const A::Observation& o,Source::Result wanted
     CHECK(s.lookup(o,&out)==wanted);CHECK(out.revision==0&&out.observation.call_sequence==0);
     CHECK(out.record.sequence==0&&out.diagnostic.sender_pid==0);CHECK(!s.current(out));
 }
+static void failed_adapter_context() {
+    Source source;A::Observation first=position();
+    const Source::JoinedReply prior=join(source,first);
+    A::Observation lost=position(2,1100);lost.reason=A::CONTEXT_UNAVAILABLE;
+    source.position(lost,2000);
+    source.sideband(record(lost,2),diagnostic(2001),2001);
+    clean_output(source,lost,Source::UNAVAILABLE);
+    CHECK(!source.current(prior));
+    CHECK(source.status().rejected>=1&&source.status().matches==1);
+    join(source,position(3,3000),4000);
+}
 static void reversal_and_identity() {
     Source s;A::Observation a=position(1),b=position(2);
     L::Record ra=record(a,2),rb=record(b,1);
@@ -276,7 +287,8 @@ int main(int argc,char** argv) {
     const char* wanted=argc>1?argv[1]:"all";
     struct Test { const char* name;void(*run)(); };
     const Test cases[]={
-        {"owned",owned_match},{"reverse",reversal_and_identity},{"conflicts",late_conflicts},
+        {"owned",owned_match},{"adapter_loss",failed_adapter_context},
+        {"reverse",reversal_and_identity},{"conflicts",late_conflicts},
         {"aliases",identity_aliases},{"causal",causal_issue},
         {"payloads",payloads},{"unavailable",unavailable},{"loss",loss_and_flags},
         {"retention",retirement},{"capacity",capacity},{"clocks",clocks},{"exhaustion",exhaustion_errno}

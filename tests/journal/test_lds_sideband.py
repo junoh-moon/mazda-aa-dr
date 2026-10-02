@@ -100,6 +100,46 @@ class LdsSideband(unittest.TestCase):
                 self.assertEqual(a.counts['position'], 1)
                 self.assertNotIn('unknown_record_kind', [i['code'] for i in a.issues])
 
+    def test_context_loss_withdraws_session_attachments(self):
+        later = dict(position(), call=19)
+        _, report = observe(position(), sideband(),
+                            dict(position(), call=18, reason=13), later, sideband())
+        links = self.linked(report)
+        self.assertEqual(links['position_links'], {'observation_fault': 2})
+        self.assertEqual(links['sideband_links'], {'observation_fault': 1})
+        self.assertEqual(links['attachments'], [])
+        self.assertEqual(links['assignment_patterns'], {})
+        self.assertEqual(report['status'], 'inconclusive')
+
+    def test_fault_marker_withdraws_prior_attachment_without_position_row(self):
+        marker = dict(kind='capture_incomplete', reason='adapter_fault',
+                      assist_ready=False)
+        _, report = observe(position(), sideband(), marker)
+        links = self.linked(report)
+        self.assertEqual(links['position_links'], {'observation_fault': 1})
+        self.assertEqual(links['attachments'], [])
+        self.assertEqual(report['status'], 'inconclusive')
+
+    def test_observation_faults_withdraw_prior_attachment(self):
+        send = dict(kind='send', call=17, generation=4, mono_ns=106, mode=position()['mode'],
+                    type=1, length=48, choice=0, reason=3, result=0,
+                    request=position()['request'],
+                    original_hex='00'*48, outgoing_hex='00'*48)
+        events = (send,
+                  dict(kind='health', mono_ns=107, dropped=1,
+                       hook_installed=True, assist_ready=False),
+                  dict(kind='health', mono_ns=107, dropped=0, audit_fault=1,
+                       hook_installed=True, assist_ready=False),
+                  dict(kind='capture_incomplete', reason='observation_pending',
+                       assist_ready=False))
+        for event in events:
+            with self.subTest(kind=event['kind'], reason=event.get('reason')):
+                _, report = observe(position(), sideband(), event)
+                links = self.linked(report)
+                self.assertEqual(links['position_links'], {'observation_fault': 1})
+                self.assertEqual(links['attachments'], [])
+                self.assertEqual(report['status'], 'inconclusive', report['issues'])
+
     def test_assignment_diversity_uses_write_identity_not_observer_clock(self):
         # Authored origins have three distinct write IDs despite equal
         # observer clocks. This still says nothing about GPS fix epochs.

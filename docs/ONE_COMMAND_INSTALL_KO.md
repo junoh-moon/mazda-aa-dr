@@ -1,15 +1,18 @@
 # USB 숫자 메뉴로 설치·CMU 재부팅·회수
 
 대상은 **2019 MX-5 ND2 6MT / Mazda Connect NA 74.00.324A**입니다.
-현재 공개 시험판은 [v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)이며,
-설치 파일 `mazda-aa-dr-v0.3.10-shadow.2.zip`의 SHA-256은
+**현재 설치 가능한 공개 시험판은 없습니다.** 마지막 공개
+[v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)는
+LDS 반복 종료 때문에 사용 중단했습니다. 아래 절차는 새 후보가 별도로
+검증·발행될 때의 절차와 과거 판정표입니다. 지금 차량에 설치하지 마십시오.
+해당 ZIP `mazda-aa-dr-v0.3.10-shadow.2.zip`의 과거 SHA-256은
 `76d6049db04631352ee7b37cb5f4f0294ad9b36e123dc8ad05b062a1a59d4148`입니다.
 GitHub의 자동 `Source code (zip)`은 설치 ZIP이 아닙니다.
 
 **아래 `1 → 5 → 2 → 0`과 확대 회수는 `v0.3.9-shadow.3`부터 가능하지만, 일곱 근거 중
 `startup_state`, `config_mode`, `runtime_disable_next_start`는 `v0.3.10-shadow.2` 시험판에서 출력합니다.**
 이전 `v0.3.9-shadow.2`에는 메뉴 `5`와 새 부팅 대조·전체 설치 폴더 회수가 없습니다.
-현재 공개판의 [발행·재다운로드 검증](../validation/RELEASE_V0310_SHADOW2_2026-10-02.md)과
+과거 공개판의 [발행·재다운로드 검증](../validation/RELEASE_V0310_SHADOW2_2026-10-02.md)과
 [이전 v0.3.9-shadow.3 검증](../validation/RELEASE_V039_SHADOW3_2026-10-02.md)을 구분하십시오.
 첫 실차 회수 archive에는 trace·collector 기록이 없었습니다.
 [빈 기록 분석](../validation/FIELD_V039_EMPTY_CAPTURE_2026-10-02.md)을 보존하며,
@@ -23,6 +26,13 @@ ZIP의 **내용물 전체**를 깨끗한 FAT32 USB 최상위에 복사하여 `tr
 `install.sh`, `mp3/`, `js/`가 바로 보이게 하십시오. 기존 USB 결과는 PC에
 먼저 보관하십시오. USB 포트 하나를 설치·회수용 USB와 무선 AA 동글이
 번갈아 사용하며 허브나 동시 연결은 요구하지 않습니다.
+새로 검증·발행한 묶음에서는 셸의 현재 디렉터리가 USB 최상위일 때
+`sh install.sh`로 직접 설치할 수도 있습니다. 이 한 줄은 설치만 수행하며
+실제 새 CMU 부팅은 USB 최상위 셸의 `sh reboot_cmu.sh` 또는 절대 경로
+`sh /tmp/mnt/sda1/reboot_cmu.sh`를 별도로 실행하고
+아래 메뉴 `2`에서 새 boot ID를 확인해야 합니다. 현재 사용 중단한
+`.1`·`.2` ZIP에는 이 안내를 적용해 설치하지 마십시오. 직접 설치했다면
+아래 2·3단계의 메뉴 `1`·`5`를 다시 누르지 말고 4단계부터 진행하십시오.
 
 ACC와 엔진이 꺼진 ON은 실제 엔진 가동과 다릅니다. 둘 다 시동 버튼의
 주황 표시등이 켜집니다. 실제 엔진 가동도 ON이지만 주황 표시등은

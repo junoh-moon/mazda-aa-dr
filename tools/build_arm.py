@@ -24,6 +24,10 @@ RECORD = 'arm-build.json'
 # alignment padding. The published 7,288-byte image repeatedly crashed in a
 # partial OEM SM QEMU run; this cap does not prove total process stack headroom.
 LDS_TLS_REGRESSION_LIMIT = 512
+# The AA preload also runs inside OEM-owned threads. Its former 7,284-byte
+# static TLS image failed an authored 16 KiB-thread QEMU-user boundary probe.
+# This catches that regression; it does not establish OEM stack headroom.
+AA_TLS_REGRESSION_LIMIT = 512
 
 
 def digest(path):
@@ -97,11 +101,14 @@ def check_elf(path):
         if offset + filesz > len(data) or (kind in (1, 7) and filesz > memsz):
             raise ValueError('Truncated ELF segment: ' + path.name)
         load_segments += kind == 1
-        if path.name == 'libmx5dr-ldstap.so' and kind == 7:
+        if path.name in ('libmx5dr-ldstap.so', 'libmx5dr.so') and kind == 7:
+            label = 'LDS' if path.name == 'libmx5dr-ldstap.so' else 'AA'
+            limit = (LDS_TLS_REGRESSION_LIMIT if label == 'LDS'
+                     else AA_TLS_REGRESSION_LIMIT)
             if align > 1 and align & (align - 1):
-                raise ValueError('Invalid LDS TLS alignment: ' + path.name)
-            if memsz + max(align - 1, 0) > LDS_TLS_REGRESSION_LIMIT:
-                raise ValueError('LDS thread-local storage exceeds regression limit: ' + path.name)
+                raise ValueError('Invalid ' + label + ' TLS alignment: ' + path.name)
+            if memsz + max(align - 1, 0) > limit:
+                raise ValueError(label + ' thread-local storage exceeds regression limit: ' + path.name)
         if path.name == 'mx5dr-sha256' and kind in (2, 3):
             raise ValueError('Hash helper is not statically linked')
     if not load_segments:

@@ -11,7 +11,11 @@ Build `adapter.cpp`, `arm_entry.cpp`, `v74_install.cpp`, `request_hooks.cpp`, `s
 `arm_veneer.S` and `request_veneer.S`. The Makefile enables exception cleanup
 for the wrappers and Observer. Link pthread, dl, and the math runtime. C++11 is required;
 no STL containers or dynamic allocation are used on the hook path. Load the
-library at process startup: the fixed TLS storage uses the initial-exec model.
+library at process startup: small thread-local slot references use the
+initial-exec model, while 64 bounded POSITION contexts live in process BSS.
+Pool exhaustion preserves the original call, disables mutation, and records
+incomplete observation. A QEMU-user 16 KiB thread test covers authored nested
+calls; the actual OEM AA thread stack and whole service remain unverified.
 
 The bootstrap owns SHA-256 verification and detection of the first cold BLM
 load. It calls `install_v74` before the loader caller can use

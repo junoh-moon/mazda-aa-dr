@@ -23,7 +23,7 @@ CLEAR_BYTES = (32, 36, 37, 38, 39, 40, 44, 45, 46, 47)
 CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT"}
 REASONS = ("PASS", "NO_CONTEXT", "NESTED_CALL", "EXTRA_LOCATION", "BAD_LENGTH",
            "DISABLED", "LOCK_BUSY", "NOT_UNKNOWN", "NOT_READY", "EPOCH_MISMATCH",
-           "EXPIRED", "BAD_ENCODING", "BAD_PROVENANCE")
+           "EXPIRED", "BAD_ENCODING", "BAD_PROVENANCE", "CONTEXT_UNAVAILABLE")
 # get_snapshot/Pipeline::diagnostic return these query results, not step()
 # results such as DUPLICATE. Pipeline status is a separate last-operation value.
 SHADOW_RESULTS = ("OK", "E_CONFIG", "E_NO_SEED", "E_CONTEXT", "E_QUALITY",
@@ -216,6 +216,13 @@ class LdsLinks:
         self.sources = {}
         self.unkeyed = Counter()
         self.exhausted = False
+        self.observation_fault = False
+
+    def invalidate_observation(self):
+        # The live worker permanently retires its source after adapter loss.
+        # Keep raw rows, but withdraw every diagnostic attachment in this
+        # recorded session, including an earlier provisional match.
+        self.observation_fault = True
 
     @staticmethod
     def text(value):
@@ -416,10 +423,13 @@ class LdsLinks:
             count, row, record = entry['positions'], entry['position'], entry['record']
             if not count:
                 if record is not None:
-                    sideband['state_capacity' if self.exhausted else
+                    sideband['observation_fault' if self.observation_fault else
+                             'state_capacity' if self.exhausted else
                              'conflict' if entry['conflict'] else 'missing_position'] += 1
                 continue
-            if self.exhausted:
+            if self.observation_fault:
+                state = 'observation_fault'
+            elif self.exhausted:
                 state = 'state_capacity'
             elif entry['conflict']:
                 state = 'conflict'
@@ -549,6 +559,7 @@ class Auditor:
                             holdout_window=None, capture_end_ns=None, model_session=None, model_bus=None)
         self.sessions.append(self.session)
         self.positions = {}
+        self.invalid_positions = set()
         self.ambiguous_positions = set()
         self.matched_holdout_references = Counter()
         self.bus_lifetimes = {}
@@ -715,6 +726,10 @@ class Auditor:
             request_valid = self.request_record(row, source, count=True)
             if not self.validate(row, source, ("call", "generation", "mono_ns", "mode", "utc_s")):
                 return
+            reason = row.get("reason", 0)  # Earlier journals have no POSITION reason.
+            if not bounded_int(reason, 0, len(REASONS)-1) or reason not in (0, 13):
+                self.issue("partial_record", source, "Invalid POSITION reason")
+                return
             self.position_numbers(row, source)
             self.modes[str(row["mode"])] += 1
             key = (row["call"], row["generation"])
@@ -731,13 +746,29 @@ class Auditor:
                     self.issue("holdout_reference_ambiguous", source,
                                "Later duplicate invalidates %d prior reference matches" % matched)
             self.positions[key] = row
-            self.lds.position(row, request_valid, source)
+            if reason == REASONS.index("CONTEXT_UNAVAILABLE"):
+                self.invalid_positions.add(key)
+                self.lds.invalidate_observation()
+                self.issue("adapter_context_unavailable", source,
+                           "POSITION context unavailable; pool capacity or nesting depth exceeded")
+            else:
+                self.lds.position(row, request_valid, source)
         elif kind == 'lds_sideband':
             self.lds.record(row, source)
         elif kind == 'lds_sideband_status':
             self.lds.status(row, source)
         elif kind == "send":
             self.send(row, source)
+        elif kind == "capture_incomplete":
+            if not self.validate(row, source, strings=("reason",), bools=("assist_ready",)):
+                return
+            if row["assist_ready"] is not False or row["reason"] not in (
+                    "observation_pending", "adapter_context_unavailable", "adapter_fault"):
+                self.issue("malformed_capture_incomplete", source,
+                           "Unknown capture failure or unsupported capability", True)
+            else:
+                self.lds.invalidate_observation()
+                self.issue("capture_incomplete", source, row["reason"])
         elif kind == "health":
             if not self.validate(row, source, ("mono_ns", "dropped"), bools=("hook_installed", "assist_ready")):
                 return
@@ -749,6 +780,7 @@ class Auditor:
                 self.issue("drop_counter_regressed", source, "Cumulative drop count decreased")
             s["dropped_max"] = max(s["dropped_max"], row["dropped"])
             if row["dropped"]:
+                self.lds.invalidate_observation()
                 self.issue("dropped_observations", source, str(row["dropped"]))
             if not row["hook_installed"]:
                 self.issue("hook_not_installed", source, "Health reports no installed hook")
@@ -761,7 +793,8 @@ class Auditor:
                     else:
                         counter[str(row[key])] += 1
             if integer(row.get("audit_fault")) and row["audit_fault"] != 0:
-                self.issue("audit_fault", source, "Runtime disabled mutation because audit logging failed")
+                self.lds.invalidate_observation()
+                self.issue("audit_fault", source, "Runtime disabled mutation after an observation or logging fault")
             if "request_observer" in row:
                 observer = row["request_observer"]
                 if (not isinstance(observer, dict) or
@@ -1322,6 +1355,11 @@ class Auditor:
             counts["ambiguous"] += 1
             self.issue("holdout_reference_ambiguous", source, "Reference call/generation has multiple raw rows")
             return
+        if values in self.invalid_positions:
+            counts["raw_unavailable"] += 1
+            self.issue("holdout_reference_unavailable", source,
+                       "Adapter could not retain the referenced POSITION context")
+            return
         position = self.positions.get(values)
         if position is None:
             counts["raw_missing"] += 1
@@ -1720,7 +1758,10 @@ class Auditor:
                 if target["result"] in ("transition", "ambiguous", "observation_fault"):
                     self.issue("session_observation_unavailable", source, target["result"])
         position = self.positions.get((row["call"], row["generation"]))
-        if position and ("request" in position or "request" in row) and position.get("request") != row.get("request"):
+        if (position and position.get("reason", 0) != REASONS.index("CONTEXT_UNAVAILABLE") and
+                row["reason"] != REASONS.index("CONTEXT_UNAVAILABLE") and
+                ("request" in position or "request" in row) and
+                position.get("request") != row.get("request")):
             self.issue("request_copy_mismatch", source, "Position/send request metadata differ", True)
         s = self.session
         s["sends"] += 1
@@ -1729,6 +1770,18 @@ class Auditor:
         self.choices[CHOICES.get(choice, "UNKNOWN:" + str(choice))] += 1
         reason = row["reason"]
         self.reasons[REASONS[reason] if 0 <= reason < len(REASONS) else "UNKNOWN:" + str(reason)] += 1
+        if ((row["call"], row["generation"]) in self.invalid_positions and
+                (choice != 0 or reason == REASONS.index("PASS"))):
+            self.issue("context_unavailable_send_inconsistent", source,
+                       "A failed POSITION context cannot authorize a PASS or mutated SEND", True)
+        if reason == REASONS.index("CONTEXT_UNAVAILABLE"):
+            self.lds.invalidate_observation()
+            self.issue("adapter_context_unavailable", source,
+                       "SEND forwarded without a POSITION context")
+        if reason == REASONS.index("EXTRA_LOCATION"):
+            self.lds.invalidate_observation()
+            self.issue("extra_location", source,
+                       "Multiple LOCATION sends in one POSITION call disabled mutation")
         self.results[str(row["result"])] += 1
         if choice == 2:
             self.issue("dr_replacement_impossible", source, "DR_REPLACEMENT is disabled in the live runtime", True)

@@ -2,7 +2,14 @@
 
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
-**The current USB bundle is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. A vehicle trial was attempted, but its recovered archive contains no capture journals; startup and storage remain under investigation. Sensor operation and phone acceptance are unverified. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
+**There is no currently installable public ZIP.** The published
+`v0.3.10-shadow.1` and `.2` packages were withdrawn after repeated original
+LDS termination. A later [AA TLS fix](validation/AA_CONTEXT_POOL_2026-10-02.md)
+passed host, ARM and stock-shell checks, but has not passed new original-AA,
+vehicle or phone validation and has not been released. Do not install the
+withdrawn ZIPs.
+
+**The local source is a SHADOW trial candidate.** OFF loader handling, separate polling and a one-use pre-Service-Manager gate are implemented. Host, ARM and partial OEM execution evidence are recorded separately. A vehicle trial was attempted, but its recovered archive contains no capture journals; startup and storage remain under investigation. Sensor operation and phone acceptance are unverified. Live ASSIST remains disabled; this is not a working tunnel-navigation solution.
 
 On 2026-10-01 the user authorized one combined vehicle installation/test before
 v1.0, after feasible firmware and offline verification. This updates the earlier
@@ -15,7 +22,7 @@ See [integration evidence](validation/INTEGRATION_2026-09-28.md). The gate remov
 
 [한국어](README_KO.md) · [Current status / handoff](docs/STATUS_KO.md) · [Review corrections](docs/REVIEW_2026-09-28_KO.md)
 
-The published [v0.3.10-shadow.2 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)
+The withdrawn [v0.3.10-shadow.2 installation ZIP](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)
 adds guarded startup and config-binding diagnostics to the LDS observer. The
 observer carries callback/cache assignment lineage and response identity into
 the bounded AA journal. Original-library execution reached
@@ -52,7 +59,9 @@ and the distinct scope of earlier original-library execution.
 [v0.3.8](validation/RELEASE_V038_2026-10-01.md) and
 [v0.3.7](validation/RELEASE_V037_2026-10-01.md) retain their historical evidence.
 
-Unpack the installation ZIP's contents to the FAT32 USB root. **While parked,
+The following is the procedure for a separately verified future package, not
+an instruction to install the withdrawn ZIP. Unpack the installation ZIP's
+contents to the FAT32 USB root. **While parked,
 open your existing working diagnostic shell**, run this line, and choose `1` for a first installation
 then Enter. Change the drive letter if needed; no Shift characters are required.
 

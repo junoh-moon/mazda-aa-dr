@@ -26,9 +26,34 @@ struct Context {
     runtime::lds_association::Owned lds_association;
     bool decoded;
 };
-struct ThreadState { uint32_t depth, send_depth; Context frames[8]; };
-// The shim must be loaded at process startup; no dynamic TLS allocation in hooks.
+// Each active POSITION owns exactly one slot. A flat pool preserves the full
+// request trace across the OEM call without allocating it on a small OEM stack
+// or reserving eight large frames in every thread's initial-exec TLS image.
+enum { CONTEXT_DEPTH_LIMIT = 8, CONTEXT_SLOT_COUNT = 64 };
+struct ContextSlot { uint32_t occupied; Context frame; };
+static ContextSlot context_slots[CONTEXT_SLOT_COUNT];
+struct FailureContext { uint32_t sequence, generation; int32_t mode; };
+struct ThreadState {
+    uint32_t depth, send_depth;
+    ContextSlot* slots[CONTEXT_DEPTH_LIMIT];
+    // Retain the first overflow frame's identity for its corresponding SEND.
+    FailureContext failures[CONTEXT_DEPTH_LIMIT+1];
+    bool unavailable[CONTEXT_DEPTH_LIMIT];
+};
+// The shim must be loaded at process startup; only bounded slot references
+// and counters live in initial-exec TLS. No dynamic allocation occurs in hooks.
 static __thread ThreadState tls __attribute__((tls_model("initial-exec")));
+ContextSlot* acquire_context_slot() {
+    // One bounded pass: if every claim loses, retain OEM forwarding and report
+    // unavailable observation instead of waiting inside an OEM callback.
+    for (unsigned i=0;i<CONTEXT_SLOT_COUNT;++i) {
+        uint32_t expected=0;
+        if (__atomic_compare_exchange_n(&context_slots[i].occupied,&expected,1,
+                false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))
+            return &context_slots[i];
+    }
+    return 0;
+}
 struct SendScope {
     SendScope() { ++tls.send_depth; }
     ~SendScope() { --tls.send_depth; }
@@ -70,8 +95,42 @@ uint64_t now() { return options.clock ? options.clock(options.user) : 0; }
 void emit(const Observation& event) {
     if (options.sink) options.sink(&event, options.user);
 }
+struct ObservationCompletion {
+    bool complete;
+    ObservationCompletion():complete(false) {}
+    ~ObservationCompletion() {
+        // A thrown callback or cancelled OEM send cannot yield a journal row.
+        // Leave a sticky failure even though the veneer still frees its slot.
+        if(!complete) {
+            fault.store(1,std::memory_order_release);
+            invalidate();
+        }
+    }
+};
+void unavailable_position(const void* input) {
+    fault.store(1,std::memory_order_release);
+    invalidate();
+    Observation event=Observation();
+    event.kind=Observation::POSITION;event.choice=ORIGINAL;
+    event.reason=CONTEXT_UNAVAILABLE;
+    event.request_result=runtime::request_trace::NOT_FOUND;
+    if(options.request_reader)
+        event.request_result=options.request_reader(input,&event.request_trace,options.user);
+    if(event.request_result!=runtime::request_trace::OK)
+        event.request_trace=runtime::request_trace::Trace();
+    event.call_sequence=sequence.fetch_add(1,std::memory_order_relaxed)+1;
+    const bool decoded=decode_position(input,&event.position);
+    event.original_mode=decoded?event.position.mode:-1;
+    previous_mode.exchange(event.original_mode,std::memory_order_acq_rel);
+    event.prediction_generation=generation();event.mono_ns=now();
+    if(tls.depth<=CONTEXT_DEPTH_LIMIT+1)
+        tls.failures[tls.depth-1]={event.call_sequence,event.prediction_generation,event.original_mode};
+    if(mode()!=OFF)emit(event);
+}
 Context* context() {
-    return tls.depth && tls.depth <= 8 ? &tls.frames[tls.depth - 1] : 0;
+    if (!tls.depth || tls.depth>CONTEXT_DEPTH_LIMIT) return 0;
+    ContextSlot* slot=tls.slots[tls.depth-1];
+    return slot?&slot->frame:0;
 }
 bool association_matches(const PositionContext& c,const runtime::lds_association::Owned& value) {
     namespace L=runtime::lds_association;
@@ -149,6 +208,7 @@ uint32_t invalidate_if_generation(uint32_t owned) {
     }
 }
 uint32_t generation() { return prediction_generation.load(std::memory_order_acquire); }
+bool faulted() { return fault.load(std::memory_order_acquire)!=0; }
 bool publish_snapshot(const DrSnapshot& snapshot) {
     if (!configured || snapshot.prediction_generation != generation() ||
         fault.load(std::memory_order_acquire)) return false;
@@ -198,8 +258,26 @@ bool encode_location(const DrSnapshot& in, uint8_t out[48]) {
 void position_enter(void* manager, const void* input) {
     const int saved_errno = errno;
     ++tls.depth;
-    if (!configured || tls.depth > 8) { errno = saved_errno; return; }
-    Context& ctx = tls.frames[tls.depth - 1];
+    if (tls.depth<=CONTEXT_DEPTH_LIMIT) {
+        tls.slots[tls.depth-1]=0;
+        tls.failures[tls.depth-1]=FailureContext();
+        tls.unavailable[tls.depth-1]=false;
+    }
+    if (!configured) { errno = saved_errno; return; }
+    if (tls.depth>CONTEXT_DEPTH_LIMIT) {
+        if(tls.depth==CONTEXT_DEPTH_LIMIT+1)
+            tls.failures[tls.depth-1]=FailureContext();
+        unavailable_position(input);errno=saved_errno;return;
+    }
+    ContextSlot* slot=acquire_context_slot();
+    if (!slot) {
+        tls.unavailable[tls.depth-1]=true;
+        unavailable_position(input);
+        errno=saved_errno;return;
+    }
+    tls.slots[tls.depth-1]=slot;
+    ObservationCompletion completion_guard;
+    Context& ctx = slot->frame;
     std::memset(&ctx, 0, sizeof ctx);
     Observation event = Observation();
     event.kind = Observation::POSITION;
@@ -242,11 +320,32 @@ void position_enter(void* manager, const void* input) {
     event.lds_association = ctx.lds_association;
     event.mono_ns = now();
     if (mode() != OFF) emit(event);
+    completion_guard.complete=true;
     errno = saved_errno;
+}
+void position_aborted() {
+    const int saved_errno=errno;
+    fault.store(1,std::memory_order_release);
+    invalidate();
+    errno=saved_errno;
 }
 void position_leave() {
     const int saved_errno = errno;
-    if (tls.depth) --tls.depth;
+    if (!tls.depth) {
+        fault.store(1,std::memory_order_release);invalidate();
+    } else if (tls.depth>CONTEXT_DEPTH_LIMIT) {
+        if(tls.depth==CONTEXT_DEPTH_LIMIT+1)
+            tls.failures[tls.depth-1]=FailureContext();
+        --tls.depth;
+    } else {
+        const unsigned index=tls.depth-1;
+        ContextSlot* slot=tls.slots[index];
+        tls.slots[index]=0;tls.failures[index]=FailureContext();tls.unavailable[index]=false;
+        --tls.depth;
+        // TLS no longer references the frame before another thread may claim
+        // it. The acquire CAS above observes this release after our last read.
+        if(slot)__atomic_store_n(&slot->occupied,0,__ATOMIC_RELEASE);
+    }
     errno = saved_errno;
 }
 int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
@@ -256,13 +355,23 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     SendFunction next = next_send;
     if (!next) __builtin_trap();
     const SendScope send_scope;
+    ObservationCompletion completion_guard;
     const bool reentrant = tls.send_depth > 1;
     Observation event = Observation();
     event.kind = Observation::SEND; event.original_mode = -1;
     if(options.session_reader)
         options.session_reader(session_storage,&event.send_session,options.user);
     event.request_result = runtime::request_trace::NOT_FOUND;
-    event.choice = ORIGINAL; event.reason = NO_CONTEXT;
+    event.choice = ORIGINAL;
+    const bool pool_unavailable=tls.depth && (tls.depth>CONTEXT_DEPTH_LIMIT ||
+        tls.unavailable[tls.depth-1]);
+    event.reason = pool_unavailable?CONTEXT_UNAVAILABLE:NO_CONTEXT;
+    if(pool_unavailable && tls.depth<=CONTEXT_DEPTH_LIMIT+1) {
+        const FailureContext& failed=tls.failures[tls.depth-1];
+        event.call_sequence=failed.sequence;
+        event.prediction_generation=failed.generation;
+        event.original_mode=failed.mode;
+    }
     Context* ctx = context();
     if (ctx) {
         event.call_sequence = ctx->sequence; event.original_mode = ctx->original_mode;
@@ -287,7 +396,8 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
             event.has_payload = true;
             std::memcpy(event.original, data->payload, 48);
             std::memcpy(event.outgoing, data->payload, 48);
-            if (!ctx || !ctx->decoded) event.reason = NO_CONTEXT;
+            if (!ctx || !ctx->decoded)
+                event.reason = pool_unavailable?CONTEXT_UNAVAILABLE:NO_CONTEXT;
             else if (ctx->location_count > 1) event.reason = EXTRA_LOCATION;
             else if (reentrant || tls.depth != 1) event.reason = NESTED_CALL;
             else if (ctx->original_mode != 0) event.reason = NOT_UNKNOWN;
@@ -308,7 +418,8 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
                 local = *data; local.payload = replacement; selected = &local;
                 std::memcpy(event.outgoing, replacement, 48);
             }
-        } else if (data->type == 1) event.reason = BAD_LENGTH;
+        } else if (data->type == 1)
+            event.reason = pool_unavailable?CONTEXT_UNAVAILABLE:BAD_LENGTH;
     }
     errno = entry_errno;
     const int32_t result = next(session_storage, selected); // Exactly one call.
@@ -316,6 +427,7 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     event.result = result;
     if (!event.mono_ns) event.mono_ns = now();
     if (current != OFF && !reentrant) emit(event);
+    completion_guard.complete=true;
     errno = result_errno;
     return result;
 }
