@@ -262,6 +262,31 @@ static void send_offer(const char* channel,L::Publisher& p,const int* fds,unsign
     CHECK(sendmsg(sock,&message,MSG_NOSIGNAL)==ssize_t(size));CHECK(close(sock)==0);
 }
 static void heading_presence() {
+    // Each invalid input starts with its own healthy loss epoch. A rejection
+    // must not pass merely because an earlier malformed input left a reset
+    // pending on the next otherwise valid publish.
+    for(unsigned fault=0;fault<2;++fault) {
+        Fixture fresh;printf("owned_fixture_dir=%s\n",fresh.dir);fflush(stdout);
+        fresh.setup();auto valid=record(41,4100);valid.position.heading_deg=0;
+        valid.field_lineage.heading_presence=N::EMPTY;
+        CHECK(fresh.publisher.publish(valid));fresh.adopt(4110);L::Owned current;
+        CHECK(lookup(fresh.registry,valid,&current));CHECK(current.heading_presence==N::EMPTY);
+        const L::Owned saved=current;auto m=L::AssociationTestAccess::map(fresh.publisher);
+        const uint32_t loss=m->words[P::LOSS].load();CHECK(loss==1);
+        auto invalid=record(42,4200);invalid.field_lineage.heading_presence=N::EMPTY;
+        if(fault==0)invalid.field_lineage.heading_presence=N::Presence(3);
+        else invalid.field_lineage.fields[mx5::sensors::lds_lineage::HEADING]={0,0};
+        CHECK(!fresh.publisher.publish(invalid));CHECK(m->words[P::LOSS].load()==loss+1);
+        CHECK(!lookup(fresh.registry,valid,&current));CHECK(current.result==L::UNAVAILABLE);
+        CHECK(!fresh.publisher.publish(record(43,4300)));
+        CHECK(m->words[P::COUNT].load()==0);CHECK(m->words[P::LOSS].load()==loss+1);
+        auto recovered=record(44,4400);recovered.position.heading_deg=0;
+        recovered.field_lineage.heading_presence=N::PRESENT;
+        CHECK(fresh.publisher.publish(recovered));CHECK(lookup(fresh.registry,recovered,&current));
+        CHECK(current.heading_presence==N::PRESENT&&current.map_loss_epoch==loss+1);
+        CHECK(!lookup(fresh.registry,valid,&current));CHECK(current.result==L::UNAVAILABLE);
+        CHECK(saved.heading_presence==N::EMPTY&&saved.map_loss_epoch==loss);
+    }
     Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
     f.setup();f.adopt();L::Owned o;
     for(unsigned value=0;value<=2;++value) {
@@ -366,14 +391,39 @@ static void drain_bound() {
     f.registry.drain(1011);CHECK(lookup(f.registry,record(),&o));CHECK(fd_count()==before);
 }
 static void malformed_map() {
-    Fixture f;f.setup();CHECK(f.publisher.publish(record()));f.adopt();L::Owned o;
+    Fixture f;printf("owned_fixture_dir=%s\n",f.dir);fflush(stdout);
+    auto r=record();r.position.heading_deg=0;r.field_lineage.heading_presence=N::EMPTY;
+    f.setup();CHECK(f.publisher.publish(r));f.adopt();L::Owned o;
     auto m=L::AssociationTestAccess::map(f.publisher);
     const uint32_t good=m->words[P::SEQUENCE].load();m->words[P::SEQUENCE].store(good+1);
-    CHECK(!lookup(f.registry,record(),&o));m->words[P::SEQUENCE].store(good+2);CHECK(lookup(f.registry,record(),&o));
+    CHECK(!lookup(f.registry,r,&o));m->words[P::SEQUENCE].store(good+2);CHECK(lookup(f.registry,r,&o));
     const uint32_t values[]={65,UINT32_MAX,0x80000000U};
-    for(unsigned i=0;i<3;++i) { m->words[P::COUNT].store(values[i]);CHECK(!lookup(f.registry,record(),&o)); }
-    m->words[P::COUNT].store(1);CHECK(lookup(f.registry,record(),&o));
-    m->words[P::ENABLED].store(0);CHECK(!lookup(f.registry,record(),&o));
+    for(unsigned i=0;i<3;++i) { m->words[P::COUNT].store(values[i]);CHECK(!lookup(f.registry,r,&o)); }
+    m->words[P::COUNT].store(1);CHECK(lookup(f.registry,r,&o));
+    uint32_t normal[P::RECORD_WORDS];
+    for(unsigned i=0;i<P::RECORD_WORDS;++i)normal[i]=m->words[P::HEADER+i].load();
+    const L::Owned saved=o;
+    for(unsigned fault=0;fault<2;++fault) {
+        CHECK(lookup(f.registry,r,&o));CHECK(o.heading_presence==N::EMPTY);
+        const uint32_t sequence=m->words[P::SEQUENCE].load();CHECK(!(sequence&1));
+        m->words[P::SEQUENCE].store(sequence+1);
+        if(fault==0)m->words[P::HEADER+P::HEADING_PRESENCE].store(3);
+        else for(unsigned i=0;i<4;++i)
+            m->words[P::HEADER+P::ORIGINS+4*mx5::sensors::lds_lineage::HEADING+i].store(0);
+        m->words[P::SEQUENCE].store(sequence+2);
+        // The record is stably readable; only the enum or known-presence
+        // origin is malformed. It must fail in Registry rather than depend
+        // on the later adapter gate or an odd writer sequence.
+        CHECK(!lookup(f.registry,r,&o));CHECK(o.result==L::UNAVAILABLE);
+        m->words[P::SEQUENCE].store(sequence+3);
+        for(unsigned i=0;i<P::RECORD_WORDS;++i)m->words[P::HEADER+i].store(normal[i]);
+        m->words[P::SEQUENCE].store(sequence+4);
+        CHECK(lookup(f.registry,r,&o));CHECK(o.result==L::MATCHED_LOCKED_FOR_SEND);
+        CHECK(o.heading_presence==N::EMPTY&&o.fields[5].write_sequence==3&&o.fields[5].observed_ns==900);
+        CHECK(o.record_sequence==saved.record_sequence&&o.view_revision==saved.view_revision&&o.map_loss_epoch==saved.map_loss_epoch);
+        for(unsigned i=0;i<P::RECORD_WORDS;++i)CHECK(m->words[P::HEADER+i].load()==normal[i]);
+    }
+    m->words[P::ENABLED].store(0);CHECK(!lookup(f.registry,r,&o));
 }
 static void concurrent() {
     Fixture f;f.setup();CHECK(f.publisher.publish(record()));f.adopt();L::Owned o;
