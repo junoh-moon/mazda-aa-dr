@@ -58,6 +58,13 @@ host Python 598개·ARM Python 124개와 C/C++, 실제 AA DSO 199사례·
 구분합니다. 최초 실패를 보존하며 관측된 새 쓰기나 token 존재를 물리 측정 자격으로 승격하지
 않으며 live ASSIST는 계속 비활성입니다.
 
+같은 `d66ec1e`의 [원본 AA 적용·복구 재검사](../validation/AA_D66_APPLICATION_2026-10-02.md)는
+최초 종료 0으로 위치/송신 18쌍·DR 대체 6건과 자격 철회·새 BEGIN 재개·
+GPS 복귀를 확인했습니다. 센서·자격은 작성 입력이며 이 fixture의
+`association_reader`는 여전히 null입니다. 실제 LDS 소유 연결과 계산·
+대체를 한 실행에 결합하는 검사는 별도로 준비 중입니다. 최초 독립 판독기의
+별칭 경로 오류와 같은 캡처의 수정 판독 통과를 구분합니다.
+
 후속 `01cb939`의 [새 전체 검사](../validation/LDS_INLINE_FULL_2026-10-02.md)는
 같은 제품 입력에서 여섯 바이너리를 다시 빌드하고 host Python 592개·C/C++,
 전체 ARM Python 118개·C/C++, 실제 AA DSO 13개 suite·190사례와 원본
