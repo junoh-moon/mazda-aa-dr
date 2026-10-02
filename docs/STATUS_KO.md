@@ -43,8 +43,12 @@ POSITION/LOCATION 10쌍·90개 원시 필드와 현재 callback의 inline 연결
 같은 제품 입력에서 여섯 바이너리를 다시 빌드하고 host Python 592개·C/C++,
 전체 ARM Python 118개·C/C++, 실제 AA DSO 13개 suite·190사례와 원본
 LDS 설치기 84사례를 생략 없이 통과했습니다. 이전 실패는 그대로 보존합니다.
-첫 부분 SM VM은 240초 안에 LDS 상태를 내보내지 못해 미판정이며,
-수집 도구를 보완하고 있습니다. 새 공개 설치 ZIP이나 v1.0 발행은 아닙니다.
+[부분 SM 후속 관측](../validation/LDS_INLINE_SM_STARTUP_2026-10-02.md)은
+r2에서 LDS 설치 진단·같은 프로세스의 반복 존재를 확보했지만 조회 도구의
+순정 BusyBox 환경 전달 결함 때문에 서비스 응답을 확인하지 못했습니다.
+조회 도구를 고친 r3는 LDS 시작 전에 원본 settings 종료와 SM의 watchdog
+갱신 중단을 관측했습니다. 원인은 미확정이며 전체 기동 통과로 세지 않습니다.
+새 공개 설치 ZIP이나 v1.0 발행은 아닙니다.
 
 후속 `9c8ef75`의 [원본 로더 추가 검사](../validation/AA_POOL_STOCK_UNWIND_2026-10-02.md)는
 같은 실제 AA 제품의 POSITION/unwind 18개와 별도 로더 추적 1개,
