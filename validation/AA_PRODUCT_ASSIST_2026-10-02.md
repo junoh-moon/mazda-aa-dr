@@ -51,6 +51,9 @@ denied는 후보가 준비된 뒤 inline provenance를 거부한 시험이 아�
 실제 worker의 readiness가 입력 pop 전에 거부됐으며, mode 0 송신의 사유는
 `EPOCH_MISMATCH`입니다. MODEL에서는 source pop과 worker 입력 수를 함께
 확인했습니다. MODEL 행이 대기열에만 있었던 것을 거부 실행으로 세지 않았습니다.
+후속 원문 재대조에서 첫 MODEL SPEED(입력 4)에서 INPUT_FAULT, 이후 223개
+입력의 ignored 처리를 확인했습니다. MODEL 216개 각각을 품질 검사로 거부했다는
+뜻은 아닙니다. 원본 요청·수치·48바이트·종료·정리도 다시 대조했습니다.
 
 원본 client와 LDS reader/server는 각각 종료 0, 원본 세션 해제·요청 배출·큐 join,
 제품 `capture.done`을 확인했습니다. 대기 중인 AA 서비스와 monitor는 실행 관리자가
@@ -114,7 +117,8 @@ GDB 13.1-3과 새 의존 패키지 19개는 전용 컨테이너에만 추가했�
 ## 남은 작업
 
 자격 상실 → 실제 철회 → readiness만 회복한 상태의 비발행 → 새 원본 GPS와
-BEGIN → DR 재개, 그리고 유효 후보가 있는 실제 callback의 inline 거부는 아직
-완료하지 않았습니다. 원본 요청의 간헐적 정지, 응답 도착 전 출처 공급부,
+BEGIN → DR 재개, 그리고 유효 후보가 있는 실제 callback의 inline 거부는
+이 첫 기록 이후 [별도 복구 실행](AA_ASSIST_RECOVERY_2026-10-02.md)에서
+완료했습니다. 원본 요청의 간헐적 정지, 응답 도착 전 출처 공급부,
 물리 센서의 시각·품질·보정, 차량 기동·복구, Galaxy S25·동글·지도 반영도 남습니다.
 새 설치 ZIP이나 v1.0을 발행한 기록이 아닙니다.
