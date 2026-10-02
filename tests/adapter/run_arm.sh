@@ -40,7 +40,7 @@ qemu-arm -L "$sysroot" "$build/veneer-test"
     src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp \
     tests/adapter/veneer_unwind_test.cpp tests/adapter/veneer_unwind_fixture.S \
     -ldl -o "$build/veneer-unwind-test"
-for case in throw_position throw_send nested_throw cancel_position cancel_send throw_enter cancel_enter nested_send small_stack deep_nested deep_throw deep_cancel deep_small_stack deep_small_overflow; do
+for case in throw_position throw_send nested_throw cancel_position cancel_send throw_enter cancel_enter nested_send small_stack deep_nested deep_throw deep_cancel deep_small_stack deep_small_overflow throw_reuse cancel_reuse small_stack_throw small_stack_cancel; do
     qemu-arm -L "$sysroot" "$build/veneer-unwind-test" "$case"
 done
 

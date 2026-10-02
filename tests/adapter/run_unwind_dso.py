@@ -48,7 +48,8 @@ def main():
     cases = ('throw_position', 'throw_send', 'nested_throw', 'cancel_position', 'cancel_send',
              'throw_enter', 'cancel_enter', 'nested_send', 'small_stack',
              'deep_nested', 'deep_throw', 'deep_cancel', 'deep_small_stack',
-             'deep_small_overflow')
+             'deep_small_overflow', 'throw_reuse', 'cancel_reuse',
+             'small_stack_throw', 'small_stack_cancel')
     fixture = 'veneer_unwind'
     access = 'unwind_dso_access.h'
     macro = '-DMX5_UNWIND_DSO_TEST'

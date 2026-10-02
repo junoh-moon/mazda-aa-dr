@@ -21,7 +21,8 @@ static unsigned char raw[72], payload[48];
 static int owner;
 enum { THROW_POSITION=1, THROW_SEND, NESTED_THROW, CANCEL_POSITION, CANCEL_SEND,
        THROW_ENTER, CANCEL_ENTER, NESTED_SEND, SMALL_STACK, DEEP_NESTED,
-       DEEP_THROW, DEEP_CANCEL, DEEP_SMALL_STACK, DEEP_SMALL_OVERFLOW };
+       DEEP_THROW, DEEP_CANCEL, DEEP_SMALL_STACK, DEEP_SMALL_OVERFLOW,
+       THROW_REUSE, CANCEL_REUSE, SMALL_STACK_THROW, SMALL_STACK_CANCEL };
 static bool in_nested_send;
 static uint32_t unavailable_call, unavailable_generation;
 static int32_t unavailable_mode;
@@ -93,7 +94,8 @@ static void outside() {
 extern "C" void authored_target(void* manager,const void* position) {
     assert(manager==&owner && position==raw && errno==EAGAIN);
     ++depth;
-    if (behavior==THROW_POSITION || (behavior==NESTED_THROW && depth==2)) throw 19;
+    if (behavior==THROW_POSITION || behavior==THROW_REUSE ||
+        behavior==SMALL_STACK_THROW || (behavior==NESTED_THROW && depth==2)) throw 19;
     if (behavior==DEEP_THROW || behavior==DEEP_CANCEL) {
         if(depth==9) {
             if(behavior==DEEP_CANCEL)cancel_now();
@@ -104,7 +106,8 @@ extern "C" void authored_target(void* manager,const void* position) {
         --depth;
         return;
     }
-    if (behavior==CANCEL_POSITION) cancel_now();
+    if (behavior==CANCEL_POSITION || behavior==CANCEL_REUSE ||
+        behavior==SMALL_STACK_CANCEL) cancel_now();
     if (behavior==NESTED_THROW) {
         bool caught=false;
         try { mx5_position_veneer(manager,position); }
@@ -159,6 +162,26 @@ static void* small_stack_main(void*) {
     outside();
     return 0;
 }
+static void* small_stack_throw_main(void*) {
+    volatile unsigned char worker_scope[sizeof(mx5::runtime::request_trace::WorkerContext)];
+    worker_scope[0]=0;worker_scope[sizeof worker_scope-1]=1;
+    bool caught=false;
+    errno=EAGAIN;
+    try { mx5_position_veneer(&owner,raw); }
+    catch(int n) { assert(n==19);caught=true; }
+    assert(caught);
+    outside();
+    return 0;
+}
+static void* small_stack_cancel_main(void*) {
+    volatile unsigned char worker_scope[sizeof(mx5::runtime::request_trace::WorkerContext)];
+    worker_scope[0]=0;worker_scope[sizeof worker_scope-1]=1;
+    pthread_cleanup_push(cleanup,0);
+    errno=EAGAIN;
+    mx5_position_veneer(&owner,raw);
+    pthread_cleanup_pop(0);
+    assert(false);return 0;
+}
 int main(int argc,char** argv) {
     assert(argc==2);
     alarm(10);
@@ -179,10 +202,15 @@ int main(int argc,char** argv) {
     else if(!strcmp(argv[1],"deep_cancel"))behavior=DEEP_CANCEL;
     else if(!strcmp(argv[1],"deep_small_stack"))behavior=DEEP_SMALL_STACK;
     else if(!strcmp(argv[1],"deep_small_overflow"))behavior=DEEP_SMALL_OVERFLOW;
+    else if(!strcmp(argv[1],"throw_reuse"))behavior=THROW_REUSE;
+    else if(!strcmp(argv[1],"cancel_reuse"))behavior=CANCEL_REUSE;
+    else if(!strcmp(argv[1],"small_stack_throw"))behavior=SMALL_STACK_THROW;
+    else if(!strcmp(argv[1],"small_stack_cancel"))behavior=SMALL_STACK_CANCEL;
     else assert(false);
     Options options=Options();options.sink=observe;
     if(behavior==SMALL_STACK || behavior==DEEP_SMALL_STACK ||
-       behavior==DEEP_SMALL_OVERFLOW) {
+       behavior==DEEP_SMALL_OVERFLOW || behavior==SMALL_STACK_THROW ||
+       behavior==SMALL_STACK_CANCEL) {
         options.clock=callback_clock;options.request_reader=callback_request;
         options.provenance=callback_provenance;options.session_reader=callback_session;
     }
@@ -192,14 +220,39 @@ int main(int argc,char** argv) {
     payload[32]=payload[40]=1;
     const unsigned requested=behavior;
     if(behavior==SMALL_STACK || behavior==DEEP_SMALL_STACK ||
-       behavior==DEEP_SMALL_OVERFLOW) {
+       behavior==DEEP_SMALL_OVERFLOW || behavior==SMALL_STACK_THROW ||
+       behavior==SMALL_STACK_CANCEL) {
         pthread_attr_t attr;
         assert(!pthread_attr_init(&attr));
         assert(!pthread_attr_setstacksize(&attr,16*1024));
         pthread_t thread;void* result=0;
-        assert(!pthread_create(&thread,&attr,small_stack_main,0));
+        void* (*entry)(void*)=behavior==SMALL_STACK_THROW?small_stack_throw_main:
+            behavior==SMALL_STACK_CANCEL?small_stack_cancel_main:small_stack_main;
+        assert(!pthread_create(&thread,&attr,entry,0));
         assert(!pthread_attr_destroy(&attr));
-        assert(!pthread_join(thread,&result) && result==0);
+        assert(!pthread_join(thread,&result));
+        if(requested==SMALL_STACK_CANCEL)
+            assert(result==PTHREAD_CANCELED && cleanups==1);
+        else assert(result==0);
+    } else if(behavior==THROW_REUSE || behavior==CANCEL_REUSE) {
+        // A leaked slot per unwind would exhaust the 64-entry process pool.
+        for(unsigned i=0;i<65;++i) {
+            depth=0;
+            behavior=requested;
+            if(behavior==CANCEL_REUSE) {
+                pthread_t thread;void* result=0;
+                assert(!pthread_create(&thread,0,thread_main,0));
+                assert(!pthread_join(thread,&result));
+                assert(result==PTHREAD_CANCELED && cleanups==i+1);
+            } else {
+                bool caught=false;
+                errno=EAGAIN;
+                try { mx5_position_veneer(&owner,raw); }
+                catch(int n) { assert(n==19);caught=true; }
+                assert(caught);
+                outside();
+            }
+        }
     } else if(behavior==CANCEL_POSITION || behavior==CANCEL_SEND ||
               behavior==CANCEL_ENTER || behavior==DEEP_CANCEL) {
         pthread_t thread;void* result=0;
@@ -224,7 +277,9 @@ int main(int argc,char** argv) {
        requested==THROW_ENTER || requested==CANCEL_ENTER ||
        requested==NESTED_SEND || requested==DEEP_NESTED ||
        requested==DEEP_THROW || requested==DEEP_CANCEL ||
-       requested==DEEP_SMALL_OVERFLOW)
+       requested==DEEP_SMALL_OVERFLOW || requested==THROW_REUSE ||
+       requested==CANCEL_REUSE || requested==SMALL_STACK_THROW ||
+       requested==SMALL_STACK_CANCEL)
         assert(faulted());
     std::printf("PASS ARM unwind %s: propagation and empty post-unwind scopes\n",argv[1]);
     assert(!munmap(trampoline,4096));
