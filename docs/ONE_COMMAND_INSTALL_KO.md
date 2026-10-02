@@ -1,16 +1,15 @@
 # USB 숫자 메뉴로 설치·CMU 재부팅·회수
 
 대상은 **2019 MX-5 ND2 6MT / Mazda Connect NA 74.00.324A**입니다.
-**현재 설치 가능한 공개 시험판은 없습니다.** 마지막 공개
-[v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)는
-LDS 반복 종료 때문에 사용 중단했습니다. 아래 절차는 새 후보가 별도로
-검증·발행될 때의 절차와 과거 판정표입니다. 지금 차량에 설치하지 마십시오.
-해당 ZIP `mazda-aa-dr-v0.3.10-shadow.2.zip`의 과거 SHA-256은
-`76d6049db04631352ee7b37cb5f4f0294ad9b36e123dc8ad05b062a1a59d4148`입니다.
-GitHub의 자동 `Source code (zip)`은 설치 ZIP이 아닙니다.
+이 문서는 **새 SHADOW 설치 묶음을 위한 숫자 메뉴 절차**입니다.
+[릴리즈 목록](https://github.com/junoh-moon/mazda-aa-dr/releases)에서
+검증·발행된 설치 ZIP과 그 체크섬을 확인하십시오. GitHub의 자동
+`Source code (zip)`은 설치 ZIP이 아닙니다. 이전 `v0.3.10-shadow.1`·`.2`는
+LDS 반복 종료 때문에 사용 중단했으므로 설치하지 마십시오.
+이 안내는 별도로 정한 시험에 적용하며 지금 새 차량 방문이나 주행을 요청하지 않습니다.
 
 **아래 `1 → 5 → 2 → 0`과 확대 회수는 `v0.3.9-shadow.3`부터 가능하지만, 일곱 근거 중
-`startup_state`, `config_mode`, `runtime_disable_next_start`는 `v0.3.10-shadow.2` 시험판에서 출력합니다.**
+`startup_state`, `config_mode`, `runtime_disable_next_start`는 이 묶음에 포함돼 있습니다.**
 이전 `v0.3.9-shadow.2`에는 메뉴 `5`와 새 부팅 대조·전체 설치 폴더 회수가 없습니다.
 과거 공개판의 [발행·재다운로드 검증](../validation/RELEASE_V0310_SHADOW2_2026-10-02.md)과
 [이전 v0.3.9-shadow.3 검증](../validation/RELEASE_V039_SHADOW3_2026-10-02.md)을 구분하십시오.
@@ -18,7 +17,7 @@ GitHub의 자동 `Source code (zip)`은 설치 ZIP이 아닙니다.
 [빈 기록 분석](../validation/FIELD_V039_EMPTY_CAPTURE_2026-10-02.md)을 보존하며,
 지금 추가 방문·재설치·재주행을 요청하지 않습니다.
 
-기존 자료를 회수할 때는 공개 `v0.3.10-shadow.2`의 한 줄과 `3`을
+기존 자료만 회수할 때도 검증·발행된 새 묶음의 한 줄과 `3`을
 사용합니다. 이미 제거했어도 남은 파일은 회수하지만, 기록이 없던 구간을
 복원하거나 같은 주행을 반복할 이유가 되지는 않습니다.
 
@@ -60,7 +59,7 @@ ACC와 엔진이 꺼진 ON은 실제 엔진 가동과 다릅니다. 둘 다 시�
    요청합니다. **시동 버튼을 누르지 말고 엔진과 USB 연결을 그대로 유지하십시오.**
    차량 시동 OFF/ON은 이 CMU 재부팅을 대신하지 않습니다.
 4. CMU 화면이 돌아오면 같은 USB의 MP3로 셸을 다시 열고, 같은 한 줄 뒤
-   **`2`와 Enter**를 누르십시오. `v0.3.10-shadow.2` 시험판에서는 다음 일곱 줄을 각각 확인하십시오.
+   **`2`와 Enter**를 누르십시오. 다음 일곱 줄을 각각 확인하십시오.
 
    - `reboot_check=new_boot_observed`
    - `startup_state=guard_committed_after_new_boot`
