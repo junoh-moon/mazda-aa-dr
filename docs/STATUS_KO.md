@@ -70,9 +70,17 @@ host Python 598개·ARM Python 124개와 C/C++, 실제 AA DSO 199사례·
 같은 `d66ec1e`의 [원본 AA 적용·복구 재검사](../validation/AA_D66_APPLICATION_2026-10-02.md)는
 최초 종료 0으로 위치/송신 18쌍·DR 대체 6건과 자격 철회·새 BEGIN 재개·
 GPS 복귀를 확인했습니다. 센서·자격은 작성 입력이며 이 fixture의
-`association_reader`는 여전히 null입니다. 실제 LDS 소유 연결과 계산·
-대체를 한 실행에 결합하는 검사는 별도로 준비 중입니다. 최초 독립 판독기의
+`association_reader`는 여전히 null입니다. 최초 독립 판독기의
 별칭 경로 오류와 같은 캡처의 수정 판독 통과를 구분합니다.
+
+후속 [같은 LDS 연결의 ASSIST 실행](../validation/AA_ASSOCIATED_ASSIST_2026-10-02.md)은
+실제 reader·Publisher·읽기 전용 Registry의 같은 callback 사본을 작성 자격과
+결합했습니다. 자격 거부 실행은 21쌍·DR 대체 6건을 확보했으며 정상 종료의
+OBSERVE를 잘못 거부한 최초 판독 실패를 보존하고 동일 캡처의 후속 검사를
+통과했습니다. epoch 불일치 실행은 음성 입력 fault 뒤 마지막 GPS 복귀
+대기에서 실패했고 journal 끝도 잘렸습니다. 두 경우 전체 통과가 아니며
+원본 요청 정체 원인을 조사 중입니다. 물리 qualified 공급부·live ASSIST는
+계속 미완료입니다.
 
 후속 `01cb939`의 [새 전체 검사](../validation/LDS_INLINE_FULL_2026-10-02.md)는
 같은 제품 입력에서 여섯 바이너리를 다시 빌드하고 host Python 592개·C/C++,
