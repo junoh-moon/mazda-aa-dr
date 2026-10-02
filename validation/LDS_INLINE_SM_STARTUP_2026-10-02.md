@@ -123,6 +123,34 @@ QEMU·임시 socket 경로·활성 작업·응용 UNIX socket·SysV message queu
 이번 console SHA-256은
 `fd5e9cc0cc9fd37307e8fae6039fd443a3c10f1930ba51bf69f1f0b1c70a18b1`입니다.
 
+## SM 추적기만 제외한 후속 실행
+
+다음 실행은 SM을 시작하는 한 줄에서 진단 strace 접두부 85바이트만
+제거했습니다. CPU affinity·환경·종료 상태 wrapper·다른 VIM 추적과
+원본 정책은 보존했습니다. 새 initrd의 10,144개 항목을 이전 이미지와
+직접 비교해 `init` 내용만 달라짐을 확인했습니다. 이 비교는 파일 내용·
+mode·UID/GID·link 수·device node를 포함하며 archive inode·mtime·
+저장 장치 번호는 비교에서 제외했습니다. 제품 여섯 개와 커널·QEMU,
+QMP 관측·240초 호스트 제한은 그대로입니다.
+
+첫 이미지 빌드는 종료 0이었고, VM은 240.115초 뒤 wrapper 124로
+종료했습니다. 마지막 일반 표식은 guard 선택 성공이었습니다. SM 시작
+표식·조회 완료·LDS 설치 진단이 모두 없어 **변경한 SM 명령까지 도달했는지
+확인하지 못했습니다.** 따라서 strace가 원인이거나 이를 제거해도 같은
+SM 문제가 생긴다고 판단하지 않습니다.
+
+약 180·210초의 QMP는 모두 running 상태였습니다. 두 CPU의 PC·PSR은
+각 CPU별로 두 관측에서 같았으며 batch는 16.853ms·9.584ms였습니다.
+앞선 QMP 실행과 마찬가지로 halted·pending IRQ·GPT 시계는 관측하지
+않았고 현재 중단의 원인은 미확정입니다. 독립 검증은 같은 저장 이미지·
+명령·QMP 원문에서 종료 0으로 끝났으며 VM을 다시 실행하지 않았습니다.
+QEMU·임시 경로·응용 socket·SysV message queue를 정리하고 산출물
+열 항목의 소유권만 복원했습니다. 내용·mode·mtime은 그대로입니다.
+
+이 실행의 initrd SHA-256은
+`ad8f8bcc8c2b869c1aa056698f801e92daf9acad4c08507c7e18e82a36569336`,
+console은 `a6b2c33e921c6f458d2fc2885c74d296777c44168159226886f2193b9f503eeb`입니다.
+
 원문·입력·이미지와 독립 readback을 보존하고 같은 저장 자료에서 비교합니다.
 각 실행 뒤 작업 프로세스·UNIX socket·SysV IPC·임시 경로를 정리했습니다.
 컨테이너 자체와 추가 검증 도구는 후속 작업 종료 시 별도 정리 대상입니다.
