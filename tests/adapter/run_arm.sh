@@ -27,7 +27,7 @@ for test in observe scrub native malformed nested assist epoch reacquire expiry 
     qemu-arm -L "$sysroot" "$build/adapter-test" "$test"
 done
 "${cross}g++" $flags -I src tests/adapter/association_context_test.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp -o "$build/association-context-test"
-for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed; do
+for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed presence_empty presence_present legacy_layout invalid_presence presence_without_origin; do
     qemu-arm -L "$sysroot" "$build/association-context-test" "$scenario"
 done
 "${cross}g++" $flags -I src tests/adapter/context_pool_association_test.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp -o "$build/context-pool-association-test"

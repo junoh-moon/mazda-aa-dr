@@ -1,6 +1,7 @@
 // The real adapter owns the same already-captured request/association throughout
 // POSITION, provenance and SEND. Inputs here are authored observation identities.
 #include "adapter/adapter.h"
+#include "runtime/lds_association_protocol.h"
 #include <cassert>
 #include <cerrno>
 #include <cstdio>
@@ -16,12 +17,14 @@ namespace A=mx5::adapter;
 namespace L=mx5::runtime::lds_association;
 namespace R=mx5::runtime::request_trace;
 namespace S=mx5::sensors::lds_lineage;
+namespace C=mx5::sensors::nmea_course_token;
 static_assert(S::FIELD_COUNT==9,"Owned comparison covers every field origin");
 namespace {
 const char* const scenarios[]={
     "captured","nested","mutate_after","nested_missing","wrong_call","wrong_generation",
     "wrong_request","wrong_worker","wrong_stage","unavailable","missing","malformed",
-    "request_failed","reader_conflict","reader_mismatch","frame_reuse","provenance_failed"};
+    "request_failed","reader_conflict","reader_mismatch","frame_reuse","provenance_failed",
+    "presence_empty","presence_present","legacy_layout","invalid_presence","presence_without_origin"};
 const char* scenario;
 unsigned reads[2],lookups[2],checks[2],sends,position_count[2],send_count[2];
 bool seen[2];
@@ -52,13 +55,14 @@ R::Result request(const void* p,R::Trace* out,void*) {
 L::Owned identity(unsigned n,uint32_t generation) {
     L::Owned out=L::Owned();out.result=L::MATCHED_LOCKED_FOR_SEND;out.stage=L::LOCKED_FOR_SEND;
     out.call_sequence=n+1;out.prediction_generation=generation;
-    out.view_revision=3;out.layout_version=1;out.source_instance=41;out.record_sequence=42;
+    out.view_revision=3;out.layout_version=L::protocol::VERSION;out.source_instance=41;out.record_sequence=42;
     out.locked_observed_ns=99;out.map_loss_epoch=1;
     out.request_id=10+n;out.request_epoch=1;out.worker_id=20+n;out.worker_epoch=1;
     out.cache_lifetime=51;out.write_sequence=52;
     for(unsigned i=0;i<S::FIELD_COUNT;++i) {
         out.fields[i].write_sequence=52-i;out.fields[i].observed_ns=98-i;
     }
+    out.heading_presence=is("presence_empty")?C::EMPTY:is("presence_present")?C::PRESENT:C::UNKNOWN;
     return out;
 }
 void same_owned(const L::Owned& a,const L::Owned& b) {
@@ -74,9 +78,11 @@ void same_owned(const L::Owned& a,const L::Owned& b) {
         assert(a.fields[i].write_sequence==b.fields[i].write_sequence);
         assert(a.fields[i].observed_ns==b.fields[i].observed_ns);
     }
+    assert(a.heading_presence==b.heading_presence);
 }
 bool expected_match(unsigned n) {
     return is("captured")||is("nested")||is("mutate_after")||is("provenance_failed")||
+        is("presence_empty")||is("presence_present")||
         ((is("nested_missing")||is("frame_reuse"))&&n==0);
 }
 // A rejected association keeps only the conflict/mismatch classification.
@@ -84,7 +90,8 @@ L::Owned expected(unsigned n) {
     if(expected_match(n)) {assert(seen[n]);return identity(n,generations[n]);}
     L::Owned out=L::Owned();
     if(is("wrong_call")||is("wrong_generation")||is("wrong_request")||is("wrong_worker")||
-       is("wrong_stage")||is("reader_conflict"))out.result=L::CONFLICT;
+       is("wrong_stage")||is("reader_conflict")||is("legacy_layout")||
+       is("invalid_presence")||is("presence_without_origin"))out.result=L::CONFLICT;
     else if(is("reader_mismatch"))out.result=L::PAYLOAD_MISMATCH;
     return out;
 }
@@ -109,6 +116,11 @@ bool association(const A::PositionContext& c,L::Owned* out,void*) {
     if(is("wrong_request"))++out->request_id;
     if(is("wrong_worker"))++out->worker_epoch;
     if(is("wrong_stage"))out->stage=L::NO_STAGE;
+    if(is("legacy_layout"))out->layout_version=1; // Deliberately old, not the current protocol constant.
+    if(is("invalid_presence"))out->heading_presence=static_cast<C::Presence>(3);
+    if(is("presence_without_origin")) {
+        out->heading_presence=C::PRESENT;out->fields[S::HEADING]=S::FieldOrigin();
+    }
     if(is("reader_conflict")) {out->result=L::CONFLICT;return false;}
     if(is("reader_mismatch")) {out->result=L::PAYLOAD_MISMATCH;return false;}
     // A failed request may still reach the reader; it must never become MATCHED.

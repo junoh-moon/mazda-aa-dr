@@ -1,5 +1,6 @@
 #include "adapter.h"
 #include "bus_hooks.h"
+#include "runtime/lds_association_protocol.h"
 #include <atomic>
 #include <cerrno>
 #include <cmath>
@@ -154,7 +155,10 @@ bool association_matches(const PositionContext& c,const runtime::lds_association
     return c.request_result==runtime::request_trace::OK &&
         value.result==L::MATCHED_LOCKED_FOR_SEND && value.stage==L::LOCKED_FOR_SEND &&
         value.call_sequence==c.call_sequence && value.prediction_generation==c.prediction_generation &&
-        value.view_revision && value.layout_version==1 && value.source_instance && value.record_sequence &&
+        value.view_revision && value.layout_version==L::protocol::VERSION && value.source_instance && value.record_sequence &&
+        value.heading_presence<=sensors::nmea_course_token::PRESENT &&
+        (value.heading_presence==sensors::nmea_course_token::UNKNOWN ||
+         value.fields[sensors::lds_lineage::HEADING].write_sequence) &&
         value.locked_observed_ns && value.request_id && value.request_epoch && value.worker_id && value.worker_epoch &&
         value.request_id==c.request_trace.request.id && value.request_epoch==c.request_trace.request.epoch &&
         value.worker_id==c.request_trace.worker.id && value.worker_epoch==c.request_trace.worker.epoch;

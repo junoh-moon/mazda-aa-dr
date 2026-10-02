@@ -202,7 +202,9 @@ def main():
             cases = ('captured', 'nested', 'mutate_after', 'nested_missing', 'wrong_call',
                      'wrong_generation', 'wrong_request', 'wrong_worker', 'wrong_stage',
                      'unavailable', 'missing', 'malformed', 'request_failed',
-                     'reader_conflict', 'reader_mismatch', 'frame_reuse', 'provenance_failed')
+                     'reader_conflict', 'reader_mismatch', 'frame_reuse', 'provenance_failed',
+                     'presence_empty', 'presence_present', 'legacy_layout', 'invalid_presence',
+                     'presence_without_origin')
             fixture, access = 'association_context', 'association_context_dso_access.h'
             macro, marker = '-DMX5_ASSOCIATION_CONTEXT_DSO_TEST', 'PASS association context '
     elif args.suite in ('context-pool', 'context-pool-association'):

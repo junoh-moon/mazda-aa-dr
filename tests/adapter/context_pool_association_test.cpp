@@ -4,6 +4,7 @@
 // Thread synchronization is outside callbacks. No adapter implementation is
 // included and no private pool/slot/owner state is inspected.
 #include "adapter/adapter.h"
+#include "runtime/lds_association_protocol.h"
 #include <atomic>
 #include <cassert>
 #include <cerrno>
@@ -25,6 +26,7 @@ namespace R=mx5::runtime::request_trace;
 namespace L=mx5::runtime::lds_association;
 namespace B=mx5::runtime::bus_trace;
 namespace S=mx5::sensors::lds_lineage;
+namespace C=mx5::sensors::nmea_course_token;
 namespace {
 const unsigned CAPACITY=64;
 const int32_t ORIGINAL_RESULT=-731;
@@ -60,7 +62,7 @@ void initialize(Frame& f,unsigned id) {
     std::memset(&f,0,sizeof f);f.id=id;f.send_choice=A::ORIGINAL;
     put32(f.raw,0);put64(f.raw+8,id);
     put_double(f.raw+16,10.0+id/100000.0);put_double(f.raw+24,20.0+id/100000.0);
-    put32(f.raw+32,id);put_double(f.raw+40,30.0);put_double(f.raw+48,40.0);
+    put32(f.raw+32,id);put_double(f.raw+40,id%3?0.0:30.0);put_double(f.raw+48,40.0);
     put_double(f.raw+56,1.25);put_double(f.raw+64,2.5);
     for(unsigned i=0;i<48;++i)f.payload[i]=uint8_t((i+id)%251+1);
     f.trace.request=R::Token{10000+id,20000+id};
@@ -118,6 +120,7 @@ void same_owned(const L::Owned& a,const L::Owned& b) {
         assert(a.fields[i].write_sequence==b.fields[i].write_sequence);
         assert(a.fields[i].observed_ns==b.fields[i].observed_ns);
     }
+    assert(a.heading_presence==b.heading_presence);
 }
 uint64_t clock_fn(void*) {assert(active);errno=EAGAIN;return 1000000+active->id;}
 R::Result request(const void* raw,R::Trace* out,void*) {
@@ -131,7 +134,7 @@ bool association(const A::PositionContext& c,L::Owned* out,void*) {
     L::Owned value=L::Owned();
     value.result=L::MATCHED_LOCKED_FOR_SEND;value.stage=L::LOCKED_FOR_SEND;
     value.call_sequence=c.call_sequence;value.prediction_generation=c.prediction_generation;
-    value.view_revision=active->id;value.layout_version=1;
+    value.view_revision=active->id;value.layout_version=L::protocol::VERSION;
     value.source_instance=100000+active->id;value.record_sequence=200000+active->id;
     value.locked_observed_ns=300000+active->id;value.map_loss_epoch=400000+active->id;
     value.request_id=c.request_trace.request.id;value.request_epoch=c.request_trace.request.epoch;
@@ -141,6 +144,7 @@ bool association(const A::PositionContext& c,L::Owned* out,void*) {
         value.fields[i].write_sequence=700000+active->id*16+i;
         value.fields[i].observed_ns=800000+active->id*16+i;
     }
+    value.heading_presence=static_cast<C::Presence>(active->id%3);
     active->owned=value;*out=value;errno=ENOTTY;return true;
 }
 bool provenance(void* manager,const A::PositionContext& c,A::Provenance* out,void*) {

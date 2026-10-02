@@ -107,7 +107,7 @@ $(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_pool_association $(BUILD)/test_association_context $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_context_pool $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
-	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed; do $(BUILD)/test_association_context $$scenario; done
+	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed presence_empty presence_present legacy_layout invalid_presence presence_without_origin; do $(BUILD)/test_association_context $$scenario; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
 	$(BUILD)/test_context_pool saturation
 	@set -e; for scenario in capacity capacity_raw reuse nested concurrent fork_full fork_live fork_nested fork_unavailable fork_depth9 fork_generation early; do $(BUILD)/test_context_pool_association $$scenario; done
@@ -358,3 +358,18 @@ $(BUILD)/test_runtime_lds_association: tests/adapter/runtime_lds_association_tes
 	$(CXX) $(CXX_WARN) $(filter-out %.h src/runtime/runtime.cpp,$^) -ldl -pthread -lrt -lm -o $@
 $(BUILD)/test_lds_association_channel: tests/runtime/test_lds_association_channel.cpp $(LDS_ASSOCIATION) $(LDS_HEADERS) src/adapter/adapter.h src/adapter/lds_hooks.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -Wl,--wrap=pwrite -Wl,--wrap=mmap -pthread -lrt -o $@
+
+# adapter.cpp consumes the shared association protocol version. Host fixtures
+# compile sources directly, so record this prerequisite as well as ARM .d files.
+HOST_ADAPTER_TESTS = \
+    test_adapter test_provenance_context test_context_pool \
+    test_journal test_worker_session test_model_session_reset \
+    test_model_session_input test_session_hooks test_session_early_init \
+    test_session_request test_bus_endpoint test_bus_hooks \
+    test_bus_early_init test_assist_publication test_pipeline \
+    test_navigation test_live_pipeline test_gyro_bias \
+    test_holdout test_shadow_log test_gps_wheel \
+    test_assist_worker test_runtime_assist test_worker_lds \
+    test_worker_lds_source test_association_context test_context_pool_association \
+    test_context_pool_atfork_failure test_runtime_lds_association
+$(addprefix $(BUILD)/,$(HOST_ADAPTER_TESTS)): src/runtime/lds_association_protocol.h
