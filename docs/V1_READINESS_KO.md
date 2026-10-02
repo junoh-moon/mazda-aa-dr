@@ -179,6 +179,10 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
   [inline 요청 문맥 검사](../validation/PROVENANCE_CONTEXT_2026-10-02.md)에서
   one-shot 재조회 없이 동일 요청을 전달하고 중첩 frame·실패·세대 철회를
   확인했습니다. 실제 provider·receiver의 자격 판단 구현과 구분합니다.
+- [x] LDS 응답 전 관측 사본을 실제 AA callback의 읽기 전용 조회에 연결합니다.
+  [새 제품 원본 실행](../validation/LDS_INLINE_PRODUCT_2026-10-02.md)은 원본
+  reader·요청·POSITION/LOCATION 10쌍과 현재 callback 연결 7건을 확인했습니다.
+  물리 자격 공급부는 미구현이며 첫 전체 ARM·후처리 실패도 별도로 남습니다.
 - [x] 실제 제품 cold 설치와 원본 BLM·AA IPC 세션의 생성·해제·큐 종료를 연결합니다.
   [원본 세션 실행](../validation/AA_PRODUCT_STARTUP_2026-10-02.md)에서 첫 환경 실패와
   후속 성공, 입력 불변·잔여 정리를 구분했습니다. 작성한 부분 초기화이며
