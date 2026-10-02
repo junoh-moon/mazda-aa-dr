@@ -62,6 +62,19 @@ Codex 독립 검토 네 건 이상과 Claude의 읽기 전용 적대적 검토�
 원본 펌웨어와 비공개 로그·프롬프트 원문은 이 공개 기록에 포함하지
 않았습니다.
 
+## 최종 로컬 ZIP 대조
+
+문서까지 고정한 소스 `647874095e97a9012585ade13fc0f8c3ae7e2744`에서
+로컬 `aa-context-pool-local-r7.zip`을 만들었습니다. SHA-256은
+`1458683d37b0f0e29c17327629c2fbaaa61c5fc0245453ece6d7c5a0bf0128cf`입니다.
+ZIP의 40개 항목은 CRC·내부 `SHA256SUMS`와 외부 `.sha256` 대조를
+통과했습니다. 내부 `build-info.json`은 `source_modified=false`,
+`default_mode=SHADOW`, 위 고정 소스와 AA/LDS 제품 해시를 기록합니다.
+압축을 다시 푼 최종 ZIP도 원본 BusyBox 격리 chroot의 설치·메뉴
+`1 → 5 → 2`·회수·제거 실행을 종료 0으로 통과했습니다. 작성한
+재부팅·collector witness와 원본 PID 1/AA/VBS 미실행 한계는 위와
+같습니다. 이 로컬 파일은 GitHub Release에 업로드하지 않았습니다.
+
 ## 아직 완료되지 않은 검증
 
 이 새 AA DSO로 [이전 원본 AA 계산·송신](AA_PRODUCT_ASSIST_2026-10-02.md)이나
