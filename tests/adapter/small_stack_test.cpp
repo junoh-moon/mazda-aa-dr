@@ -102,8 +102,12 @@ void note_sp(void* p) {
     if (!g_lowest_marker || a < g_lowest_marker) g_lowest_marker = a;
 }
 
-// Monotonic clock must not perturb the caller's errno.
-uint64_t clock_fn(void*) { return 1000000000ULL; }
+// Challenge the product's errno restoration on both sides of the OEM call.
+uint64_t clock_fn(void*) { errno=EAGAIN;return 1000000000ULL; }
+void session_fn(const void* storage,mx5::runtime::session_trace::Snapshot* out,void*) {
+    assert(storage==session_storage);
+    *out=mx5::runtime::session_trace::Snapshot();errno=ENOTTY;
+}
 
 // Original fallback. OBSERVE forwards the unchanged wrapper/payload here.
 int32_t next_fn(void* storage, A::VehicleData* data) {
@@ -120,14 +124,14 @@ int32_t next_fn(void* storage, A::VehicleData* data) {
     return -319;                  // original result
 }
 
-// Lightweight sink: copy into BSS, preserve errno so post-return checks are not
-// confused by sink-local errno writes. Also records the deepest SP marker.
+// Copy into BSS and deliberately clobber errno. The product must restore the
+// original result errno after this callback, not accidentally inherit it.
 void sink_fn(const A::Observation* o, void*) {
-    int saved = errno;
     note_sp(__builtin_frame_address(0));
     if (o->kind == A::Observation::POSITION) { obs_position = *o; ++position_count; }
     else if (o->kind == A::Observation::SEND) { obs_send = *o; ++send_count; }
-    errno = saved;
+    else assert(!"unexpected observation kind");
+    errno = EIO;
 }
 
 // A 1 KB volatile frame kept live across the entire product callback. noinline
@@ -205,11 +209,16 @@ int main(int argc, char** argv) {
     A::Options options = A::Options();
     options.sink = sink_fn;
     options.clock = clock_fn;
+    options.session_reader = session_fn;
     options.allow_assist = false;  // OBSERVE only; never set_mode(ASSIST)
 
     // Keep side effects out of assert() for clarity (build is not NDEBUG).
     bool configured = product_configure(next_fn, options);
     assert(configured);
+    // The explicit deployment gate is false, so this must not enable ASSIST.
+    // It also distinguishes the set_mode offset from a mode getter.
+    bool denied = product_set_mode(A::ASSIST);
+    assert(!denied);
     bool moded = product_set_mode(A::OBSERVE);
     assert(moded);
 

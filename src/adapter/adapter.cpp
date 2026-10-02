@@ -40,6 +40,8 @@ struct ThreadState {
     FailureContext failures[CONTEXT_DEPTH_LIMIT+1];
     bool unavailable[CONTEXT_DEPTH_LIMIT];
 };
+static_assert(__has_trivial_constructor(ContextSlot) &&
+              __has_trivial_constructor(ThreadState),"Context storage must be BSS/TBSS initialized");
 // The shim must be loaded at process startup; only bounded slot references
 // and counters live in initial-exec TLS. No dynamic allocation occurs in hooks.
 static __thread ThreadState tls __attribute__((tls_model("initial-exec")));

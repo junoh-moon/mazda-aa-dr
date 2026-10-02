@@ -31,9 +31,11 @@ for scenario in captured nested mutate_after nested_missing wrong_call wrong_gen
     qemu-arm -L "$sysroot" "$build/association-context-test" "$scenario"
 done
 "${cross}g++" $flags -I src tests/adapter/context_pool_association_test.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp -o "$build/context-pool-association-test"
-for scenario in capacity capacity_raw reuse nested concurrent fork_full fork_live fork_generation early; do
+for scenario in capacity capacity_raw reuse nested concurrent fork_full fork_live fork_nested fork_unavailable fork_depth9 fork_generation early; do
     qemu-arm -L "$sysroot" "$build/context-pool-association-test" "$scenario"
 done
+"${cross}g++" $flags -I src tests/adapter/context_pool_atfork_failure_test.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp -Wl,--wrap=pthread_atfork -o "$build/context-pool-atfork-failure-test"
+qemu-arm -L "$sysroot" "$build/context-pool-atfork-failure-test"
 "${cross}g++" $flags -I src tests/adapter/provenance_context_test.cpp \
     src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp -o "$build/provenance-context-test"
 for case in captured nested failure missing invalidate unqualified malformed; do

@@ -366,20 +366,86 @@ void fork_full() {
     distinct_holders(CAPACITY);recovery();
 }
 void fork_live() {
-    start_holders(CAPACITY-1);Frame caller;initialize(caller,800);enter(caller);
+    // The product claims first-fit: entering the caller before the holders
+    // makes a child that wrongly frees every slot overwrite this exact frame.
+    Frame caller;initialize(caller,800);enter(caller);start_holders(CAPACITY-1);
     const uint32_t before=A::generation();assert(caller.position.prediction_generation==before);
     const pid_t child=fork();assert(child>=0);
     if(!child) {
         alarm(10);child_generation(before);
         // Reclaim orphan slots without erasing the caller's captured frame.
         Frame inner;round(inner,801,true,A::NESTED_CALL);
-        send(caller);verify(caller,true,A::DISABLED);leave(caller);
+        send(caller);
+        // Check the owned values before generic reason assertions so an
+        // over-reclaim mutation is rejected for the actual aliasing evidence.
+        same_trace(caller.sent.request_trace,caller.trace);same_owned(caller.sent.lds_association,caller.owned);
+        verify(caller,true,A::DISABLED);leave(caller);
         Frame fresh;round(fresh,802,true,A::DISABLED);_exit(0);
     }
     assert(A::generation()==before);await_child(child);assert(A::generation()==before);
     send(caller);verify(caller,true,A::DISABLED);leave(caller);
     for(unsigned i=0;i<CAPACITY-1;++i)release_holder(i);
     distinct_holders(CAPACITY-1);recovery();
+}
+void fork_nested() {
+    Frame live[3];
+    for(unsigned i=0;i<3;++i) {initialize(live[i],900+i);enter(live[i]);}
+    start_holders(CAPACITY-3);const uint32_t before=A::generation();
+    const pid_t child=fork();assert(child>=0);
+    if(!child) {
+        alarm(10);child_generation(before);Frame inner;round(inner,903,true,A::NESTED_CALL);
+        for(unsigned n=3;n>0;--n) {
+            Frame& f=live[n-1];send(f);
+            same_trace(f.sent.request_trace,f.trace);same_owned(f.sent.lds_association,f.owned);
+            verify(f,true,n==1?A::DISABLED:A::NESTED_CALL);leave(f);
+        }
+        Frame fresh;round(fresh,904,true,A::DISABLED);_exit(0);
+    }
+    assert(A::generation()==before);await_child(child);assert(A::generation()==before);
+    for(unsigned n=3;n>0;--n) {
+        Frame& f=live[n-1];send(f);verify(f,true,n==1?A::DISABLED:A::NESTED_CALL);leave(f);
+    }
+    for(unsigned i=0;i<CAPACITY-3;++i)release_holder(i);
+    distinct_holders(CAPACITY-3);recovery();
+}
+void fork_unavailable() {
+    start_holders(CAPACITY);Frame failed;initialize(failed,910);enter(failed);
+    verify_exhausted_position(failed);assert(A::faulted());
+    const uint32_t before=A::generation();const pid_t child=fork();assert(child>=0);
+    if(!child) {
+        alarm(10);child_generation(before);
+        Frame inner;round(inner,911,true,A::NESTED_CALL);
+        send(failed);verify(failed,false,A::CONTEXT_UNAVAILABLE);leave(failed);
+        Frame fresh;round(fresh,912,true,A::DISABLED);_exit(0);
+    }
+    assert(A::generation()==before);await_child(child);assert(A::generation()==before);
+    send(failed);verify(failed,false,A::CONTEXT_UNAVAILABLE);leave(failed);
+    for(unsigned i=0;i<CAPACITY;++i)release_holder(i);
+    distinct_holders(CAPACITY);recovery();
+}
+void fork_depth9() {
+    Frame live[8];
+    for(unsigned i=0;i<8;++i) {initialize(live[i],920+i);enter(live[i]);}
+    start_holders(CAPACITY-8);Frame failed;initialize(failed,928);enter(failed);
+    verify_exhausted_position(failed);assert(A::faulted());
+    const uint32_t before=A::generation();const pid_t child=fork();assert(child>=0);
+    if(!child) {
+        alarm(10);child_generation(before);
+        send(failed);verify(failed,false,A::CONTEXT_UNAVAILABLE);leave(failed);
+        for(unsigned n=8;n>0;--n) {
+            Frame& f=live[n-1];send(f);
+            same_trace(f.sent.request_trace,f.trace);same_owned(f.sent.lds_association,f.owned);
+            verify(f,true,n==1?A::DISABLED:A::NESTED_CALL);leave(f);
+        }
+        Frame fresh;round(fresh,929,true,A::DISABLED);_exit(0);
+    }
+    assert(A::generation()==before);await_child(child);assert(A::generation()==before);
+    send(failed);verify(failed,false,A::CONTEXT_UNAVAILABLE);leave(failed);
+    for(unsigned n=8;n>0;--n) {
+        Frame& f=live[n-1];send(f);verify(f,true,n==1?A::DISABLED:A::NESTED_CALL);leave(f);
+    }
+    for(unsigned i=0;i<CAPACITY-8;++i)release_holder(i);
+    distinct_holders(CAPACITY-8);recovery();
 }
 void fork_generation() {
     // Independent of pool pressure: an inherited generation must be revoked in
@@ -408,6 +474,9 @@ int main(int argc,char** argv) {
     else if(!std::strcmp(argv[1],"concurrent"))concurrent();
     else if(!std::strcmp(argv[1],"fork_full"))fork_full();
     else if(!std::strcmp(argv[1],"fork_live"))fork_live();
+    else if(!std::strcmp(argv[1],"fork_nested"))fork_nested();
+    else if(!std::strcmp(argv[1],"fork_unavailable"))fork_unavailable();
+    else if(!std::strcmp(argv[1],"fork_depth9"))fork_depth9();
     else if(!std::strcmp(argv[1],"fork_generation"))fork_generation();
     else assert(!"unknown context pool scenario");
     alarm(0);std::printf("PASS context pool association %s: original forwarding and owned frame lifetime\n",argv[1]);

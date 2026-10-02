@@ -221,7 +221,8 @@ def main():
             names['FAULT'] = '_ZN3mx57adapter7faultedEv'
             names['DECODE_POSITION'] = '_ZN3mx57adapter15decode_positionEPKvPNS0_13PositionInputE'
             cases = ('capacity', 'capacity_raw', 'reuse', 'nested', 'concurrent',
-                     'fork_full', 'fork_live', 'fork_generation', 'early')
+                     'fork_full', 'fork_live', 'fork_nested', 'fork_unavailable',
+                     'fork_depth9', 'fork_generation', 'early')
             fixture, access = 'context_pool_association', 'context_pool_association_dso_access.h'
             macro, marker = '-DMX5_CONTEXT_POOL_ASSOCIATION_DSO_TEST', 'PASS context pool association '
     elif args.suite == 'small-stack':
