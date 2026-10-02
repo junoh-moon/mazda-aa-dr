@@ -95,7 +95,8 @@ bool increment(std::atomic<uint32_t>& value,uint32_t* result) {
     uint32_t before=value.load(std::memory_order_relaxed);
     for(unsigned n=0;n<4;++n) {
         if(before==UINT32_MAX)return false;
-        if(value.compare_exchange_weak(before,before+1,std::memory_order_acq_rel)) { if(result)*result=before+1;return true; }
+        if(value.compare_exchange_weak(before,before+1,std::memory_order_acq_rel,
+                std::memory_order_acquire)) { if(result)*result=before+1;return true; }
     }
     return false;
 }
@@ -183,7 +184,8 @@ bool Publisher::publish(const adapter::LdsLockedSend& r) {
     P::Map* m=static_cast<P::Map*>(mapping_);if(!m->words[P::ENABLED].load(std::memory_order_acquire))return false;
     if(!valid(r)) { invalidate();return false; }
     uint32_t idle=0;
-    if(!busy_.compare_exchange_strong(idle,1,std::memory_order_acquire)) { invalidate();return false; }
+    if(!busy_.compare_exchange_strong(idle,1,std::memory_order_acquire,
+            std::memory_order_relaxed)) { invalidate();return false; }
     Release release(busy_);
     const uint32_t loss=m->words[P::LOSS].load(std::memory_order_acquire);
     if(loss!=seen_loss_||count_==P::CAPACITY) {
@@ -215,7 +217,8 @@ bool Publisher::publish(const adapter::LdsLockedSend& r) {
 }
 bool Publisher::offer(const char* channel,uint64_t now) {
     Errno saved;if(!mapping_||socket_<0||disabled_.load(std::memory_order_acquire)||!now)return false;
-    uint32_t idle=0;if(!offer_busy_.compare_exchange_strong(idle,1,std::memory_order_acquire))return false;
+    uint32_t idle=0;if(!offer_busy_.compare_exchange_strong(idle,1,std::memory_order_acquire,
+            std::memory_order_relaxed))return false;
     Release release(offer_busy_);
     if(last_offer_ns_&&(now<last_offer_ns_||now-last_offer_ns_<1000000000ULL))return false;
     last_offer_ns_=now;sockaddr_un addr;socklen_t len;if(!address(channel,&addr,&len))return false;
@@ -323,7 +326,8 @@ void Registry::drain(uint64_t now) {
         if(active) {
             // Our replacement is conditional on the epoch seen before recv.
             // A concurrent external retirement cannot be undone by adoption.
-            if(epoch==UINT32_MAX||!admission_epoch_.compare_exchange_strong(selected_epoch,epoch+1,std::memory_order_acq_rel)) {
+            if(epoch==UINT32_MAX||!admission_epoch_.compare_exchange_strong(selected_epoch,epoch+1,
+                    std::memory_order_acq_rel,std::memory_order_acquire)) {
                 munmap(mapping,P::MAP_BYTES);continue;
             }
             selected_epoch=epoch+1;drained_epoch_=selected_epoch;close_views();
@@ -356,7 +360,8 @@ bool Registry::read(const adapter::PositionContext& c,Owned* out) {
     const uint32_t token=active_.load(std::memory_order_acquire);const unsigned slot=(token&3)-1;
     if(!token||slot>=2)return false;
     View& v=views_[slot];uint32_t gate=v.gate.load(std::memory_order_acquire);
-    if((gate&P::CLOSED)||gate==P::CLOSED-1||!v.gate.compare_exchange_strong(gate,gate+1,std::memory_order_acq_rel))return false;
+    if((gate&P::CLOSED)||gate==P::CLOSED-1||!v.gate.compare_exchange_strong(gate,gate+1,
+            std::memory_order_acq_rel,std::memory_order_acquire))return false;
     Owned answer=Owned();bool match=false;
     if(active_.load(std::memory_order_acquire)==token&&admission_epoch_.load(std::memory_order_acquire)==v.admission_epoch&&
        !disabled_.load(std::memory_order_acquire)) {

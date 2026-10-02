@@ -74,6 +74,13 @@ drain 1,352, read 2,344바이트입니다. 전체 호출 사슬·원본 스레�
 
 ## 리뷰와 남은 검증
 
+고정 `c09d7a9`의 첫 전체 제품 빌드는 GCC 4.9.1의 `-Os`에서 세 인자 CAS
+overload의 failure memory order 오류 다섯 건으로 중단됐습니다. 이 실행은
+전체 링크·bundle·host·ARM 전체 검사를 시작하지 못한 실패로 보존합니다.
+성공/실패 memory order를 명시한 후속 수정은 실제 LDS·AA 제품 옵션의
+object 컴파일과 host 17사례/499 assertion·ARM 17사례/499 assertion을
+통과했습니다. 이것도 아직 전체 제품 검사를 대신하지 않습니다.
+
 실제 사전 설치된 Claude CLI로 정적 반대 관점 리뷰, C++ 회귀 코드 작성,
 AA 저장 구조 설계 비교를 수행했습니다. 생성된 코드는 검토·보완 후 직접
 실행했습니다. 실패 provenance 필드의 잔류를 실제 assertion 실패로 확인하고
