@@ -239,11 +239,13 @@ BusyBox에서 USB 부재·작성한 새 boot 뒤 메뉴3 회수로 검사했습�
   [8입력 원본 실행](../validation/LDS_RMC_INHERITANCE_2026-10-02.md)은 최종
   아홉 값이 A 기준과 같아져도 UTC·방위각·속도가 V 할당에서 상속됨을
   확인했습니다. 숫자 MODE만으로 앞선 RMC 상태를 복원하지 않습니다.
-- [ ] HEADING 할당에 묶인 lexical RMC 상태를 기존 소유 사본에 보존합니다.
+- [x] HEADING 할당에 묶인 lexical RMC 상태를 기존 소유 사본에 보존합니다.
   중간 응답을 놓친 경우의 정보 공백을 줄이는 작업이며 물리 측정 시각·
   수신기 품질 자격이나 live ASSIST 공급부 구현 완료를 뜻하지 않습니다.
-  [소스 구현·host 집중 검사](../validation/LDS_RMC_METADATA_2026-10-02.md)는
-  완료했으며 새 ARM 제품·전체 회귀·원본 reader 전파 검증을 남겨 둡니다.
+  [소스 구현·host 집중 검사](../validation/LDS_RMC_METADATA_2026-10-02.md) 뒤
+  [새 여섯 제품·전체 검사·원본 전파](../validation/LDS_RMC_PRODUCT_2026-10-02.md)를
+  완료했습니다. 최종 숫자가 같아져도 현재 사본에 V 상태가 남았으며,
+  전체 host/ARM·실제 DSO·원본 설치기를 생략 없이 검사했습니다.
 - [x] 외부 journal 큐 수정을 통합하고 동일 제품의 원본 실행에서 관측 loss 0을 확인합니다.
   과거 drop의 정확한 호출 조합·원인을 확정한 것으로 세지 않습니다.
 - [x] 세션 관측·전환 검사의 추가 도구는 설치 전후 목록을 남기고 모두 제거했습니다.
