@@ -79,12 +79,31 @@ PTY 문장과 시작 순서를 사용하며 실제 차량·정상 전체 SM 기�
 
 ## 남는 범위
 
-현재 새 제품의 ASSIST 복구·원본 LOCATION 대체 재실행과 부분 SM 기동은
-후속 작업입니다. 이전 `8d5669c` 제품의 DR 대체 6건을 이번 제품의 결과로
-세지 않습니다. 물리 생산 시각·센서 품질·단위·보정·receiver/provider 자격,
+별도 [새 제품 ASSIST 적용·복구](AA_POOL_APPLICATION_2026-10-02.md)는 작성한
+자격 입력으로 18쌍·DR 대체 6건을 다시 확인했습니다. 이 fixture의
+association_reader는 null이며 위 실제 관측 연결과 합쳐 물리 공급부 완료로
+세지 않습니다. 부분 SM 기동은 후속 작업입니다. 물리 생산 시각·센서 품질·단위·보정·receiver/provider 자격,
 실제 CMU 기동·복구와 S25/동글/네이버 수용은 미검증입니다. 관성항법 위치를
 실제로 적용하는 [v1.0 목표](../docs/V1_READINESS_KO.md)는 유지합니다.
 
 원본 바이너리·maps·원시 로그는 공개하지 않습니다. 실행·실패·독립 읽기는
 비공개 `full-3625449`, `product-pool-focused-3625449`, `product-association`
 기록에 각각 보존했습니다.
+
+## 후속 검사 보강: 거짓 통과 대조
+
+실제 Claude CLI의 독립 리뷰에서 FD 거부·fork·retire 검사의 일부 조건이
+다른 거부 조건에 가려질 수 있음을 지적받았습니다. 제품 코드는 그대로 두고
+검사를 보강했습니다. descriptor 수·읽기 전용·nlink·크기·mode 검사 제거와
+Registry child-disable·retire 무효화, 총 **7개 사적 오류 주입판**에서 이전
+해당 검사가 모두 통과했습니다. 보강 후 동일 7개는 모두 기대 assertion으로
+실패했습니다. 리뷰 문장 자체를 실행 결과로 세지 않았습니다.
+
+FD 음성 대조에는 새롭고 수락 가능한 publisher identity와 유효한 map을
+사용하며, 같은 identity의 정상 FD가 바로 채택되는 양성 대조를 둡니다.
+fork 검사는 읽을 수 있는 even sequence에서 child disable 유무를 비교하고,
+retire는 capacity 교체 이전의 실제 MATCH를 즉시 철회하는지 확인합니다.
+기존 17개 case를 유지한 새 집중 검사는 host·고정 ARM 각각 **17사례·1,162
+assertion, 생략 0개**를 통과했습니다. 이전 499개 결과는 소급 변경하지
+않습니다. fstat의 다른 소유 UID를 직접 주입하지는 않았고 기존 peer UID
+거부는 유지합니다. 이 대조는 하드웨어 ARM 메모리 순서의 실행 증명이 아닙니다.

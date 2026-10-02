@@ -142,6 +142,24 @@ static void forked() {
     bool unchanged=true;for(unsigned i=0;i<P::WORDS;++i)unchanged=unchanged&&(m->words[i].load()==before[i]);
     CHECK(unchanged);m->words[P::SEQUENCE].store(sequence+2);
     CHECK(lookup(f.registry,r,&o));
+    // The odd sequence above proves that child publisher operations cannot
+    // write the parent's map. Test the registry independently with a readable
+    // even map: the same inherited request matches without disable, and only
+    // child-local disable must make that request unavailable.
+    for(unsigned disable=0;disable<2;++disable) {
+        CHECK(lookup(f.registry,r,&o)&&o.source_instance==41);
+        child=fork();CHECK(child>=0);
+        if(!child) {
+            if(disable)f.registry.disable_after_fork();
+            const bool matched=lookup(f.registry,r,&o);
+            const bool correct=disable?(!matched&&o.result==L::UNAVAILABLE):
+                (matched&&o.source_instance==41&&o.record_sequence==1);
+            _exit(correct?0:10);
+        }
+        CHECK(waitpid(child,&status,0)==child);
+        CHECK(WIFEXITED(status)&&WEXITSTATUS(status)==0);
+        CHECK(lookup(f.registry,r,&o)&&o.source_instance==41&&o.record_sequence==1);
+    }
 }
 static void stopped() {
     Fixture f;f.setup();const auto r=record();CHECK(f.publisher.publish(r));f.adopt();L::Owned o;
@@ -242,31 +260,67 @@ static void send_offer(const char* channel,L::Publisher& p,const int* fds,unsign
     }
     CHECK(sendmsg(sock,&message,MSG_NOSIGNAL)==ssize_t(size));CHECK(close(sock)==0);
 }
-static void fd_validation() {
+enum BadFd { GOOD_FD,WRITABLE_FD,LINKED_FD,LARGE_FD,SHORT_FD,EMPTY_FD,MODE_FD };
+static void fd_rejected_then_adopted(unsigned rights_count,BadFd kind) {
     Fixture f;f.setup();CHECK(f.publisher.publish(record()));f.adopt();L::Owned o;
-    const int fd=L::AssociationTestAccess::fd(f.publisher);const unsigned before=fd_count();
-    int many[8];for(unsigned i=0;i<8;++i)many[i]=fd;
+    CHECK(lookup(f.registry,record(),&o)&&o.source_instance==41);
+    L::Publisher next;CHECK(next.prepare(42,f.dir));const auto fresh=record(8,3000);
+    CHECK(L::AssociationTestAccess::created(next)>L::AssociationTestAccess::created(f.publisher));
+    CHECK(next.publish(fresh));const int good=L::AssociationTestAccess::fd(next);
+    int offered=good,extra=-1;char path[256]={0};
+    if(kind==WRITABLE_FD) {
+        snprintf(path,sizeof path,"/proc/self/fd/%d",good);
+        extra=open(path,O_RDWR|O_CLOEXEC);CHECK(extra>=0);offered=extra;
+    } else if(kind==MODE_FD)CHECK(fchmod(good,0644)==0);
+    else if(kind==LINKED_FD||kind==LARGE_FD||kind==SHORT_FD||kind==EMPTY_FD) {
+        snprintf(path,sizeof path,"%s/candidate",f.dir);
+        int writer=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);CHECK(writer>=0);
+        const unsigned copied=kind==EMPTY_FD?0:kind==SHORT_FD?4096:unsigned(P::MAP_BYTES);
+        const unsigned size=kind==LARGE_FD?unsigned(P::MAP_BYTES)+4096:copied;
+        CHECK(ftruncate(writer,size)==0);
+        // The exact newer identity, header and first record are valid. nlink
+        // and size negatives must not be accidentally rejected as old offers
+        // or zero-filled invalid headers before the guard under test matters.
+        unsigned char bytes[4096];
+        for(unsigned offset=0;offset<copied;offset+=sizeof bytes) {
+            unsigned n=copied-offset;if(n>sizeof bytes)n=sizeof bytes;
+            CHECK(pread(good,bytes,n,offset)==ssize_t(n));
+            CHECK(pwrite(writer,bytes,n,offset)==ssize_t(n));
+        }
+        CHECK(close(writer)==0);extra=open(path,O_RDONLY|O_CLOEXEC);CHECK(extra>=0);offered=extra;
+        if(kind!=LINKED_FD)CHECK(unlink(path)==0);
+    }
+    int descriptors[P::MAX_RIGHTS];CHECK(rights_count<=P::MAX_RIGHTS);
+    for(unsigned i=0;i<rights_count;++i)descriptors[i]=offered;
+    unsigned before=fd_count();
+    std::printf("FD control count=%u kind=%u\n",rights_count,unsigned(kind));std::fflush(stdout);
+    send_offer(f.channel,next,descriptors,rights_count);f.registry.drain(2000);
+    CHECK(fd_count()==before);CHECK(lookup(f.registry,record(),&o)&&o.source_instance==41);
+    CHECK(!lookup(f.registry,fresh,&o));
+    if(extra>=0)CHECK(close(extra)==0);
+    if(kind==LINKED_FD)CHECK(unlink(path)==0);
+    if(kind==MODE_FD)CHECK(fchmod(good,0600)==0);
+    // Positive control uses the SAME newer instance/creation/key that was
+    // rejected above. No third identity or timestamp repair can hide a test
+    // which never offered an otherwise-admissible map.
+    before=fd_count();send_offer(f.channel,next,&good,1);f.registry.drain(2010);
+    CHECK(fd_count()==before);CHECK(lookup(f.registry,fresh,&o)&&o.source_instance==42);
+    CHECK(o.record_sequence==1&&o.cache_lifetime==2&&o.write_sequence==3);
+    for(unsigned i=0;i<9;++i)CHECK(o.fields[i].write_sequence==3&&o.fields[i].observed_ns==2900);
+    CHECK(!lookup(f.registry,record(),&o));
+}
+static void fd_validation() {
     for(unsigned count=0;count<=8;++count) {
         if(count==1)continue;
-        send_offer(f.channel,f.publisher,many,count);f.registry.drain(1020+count);
-        CHECK(fd_count()==before);CHECK(lookup(f.registry,record(),&o));
+        fd_rejected_then_adopted(count,GOOD_FD);
     }
-    int maximum[P::MAX_RIGHTS];for(unsigned i=0;i<P::MAX_RIGHTS;++i)maximum[i]=fd;
-    send_offer(f.channel,f.publisher,maximum,P::MAX_RIGHTS);f.registry.drain(1039);
-    CHECK(fd_count()==before);CHECK(lookup(f.registry,record(),&o));
+    fd_rejected_then_adopted(P::MAX_RIGHTS,GOOD_FD);
+    fd_rejected_then_adopted(1,WRITABLE_FD);fd_rejected_then_adopted(1,MODE_FD);
+    fd_rejected_then_adopted(1,LINKED_FD);fd_rejected_then_adopted(1,LARGE_FD);
+    fd_rejected_then_adopted(1,SHORT_FD);fd_rejected_then_adopted(1,EMPTY_FD);
+    Fixture f;f.setup();CHECK(f.publisher.publish(record()));f.adopt();L::Owned o;
+    const int fd=L::AssociationTestAccess::fd(f.publisher);const unsigned before=fd_count();
     send_offer(f.channel,f.publisher,&fd,1,P::OFFER_BYTES+1);f.registry.drain(1040);
-    CHECK(fd_count()==before);CHECK(lookup(f.registry,record(),&o));
-    char path[256];snprintf(path,sizeof path,"/proc/self/fd/%d",fd);
-    int writable=open(path,O_RDWR|O_CLOEXEC);CHECK(writable>=0);
-    send_offer(f.channel,f.publisher,&writable,1);f.registry.drain(1050);CHECK(close(writable)==0);
-    CHECK(fd_count()==before);CHECK(lookup(f.registry,record(),&o));
-    snprintf(path,sizeof path,"%s/linked",f.dir);int other=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);CHECK(other>=0);
-    CHECK(ftruncate(other,P::MAP_BYTES)==0);CHECK(close(other)==0);other=open(path,O_RDONLY|O_CLOEXEC);CHECK(other>=0);
-    send_offer(f.channel,f.publisher,&other,1);f.registry.drain(1060);CHECK(close(other)==0);CHECK(unlink(path)==0);
-    CHECK(fd_count()==before);CHECK(lookup(f.registry,record(),&o));
-    other=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);CHECK(other>=0);CHECK(close(other)==0);
-    other=open(path,O_RDONLY|O_CLOEXEC);CHECK(other>=0);CHECK(unlink(path)==0);
-    send_offer(f.channel,f.publisher,&other,1);f.registry.drain(1070);CHECK(close(other)==0);
     CHECK(fd_count()==before);CHECK(lookup(f.registry,record(),&o));
     L::Publisher broken;CHECK(broken.prepare(99,f.dir));L::AssociationTestAccess::map(broken)->words[P::MAGIC].store(0);
     CHECK(broken.offer(f.channel,1080));f.registry.drain(1080);CHECK(lookup(f.registry,record(),&o));
@@ -293,18 +347,28 @@ static void malformed_map() {
     m->words[P::ENABLED].store(0);CHECK(!lookup(f.registry,record(),&o));
 }
 static void concurrent() {
-    Fixture f;f.setup();CHECK(f.publisher.publish(record()));f.adopt();std::atomic<unsigned> failures(0),started(0),done(0),reads(0);
+    Fixture f;f.setup();CHECK(f.publisher.publish(record()));f.adopt();L::Owned o;
+    // Prove immediate retirement with a currently matchable record, before
+    // capacity turnover can make this lookup fail independently of retire.
+    for(unsigned i=0;i<20;++i)CHECK(lookup(f.registry,record(),&o)&&o.source_instance==41);
+    f.registry.retire();for(unsigned i=0;i<20;++i)CHECK(!lookup(f.registry,record(),&o));
+    CHECK(f.publisher.offer(f.channel,2000000000ULL));f.registry.drain(2000000000ULL);
+    const auto watched=record(8,2000000100ULL);CHECK(f.publisher.publish(watched));
+    CHECK(lookup(f.registry,watched,&o)&&o.record_sequence==2);
+    // This remains concurrent read/turnover/reclamation coverage, not a proof
+    // of ARM hardware ordering or of in-place torn-copy detection.
+    std::atomic<unsigned> failures(0),started(0),done(0),reads(0);
     std::thread reader([&] {
         started.store(1);
         while(!done.load()) {
-            L::Owned o;if(lookup(f.registry,record(),&o)&&(o.record_sequence!=1||o.source_instance!=41||o.fields[0].observed_ns!=900))++failures;
+            L::Owned value;if(lookup(f.registry,watched,&value)&&(value.record_sequence!=2||value.source_instance!=41||value.fields[0].observed_ns!=2000000000ULL))++failures;
             ++reads;
         }
     });
     while(!started.load())std::this_thread::yield();
-    for(unsigned i=0;i<512;++i)(void)f.publisher.publish(record(8+i,2000+100*i));
-    f.registry.retire();for(unsigned i=0;i<20;++i) { L::Owned o;CHECK(!lookup(f.registry,record(),&o)); }
-    f.registry.drain(100000);done.store(1);reader.join();CHECK(!failures.load());CHECK(reads.load()>0);
+    for(unsigned i=0;i<512;++i)(void)f.publisher.publish(record(9+i,2000000200ULL+100*i));
+    f.registry.retire();for(unsigned i=0;i<20;++i)CHECK(!lookup(f.registry,watched,&o));
+    f.registry.drain(2000100000ULL);done.store(1);reader.join();CHECK(!failures.load());CHECK(reads.load()>0);
 }
 static void retirement_scheduled() {
     alarm(10);Fixture f;f.setup();CHECK(f.publisher.publish(record()));f.adopt();L::Owned o;
