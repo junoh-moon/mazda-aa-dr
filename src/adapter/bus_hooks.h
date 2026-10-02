@@ -26,7 +26,11 @@ enum { BUS_CONTEXT_CAPACITY=64 };
 enum BusFault { BUS_CAPACITY=1, BUS_CONTENTION=2, BUS_CALLBACK=4, BUS_UNWIND=8,
                 BUS_EXHAUSTED=16, BUS_COLLISION=32 };
 struct BusHealth { bool prepared; unsigned contexts,faults; };
+// AA revokes its prediction generation on connection mutations. LDS has no
+// AA prediction candidate, so its DSO passes no invalidator.
+typedef uint32_t (*PredictionInvalidator)();
 bool prepare_bus_hooks(const BusBindings&);
+bool prepare_bus_hooks(const BusBindings&,PredictionInvalidator);
 runtime::bus_trace::Snapshot read_bus_connection(const void*);
 // The raw address is an opaque comparison key only. Never dereference it or
 // place it in an owned Trace/journal. Unknown metadata leaves raw capture live.

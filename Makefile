@@ -18,7 +18,7 @@ LDS_SIDEBAND = src/runtime/lds_sideband.cpp
 LDS_REQUEST_SOURCE = src/runtime/lds_request_source.cpp
 LDS_HEADERS = src/runtime/lds_sideband.h src/sensors/lds_lineage.h
 LDS_HOOKS = src/adapter/lds_hooks.cpp src/sensors/lds_lineage.cpp
-LDS_TAP = $(LDS_HOOKS) $(LDS_SIDEBAND) $(RUNTIME_SUPPORT) src/sensors/lds_tap.cpp src/adapter/lds_install.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/runtime/loader.cpp
+LDS_TAP = $(LDS_HOOKS) $(LDS_SIDEBAND) $(RUNTIME_SUPPORT) src/sensors/lds_tap.cpp src/adapter/lds_install.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/runtime/loader.cpp
 LDS_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm-lds/%.o,$(LDS_TAP))
 STORAGE_HEADERS = src/runtime/storage.h src/runtime/boot_id.h
 HOST_DBUS_FLAGS = $(shell pkg-config --cflags dbus-1)
@@ -47,7 +47,7 @@ $(BUILD)/replay: $(CORE) src/core/dr_core.h tests/core/replay.c | $(BUILD)
 	$(CC) $(C_WARN) -Isrc/core $(CORE) tests/core/replay.c -lm -o $@
 $(BUILD)/test_adapter: $(ADAPTER) src/adapter/adapter.h tests/adapter/adapter_test.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ADAPTER) tests/adapter/adapter_test.cpp -ldl -pthread -o $@
-$(BUILD)/test_provenance_context: src/adapter/adapter.cpp src/adapter/adapter.h src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h tests/adapter/provenance_context_test.cpp | $(BUILD)
+$(BUILD)/test_provenance_context: src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.h src/runtime/request_trace.cpp src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h tests/adapter/provenance_context_test.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_runtime: $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(RUNTIME_SUPPORT) tests/runtime/test_runtime.cpp -o $@
@@ -98,9 +98,11 @@ $(BUILD)/test_bus_endpoint: tests/adapter/bus_endpoint_test.cpp tests/adapter/bu
 	$(CXX) $(CXX_WARN) -no-pie $(filter-out %.h src/adapter/request_hooks.cpp,$^) -pthread -o $@
 $(BUILD)/test_bus_hooks: tests/adapter/bus_hooks_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/runtime/request_trace.cpp src/adapter/bus_hooks.h src/adapter/adapter.h src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
+$(BUILD)/test_lds_bus_hooks: tests/adapter/lds_bus_hooks_test.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp src/adapter/bus_hooks.h src/runtime/request_trace.h src/runtime/bus_trace.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
 $(BUILD)/test_bus_early_init: tests/adapter/bus_early_init_test.cpp src/adapter/bus_hooks.cpp src/adapter/adapter.cpp src/runtime/request_trace.cpp src/adapter/bus_hooks.h src/adapter/adapter.h src/runtime/request_trace.h src/runtime/session_trace.h src/runtime/bus_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -pthread -o $@
-test-adapter: $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
+test-adapter: $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire
 	@set -e; for case in observe scrub native malformed nested assist epoch reacquire expiry encoder backend request; do $(BUILD)/test_adapter $$case; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
 	$(BUILD)/test_cold_patch
@@ -111,6 +113,7 @@ test-adapter: $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_b
 	$(BUILD)/test_request_wire
 	@set -e; for case in normal missing_guid missing_unique empty long failed_register failed_connect early_close wrong_raw wrong_caller duplicate nested getter_nested register_throw getter_throw getter_cancel connect_throw raw_mismatch reconnect_before_send reconnect_in_send transition_send reconnect address_reuse readers no_api; do $(BUILD)/test_bus_endpoint $$case; done
 	$(BUILD)/test_bus_early_init
+	$(BUILD)/test_lds_bus_hooks
 	@set -e; for case in normal position_source position_sources_concurrent signal signal_reuse failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed prediction_entry_create prediction_entry_connect prediction_entry_disconnect prediction_entry_free prediction_entry_closed prediction_entry_signal prediction_exit_create prediction_exit_connect prediction_exit_disconnect prediction_exit_free prediction_exit_closed prediction_exit_signal; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 test-runtime: $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session test-request-publication test-journal-boundaries
 	$(BUILD)/test_assist_worker
@@ -228,8 +231,8 @@ $(BUILD)/mx5dr-sha256: $(HASH_OBJECTS) | $(BUILD)
 $(BUILD)/libmx5dr-vimtap.so: $(SENSOR_OBJECTS)
 	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr-vimtap.so -static-libstdc++ -static-libgcc $^ -ldl -lpthread -lrt -o $@
 
-# The LDS process has its own loader and immutable hook state. The AA ARM
-# veneer entry is excluded; real shared adapter invalidation remains available.
+# The LDS process has its own loader and immutable hook state. Its bus wrapper
+# tracks connection lifetimes without linking the AA prediction/TLS adapter.
 # Pinned binutils 2.22 has an ARM unwind assertion with section GC here.
 $(LDS_OBJECTS): override ARM_CXXFLAGS += -fexceptions
 $(BUILD)/arm-lds/src/runtime/loader.o: override ARM_CPPFLAGS += -DMX5_LOADER_TARGET='"/jci/lds/svcjcilds.so"'

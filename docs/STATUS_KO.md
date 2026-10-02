@@ -2,6 +2,15 @@
 
 이 문서는 새 리뷰어·LLM의 첫 진입점이다. 과거 상세 설계와 설치 가능 판단보다 우선한다. 현재 USB는 SHADOW 시험 후보이며 OFF·폴링 분리·일회성 기동 보호를 구현했다. 호스트·ARM·부분 OEM 실행과 실제 차량 검증을 구분한다. 소스 커밋과 공개 릴리즈는 별개다.
 
+**2026-10-02 긴급 정정:** 공개 `v0.3.10-shadow.1`과 `.2` ZIP은 설치하지 마십시오.
+원본 펌웨어의 부분 SM 에뮬레이션에서 `.2` ZIP의 LDS preload가 원본 LDS를
+반복 종료시켰습니다. `.1`은 동일한 LDS DSO를 포함합니다. 두 릴리즈
+설명에도 사용 중단 경고를 게시했습니다.
+LDS DSO의 큰 정적 TLS가 작은 스레드 스택을 침범했을 가능성이 높지만,
+스택 여유와 실제 차량 인과관계는 미확정입니다. 수정 후보의 LDS 생존은
+전체 OEM 기동·AA·차량·폰 승인으로 세지 않습니다.
+[LDS TLS 조사](../validation/LDS_TLS_CRASH_2026-10-02.md)를 먼저 읽으십시오.
+
 **2026-10-02 첫 실차 회수는 빈 기록입니다.** v0.3.9-shadow.1 설치 뒤
 차량 시동 OFF/ON과 무선 AA 동글 사용이 있었고, v0.3.9-shadow.2로 다시
 회수한 archive에는 trace·collector JSONL이 전혀 없습니다. 메뉴3의
@@ -26,7 +35,7 @@ SHADOW/GPS 제외 비교·회수를 한 번에 준비해야 합니다. 설치 �
 [통합 시험 준비](FIELD_TRIAL_KO.md)와 [v1.0 완료 조건](V1_READINESS_KO.md)을
 따르십시오. 공개판도 차량 승인을 받은 완성본이 아닌 SHADOW 시험판입니다.
 
-현재 공개 시험판은 [v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)입니다.
+마지막 공개 시험판 [v0.3.10-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.10-shadow.2)는 위 결함으로 사용 중단 상태입니다.
 고정 소스 `be96c6de6619d8e9053a327fd16e9df718384ca4`의 설치 ZIP·
 체크섬을 게시한 뒤 다시 내려받아 바이트·SHA·CRC·내부 source pin을
 대조했습니다. [새 발행 검증](../validation/RELEASE_V0310_SHADOW2_2026-10-02.md)은

@@ -59,6 +59,7 @@ Pool contexts;
 std::atomic<unsigned> prepared(0),used(0),faults(0),mutations(0),lifecycle(0);
 std::atomic<uint64_t> version(0),next_lifetime(0);
 A::BusBindings original=A::BusBindings();
+A::PredictionInvalidator prediction_invalidator=0;
 bool attempted;
 __thread const void* freeing __attribute__((tls_model("initial-exec")));
 struct PreserveErrno {
@@ -109,12 +110,12 @@ struct Mutation {
         const PreserveErrno saved;
         mutations.fetch_add(1);
         if(life && lifecycle.fetch_add(1))fault(A::BUS_CONTENTION);
-        A::invalidate();
+        if(prediction_invalidator)prediction_invalidator();
     }
     ~Mutation() {
         const PreserveErrno saved;
         if(!complete)fault(A::BUS_UNWIND);
-        A::invalidate();
+        if(prediction_invalidator)prediction_invalidator();
         if(version.fetch_add(1)==UINT64_MAX)fault(A::BUS_EXHAUSTED);
         if(life)lifecycle.fetch_sub(1);
         mutations.fetch_sub(1);
@@ -175,13 +176,14 @@ B::Boundary boundary_unavailable(B::Result result) {
 }
 }
 namespace mx5 { namespace adapter {
-bool prepare_bus_hooks(const BusBindings& b) {
+bool prepare_bus_hooks(const BusBindings& b,PredictionInvalidator invalidate_prediction) {
     const PreserveErrno saved;
     if(attempted || !b.create || !b.connect || !b.disconnect || !b.free || !b.signal || !b.is_signal)return false;
     const BusEndpointApi& e=b.endpoint;
     const bool any=e.registration||e.get_server_id||e.get_unique_name||e.free_guid||e.register_caller;
     if(any && (!e.registration||!e.get_server_id||!e.get_unique_name||!e.free_guid||!e.register_caller))return false;
-    attempted=true;original=b;prepared.store(1,std::memory_order_release);return true;
+    attempted=true;original=b;prediction_invalidator=invalidate_prediction;
+    prepared.store(1,std::memory_order_release);return true;
 }
 BusHealth bus_hook_health() {
     const PreserveErrno saved;
