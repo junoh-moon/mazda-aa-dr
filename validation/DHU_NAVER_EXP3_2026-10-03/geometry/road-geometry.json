@@ -1,0 +1,28 @@
+{
+  "ways": [
+    "1126003976",
+    "627350922",
+    "1359976816",
+    "1359976814",
+    "1359976815",
+    "1359976817",
+    "1495778540",
+    "1359976818",
+    "509125478",
+    "37399935",
+    "1457464649",
+    "1005811762",
+    "509123639",
+    "507420451"
+  ],
+  "length_m": 2520.902677263404,
+  "start": [
+    35.1582787,
+    129.1493314,
+    110.03628306095855
+  ],
+  "A_distance_m": 420,
+  "B_drivein_distance_m": 266,
+  "source": "https://api.openstreetmap.org/api/0.6/map?bbox=129.148,35.154,129.178,35.17",
+  "path_method": "Directed shortest path through motor roads from shared start node to a node near Mipo; screen guidance checked before each run. First 420m of path used."
+}

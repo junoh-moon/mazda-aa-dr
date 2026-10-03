@@ -1,0 +1,18 @@
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 0.5
+tap 200 50
+sleep 4
+tap 345 145
+sleep 3
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+sleep 2
+screenshot ../../../../experiment3/C4-guidance.png

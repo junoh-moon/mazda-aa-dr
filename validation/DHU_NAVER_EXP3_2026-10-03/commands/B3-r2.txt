@@ -1,0 +1,104 @@
+location 35.1582787 129.1493314 5 NAN 14 110.0
+sleep 1
+location 35.1582356 129.1494761 5 NAN 14 110.0
+sleep 1
+location 35.1581924 129.1496208 5 NAN 14 110.0
+sleep 1
+location 35.1581493 129.1497654 5 NAN 14 110.0
+sleep 1
+location 35.1581061 129.1499101 5 NAN 14 110.0
+sleep 1
+location 35.1580630 129.1500548 5 NAN 14 110.0
+sleep 1
+location 35.1580199 129.1501995 5 NAN 14 110.0
+sleep 1
+location 35.1579767 129.1503442 5 NAN 14 110.0
+sleep 1
+location 35.1579336 129.1504888 5 NAN 14 110.0
+sleep 1
+location 35.1578905 129.1506335 5 NAN 14 110.0
+sleep 1
+location 35.1578485 129.1507787 5 NAN 14 108.3
+sleep 1
+location 35.1578088 129.1509248 5 NAN 14 108.3
+sleep 1
+location 35.1577820 129.1510745 5 NAN 14 96.5
+sleep 1
+location 35.1577676 129.1512275 5 NAN 14 96.5
+sleep 1
+location 35.1578025 129.1513748 5 NAN 14 72.7
+sleep 1
+location 35.1578399 129.1515218 5 NAN 14 72.7
+sleep 1
+location 35.1578779 129.1516686 5 NAN 14 72.3
+sleep 1
+location 35.1579161 129.1518154 5 NAN 14 72.3
+sleep 1
+location 35.1579544 129.1519621 5 NAN 14 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 14 72.3
+sleep 1
+screenshot ../../../../experiment3/B3-r2-00.png
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+screenshot ../../../../experiment3/B3-r2-10.png
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+screenshot ../../../../experiment3/B3-r2-20.png
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+location 35.1579926 129.1521088 5 NAN 0 72.3
+sleep 1
+screenshot ../../../../experiment3/B3-r2-30.png

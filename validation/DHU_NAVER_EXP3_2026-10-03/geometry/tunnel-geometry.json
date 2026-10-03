@@ -1,0 +1,23 @@
+{
+  "tunnel_way": 59038277,
+  "approach_way": 59038272,
+  "tunnel_tag": "yes",
+  "tunnel_geometry_nodes": 2,
+  "tunnel_length_m": 2433.121986654051,
+  "entrance": [
+    35.1714322,
+    129.0250025
+  ],
+  "exit": [
+    35.1853302,
+    129.0043248
+  ],
+  "approach_start": [
+    35.169767905698826,
+    129.0267566165744,
+    328.8559922619735
+  ],
+  "phase_start_m_inside_tunnel": 20,
+  "moving_phase_distance_m": 300,
+  "geometry_limit": "OSM represents this tunnel by two endpoints; interpolated straight segment"
+}

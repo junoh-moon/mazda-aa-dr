@@ -1,0 +1,2491 @@
+{
+  "schema": "dhu_location_experiment3.v1",
+  "date": "2026-10-03",
+  "timezone": "Asia/Seoul",
+  "language": "ko",
+  "source_premise_unverified": "Actual Mazda cached-fix behavior in supplied protocol was not measured.",
+  "environment": {
+    "host": "macOS 15.8 arm64",
+    "phone": "SM-S931N",
+    "android": "16 (API 36)",
+    "android_auto": "17.7.663654-release",
+    "naver": "6.10.0.16",
+    "dhu": "2.0-mac-arm64; build 2022-03-30-438482292",
+    "adb": "37.0.1",
+    "location_permissions": "not changed"
+  },
+  "config_exact": "[general]\ntouch = true\nresolution = 800x480\ndpi = 160\n\n[sensors]\nlocation = true\ndriving_status = true\n",
+  "run_order": {
+    "randomization": "Python random.Random seed 20261003; shuffle A then B",
+    "part_order": [
+      "C",
+      "A",
+      "B"
+    ],
+    "A": [
+      30,
+      300,
+      100,
+      5
+    ],
+    "B": [
+      "B5-r1",
+      "B1-r2",
+      "B4-r1",
+      "B2-r1",
+      "B3-r1",
+      "B1-r1",
+      "B3-r3",
+      "B2-r2",
+      "B3-r2",
+      "B1-r3",
+      "B2-r3"
+    ],
+    "C": [
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5"
+    ],
+    "pilot": [
+      "NAN accuracy / speed14, then unused restart"
+    ],
+    "C5_note": "Optional condition added after C1-C3 outcomes; no randomization requested for C."
+  },
+  "trials": [
+    {
+      "id": "C1",
+      "capture_session_label": "C1",
+      "command_file": "commands/C1.txt",
+      "commands_exact": "location 35.1697679 129.0267566 5 NAN 14 328.9\nsleep 1\nlocation 35.1698757 129.0266770 5 NAN 14 328.9\nsleep 1\nlocation 35.1699834 129.0265973 5 NAN 14 328.9\nsleep 1\nlocation 35.1700899 129.0265152 5 NAN 14 327.5\nsleep 1\nlocation 35.1701962 129.0264325 5 NAN 14 327.5\nsleep 1\nlocation 35.1703003 129.0263463 5 NAN 14 321.2\nsleep 1\nlocation 35.1703984 129.0262498 5 NAN 14 321.2\nsleep 1\nlocation 35.1704965 129.0261532 5 NAN 14 321.2\nsleep 1\nlocation 35.1705946 129.0260567 5 NAN 14 321.2\nsleep 1\nlocation 35.1706928 129.0259602 5 NAN 14 321.2\nsleep 1\nlocation 35.1707909 129.0258636 5 NAN 14 321.2\nsleep 1\nlocation 35.1708834 129.0257600 5 NAN 14 311.6\nsleep 1\nlocation 35.1709669 129.0256447 5 NAN 14 311.6\nsleep 1\nlocation 35.1710504 129.0255294 5 NAN 14 311.6\nsleep 1\nlocation 35.1711340 129.0254142 5 NAN 14 311.6\nsleep 1\nlocation 35.1712175 129.0252989 5 NAN 14 311.6\nsleep 1\nlocation 35.1713010 129.0251836 5 NAN 14 311.6\nsleep 1\nlocation 35.1713845 129.0250684 5 NAN 14 311.6\nsleep 1\nlocation 35.1714665 129.0249515 5 NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 5 NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C1-00.png\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C1-10.png\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C1-20.png\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C1-30.png\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C1-40.png\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C1-50.png\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 NAN NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C1-60.png\nsleep 10\nscreenshot ../../../../experiment3/C1-after10.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:31:50.420122+00:00",
+      "location_command_count": 80,
+      "observation": {
+        "classification": "EXTRAPOLATES_WITH_GPS_LOSS",
+        "remaining_km": {
+          "0": 4.0,
+          "20": 3.8,
+          "60": 3.2,
+          "after10": 3.1,
+          "10": 3.9,
+          "30": 3.6,
+          "40": 3.5,
+          "50": 3.3
+        },
+        "next_maneuver_km": {
+          "0": 2.7,
+          "20": 2.4,
+          "60": 1.9,
+          "after10": 1.7,
+          "10": 2.6,
+          "30": 2.3,
+          "40": 2.1,
+          "50": 2.0
+        },
+        "arrow": {
+          "0": "blue",
+          "20": "gray",
+          "60": "gray"
+        },
+        "speed_display_kmh": {
+          "0": 50,
+          "20": 50,
+          "60": 50
+        },
+        "satellite_x_at_60": true,
+        "advance_display_estimate_m": 800,
+        "distance_rounding_caveat": "Screen distances round to 0.1 km; estimate is not an exact measured path length.",
+        "after_phase": "Continued advancing for 10 seconds after injections stopped.",
+        "gray_arrow_interval_s": [
+          10,
+          20
+        ],
+        "satellite_x_first_interval_s": [
+          20,
+          30
+        ]
+      }
+    },
+    {
+      "id": "C2",
+      "capture_session_label": "C2",
+      "command_file": "commands/C2.txt",
+      "commands_exact": "location 35.1697679 129.0267566 5 NAN 14 328.9\nsleep 1\nlocation 35.1698757 129.0266770 5 NAN 14 328.9\nsleep 1\nlocation 35.1699834 129.0265973 5 NAN 14 328.9\nsleep 1\nlocation 35.1700899 129.0265152 5 NAN 14 327.5\nsleep 1\nlocation 35.1701962 129.0264325 5 NAN 14 327.5\nsleep 1\nlocation 35.1703003 129.0263463 5 NAN 14 321.2\nsleep 1\nlocation 35.1703984 129.0262498 5 NAN 14 321.2\nsleep 1\nlocation 35.1704965 129.0261532 5 NAN 14 321.2\nsleep 1\nlocation 35.1705946 129.0260567 5 NAN 14 321.2\nsleep 1\nlocation 35.1706928 129.0259602 5 NAN 14 321.2\nsleep 1\nlocation 35.1707909 129.0258636 5 NAN 14 321.2\nsleep 1\nlocation 35.1708834 129.0257600 5 NAN 14 311.6\nsleep 1\nlocation 35.1709669 129.0256447 5 NAN 14 311.6\nsleep 1\nlocation 35.1710504 129.0255294 5 NAN 14 311.6\nsleep 1\nlocation 35.1711340 129.0254142 5 NAN 14 311.6\nsleep 1\nlocation 35.1712175 129.0252989 5 NAN 14 311.6\nsleep 1\nlocation 35.1713010 129.0251836 5 NAN 14 311.6\nsleep 1\nlocation 35.1713845 129.0250684 5 NAN 14 311.6\nsleep 1\nlocation 35.1714665 129.0249515 5 NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 5 NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C2-00.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/C2-10.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/C2-20.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/C2-30.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/C2-40.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/C2-50.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/C2-60.png\nsleep 10\nscreenshot ../../../../experiment3/C2-after10.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:35:08.021961+00:00",
+      "location_command_count": 20,
+      "observation": {
+        "classification": "EXTRAPOLATES_WITH_GPS_LOSS",
+        "remaining_km": {
+          "0": 4.0,
+          "10": 3.9,
+          "20": 3.8,
+          "30": 3.6,
+          "40": 3.5,
+          "50": 3.3,
+          "60": 3.2,
+          "after10": 3.1
+        },
+        "next_maneuver_km": {
+          "0": 2.7,
+          "10": 2.6,
+          "20": 2.4,
+          "30": 2.3,
+          "40": 2.1,
+          "50": 2.0,
+          "60": 1.8,
+          "after10": 1.7
+        },
+        "gray_arrow_interval_s": [
+          0,
+          10
+        ],
+        "satellite_x_first_interval_s": [
+          0,
+          10
+        ],
+        "speed_display_kmh": 50,
+        "advance_display_estimate_m": 800,
+        "after_phase": "Continued advancing with no location injection."
+      }
+    },
+    {
+      "id": "C3",
+      "capture_session_label": "C3",
+      "command_file": "commands/C3.txt",
+      "commands_exact": "location 35.1697679 129.0267566 5 NAN 14 328.9\nsleep 1\nlocation 35.1698757 129.0266770 5 NAN 14 328.9\nsleep 1\nlocation 35.1699834 129.0265973 5 NAN 14 328.9\nsleep 1\nlocation 35.1700899 129.0265152 5 NAN 14 327.5\nsleep 1\nlocation 35.1701962 129.0264325 5 NAN 14 327.5\nsleep 1\nlocation 35.1703003 129.0263463 5 NAN 14 321.2\nsleep 1\nlocation 35.1703984 129.0262498 5 NAN 14 321.2\nsleep 1\nlocation 35.1704965 129.0261532 5 NAN 14 321.2\nsleep 1\nlocation 35.1705946 129.0260567 5 NAN 14 321.2\nsleep 1\nlocation 35.1706928 129.0259602 5 NAN 14 321.2\nsleep 1\nlocation 35.1707909 129.0258636 5 NAN 14 321.2\nsleep 1\nlocation 35.1708834 129.0257600 5 NAN 14 311.6\nsleep 1\nlocation 35.1709669 129.0256447 5 NAN 14 311.6\nsleep 1\nlocation 35.1710504 129.0255294 5 NAN 14 311.6\nsleep 1\nlocation 35.1711340 129.0254142 5 NAN 14 311.6\nsleep 1\nlocation 35.1712175 129.0252989 5 NAN 14 311.6\nsleep 1\nlocation 35.1713010 129.0251836 5 NAN 14 311.6\nsleep 1\nlocation 35.1713845 129.0250684 5 NAN 14 311.6\nsleep 1\nlocation 35.1714665 129.0249515 5 NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 5 NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C3-00.png\nlocation 35.1715750 129.0247900 20 NAN 5 309.4\nsleep 1\nlocation 35.1716036 129.0247475 20 NAN 5 309.4\nsleep 1\nlocation 35.1716321 129.0247051 20 NAN 5 309.4\nsleep 1\nlocation 35.1716607 129.0246626 20 NAN 5 309.4\nsleep 1\nlocation 35.1716892 129.0246201 20 NAN 5 309.4\nsleep 1\nlocation 35.1717178 129.0245776 20 NAN 5 309.4\nsleep 1\nlocation 35.1717464 129.0245351 20 NAN 5 309.4\nsleep 1\nlocation 35.1717749 129.0244926 20 NAN 5 309.4\nsleep 1\nlocation 35.1718035 129.0244501 20 NAN 5 309.4\nsleep 1\nlocation 35.1718320 129.0244076 20 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C3-10.png\nlocation 35.1718606 129.0243651 20 NAN 5 309.4\nsleep 1\nlocation 35.1718892 129.0243226 20 NAN 5 309.4\nsleep 1\nlocation 35.1719177 129.0242801 20 NAN 5 309.4\nsleep 1\nlocation 35.1719463 129.0242376 20 NAN 5 309.4\nsleep 1\nlocation 35.1719748 129.0241951 20 NAN 5 309.4\nsleep 1\nlocation 35.1720034 129.0241527 20 NAN 5 309.4\nsleep 1\nlocation 35.1720320 129.0241102 20 NAN 5 309.4\nsleep 1\nlocation 35.1720605 129.0240677 20 NAN 5 309.4\nsleep 1\nlocation 35.1720891 129.0240252 20 NAN 5 309.4\nsleep 1\nlocation 35.1721176 129.0239827 20 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C3-20.png\nlocation 35.1721462 129.0239402 20 NAN 5 309.4\nsleep 1\nlocation 35.1721748 129.0238977 20 NAN 5 309.4\nsleep 1\nlocation 35.1722033 129.0238552 20 NAN 5 309.4\nsleep 1\nlocation 35.1722319 129.0238127 20 NAN 5 309.4\nsleep 1\nlocation 35.1722604 129.0237702 20 NAN 5 309.4\nsleep 1\nlocation 35.1722890 129.0237277 20 NAN 5 309.4\nsleep 1\nlocation 35.1723176 129.0236852 20 NAN 5 309.4\nsleep 1\nlocation 35.1723461 129.0236428 20 NAN 5 309.4\nsleep 1\nlocation 35.1723747 129.0236003 20 NAN 5 309.4\nsleep 1\nlocation 35.1724032 129.0235578 20 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C3-30.png\nlocation 35.1724318 129.0235153 20 NAN 5 309.4\nsleep 1\nlocation 35.1724604 129.0234728 20 NAN 5 309.4\nsleep 1\nlocation 35.1724889 129.0234303 20 NAN 5 309.4\nsleep 1\nlocation 35.1725175 129.0233878 20 NAN 5 309.4\nsleep 1\nlocation 35.1725460 129.0233453 20 NAN 5 309.4\nsleep 1\nlocation 35.1725746 129.0233028 20 NAN 5 309.4\nsleep 1\nlocation 35.1726032 129.0232603 20 NAN 5 309.4\nsleep 1\nlocation 35.1726317 129.0232178 20 NAN 5 309.4\nsleep 1\nlocation 35.1726603 129.0231753 20 NAN 5 309.4\nsleep 1\nlocation 35.1726888 129.0231328 20 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C3-40.png\nlocation 35.1727174 129.0230904 20 NAN 5 309.4\nsleep 1\nlocation 35.1727460 129.0230479 20 NAN 5 309.4\nsleep 1\nlocation 35.1727745 129.0230054 20 NAN 5 309.4\nsleep 1\nlocation 35.1728031 129.0229629 20 NAN 5 309.4\nsleep 1\nlocation 35.1728316 129.0229204 20 NAN 5 309.4\nsleep 1\nlocation 35.1728602 129.0228779 20 NAN 5 309.4\nsleep 1\nlocation 35.1728888 129.0228354 20 NAN 5 309.4\nsleep 1\nlocation 35.1729173 129.0227929 20 NAN 5 309.4\nsleep 1\nlocation 35.1729459 129.0227504 20 NAN 5 309.4\nsleep 1\nlocation 35.1729744 129.0227079 20 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C3-50.png\nlocation 35.1730030 129.0226654 20 NAN 5 309.4\nsleep 1\nlocation 35.1730316 129.0226229 20 NAN 5 309.4\nsleep 1\nlocation 35.1730601 129.0225804 20 NAN 5 309.4\nsleep 1\nlocation 35.1730887 129.0225380 20 NAN 5 309.4\nsleep 1\nlocation 35.1731172 129.0224955 20 NAN 5 309.4\nsleep 1\nlocation 35.1731458 129.0224530 20 NAN 5 309.4\nsleep 1\nlocation 35.1731744 129.0224105 20 NAN 5 309.4\nsleep 1\nlocation 35.1732029 129.0223680 20 NAN 5 309.4\nsleep 1\nlocation 35.1732315 129.0223255 20 NAN 5 309.4\nsleep 1\nlocation 35.1732600 129.0222830 20 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C3-60.png\nsleep 10\nscreenshot ../../../../experiment3/C3-after10.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:37:35.679034+00:00",
+      "location_command_count": 80,
+      "observation": {
+        "classification": "FOLLOWS_INJECTED_MOVING_POSITION",
+        "remaining_km": {
+          "0": 4.0,
+          "10": 4.0,
+          "20": 3.9,
+          "30": 3.9,
+          "40": 3.8,
+          "50": 3.8,
+          "60": 3.7,
+          "after10": 3.7
+        },
+        "next_maneuver_km": {
+          "0": 2.7,
+          "10": 2.6,
+          "20": 2.6,
+          "30": 2.5,
+          "40": 2.5,
+          "50": 2.4,
+          "60": 2.4,
+          "after10": 2.4
+        },
+        "arrow_during_phase": "blue at all captured times",
+        "speed_display_kmh": {
+          "0": 50,
+          "10": 18,
+          "60": 18
+        },
+        "gps_loss_during_phase": false,
+        "advance_display_estimate_m": 300,
+        "after_phase": "At +10s gray arrow and satellite-X; rounded remaining distance unchanged. Smaller movement below 0.1km precision cannot be ruled out."
+      }
+    },
+    {
+      "id": "C4",
+      "capture_session_label": "C4",
+      "command_file": "commands/C4.txt",
+      "commands_exact": "location 35.1697679 129.0267566 5 NAN 14 328.9\nsleep 1\nlocation 35.1698757 129.0266770 5 NAN 14 328.9\nsleep 1\nlocation 35.1699834 129.0265973 5 NAN 14 328.9\nsleep 1\nlocation 35.1700899 129.0265152 5 NAN 14 327.5\nsleep 1\nlocation 35.1701962 129.0264325 5 NAN 14 327.5\nsleep 1\nlocation 35.1703003 129.0263463 5 NAN 14 321.2\nsleep 1\nlocation 35.1703984 129.0262498 5 NAN 14 321.2\nsleep 1\nlocation 35.1704965 129.0261532 5 NAN 14 321.2\nsleep 1\nlocation 35.1705946 129.0260567 5 NAN 14 321.2\nsleep 1\nlocation 35.1706928 129.0259602 5 NAN 14 321.2\nsleep 1\nlocation 35.1707909 129.0258636 5 NAN 14 321.2\nsleep 1\nlocation 35.1708834 129.0257600 5 NAN 14 311.6\nsleep 1\nlocation 35.1709669 129.0256447 5 NAN 14 311.6\nsleep 1\nlocation 35.1710504 129.0255294 5 NAN 14 311.6\nsleep 1\nlocation 35.1711340 129.0254142 5 NAN 14 311.6\nsleep 1\nlocation 35.1712175 129.0252989 5 NAN 14 311.6\nsleep 1\nlocation 35.1713010 129.0251836 5 NAN 14 311.6\nsleep 1\nlocation 35.1713845 129.0250684 5 NAN 14 311.6\nsleep 1\nlocation 35.1714665 129.0249515 5 NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 5 NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C4-00.png\nlocation 35.1715750 129.0247900 10.000 NAN 5 309.4\nsleep 1\nlocation 35.1716036 129.0247475 11.525 NAN 5 309.4\nsleep 1\nlocation 35.1716321 129.0247051 13.051 NAN 5 309.4\nsleep 1\nlocation 35.1716607 129.0246626 14.576 NAN 5 309.4\nsleep 1\nlocation 35.1716892 129.0246201 16.102 NAN 5 309.4\nsleep 1\nlocation 35.1717178 129.0245776 17.627 NAN 5 309.4\nsleep 1\nlocation 35.1717464 129.0245351 19.153 NAN 5 309.4\nsleep 1\nlocation 35.1717749 129.0244926 20.678 NAN 5 309.4\nsleep 1\nlocation 35.1718035 129.0244501 22.203 NAN 5 309.4\nsleep 1\nlocation 35.1718320 129.0244076 23.729 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C4-10.png\nlocation 35.1718606 129.0243651 25.254 NAN 5 309.4\nsleep 1\nlocation 35.1718892 129.0243226 26.780 NAN 5 309.4\nsleep 1\nlocation 35.1719177 129.0242801 28.305 NAN 5 309.4\nsleep 1\nlocation 35.1719463 129.0242376 29.831 NAN 5 309.4\nsleep 1\nlocation 35.1719748 129.0241951 31.356 NAN 5 309.4\nsleep 1\nlocation 35.1720034 129.0241527 32.881 NAN 5 309.4\nsleep 1\nlocation 35.1720320 129.0241102 34.407 NAN 5 309.4\nsleep 1\nlocation 35.1720605 129.0240677 35.932 NAN 5 309.4\nsleep 1\nlocation 35.1720891 129.0240252 37.458 NAN 5 309.4\nsleep 1\nlocation 35.1721176 129.0239827 38.983 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C4-20.png\nlocation 35.1721462 129.0239402 40.508 NAN 5 309.4\nsleep 1\nlocation 35.1721748 129.0238977 42.034 NAN 5 309.4\nsleep 1\nlocation 35.1722033 129.0238552 43.559 NAN 5 309.4\nsleep 1\nlocation 35.1722319 129.0238127 45.085 NAN 5 309.4\nsleep 1\nlocation 35.1722604 129.0237702 46.610 NAN 5 309.4\nsleep 1\nlocation 35.1722890 129.0237277 48.136 NAN 5 309.4\nsleep 1\nlocation 35.1723176 129.0236852 49.661 NAN 5 309.4\nsleep 1\nlocation 35.1723461 129.0236428 51.186 NAN 5 309.4\nsleep 1\nlocation 35.1723747 129.0236003 52.712 NAN 5 309.4\nsleep 1\nlocation 35.1724032 129.0235578 54.237 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C4-30.png\nlocation 35.1724318 129.0235153 55.763 NAN 5 309.4\nsleep 1\nlocation 35.1724604 129.0234728 57.288 NAN 5 309.4\nsleep 1\nlocation 35.1724889 129.0234303 58.814 NAN 5 309.4\nsleep 1\nlocation 35.1725175 129.0233878 60.339 NAN 5 309.4\nsleep 1\nlocation 35.1725460 129.0233453 61.864 NAN 5 309.4\nsleep 1\nlocation 35.1725746 129.0233028 63.390 NAN 5 309.4\nsleep 1\nlocation 35.1726032 129.0232603 64.915 NAN 5 309.4\nsleep 1\nlocation 35.1726317 129.0232178 66.441 NAN 5 309.4\nsleep 1\nlocation 35.1726603 129.0231753 67.966 NAN 5 309.4\nsleep 1\nlocation 35.1726888 129.0231328 69.492 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C4-40.png\nlocation 35.1727174 129.0230904 71.017 NAN 5 309.4\nsleep 1\nlocation 35.1727460 129.0230479 72.542 NAN 5 309.4\nsleep 1\nlocation 35.1727745 129.0230054 74.068 NAN 5 309.4\nsleep 1\nlocation 35.1728031 129.0229629 75.593 NAN 5 309.4\nsleep 1\nlocation 35.1728316 129.0229204 77.119 NAN 5 309.4\nsleep 1\nlocation 35.1728602 129.0228779 78.644 NAN 5 309.4\nsleep 1\nlocation 35.1728888 129.0228354 80.169 NAN 5 309.4\nsleep 1\nlocation 35.1729173 129.0227929 81.695 NAN 5 309.4\nsleep 1\nlocation 35.1729459 129.0227504 83.220 NAN 5 309.4\nsleep 1\nlocation 35.1729744 129.0227079 84.746 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C4-50.png\nlocation 35.1730030 129.0226654 86.271 NAN 5 309.4\nsleep 1\nlocation 35.1730316 129.0226229 87.797 NAN 5 309.4\nsleep 1\nlocation 35.1730601 129.0225804 89.322 NAN 5 309.4\nsleep 1\nlocation 35.1730887 129.0225380 90.847 NAN 5 309.4\nsleep 1\nlocation 35.1731172 129.0224955 92.373 NAN 5 309.4\nsleep 1\nlocation 35.1731458 129.0224530 93.898 NAN 5 309.4\nsleep 1\nlocation 35.1731744 129.0224105 95.424 NAN 5 309.4\nsleep 1\nlocation 35.1732029 129.0223680 96.949 NAN 5 309.4\nsleep 1\nlocation 35.1732315 129.0223255 98.475 NAN 5 309.4\nsleep 1\nlocation 35.1732600 129.0222830 100.000 NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C4-60.png\nsleep 10\nscreenshot ../../../../experiment3/C4-after10.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:40:33.753411+00:00",
+      "location_command_count": 80,
+      "observation": {
+        "classification": "FOLLOWS_THEN_GPS_LOST_WITH_CONTINUED_ADVANCE",
+        "remaining_km": {
+          "0": 4.0,
+          "10": 4.0,
+          "20": 3.9,
+          "30": 3.9,
+          "40": 3.8,
+          "50": 3.8,
+          "60": 3.7,
+          "after10": 3.7
+        },
+        "next_maneuver_km": {
+          "0": 2.7,
+          "10": 2.6,
+          "20": 2.6,
+          "30": 2.6,
+          "40": 2.5,
+          "50": 2.5,
+          "60": 2.4,
+          "after10": 2.4
+        },
+        "arrow": {
+          "0": "blue",
+          "10": "blue",
+          "20": "blue",
+          "30": "blue",
+          "40": "gray",
+          "50": "gray",
+          "60": "gray"
+        },
+        "gray_arrow_interval_s": [
+          30,
+          40
+        ],
+        "satellite_x_first_interval_s": [
+          30,
+          40
+        ],
+        "speed_display_kmh": {
+          "0": 50,
+          "10": 18,
+          "60": 18
+        },
+        "advance_display_estimate_m": 300,
+        "interpretation": "Initially follows slow injected fixes; after loss, continued motion at last slow speed is also consistent with tunnel extrapolation. Cannot claim accuracy 100 fixes were accepted or that positions continued to drive the marker.",
+        "after_phase": "At +10s gray arrow and satellite-X; rounded remaining distance unchanged."
+      }
+    },
+    {
+      "id": "C5",
+      "capture_session_label": "C5",
+      "command_file": "commands/C5.txt",
+      "commands_exact": "location 35.1697679 129.0267566 5 NAN 14 328.9\nsleep 1\nlocation 35.1698757 129.0266770 5 NAN 14 328.9\nsleep 1\nlocation 35.1699834 129.0265973 5 NAN 14 328.9\nsleep 1\nlocation 35.1700899 129.0265152 5 NAN 14 327.5\nsleep 1\nlocation 35.1701962 129.0264325 5 NAN 14 327.5\nsleep 1\nlocation 35.1703003 129.0263463 5 NAN 14 321.2\nsleep 1\nlocation 35.1703984 129.0262498 5 NAN 14 321.2\nsleep 1\nlocation 35.1704965 129.0261532 5 NAN 14 321.2\nsleep 1\nlocation 35.1705946 129.0260567 5 NAN 14 321.2\nsleep 1\nlocation 35.1706928 129.0259602 5 NAN 14 321.2\nsleep 1\nlocation 35.1707909 129.0258636 5 NAN 14 321.2\nsleep 1\nlocation 35.1708834 129.0257600 5 NAN 14 311.6\nsleep 1\nlocation 35.1709669 129.0256447 5 NAN 14 311.6\nsleep 1\nlocation 35.1710504 129.0255294 5 NAN 14 311.6\nsleep 1\nlocation 35.1711340 129.0254142 5 NAN 14 311.6\nsleep 1\nlocation 35.1712175 129.0252989 5 NAN 14 311.6\nsleep 1\nlocation 35.1713010 129.0251836 5 NAN 14 311.6\nsleep 1\nlocation 35.1713845 129.0250684 5 NAN 14 311.6\nsleep 1\nlocation 35.1714665 129.0249515 5 NAN 14 309.4\nsleep 1\nlocation 35.1715464 129.0248325 5 NAN 14 309.4\nsleep 1\nscreenshot ../../../../experiment3/C5-00.png\nlocation 35.1715750 129.0247900 NAN NAN 5 309.4\nsleep 1\nlocation 35.1716036 129.0247475 NAN NAN 5 309.4\nsleep 1\nlocation 35.1716321 129.0247051 NAN NAN 5 309.4\nsleep 1\nlocation 35.1716607 129.0246626 NAN NAN 5 309.4\nsleep 1\nlocation 35.1716892 129.0246201 NAN NAN 5 309.4\nsleep 1\nlocation 35.1717178 129.0245776 NAN NAN 5 309.4\nsleep 1\nlocation 35.1717464 129.0245351 NAN NAN 5 309.4\nsleep 1\nlocation 35.1717749 129.0244926 NAN NAN 5 309.4\nsleep 1\nlocation 35.1718035 129.0244501 NAN NAN 5 309.4\nsleep 1\nlocation 35.1718320 129.0244076 NAN NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C5-10.png\nlocation 35.1718606 129.0243651 NAN NAN 5 309.4\nsleep 1\nlocation 35.1718892 129.0243226 NAN NAN 5 309.4\nsleep 1\nlocation 35.1719177 129.0242801 NAN NAN 5 309.4\nsleep 1\nlocation 35.1719463 129.0242376 NAN NAN 5 309.4\nsleep 1\nlocation 35.1719748 129.0241951 NAN NAN 5 309.4\nsleep 1\nlocation 35.1720034 129.0241527 NAN NAN 5 309.4\nsleep 1\nlocation 35.1720320 129.0241102 NAN NAN 5 309.4\nsleep 1\nlocation 35.1720605 129.0240677 NAN NAN 5 309.4\nsleep 1\nlocation 35.1720891 129.0240252 NAN NAN 5 309.4\nsleep 1\nlocation 35.1721176 129.0239827 NAN NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C5-20.png\nlocation 35.1721462 129.0239402 NAN NAN 5 309.4\nsleep 1\nlocation 35.1721748 129.0238977 NAN NAN 5 309.4\nsleep 1\nlocation 35.1722033 129.0238552 NAN NAN 5 309.4\nsleep 1\nlocation 35.1722319 129.0238127 NAN NAN 5 309.4\nsleep 1\nlocation 35.1722604 129.0237702 NAN NAN 5 309.4\nsleep 1\nlocation 35.1722890 129.0237277 NAN NAN 5 309.4\nsleep 1\nlocation 35.1723176 129.0236852 NAN NAN 5 309.4\nsleep 1\nlocation 35.1723461 129.0236428 NAN NAN 5 309.4\nsleep 1\nlocation 35.1723747 129.0236003 NAN NAN 5 309.4\nsleep 1\nlocation 35.1724032 129.0235578 NAN NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C5-30.png\nlocation 35.1724318 129.0235153 NAN NAN 5 309.4\nsleep 1\nlocation 35.1724604 129.0234728 NAN NAN 5 309.4\nsleep 1\nlocation 35.1724889 129.0234303 NAN NAN 5 309.4\nsleep 1\nlocation 35.1725175 129.0233878 NAN NAN 5 309.4\nsleep 1\nlocation 35.1725460 129.0233453 NAN NAN 5 309.4\nsleep 1\nlocation 35.1725746 129.0233028 NAN NAN 5 309.4\nsleep 1\nlocation 35.1726032 129.0232603 NAN NAN 5 309.4\nsleep 1\nlocation 35.1726317 129.0232178 NAN NAN 5 309.4\nsleep 1\nlocation 35.1726603 129.0231753 NAN NAN 5 309.4\nsleep 1\nlocation 35.1726888 129.0231328 NAN NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C5-40.png\nlocation 35.1727174 129.0230904 NAN NAN 5 309.4\nsleep 1\nlocation 35.1727460 129.0230479 NAN NAN 5 309.4\nsleep 1\nlocation 35.1727745 129.0230054 NAN NAN 5 309.4\nsleep 1\nlocation 35.1728031 129.0229629 NAN NAN 5 309.4\nsleep 1\nlocation 35.1728316 129.0229204 NAN NAN 5 309.4\nsleep 1\nlocation 35.1728602 129.0228779 NAN NAN 5 309.4\nsleep 1\nlocation 35.1728888 129.0228354 NAN NAN 5 309.4\nsleep 1\nlocation 35.1729173 129.0227929 NAN NAN 5 309.4\nsleep 1\nlocation 35.1729459 129.0227504 NAN NAN 5 309.4\nsleep 1\nlocation 35.1729744 129.0227079 NAN NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C5-50.png\nlocation 35.1730030 129.0226654 NAN NAN 5 309.4\nsleep 1\nlocation 35.1730316 129.0226229 NAN NAN 5 309.4\nsleep 1\nlocation 35.1730601 129.0225804 NAN NAN 5 309.4\nsleep 1\nlocation 35.1730887 129.0225380 NAN NAN 5 309.4\nsleep 1\nlocation 35.1731172 129.0224955 NAN NAN 5 309.4\nsleep 1\nlocation 35.1731458 129.0224530 NAN NAN 5 309.4\nsleep 1\nlocation 35.1731744 129.0224105 NAN NAN 5 309.4\nsleep 1\nlocation 35.1732029 129.0223680 NAN NAN 5 309.4\nsleep 1\nlocation 35.1732315 129.0223255 NAN NAN 5 309.4\nsleep 1\nlocation 35.1732600 129.0222830 NAN NAN 5 309.4\nsleep 1\nscreenshot ../../../../experiment3/C5-60.png\nsleep 10\nscreenshot ../../../../experiment3/C5-after10.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:43:02.968902+00:00",
+      "location_command_count": 80,
+      "observation": {
+        "classification": "EXTRAPOLATES_AT_OLD_SPEED_DESPITE_SLOW_MOVING_INPUT",
+        "remaining_km": {
+          "0": 4.0,
+          "10": 3.9,
+          "20": 3.8,
+          "30": 3.6,
+          "40": 3.5,
+          "50": 3.3,
+          "60": 3.2,
+          "after10": 3.0
+        },
+        "next_maneuver_km": {
+          "0": 2.7,
+          "10": 2.6,
+          "20": 2.4,
+          "30": 2.3,
+          "40": 2.1,
+          "50": 2.0,
+          "60": 1.8,
+          "after10": 1.7
+        },
+        "gray_arrow_interval_s": [
+          0,
+          10
+        ],
+        "satellite_x_first_interval_s": [
+          0,
+          10
+        ],
+        "speed_display_kmh": 50,
+        "injected_speed_kmh": 18,
+        "advance_display_estimate_m": 800,
+        "injected_phase_distance_m": 300,
+        "after_phase": "Continued advancing; gray arrow and satellite-X remained."
+      }
+    },
+    {
+      "id": "A30",
+      "capture_session_label": "A30",
+      "command_file": "commands/A30.txt",
+      "commands_exact": "location 35.1582787 129.1493314 30 NAN 14 110.0\nsleep 0.2\nscreenshot ../../../../experiment3/A30-00.png\nsleep 0.8\nlocation 35.1582356 129.1494761 30 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 30 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 30 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 30 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 30 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 30 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 30 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 30 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 30 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 30 NAN 14 108.3\nsleep 0.2\nscreenshot ../../../../experiment3/A30-10.png\nsleep 0.8\nlocation 35.1578088 129.1509248 30 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 30 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 30 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 30 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 30 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 30 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 30 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 30 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 30 NAN 14 72.3\nsleep 1\nlocation 35.1580260 129.1522570 30 NAN 14 80.4\nsleep 0.2\nscreenshot ../../../../experiment3/A30-20.png\nsleep 0.8\nlocation 35.1580471 129.1524088 30 NAN 14 80.4\nsleep 1\nlocation 35.1580681 129.1525606 30 NAN 14 80.4\nsleep 1\nlocation 35.1580888 129.1527126 30 NAN 14 81.1\nsleep 1\nlocation 35.1581082 129.1528647 30 NAN 14 81.1\nsleep 1\nlocation 35.1581276 129.1530169 30 NAN 14 81.1\nsleep 1\nlocation 35.1581471 129.1531690 30 NAN 14 81.1\nsleep 1\nlocation 35.1581748 129.1533192 30 NAN 14 76.6\nsleep 1\nlocation 35.1582091 129.1534672 30 NAN 14 72.4\nsleep 1\nlocation 35.1582471 129.1536141 30 NAN 14 72.4\nsleep 1\nlocation 35.1582851 129.1537609 30 NAN 14 72.4\nsleep 0.2\nscreenshot ../../../../experiment3/A30-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:48:34.702113+00:00",
+      "location_command_count": 31,
+      "observation": {
+        "classification": "FOLLOWS_INJECTED_MOVING_POSITION",
+        "accuracy_m": 30,
+        "remaining_km": {
+          "0": 2.4,
+          "10": 2.3,
+          "20": 2.1,
+          "30": 2.0
+        },
+        "arrow_during_phase": "blue at all captured times",
+        "speed_display_kmh": {
+          "0": 0,
+          "10": 50,
+          "20": 50,
+          "30": null
+        },
+        "advance_display_estimate_m": 400,
+        "injected_distance_m": 420,
+        "evidence_limitation": "At 30s an unrelated personal notification obscured upper screen. Blue arrow and 2.0km remained visible. Original screenshot excluded from shared bundle; 30s speed/icon unobservable."
+      }
+    },
+    {
+      "id": "A300",
+      "capture_session_label": "A300",
+      "command_file": "commands/A300.txt",
+      "commands_exact": "location 35.1582787 129.1493314 300 NAN 14 110.0\nsleep 0.2\nscreenshot ../../../../experiment3/A300-00.png\nsleep 0.8\nlocation 35.1582356 129.1494761 300 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 300 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 300 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 300 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 300 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 300 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 300 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 300 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 300 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 300 NAN 14 108.3\nsleep 0.2\nscreenshot ../../../../experiment3/A300-10.png\nsleep 0.8\nlocation 35.1578088 129.1509248 300 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 300 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 300 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 300 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 300 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 300 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 300 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 300 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 300 NAN 14 72.3\nsleep 1\nlocation 35.1580260 129.1522570 300 NAN 14 80.4\nsleep 0.2\nscreenshot ../../../../experiment3/A300-20.png\nsleep 0.8\nlocation 35.1580471 129.1524088 300 NAN 14 80.4\nsleep 1\nlocation 35.1580681 129.1525606 300 NAN 14 80.4\nsleep 1\nlocation 35.1580888 129.1527126 300 NAN 14 81.1\nsleep 1\nlocation 35.1581082 129.1528647 300 NAN 14 81.1\nsleep 1\nlocation 35.1581276 129.1530169 300 NAN 14 81.1\nsleep 1\nlocation 35.1581471 129.1531690 300 NAN 14 81.1\nsleep 1\nlocation 35.1581748 129.1533192 300 NAN 14 76.6\nsleep 1\nlocation 35.1582091 129.1534672 300 NAN 14 72.4\nsleep 1\nlocation 35.1582471 129.1536141 300 NAN 14 72.4\nsleep 1\nlocation 35.1582851 129.1537609 300 NAN 14 72.4\nsleep 0.2\nscreenshot ../../../../experiment3/A300-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:50:21.609471+00:00",
+      "location_command_count": 31,
+      "observation": {
+        "classification": "DOES_NOT_FOLLOW_THEN_GRAY",
+        "accuracy_m": 300,
+        "remaining_km": {
+          "0": 2.4,
+          "10": 2.4,
+          "20": 2.4,
+          "30": 2.4
+        },
+        "arrow": {
+          "0": "blue",
+          "10": "blue",
+          "20": "blue",
+          "30": "gray"
+        },
+        "gray_arrow_interval_s": [
+          20,
+          30
+        ],
+        "speed_display_kmh": 0,
+        "advance_display_estimate_m": 0,
+        "injected_distance_m": 420,
+        "gps_loss_icon_note": "Gray arrow at 30s; no satellite-X captured in the four samples."
+      }
+    },
+    {
+      "id": "A100",
+      "capture_session_label": "A100",
+      "command_file": "commands/A100.txt",
+      "commands_exact": "location 35.1582787 129.1493314 100 NAN 14 110.0\nsleep 0.2\nscreenshot ../../../../experiment3/A100-00.png\nsleep 0.8\nlocation 35.1582356 129.1494761 100 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 100 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 100 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 100 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 100 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 100 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 100 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 100 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 100 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 100 NAN 14 108.3\nsleep 0.2\nscreenshot ../../../../experiment3/A100-10.png\nsleep 0.8\nlocation 35.1578088 129.1509248 100 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 100 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 100 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 100 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 100 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 100 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 100 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 100 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 100 NAN 14 72.3\nsleep 1\nlocation 35.1580260 129.1522570 100 NAN 14 80.4\nsleep 0.2\nscreenshot ../../../../experiment3/A100-20.png\nsleep 0.8\nlocation 35.1580471 129.1524088 100 NAN 14 80.4\nsleep 1\nlocation 35.1580681 129.1525606 100 NAN 14 80.4\nsleep 1\nlocation 35.1580888 129.1527126 100 NAN 14 81.1\nsleep 1\nlocation 35.1581082 129.1528647 100 NAN 14 81.1\nsleep 1\nlocation 35.1581276 129.1530169 100 NAN 14 81.1\nsleep 1\nlocation 35.1581471 129.1531690 100 NAN 14 81.1\nsleep 1\nlocation 35.1581748 129.1533192 100 NAN 14 76.6\nsleep 1\nlocation 35.1582091 129.1534672 100 NAN 14 72.4\nsleep 1\nlocation 35.1582471 129.1536141 100 NAN 14 72.4\nsleep 1\nlocation 35.1582851 129.1537609 100 NAN 14 72.4\nsleep 0.2\nscreenshot ../../../../experiment3/A100-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:51:45.213068+00:00",
+      "location_command_count": 31,
+      "observation": {
+        "classification": "DOES_NOT_FOLLOW_THEN_GRAY",
+        "accuracy_m": 100,
+        "remaining_km": {
+          "0": 2.4,
+          "10": 2.4,
+          "20": 2.4,
+          "30": 2.4
+        },
+        "arrow": {
+          "0": "blue",
+          "10": "blue",
+          "20": "blue",
+          "30": "gray"
+        },
+        "gray_arrow_interval_s": [
+          20,
+          30
+        ],
+        "speed_display_kmh": 0,
+        "advance_display_estimate_m": 0,
+        "injected_distance_m": 420,
+        "gps_loss_icon_note": "Gray arrow at 30s; no satellite-X captured in the four samples."
+      }
+    },
+    {
+      "id": "A5",
+      "capture_session_label": "A5",
+      "command_file": "commands/A5.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 0.2\nscreenshot ../../../../experiment3/A5-00.png\nsleep 0.8\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 0.2\nscreenshot ../../../../experiment3/A5-10.png\nsleep 0.8\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1580260 129.1522570 5 NAN 14 80.4\nsleep 0.2\nscreenshot ../../../../experiment3/A5-20.png\nsleep 0.8\nlocation 35.1580471 129.1524088 5 NAN 14 80.4\nsleep 1\nlocation 35.1580681 129.1525606 5 NAN 14 80.4\nsleep 1\nlocation 35.1580888 129.1527126 5 NAN 14 81.1\nsleep 1\nlocation 35.1581082 129.1528647 5 NAN 14 81.1\nsleep 1\nlocation 35.1581276 129.1530169 5 NAN 14 81.1\nsleep 1\nlocation 35.1581471 129.1531690 5 NAN 14 81.1\nsleep 1\nlocation 35.1581748 129.1533192 5 NAN 14 76.6\nsleep 1\nlocation 35.1582091 129.1534672 5 NAN 14 72.4\nsleep 1\nlocation 35.1582471 129.1536141 5 NAN 14 72.4\nsleep 1\nlocation 35.1582851 129.1537609 5 NAN 14 72.4\nsleep 0.2\nscreenshot ../../../../experiment3/A5-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:52:58.903368+00:00",
+      "location_command_count": 31,
+      "observation": {
+        "classification": "FOLLOWS_INJECTED_MOVING_POSITION",
+        "accuracy_m": 5,
+        "remaining_km": {
+          "0": 2.4,
+          "10": 2.3,
+          "20": 2.1,
+          "30": 2.0
+        },
+        "next_maneuver_km": {
+          "0": 1.6,
+          "10": 1.5,
+          "20": 1.3,
+          "30": 1.2
+        },
+        "arrow_during_phase": "blue at all captured times",
+        "speed_display_kmh": {
+          "0": 0,
+          "10": 50,
+          "20": 50,
+          "30": 50
+        },
+        "advance_display_estimate_m": 400,
+        "injected_distance_m": 420,
+        "gps_loss_during_phase": false
+      }
+    },
+    {
+      "id": "B5-r1",
+      "capture_session_label": "B5-r1",
+      "command_file": "commands/B5-r1.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B5-r1-00.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/B5-r1-10.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/B5-r1-20.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment3/B5-r1-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:54:27.955247+00:00",
+      "location_command_count": 20,
+      "observation": {
+        "classification": "GPS-LOST",
+        "arrow": {
+          "0": "blue",
+          "10": "gray",
+          "20": "gray",
+          "30": "gray"
+        },
+        "gps_loss_interval_s": [
+          0,
+          10
+        ],
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": 50,
+        "sustained_forward_motion": false,
+        "settling_note": "Near maneuver distance 213m at t0 became 199m at t10 and then held; approximately one approach fix of display lag, not sustained extrapolation."
+      }
+    },
+    {
+      "id": "B1-r2",
+      "capture_session_label": "B1-r2",
+      "command_file": "commands/B1-r2.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r2-00.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r2-10.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r2-20.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r2-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T05:56:30.544335+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "GPS-LOST",
+        "arrow": {
+          "0": "blue",
+          "10": "gray",
+          "20": "gray",
+          "30": "gray"
+        },
+        "gps_loss_interval_s": [
+          0,
+          10
+        ],
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": 50,
+        "sustained_forward_motion": false
+      }
+    },
+    {
+      "id": "B4-r1",
+      "capture_session_label": "B4-r1-retry",
+      "command_file": "commands/B4-r1-retry.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B4-r1-retry-00.png\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B4-r1-retry-10.png\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B4-r1-retry-20.png\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B4-r1-retry-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:06:27.684603+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "source_session": "B4-r1-retry",
+        "arrow_during_phase": "blue at all captured times",
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": {
+          "0": 50,
+          "10": 0,
+          "20": 0,
+          "30": 0
+        },
+        "gps_loss_during_phase": false,
+        "sustained_forward_motion": false
+      }
+    },
+    {
+      "id": "B2-r1",
+      "capture_session_label": "B2-r1-valid",
+      "command_file": "commands/B2-r1-valid.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r1-valid-00.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r1-valid-10.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r1-valid-20.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r1-valid-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:08:50.598949+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "source_session": "B2-r1-valid",
+        "arrow_during_phase": "blue at all captured times",
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": 50,
+        "gps_loss_during_phase": false,
+        "sustained_forward_motion": false
+      }
+    },
+    {
+      "id": "B3-r1",
+      "capture_session_label": "B3-r1",
+      "command_file": "commands/B3-r1.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r1-00.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r1-10.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r1-20.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r1-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:10:54.056469+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "arrow_during_phase": "blue at all captured times",
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": {
+          "0": 50,
+          "10": 0,
+          "20": 0,
+          "30": 0
+        },
+        "gps_loss_during_phase": false,
+        "sustained_forward_motion": false
+      }
+    },
+    {
+      "id": "B1-r1",
+      "capture_session_label": "B1-r1",
+      "command_file": "commands/B1-r1.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r1-00.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r1-10.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r1-20.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r1-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:13:07.585944+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "GPS-LOST",
+        "arrow": {
+          "0": "blue",
+          "10": "gray",
+          "20": "gray",
+          "30": "gray"
+        },
+        "gps_loss_interval_s": [
+          0,
+          10
+        ],
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": 50,
+        "sustained_forward_motion": false
+      }
+    },
+    {
+      "id": "B3-r3",
+      "capture_session_label": "B3-r3",
+      "command_file": "commands/B3-r3.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r3-00.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r3-10.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r3-20.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r3-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:15:44.569167+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "arrow_during_phase": "blue at all captured times",
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": {
+          "0": 50,
+          "10": 0,
+          "20": 0,
+          "30": 0
+        },
+        "gps_loss_during_phase": false,
+        "sustained_forward_motion": false
+      }
+    },
+    {
+      "id": "B2-r2",
+      "capture_session_label": "B2-r2",
+      "command_file": "commands/B2-r2.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r2-00.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r2-10.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r2-20.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r2-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:17:38.110110+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "arrow_during_phase": "blue at all captured times",
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": 50,
+        "gps_loss_during_phase": false,
+        "sustained_forward_motion": false
+      }
+    },
+    {
+      "id": "B3-r2",
+      "capture_session_label": "B3-r2",
+      "command_file": "commands/B3-r2.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r2-00.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r2-10.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r2-20.png\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 0 72.3\nsleep 1\nscreenshot ../../../../experiment3/B3-r2-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:19:47.670893+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "arrow_during_phase": "blue at all captured times",
+        "remaining_km": {
+          "0": 2.2,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": {
+          "0": 50,
+          "10": 0,
+          "20": 0,
+          "30": 0
+        },
+        "gps_loss_during_phase": false,
+        "sustained_forward_motion": false,
+        "settling_note": "Rounded remaining distance changed from 2.2km at t0 to 2.1km at t10, then held through t30. No sustained forward movement observed."
+      }
+    },
+    {
+      "id": "B1-r3",
+      "capture_session_label": "B1-r3",
+      "command_file": "commands/B1-r3.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r3-00.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r3-10.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r3-20.png\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 NAN NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B1-r3-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:22:10.752859+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "GPS-LOST",
+        "arrow": {
+          "0": "blue",
+          "10": "gray",
+          "20": "gray",
+          "30": "gray"
+        },
+        "gps_loss_interval_s": [
+          0,
+          10
+        ],
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": 50,
+        "sustained_forward_motion": false,
+        "phone_provider_snapshot": "Synchronized at phase +15.059s: GPS age 0.959s, reported horizontal accuracy 15.201965m, reported satellites 8; physical coordinates not retained."
+      }
+    },
+    {
+      "id": "B2-r3",
+      "capture_session_label": "B2-r3",
+      "command_file": "commands/B2-r3.txt",
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 110.0\nsleep 1\nlocation 35.1582356 129.1494761 5 NAN 14 110.0\nsleep 1\nlocation 35.1581924 129.1496208 5 NAN 14 110.0\nsleep 1\nlocation 35.1581493 129.1497654 5 NAN 14 110.0\nsleep 1\nlocation 35.1581061 129.1499101 5 NAN 14 110.0\nsleep 1\nlocation 35.1580630 129.1500548 5 NAN 14 110.0\nsleep 1\nlocation 35.1580199 129.1501995 5 NAN 14 110.0\nsleep 1\nlocation 35.1579767 129.1503442 5 NAN 14 110.0\nsleep 1\nlocation 35.1579336 129.1504888 5 NAN 14 110.0\nsleep 1\nlocation 35.1578905 129.1506335 5 NAN 14 110.0\nsleep 1\nlocation 35.1578485 129.1507787 5 NAN 14 108.3\nsleep 1\nlocation 35.1578088 129.1509248 5 NAN 14 108.3\nsleep 1\nlocation 35.1577820 129.1510745 5 NAN 14 96.5\nsleep 1\nlocation 35.1577676 129.1512275 5 NAN 14 96.5\nsleep 1\nlocation 35.1578025 129.1513748 5 NAN 14 72.7\nsleep 1\nlocation 35.1578399 129.1515218 5 NAN 14 72.7\nsleep 1\nlocation 35.1578779 129.1516686 5 NAN 14 72.3\nsleep 1\nlocation 35.1579161 129.1518154 5 NAN 14 72.3\nsleep 1\nlocation 35.1579544 129.1519621 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r3-00.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r3-10.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r3-20.png\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nlocation 35.1579926 129.1521088 5 NAN 14 72.3\nsleep 1\nscreenshot ../../../../experiment3/B2-r3-30.png\n",
+      "phase_time_zero_utc": "2026-10-03T06:24:32.552886+00:00",
+      "location_command_count": 50,
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "arrow_during_phase": "blue at all captured times",
+        "remaining_km": {
+          "0": 2.1,
+          "10": 2.1,
+          "20": 2.1,
+          "30": 2.1
+        },
+        "speed_display_kmh": 50,
+        "gps_loss_during_phase": false,
+        "sustained_forward_motion": false
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "screenshots/C1-00.png",
+      "saved_utc": "2026-10-03T05:31:50.473081+00:00",
+      "saved_kst": "2026-10-03T14:31:50.473081+09:00"
+    },
+    {
+      "file": "screenshots/C1-10.png",
+      "saved_utc": "2026-10-03T05:32:00.566986+00:00",
+      "saved_kst": "2026-10-03T14:32:00.566986+09:00"
+    },
+    {
+      "file": "screenshots/C1-20.png",
+      "saved_utc": "2026-10-03T05:32:10.653034+00:00",
+      "saved_kst": "2026-10-03T14:32:10.653034+09:00"
+    },
+    {
+      "file": "screenshots/C1-30.png",
+      "saved_utc": "2026-10-03T05:32:20.730898+00:00",
+      "saved_kst": "2026-10-03T14:32:20.730898+09:00"
+    },
+    {
+      "file": "screenshots/C1-40.png",
+      "saved_utc": "2026-10-03T05:32:30.827162+00:00",
+      "saved_kst": "2026-10-03T14:32:30.827162+09:00"
+    },
+    {
+      "file": "screenshots/C1-50.png",
+      "saved_utc": "2026-10-03T05:32:40.885536+00:00",
+      "saved_kst": "2026-10-03T14:32:40.885536+09:00"
+    },
+    {
+      "file": "screenshots/C1-60.png",
+      "saved_utc": "2026-10-03T05:32:50.965447+00:00",
+      "saved_kst": "2026-10-03T14:32:50.965447+09:00"
+    },
+    {
+      "file": "screenshots/C1-after10.png",
+      "saved_utc": "2026-10-03T05:33:00.978381+00:00",
+      "saved_kst": "2026-10-03T14:33:00.978381+09:00"
+    },
+    {
+      "file": "screenshots/C2-00.png",
+      "saved_utc": "2026-10-03T05:35:08.065469+00:00",
+      "saved_kst": "2026-10-03T14:35:08.065469+09:00"
+    },
+    {
+      "file": "screenshots/C2-10.png",
+      "saved_utc": "2026-10-03T05:35:18.120579+00:00",
+      "saved_kst": "2026-10-03T14:35:18.120579+09:00"
+    },
+    {
+      "file": "screenshots/C2-20.png",
+      "saved_utc": "2026-10-03T05:35:28.172626+00:00",
+      "saved_kst": "2026-10-03T14:35:28.172626+09:00"
+    },
+    {
+      "file": "screenshots/C2-30.png",
+      "saved_utc": "2026-10-03T05:35:38.206971+00:00",
+      "saved_kst": "2026-10-03T14:35:38.206971+09:00"
+    },
+    {
+      "file": "screenshots/C2-40.png",
+      "saved_utc": "2026-10-03T05:35:48.238766+00:00",
+      "saved_kst": "2026-10-03T14:35:48.238766+09:00"
+    },
+    {
+      "file": "screenshots/C2-50.png",
+      "saved_utc": "2026-10-03T05:35:58.292043+00:00",
+      "saved_kst": "2026-10-03T14:35:58.292043+09:00"
+    },
+    {
+      "file": "screenshots/C2-60.png",
+      "saved_utc": "2026-10-03T05:36:08.338708+00:00",
+      "saved_kst": "2026-10-03T14:36:08.338708+09:00"
+    },
+    {
+      "file": "screenshots/C2-after10.png",
+      "saved_utc": "2026-10-03T05:36:18.345615+00:00",
+      "saved_kst": "2026-10-03T14:36:18.345615+09:00"
+    },
+    {
+      "file": "screenshots/C2-guidance.png",
+      "saved_utc": "2026-10-03T05:34:19.900166+00:00",
+      "saved_kst": "2026-10-03T14:34:19.900166+09:00"
+    },
+    {
+      "file": "screenshots/C3-00.png",
+      "saved_utc": "2026-10-03T05:37:35.736615+00:00",
+      "saved_kst": "2026-10-03T14:37:35.736615+09:00"
+    },
+    {
+      "file": "screenshots/C3-10.png",
+      "saved_utc": "2026-10-03T05:37:45.763976+00:00",
+      "saved_kst": "2026-10-03T14:37:45.763976+09:00"
+    },
+    {
+      "file": "screenshots/C3-20.png",
+      "saved_utc": "2026-10-03T05:37:55.830521+00:00",
+      "saved_kst": "2026-10-03T14:37:55.830521+09:00"
+    },
+    {
+      "file": "screenshots/C3-30.png",
+      "saved_utc": "2026-10-03T05:38:05.876682+00:00",
+      "saved_kst": "2026-10-03T14:38:05.876682+09:00"
+    },
+    {
+      "file": "screenshots/C3-40.png",
+      "saved_utc": "2026-10-03T05:38:15.927372+00:00",
+      "saved_kst": "2026-10-03T14:38:15.927372+09:00"
+    },
+    {
+      "file": "screenshots/C3-50.png",
+      "saved_utc": "2026-10-03T05:38:25.979572+00:00",
+      "saved_kst": "2026-10-03T14:38:25.979572+09:00"
+    },
+    {
+      "file": "screenshots/C3-60.png",
+      "saved_utc": "2026-10-03T05:38:36.032801+00:00",
+      "saved_kst": "2026-10-03T14:38:36.032801+09:00"
+    },
+    {
+      "file": "screenshots/C3-after10.png",
+      "saved_utc": "2026-10-03T05:38:46.035805+00:00",
+      "saved_kst": "2026-10-03T14:38:46.035805+09:00"
+    },
+    {
+      "file": "screenshots/C3-guidance.png",
+      "saved_utc": "2026-10-03T05:36:37.336930+00:00",
+      "saved_kst": "2026-10-03T14:36:37.336930+09:00"
+    },
+    {
+      "file": "screenshots/C4-00.png",
+      "saved_utc": "2026-10-03T05:40:33.807276+00:00",
+      "saved_kst": "2026-10-03T14:40:33.807276+09:00"
+    },
+    {
+      "file": "screenshots/C4-10.png",
+      "saved_utc": "2026-10-03T05:40:43.854750+00:00",
+      "saved_kst": "2026-10-03T14:40:43.854750+09:00"
+    },
+    {
+      "file": "screenshots/C4-20.png",
+      "saved_utc": "2026-10-03T05:40:53.891998+00:00",
+      "saved_kst": "2026-10-03T14:40:53.891998+09:00"
+    },
+    {
+      "file": "screenshots/C4-30.png",
+      "saved_utc": "2026-10-03T05:41:03.952780+00:00",
+      "saved_kst": "2026-10-03T14:41:03.952780+09:00"
+    },
+    {
+      "file": "screenshots/C4-40.png",
+      "saved_utc": "2026-10-03T05:41:13.993421+00:00",
+      "saved_kst": "2026-10-03T14:41:13.993421+09:00"
+    },
+    {
+      "file": "screenshots/C4-50.png",
+      "saved_utc": "2026-10-03T05:41:24.049035+00:00",
+      "saved_kst": "2026-10-03T14:41:24.049035+09:00"
+    },
+    {
+      "file": "screenshots/C4-60.png",
+      "saved_utc": "2026-10-03T05:41:34.094663+00:00",
+      "saved_kst": "2026-10-03T14:41:34.094663+09:00"
+    },
+    {
+      "file": "screenshots/C4-after10.png",
+      "saved_utc": "2026-10-03T05:41:44.102905+00:00",
+      "saved_kst": "2026-10-03T14:41:44.102905+09:00"
+    },
+    {
+      "file": "screenshots/C4-guidance.png",
+      "saved_utc": "2026-10-03T05:39:19.220141+00:00",
+      "saved_kst": "2026-10-03T14:39:19.220141+09:00"
+    },
+    {
+      "file": "screenshots/C5-00.png",
+      "saved_utc": "2026-10-03T05:43:03.022781+00:00",
+      "saved_kst": "2026-10-03T14:43:03.022781+09:00"
+    },
+    {
+      "file": "screenshots/C5-10.png",
+      "saved_utc": "2026-10-03T05:43:13.104046+00:00",
+      "saved_kst": "2026-10-03T14:43:13.104046+09:00"
+    },
+    {
+      "file": "screenshots/C5-20.png",
+      "saved_utc": "2026-10-03T05:43:23.168178+00:00",
+      "saved_kst": "2026-10-03T14:43:23.168178+09:00"
+    },
+    {
+      "file": "screenshots/C5-30.png",
+      "saved_utc": "2026-10-03T05:43:33.253246+00:00",
+      "saved_kst": "2026-10-03T14:43:33.253246+09:00"
+    },
+    {
+      "file": "screenshots/C5-40.png",
+      "saved_utc": "2026-10-03T05:43:43.352485+00:00",
+      "saved_kst": "2026-10-03T14:43:43.352485+09:00"
+    },
+    {
+      "file": "screenshots/C5-50.png",
+      "saved_utc": "2026-10-03T05:43:53.432035+00:00",
+      "saved_kst": "2026-10-03T14:43:53.432035+09:00"
+    },
+    {
+      "file": "screenshots/C5-60.png",
+      "saved_utc": "2026-10-03T05:44:03.506604+00:00",
+      "saved_kst": "2026-10-03T14:44:03.506604+09:00"
+    },
+    {
+      "file": "screenshots/C5-after10.png",
+      "saved_utc": "2026-10-03T05:44:13.512766+00:00",
+      "saved_kst": "2026-10-03T14:44:13.512766+09:00"
+    },
+    {
+      "file": "screenshots/C5-guidance.png",
+      "saved_utc": "2026-10-03T05:42:01.951420+00:00",
+      "saved_kst": "2026-10-03T14:42:01.951420+09:00"
+    },
+    {
+      "file": "screenshots/A30-00.png",
+      "saved_utc": "2026-10-03T05:48:34.747163+00:00",
+      "saved_kst": "2026-10-03T14:48:34.747163+09:00"
+    },
+    {
+      "file": "screenshots/A30-10.png",
+      "saved_utc": "2026-10-03T05:48:44.852086+00:00",
+      "saved_kst": "2026-10-03T14:48:44.852086+09:00"
+    },
+    {
+      "file": "screenshots/A30-20.png",
+      "saved_utc": "2026-10-03T05:48:54.935898+00:00",
+      "saved_kst": "2026-10-03T14:48:54.935898+09:00"
+    },
+    {
+      "file": "screenshots/A30-guidance.png",
+      "saved_utc": "2026-10-03T05:47:40.249261+00:00",
+      "saved_kst": "2026-10-03T14:47:40.249261+09:00"
+    },
+    {
+      "file": "screenshots/A300-00.png",
+      "saved_utc": "2026-10-03T05:50:21.660990+00:00",
+      "saved_kst": "2026-10-03T14:50:21.660990+09:00"
+    },
+    {
+      "file": "screenshots/A300-10.png",
+      "saved_utc": "2026-10-03T05:50:31.770281+00:00",
+      "saved_kst": "2026-10-03T14:50:31.770281+09:00"
+    },
+    {
+      "file": "screenshots/A300-20.png",
+      "saved_utc": "2026-10-03T05:50:41.865784+00:00",
+      "saved_kst": "2026-10-03T14:50:41.865784+09:00"
+    },
+    {
+      "file": "screenshots/A300-30.png",
+      "saved_utc": "2026-10-03T05:50:51.959264+00:00",
+      "saved_kst": "2026-10-03T14:50:51.959264+09:00"
+    },
+    {
+      "file": "screenshots/A300-guidance.png",
+      "saved_utc": "2026-10-03T05:49:22.871698+00:00",
+      "saved_kst": "2026-10-03T14:49:22.871698+09:00"
+    },
+    {
+      "file": "screenshots/A100-00.png",
+      "saved_utc": "2026-10-03T05:51:45.265877+00:00",
+      "saved_kst": "2026-10-03T14:51:45.265877+09:00"
+    },
+    {
+      "file": "screenshots/A100-10.png",
+      "saved_utc": "2026-10-03T05:51:55.381470+00:00",
+      "saved_kst": "2026-10-03T14:51:55.381470+09:00"
+    },
+    {
+      "file": "screenshots/A100-20.png",
+      "saved_utc": "2026-10-03T05:52:05.453952+00:00",
+      "saved_kst": "2026-10-03T14:52:05.453952+09:00"
+    },
+    {
+      "file": "screenshots/A100-30.png",
+      "saved_utc": "2026-10-03T05:52:15.555876+00:00",
+      "saved_kst": "2026-10-03T14:52:15.555876+09:00"
+    },
+    {
+      "file": "screenshots/A100-guidance.png",
+      "saved_utc": "2026-10-03T05:51:09.808138+00:00",
+      "saved_kst": "2026-10-03T14:51:09.808138+09:00"
+    },
+    {
+      "file": "screenshots/A5-00.png",
+      "saved_utc": "2026-10-03T05:52:58.946378+00:00",
+      "saved_kst": "2026-10-03T14:52:58.946378+09:00"
+    },
+    {
+      "file": "screenshots/A5-10.png",
+      "saved_utc": "2026-10-03T05:53:09.059249+00:00",
+      "saved_kst": "2026-10-03T14:53:09.059249+09:00"
+    },
+    {
+      "file": "screenshots/A5-20.png",
+      "saved_utc": "2026-10-03T05:53:19.147469+00:00",
+      "saved_kst": "2026-10-03T14:53:19.147469+09:00"
+    },
+    {
+      "file": "screenshots/A5-30.png",
+      "saved_utc": "2026-10-03T05:53:29.221613+00:00",
+      "saved_kst": "2026-10-03T14:53:29.221613+09:00"
+    },
+    {
+      "file": "screenshots/A5-guidance.png",
+      "saved_utc": "2026-10-03T05:52:33.409400+00:00",
+      "saved_kst": "2026-10-03T14:52:33.409400+09:00"
+    },
+    {
+      "file": "screenshots/B5-r1-00.png",
+      "saved_utc": "2026-10-03T05:54:28.031142+00:00",
+      "saved_kst": "2026-10-03T14:54:28.031142+09:00"
+    },
+    {
+      "file": "screenshots/B5-r1-10.png",
+      "saved_utc": "2026-10-03T05:54:38.123425+00:00",
+      "saved_kst": "2026-10-03T14:54:38.123425+09:00"
+    },
+    {
+      "file": "screenshots/B5-r1-20.png",
+      "saved_utc": "2026-10-03T05:54:48.197239+00:00",
+      "saved_kst": "2026-10-03T14:54:48.197239+09:00"
+    },
+    {
+      "file": "screenshots/B5-r1-30.png",
+      "saved_utc": "2026-10-03T05:54:58.274203+00:00",
+      "saved_kst": "2026-10-03T14:54:58.274203+09:00"
+    },
+    {
+      "file": "screenshots/B5-r1-guidance.png",
+      "saved_utc": "2026-10-03T05:53:47.073744+00:00",
+      "saved_kst": "2026-10-03T14:53:47.073744+09:00"
+    },
+    {
+      "file": "screenshots/B1-r2-00.png",
+      "saved_utc": "2026-10-03T05:56:30.617734+00:00",
+      "saved_kst": "2026-10-03T14:56:30.617734+09:00"
+    },
+    {
+      "file": "screenshots/B1-r2-10.png",
+      "saved_utc": "2026-10-03T05:56:40.703682+00:00",
+      "saved_kst": "2026-10-03T14:56:40.703682+09:00"
+    },
+    {
+      "file": "screenshots/B1-r2-20.png",
+      "saved_utc": "2026-10-03T05:56:50.767794+00:00",
+      "saved_kst": "2026-10-03T14:56:50.767794+09:00"
+    },
+    {
+      "file": "screenshots/B1-r2-30.png",
+      "saved_utc": "2026-10-03T05:57:00.846463+00:00",
+      "saved_kst": "2026-10-03T14:57:00.846463+09:00"
+    },
+    {
+      "file": "screenshots/B1-r2-guidance.png",
+      "saved_utc": "2026-10-03T05:55:16.123615+00:00",
+      "saved_kst": "2026-10-03T14:55:16.123615+09:00"
+    },
+    {
+      "file": "screenshots/B4-r1-retry-00.png",
+      "saved_utc": "2026-10-03T06:06:27.753326+00:00",
+      "saved_kst": "2026-10-03T15:06:27.753326+09:00"
+    },
+    {
+      "file": "screenshots/B4-r1-retry-10.png",
+      "saved_utc": "2026-10-03T06:06:37.841233+00:00",
+      "saved_kst": "2026-10-03T15:06:37.841233+09:00"
+    },
+    {
+      "file": "screenshots/B4-r1-retry-20.png",
+      "saved_utc": "2026-10-03T06:06:47.922782+00:00",
+      "saved_kst": "2026-10-03T15:06:47.922782+09:00"
+    },
+    {
+      "file": "screenshots/B4-r1-retry-30.png",
+      "saved_utc": "2026-10-03T06:06:58.004316+00:00",
+      "saved_kst": "2026-10-03T15:06:58.004316+09:00"
+    },
+    {
+      "file": "screenshots/B4-r1-retry-guidance.png",
+      "saved_utc": "2026-10-03T06:02:31.395327+00:00",
+      "saved_kst": "2026-10-03T15:02:31.395327+09:00"
+    },
+    {
+      "file": "screenshots/B4-r1-retry-guidance2.png",
+      "saved_utc": "2026-10-03T06:03:47.522084+00:00",
+      "saved_kst": "2026-10-03T15:03:47.522084+09:00"
+    },
+    {
+      "file": "screenshots/B2-r1-valid-00.png",
+      "saved_utc": "2026-10-03T06:08:50.670985+00:00",
+      "saved_kst": "2026-10-03T15:08:50.670985+09:00"
+    },
+    {
+      "file": "screenshots/B2-r1-valid-10.png",
+      "saved_utc": "2026-10-03T06:09:00.758145+00:00",
+      "saved_kst": "2026-10-03T15:09:00.758145+09:00"
+    },
+    {
+      "file": "screenshots/B2-r1-valid-20.png",
+      "saved_utc": "2026-10-03T06:09:10.852750+00:00",
+      "saved_kst": "2026-10-03T15:09:10.852750+09:00"
+    },
+    {
+      "file": "screenshots/B2-r1-valid-30.png",
+      "saved_utc": "2026-10-03T06:09:20.936360+00:00",
+      "saved_kst": "2026-10-03T15:09:20.936360+09:00"
+    },
+    {
+      "file": "screenshots/B2-r1-valid-guidance.png",
+      "saved_utc": "2026-10-03T06:07:21.850078+00:00",
+      "saved_kst": "2026-10-03T15:07:21.850078+09:00"
+    },
+    {
+      "file": "screenshots/B3-r1-00.png",
+      "saved_utc": "2026-10-03T06:10:54.133186+00:00",
+      "saved_kst": "2026-10-03T15:10:54.133186+09:00"
+    },
+    {
+      "file": "screenshots/B3-r1-10.png",
+      "saved_utc": "2026-10-03T06:11:04.195468+00:00",
+      "saved_kst": "2026-10-03T15:11:04.195468+09:00"
+    },
+    {
+      "file": "screenshots/B3-r1-20.png",
+      "saved_utc": "2026-10-03T06:11:14.252083+00:00",
+      "saved_kst": "2026-10-03T15:11:14.252083+09:00"
+    },
+    {
+      "file": "screenshots/B3-r1-30.png",
+      "saved_utc": "2026-10-03T06:11:24.274370+00:00",
+      "saved_kst": "2026-10-03T15:11:24.274370+09:00"
+    },
+    {
+      "file": "screenshots/B3-r1-guidance.png",
+      "saved_utc": "2026-10-03T06:09:44.805189+00:00",
+      "saved_kst": "2026-10-03T15:09:44.805189+09:00"
+    },
+    {
+      "file": "screenshots/B1-r1-00.png",
+      "saved_utc": "2026-10-03T06:13:07.662004+00:00",
+      "saved_kst": "2026-10-03T15:13:07.662004+09:00"
+    },
+    {
+      "file": "screenshots/B1-r1-10.png",
+      "saved_utc": "2026-10-03T06:13:17.750510+00:00",
+      "saved_kst": "2026-10-03T15:13:17.750510+09:00"
+    },
+    {
+      "file": "screenshots/B1-r1-20.png",
+      "saved_utc": "2026-10-03T06:13:27.837819+00:00",
+      "saved_kst": "2026-10-03T15:13:27.837819+09:00"
+    },
+    {
+      "file": "screenshots/B1-r1-30.png",
+      "saved_utc": "2026-10-03T06:13:37.923391+00:00",
+      "saved_kst": "2026-10-03T15:13:37.923391+09:00"
+    },
+    {
+      "file": "screenshots/B1-r1-guidance.png",
+      "saved_utc": "2026-10-03T06:11:48.118728+00:00",
+      "saved_kst": "2026-10-03T15:11:48.118728+09:00"
+    },
+    {
+      "file": "screenshots/B3-r3-00.png",
+      "saved_utc": "2026-10-03T06:15:44.638640+00:00",
+      "saved_kst": "2026-10-03T15:15:44.638640+09:00"
+    },
+    {
+      "file": "screenshots/B3-r3-10.png",
+      "saved_utc": "2026-10-03T06:15:54.714815+00:00",
+      "saved_kst": "2026-10-03T15:15:54.714815+09:00"
+    },
+    {
+      "file": "screenshots/B3-r3-20.png",
+      "saved_utc": "2026-10-03T06:16:04.812312+00:00",
+      "saved_kst": "2026-10-03T15:16:04.812312+09:00"
+    },
+    {
+      "file": "screenshots/B3-r3-30.png",
+      "saved_utc": "2026-10-03T06:16:14.895612+00:00",
+      "saved_kst": "2026-10-03T15:16:14.895612+09:00"
+    },
+    {
+      "file": "screenshots/B3-r3-guidance.png",
+      "saved_utc": "2026-10-03T06:14:01.759623+00:00",
+      "saved_kst": "2026-10-03T15:14:01.759623+09:00"
+    },
+    {
+      "file": "screenshots/B2-r2-00.png",
+      "saved_utc": "2026-10-03T06:17:38.179955+00:00",
+      "saved_kst": "2026-10-03T15:17:38.179955+09:00"
+    },
+    {
+      "file": "screenshots/B2-r2-10.png",
+      "saved_utc": "2026-10-03T06:17:48.284949+00:00",
+      "saved_kst": "2026-10-03T15:17:48.284949+09:00"
+    },
+    {
+      "file": "screenshots/B2-r2-20.png",
+      "saved_utc": "2026-10-03T06:17:58.369392+00:00",
+      "saved_kst": "2026-10-03T15:17:58.369392+09:00"
+    },
+    {
+      "file": "screenshots/B2-r2-30.png",
+      "saved_utc": "2026-10-03T06:18:08.454154+00:00",
+      "saved_kst": "2026-10-03T15:18:08.454154+09:00"
+    },
+    {
+      "file": "screenshots/B2-r2-guidance.png",
+      "saved_utc": "2026-10-03T06:16:38.760450+00:00",
+      "saved_kst": "2026-10-03T15:16:38.760450+09:00"
+    },
+    {
+      "file": "screenshots/B3-r2-00.png",
+      "saved_utc": "2026-10-03T06:19:47.748062+00:00",
+      "saved_kst": "2026-10-03T15:19:47.748062+09:00"
+    },
+    {
+      "file": "screenshots/B3-r2-10.png",
+      "saved_utc": "2026-10-03T06:19:57.821875+00:00",
+      "saved_kst": "2026-10-03T15:19:57.821875+09:00"
+    },
+    {
+      "file": "screenshots/B3-r2-20.png",
+      "saved_utc": "2026-10-03T06:20:07.901800+00:00",
+      "saved_kst": "2026-10-03T15:20:07.901800+09:00"
+    },
+    {
+      "file": "screenshots/B3-r2-30.png",
+      "saved_utc": "2026-10-03T06:20:17.986463+00:00",
+      "saved_kst": "2026-10-03T15:20:17.986463+09:00"
+    },
+    {
+      "file": "screenshots/B3-r2-guidance.png",
+      "saved_utc": "2026-10-03T06:18:32.307810+00:00",
+      "saved_kst": "2026-10-03T15:18:32.307810+09:00"
+    },
+    {
+      "file": "screenshots/B1-r3-00.png",
+      "saved_utc": "2026-10-03T06:22:10.825132+00:00",
+      "saved_kst": "2026-10-03T15:22:10.825132+09:00"
+    },
+    {
+      "file": "screenshots/B1-r3-10.png",
+      "saved_utc": "2026-10-03T06:22:20.893477+00:00",
+      "saved_kst": "2026-10-03T15:22:20.893477+09:00"
+    },
+    {
+      "file": "screenshots/B1-r3-20.png",
+      "saved_utc": "2026-10-03T06:22:30.964493+00:00",
+      "saved_kst": "2026-10-03T15:22:30.964493+09:00"
+    },
+    {
+      "file": "screenshots/B1-r3-30.png",
+      "saved_utc": "2026-10-03T06:22:41.065027+00:00",
+      "saved_kst": "2026-10-03T15:22:41.065027+09:00"
+    },
+    {
+      "file": "screenshots/B1-r3-guidance.png",
+      "saved_utc": "2026-10-03T06:20:41.829620+00:00",
+      "saved_kst": "2026-10-03T15:20:41.829620+09:00"
+    },
+    {
+      "file": "screenshots/B2-r3-00.png",
+      "saved_utc": "2026-10-03T06:24:32.625036+00:00",
+      "saved_kst": "2026-10-03T15:24:32.625036+09:00"
+    },
+    {
+      "file": "screenshots/B2-r3-10.png",
+      "saved_utc": "2026-10-03T06:24:42.692338+00:00",
+      "saved_kst": "2026-10-03T15:24:42.692338+09:00"
+    },
+    {
+      "file": "screenshots/B2-r3-20.png",
+      "saved_utc": "2026-10-03T06:24:52.770482+00:00",
+      "saved_kst": "2026-10-03T15:24:52.770482+09:00"
+    },
+    {
+      "file": "screenshots/B2-r3-30.png",
+      "saved_utc": "2026-10-03T06:25:02.851060+00:00",
+      "saved_kst": "2026-10-03T15:25:02.851060+09:00"
+    },
+    {
+      "file": "screenshots/B2-r3-guidance.png",
+      "saved_utc": "2026-10-03T06:23:04.917625+00:00",
+      "saved_kst": "2026-10-03T15:23:04.917625+09:00"
+    },
+    {
+      "file": "screenshots/tunnel-guidance.png",
+      "saved_utc": "2026-10-03T05:30:52.151460+00:00",
+      "saved_kst": "2026-10-03T14:30:52.151460+09:00"
+    },
+    {
+      "file": "screenshots/repeat1-tunnel-10.png",
+      "saved_utc": "2026-10-03T05:20:57.961005+00:00",
+      "saved_kst": "2026-10-03T14:20:57.961005+09:00"
+    }
+  ],
+  "withheld_screenshots": [
+    {
+      "file": "A30-30.png",
+      "reason": "Unrelated personal notification; observed blue arrow and 2.0km remain documented; upper screen occluded."
+    }
+  ],
+  "transport": {
+    "path": "DHU -> localhost:5278 transparent relay -> localhost:5277 ADB forward -> phone",
+    "tls_observed": "TLSv1.2; ECDHE-RSA-AES128-GCM-SHA256",
+    "capture_type": "TCP application read chunks, not packet capture",
+    "payload_decoded": false,
+    "decompiled_or_patched": false
+  },
+  "logging": {
+    "dhu_debug_option": "none found in --help or console help",
+    "android_auto_logcat": "UID 10257, all tags",
+    "naver_logcat": "PID 28561, all tags; first filename android-auto.log was corrected to naver.log",
+    "system_logcat": "LocationManagerService, GnssLocationProvider, LocationProviderManager",
+    "clock_check": "host and phone epoch seconds both 1791004598"
+  },
+  "log_collection_statistics": {
+    "naver.log": {
+      "collected_lines": 16483,
+      "tags": {
+        "CCodec": 3917,
+        "NotificationManager:": 3193,
+        "VRI[LaunchActivity]@f3d123c:": 2365,
+        "CCodecConfig:": 1648,
+        "CCodecBufferChannel:": 890,
+        "Kumiho-Kumiho:": 750,
+        "ReflectedParamUpdater:": 623,
+        "System.err:": 471,
+        "CameraManagerGlobal:": 434,
+        "hn.android.nmap:": 427,
+        "AidlBufferPool:": 260,
+        "AudioTrack:": 206,
+        "MediaRouter:": 188,
+        "MediaCodec:": 178,
+        "MediaPlayerNative:": 168,
+        "MediaPlayer-JNI:": 144,
+        "AidlBufferPoolAcc:": 140,
+        "Codec2Client:": 89,
+        "MessageQueue:": 68,
+        "SV[83575449": 50,
+        "Configuration:": 48,
+        "SensorManager:": 48,
+        "MediaPlayer:": 48,
+        "System": 43,
+        "Settings:": 24,
+        "Adreno": 21,
+        "NTracker.EventDelivery:": 15,
+        "CCodecBuffers:": 11,
+        "AudioManager:": 6,
+        "HWUI": 3,
+        "Surface": 3,
+        "libbinder.IPCThreadState:": 2
+      }
+    },
+    "android-auto.log": {
+      "collected_lines": 231423,
+      "tags": {
+        "MessageQueue:": 98474,
+        "PipelineWatcher:": 47388,
+        "ResourcesCompat:": 13984,
+        "View": 6660,
+        "CarApp.H.Per:": 5984,
+        "CarApp.H.Tem:": 3335,
+        "VRI[Material3SettingsActivity]@2ac0b59:": 2739,
+        "CAR.VALIDATOR:": 2434,
+        "CCodec": 2298,
+        "GH.GhNavFocusManager:": 2294,
+        "CAR.SETTING:": 2256,
+        "CAR.AUDIO.CHANNEL:": 2173,
+        "CCodecConfig:": 1877,
+        "CAR.AUDIO.FOCUS:": 1654,
+        "CAR.AUDIO.AFM:": 1357,
+        "CarApp.H.Har:": 1336,
+        "GH.ConnLoggerV2:": 1305,
+        "CAR.AUDIO.TTS:": 1287,
+        "GH.OverlayStateLD:": 1242,
+        "CSL.CarUiController:": 989,
+        "CAR.CAM": 969,
+        "SurfaceView:": 968,
+        "GH.GhMediaPlayback:": 874,
+        "GH.CarSensorReader:": 820,
+        "CAR.CLIENT:": 765,
+        "MediaCodec:": 755,
+        "GH.MsgNotifParser:": 653,
+        "MediaPlayerNative:": 582,
+        "CAR.GAL.AUDIO.LITE:": 544,
+        "CAR.GAL.GAL.LITE:": 536,
+        "CameraManagerGlobal:": 479,
+        "CAR.SETUP.SERVICE.LITE:": 474,
+        "GH.CarClientManager:": 448,
+        "CAR.SERVICE:": 442,
+        "GH.AssistantUtils:": 432,
+        "GH.GhLifecycleService:": 416,
+        "GoogleApiManager:": 414,
+        "ReflectedParamUpdater:": 414,
+        "GH.StartupMeasure:": 391,
+        "CAR.AUDIO.TTS.LITE:": 386,
+        "BLASTBufferQueue_Java:": 343,
+        "HWUI": 343,
+        "ClearcutMetricXmitter:": 335,
+        "WindowOnBackDispatcher:": 326,
+        "CAR.SENSOR:": 326,
+        "GH.DemandController:": 311,
+        "GH.CarConnSession:": 276,
+        "AdrenoGLES-0:": 276,
+        "GH.AssistantNavListener:": 269,
+        "CAR.AUDIO.STATS:": 260,
+        "ImeFocusController:": 226,
+        "MediaPlayer-JNI:": 225,
+        "CAR.TOKEN:": 224,
+        "System": 218,
+        "MediaRouter:": 216,
+        "ViewRootImpl:": 208,
+        "CAR.STARTUP.LITE:": 207,
+        "CAR.GAL.SECURITY.LITE:": 207,
+        "GH.LocalICSCallAdapter:": 204,
+        "CAR.INTERNAL:": 204,
+        "CarApp.H:": 202,
+        "perf_hint:": 196,
+        "CAR.WM": 192,
+        "GH.NavClientManager:": 192,
+        "CAR.SERVICE.LITE:": 191,
+        "InputTransport:": 188,
+        "GH.CAR.ProxyEP.LITE:": 184,
+        "GH.SelectSvcStarter:": 184,
+        "BufferQueueProducer:": 182,
+        "AdrenoVK-0:": 180,
+        "MediaPlayer:": 168,
+        "CAR.AUDIO.MEDIA:": 163,
+        "GH.CAR": 162,
+        "CCodecBufferChannel:": 161,
+        "CAR.FRX.CHECKS:": 161,
+        "GH.MediaAutoplayManager:": 161,
+        "GH.GhCarClientCtor:": 149,
+        "GH.LifetimeManager:": 140,
+        "WindowManager:": 138,
+        "BLASTBufferQueue:": 136,
+        "SurfaceComposerClient:": 136,
+        "GH.AlarmNotifHandler:": 117,
+        "GH.AppIconFactory:": 116,
+        "CAR.VIDEO:": 115,
+        "GH.DisplayLayout:": 115,
+        "DecorView:": 114,
+        "GH.CarConnSessMgr:": 113,
+        "CAR.AUDIO.PERF:": 101,
+        "InsetsController:": 101,
+        "NativeCustomFrequencyManager:": 98,
+        "libbinder.BpBinder:": 97,
+        "CAR.GAL.VIDEO.LITE:": 96,
+        "CAR.CONMAN.LITE:": 94,
+        "CAR.PROJECTION.PRES:": 94,
+        "WallpaperManager:": 94,
+        "GH.Assistant.Controller:": 93,
+        "GraphicBufferSource:": 93,
+        "GH.PrimaryColorProvider:": 93,
+        "GH.BitmapUtils:": 93,
+        "CAR.AUDIO:": 92,
+        "Kumiho-Kumiho:": 92,
+        "CAR.WM.CW:": 90,
+        "AudioManager:": 78,
+        "GH.ContModWrapper:": 74,
+        "GH.CallManager:": 71,
+        "GH.DNDCallManager:": 70,
+        "CAR.SYS": 70,
+        "GH.SysChromeController:": 70,
+        "GH.GHLifetimeManager:": 70,
+        "GH.PreflightManager:": 70,
+        "GH.ThemingManager:": 70,
+        "CAR.XFER.LITE:": 70,
+        "CAR.LITE.LITE:": 70,
+        "CAR.SETUP.LITE:": 69,
+        "CAR.INPUT:": 69,
+        "GH.CarInfoCache:": 69,
+        "GH.InitialFocusSettings:": 69,
+        "C2NodeImpl:": 69,
+        "ADU.CarUiEntry:": 69,
+        "Dialog": 68,
+        "head:projection:": 67,
+        "CAR.BT.SVC.LITE:": 66,
+        "GH.AssistantEdProvider:": 64,
+        "GH.CarService:": 62,
+        "CAR.WM.FrameRateLimit:": 60,
+        "WakeLock:": 60,
+        "GH.HatsDownloadService:": 59,
+        "AlertDataEmitter:": 56,
+        "on.gearhead:car:": 54,
+        "VRI[jvu]@e33587a:": 51,
+        "ConnectivityManager:": 48,
+        "CarAssistantClient:": 48,
+        "SV[182983563": 48,
+        "SemWallpaperColorsArea:": 48,
+        "GH.MediaLiveDataFns:": 47,
+        "GH.MTMCByteCounter:": 47,
+        "CAR.POOL_VIDEO:": 47,
+        "GH.CmpnDvcCtrlImpl:": 47,
+        "GH.DHUService:": 47,
+        "GH.InCallService:": 46,
+        "CAR.AUTH:": 46,
+        "CAR.MEDIA.VIDEO:": 46,
+        "GH.DefaultAppManager:": 46,
+        "ColorUtils:": 46,
+        "libbinder.ServiceManagerCppClient:": 46,
+        "SehCodecSolutionHelper:": 46,
+        "android.media.AudioRecord:": 46,
+        "CAR.WM.LOADING.MAN:": 46,
+        "GH.GhNavAppManager:": 46,
+        "GH.OEMAppProvider:": 46,
+        "GH.ParkedNativeApps:": 46,
+        "GH.BackdropWinCtrl:": 46,
+        "PhoneAppProvider:": 46,
+        "CSL.StatusBarController:": 46,
+        "GH.CsatSurvey:": 46,
+        "GH.CsatTriggerRcvr:": 46,
+        "GH.CsatPostdrive:": 46,
+        "VRI[jvu]@5d3d456:": 45,
+        "GoogleAuthProviderImpl:": 44,
+        "cn_CronetUrlRequestContext:": 44,
+        "SV[208119346": 44,
+        "SV[195571207": 44,
+        "SV[120150994": 44,
+        "SV[119946550": 44,
+        "SV[172905705": 43,
+        "VRI[jvu]@3445262:": 43,
+        "SV[10169853": 43,
+        "SV[50634036": 43,
+        "SV[203836887": 43,
+        "SV[28489969": 43,
+        "SV[65155063": 43,
+        "SV[29203654": 42,
+        "SV[173394729": 42,
+        "SV[201159300": 42,
+        "SV[185348802": 42,
+        "SV[36494948": 42,
+        "SV[205110307": 42,
+        "SV[55062882": 42,
+        "SV[200387173": 42,
+        "SV[252576069": 41,
+        "ActivityThread:": 40,
+        "RingtoneManager:": 40,
+        "SV[55211909": 40,
+        "libbinder.IPCThreadState:": 39,
+        "VRI[jvu]@f773f47:": 37,
+        "VRI[jvu]@4339c55:": 35,
+        "VRI[jvu]@4a7b411:": 34,
+        "GH.FeedbackNotifManager:": 33,
+        "VRI[TouchInputMethod]@5c2f7ad:": 33,
+        "VRI[jvu]@3de9eb6:": 33,
+        "VRI[jvu]@8d56dc1:": 33,
+        "VRI[jvu]@45e5191:": 33,
+        "VRI[jvu]@ecd31ff:": 33,
+        "VRI[jvu]@5508f84:": 33,
+        "VRI[jvu]@a8e131d:": 33,
+        "VRI[jvu]@928c657:": 33,
+        "VRI[jvu]@326e7da:": 33,
+        "VRI[jvu]@bd599b:": 33,
+        "VRI[jvu]@5c3a985:": 33,
+        "VRI[jvu]@ed600fb:": 33,
+        "VRI[jvu]@9a08403:": 33,
+        "VRI[jvu]@cf3ec48:": 33,
+        "VRI[jvu]@ec1829d:": 33,
+        "VRI[jvu]@f4f75a3:": 33,
+        "VRI[jvu]@8ecdb4:": 33,
+        "VRI[jvu]@ad4e8a2:": 32,
+        "VRI[PhoneKeyboardActivity]@7060fb4:": 31,
+        "AssistantClientHelper:": 30,
+        "GH.ThermalMitigation:": 28,
+        "GH.SevThermalStatusLD:": 28,
+        "SV[51435601": 27,
+        "CAR.IME": 27,
+        "RouteInfoService:": 25,
+        "GH.CarMicRecorder:": 24,
+        "GH.RatingPromptManager:": 24,
+        "GH.CsatRateLimiter:": 24,
+        "Codec2Client:": 24,
+        "CAR.VENDOR:": 24,
+        "GH.SharedServiceConnect:": 24,
+        "GH.IconLoader:": 24,
+        "CAR.GAL.SENSOR.LITE:": 23,
+        "GH.ICarCall:": 23,
+        "GH.CarCallMapper:": 23,
+        "XFER.Proxy.LITE:": 23,
+        "GH.CarSvcDataStorage:": 23,
+        "CAR.POWER:": 23,
+        "Lite.EP.LITE:": 23,
+        "GH.CAR.VIDEO:": 23,
+        "CAR.AUDIO.Policy:": 23,
+        "CAR.AUDIO.MEDIA.LITE:": 23,
+        "GH.AppIconCache:": 23,
+        "GH.DisplayLayoutMngr:": 23,
+        "GH.RecoveryLifecycle:": 23,
+        "GH.ResetHandler:": 23,
+        "GH.Preflight.Req.PLock:": 23,
+        "CAR.BT": 23,
+        "FactoryImpl:": 23,
+        "GH.SimToNSAdapter:": 23,
+        "VQApply": 23,
+        "HidlServiceManagement:": 23,
+        "Adreno-AppProfiles:": 23,
+        "CAR.WM.WATERMARK:": 23,
+        "CAR.CAM.TASK:": 23,
+        "GH.SmsBrdcstRcv:": 23,
+        "LocaleConfig:": 23,
+        "GH.MediaServiceConnLDP:": 23,
+        "GH.PassengerModeUiContr:": 23,
+        "GH.PassengerMode:": 23,
+        "GH.Assistant.Recorder:": 23,
+        "GH.DisplayUiFeaturesMgr:": 23,
+        "GH.CanonicalCM:": 23,
+        "GH.PermissionChecker:": 23,
+        "CameraManager:": 23,
+        "MediaBrowserCompat:": 23,
+        "GH.ConnBroadcast:": 23,
+        "CAR.ApiFactory:": 23,
+        "GH.CarControlManager:": 23,
+        "GH.RailStatusBarFrag:": 23,
+        "HostConfig:": 23,
+        "VRI[jvu]@fe87a0:": 23,
+        "GH.AppNotifier:": 23,
+        "GH.CPNotifPromptMgr:": 23,
+        "GH.MediaSuggNotifier:": 23,
+        "VRI[FirstActivityImpl]@97fe9a8:": 22,
+        "VRI[FirstActivityImpl]@91d8256:": 22,
+        "CarApp.H.Nav:": 21,
+        "VRI[FirstActivityImpl]@6561db7:": 21,
+        "Adreno-UNKNOWN:": 20,
+        "SV[197092323": 19,
+        "VRI[GhFacetBar]@6c6ddbf:": 19,
+        "VRI[HUN]@397c089:": 19,
+        "VRI[HUN]@39c7cb9:": 19,
+        "VRI[HUN]@98cc683:": 19,
+        "VRI[HUN]@76f71c7:": 19,
+        "VRI[HUN]@739e91b:": 19,
+        "VRI[HUN]@8380ee3:": 19,
+        "VRI[HUN]@8a49626:": 19,
+        "VRI[HUN]@88038cc:": 19,
+        "VRI[HUN]@b30af80:": 19,
+        "VRI[HUN]@5502b36:": 19,
+        "SV[146933892": 19,
+        "VRI[GhFacetBar]@fba3f50:": 19,
+        "VRI[HUN]@bcd33a2:": 19,
+        "VRI[HUN]@7677746:": 19,
+        "VRI[HUN]@6d0e28f:": 19,
+        "VRI[HUN]@1a49399:": 19,
+        "VRI[HUN]@520d3c0:": 19,
+        "VRI[HUN]@a9c06cb:": 19,
+        "VRI[HUN]@5ec9719:": 19,
+        "VRI[HUN]@6424e29:": 19,
+        "VRI[GhFacetBar]@1ae1871:": 18,
+        "VRI[GhFacetBar]@bc3e55b:": 18,
+        "VRI[GhFacetBar]@8c74eb4:": 18,
+        "VRI[GhFacetBar]@21d6d9e:": 18,
+        "VRI[GhFacetBar]@c99f8d9:": 18,
+        "VRI[GhFacetBar]@f55a7d6:": 18,
+        "VRI[GhFacetBar]@4113c3b:": 18,
+        "VRI[GhFacetBar]@c99ae2e:": 18,
+        "VRI[GhFacetBar]@be5dcd3:": 18,
+        "VRI[GhFacetBar]@e52a756:": 18,
+        "VRI[GhFacetBar]@a4574f:": 18,
+        "VRI[GhFacetBar]@d89eb65:": 18,
+        "VRI[GhFacetBar]@5d974c8:": 18,
+        "VRI[GhFacetBar]@d335c4:": 18,
+        "VRI[GhFacetBar]@65b0354:": 18,
+        "VRI[GhFacetBar]@c63035f:": 18,
+        "VRI[GhFacetBar]@ef333c1:": 18,
+        "VRI[GhFacetBar]@bd22bed:": 18,
+        "VRI[GhFacetBar]@f280337:": 18,
+        "VRI[GhFacetBar]@7e106fb:": 18,
+        "VRI[GhFacetBar]@876fdec:": 18,
+        "VRI[HUN]@ff2e7ff:": 17,
+        "VRI[FirstActivityImpl]@7e16f0d:": 17,
+        "VRI[FirstActivityImpl]@c7df35f:": 16,
+        "VRI[FirstActivityImpl]@42aa801:": 16,
+        "VRI[FirstActivityImpl]@dd82df5:": 16,
+        "VRI[FirstActivityImpl]@c60ccc8:": 16,
+        "VRI[FirstActivityImpl]@43102a9:": 16,
+        "VRI[FirstActivityImpl]@6b6f6bc:": 16,
+        "VRI[FirstActivityImpl]@d051594:": 16,
+        "VRI[FirstActivityImpl]@956809a:": 16,
+        "VRI[FirstActivityImpl]@fb0be59:": 16,
+        "VRI[FirstActivityImpl]@91c34d6:": 16,
+        "VRI[FirstActivityImpl]@1c2c04f:": 16,
+        "VRI[FirstActivityImpl]@13b0a49:": 16,
+        "VRI[FirstActivityImpl]@ca8ab39:": 16,
+        "VRI[FirstActivityImpl]@6a91f63:": 16,
+        "VRI[FirstActivityImpl]@fbe6ef5:": 16,
+        "VRI[FirstActivityImpl]@7d0def5:": 16,
+        "VRI[FirstActivityImpl]@b3f9c9c:": 16,
+        "VRI[HUN]@fd3623f:": 15,
+        "VRI[HUN]@3ff252f:": 15,
+        "VRI[FirstActivityImpl]@2722d4e:": 14,
+        "VRI[FirstActivityImpl]@7017383:": 13,
+        "GH.CarCmpDvcSvc:": 10,
+        "InputMethodManager:": 10,
+        "CAR.SERVICE.USBMON.LITE:": 9,
+        "ImeTracker:": 8,
+        "InputMethodManager_LC:": 6,
+        "GestureDetector:": 6,
+        "GraphicsEnvironment:": 6,
+        "arhead:watchdog:": 5,
+        "JobService:": 4,
+        "nativeloader:": 4,
+        "InsetsSourceConsumer:": 3,
+        "CAR.GH": 3,
+        "ListPreference:": 2,
+        "SensorManager:": 2,
+        "android.widget.GridLayout:": 2,
+        "InputMethodManagerUtils:": 2,
+        "CAR.BUF.POOL:": 2,
+        "ApplicationLoaders:": 2,
+        "VRI[GhFacetBar]@35d134c:": 1,
+        "PrimesLoggerHolder:": 1,
+        "AssistStructure:": 1,
+        "InteractionJankMonitor:": 1,
+        "AutofillManager:": 1,
+        "GH.KeyboardBinderWrappr:": 1,
+        "GH.CarWindowImeService:": 1,
+        "RemoteInputConnectionImpl:": 1,
+        "Zygote": 1,
+        "GH.PrimesMgr:": 1,
+        "SharedPreferencesImpl:": 1
+      }
+    },
+    "system-location.log": {
+      "collected_lines": 10984,
+      "tags": {
+        "LocationManagerService:": 7064,
+        "GnssLocationProvider:": 3919
+      }
+    }
+  },
+  "phone_provider_snapshots": [
+    {
+      "query_start_utc": "2026-10-03T06:22:25.812204+00:00",
+      "query_end_utc": "2026-10-03T06:22:25.916561+00:00",
+      "providers": {
+        "gps": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 15.201965,
+          "reported_satellites": 8.0,
+          "age_seconds_at_query_estimate": 0.959
+        },
+        "network": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 13.464,
+          "age_seconds_at_query_estimate": 7.144
+        },
+        "fused": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 15.737,
+          "age_seconds_at_query_estimate": 0.959
+        }
+      },
+      "physical_coordinates": "not retained",
+      "target_run": "B1-r3",
+      "phase_time_zero_utc": "2026-10-03T06:22:10.752859+00:00",
+      "phase_seconds_at_query": 15.05934476852417
+    },
+    {
+      "query_start_utc": "2026-10-03T06:13:55.069580+00:00",
+      "query_end_utc": "2026-10-03T06:13:55.157225+00:00",
+      "providers": {
+        "gps": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 77.450066,
+          "reported_satellites": 3.0,
+          "age_seconds_at_query_estimate": 0.198
+        },
+        "network": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 12.398,
+          "age_seconds_at_query_estimate": 13.554
+        },
+        "fused": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 11.108,
+          "age_seconds_at_query_estimate": 0.198
+        }
+      },
+      "physical_coordinates": "not retained"
+    },
+    {
+      "query_start_utc": "2026-10-03T06:09:26.846137+00:00",
+      "query_end_utc": "2026-10-03T06:09:26.962646+00:00",
+      "providers": {
+        "gps": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 26.679615,
+          "reported_satellites": 2.0,
+          "age_seconds_at_query_estimate": 0.947
+        },
+        "network": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 34.6714,
+          "age_seconds_at_query_estimate": 4.176
+        },
+        "fused": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 12.097,
+          "age_seconds_at_query_estimate": 0.947
+        }
+      },
+      "physical_coordinates": "not retained"
+    },
+    {
+      "query_start_utc": "2026-10-03T05:39:56.097709+00:00",
+      "query_end_utc": "2026-10-03T05:39:56.212792+00:00",
+      "providers": {
+        "gps": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 12.19225,
+          "reported_satellites": 11.0,
+          "age_seconds_at_query_estimate": 0.212
+        },
+        "network": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 17.561,
+          "age_seconds_at_query_estimate": 7.481
+        },
+        "fused": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 11.921,
+          "age_seconds_at_query_estimate": 0.212
+        }
+      },
+      "physical_coordinates": "not retained"
+    },
+    {
+      "source": "pilot post-phase location snapshot; original physical-coordinate dump deleted at cleanup",
+      "target_run": "pilot",
+      "timing_relation": "after observed GPS loss, not a synchronized in-phase sample",
+      "providers": {
+        "gps": {
+          "last_location_present": true,
+          "horizontal_accuracy_m": 14.850175,
+          "reported_satellites": 9
+        }
+      },
+      "physical_coordinates": "not retained"
+    }
+  ],
+  "restarts_and_controller_errors": [
+    {
+      "utc": "2026-10-03T05:25:24.212547+00:00",
+      "monotonic_ns": 1037188256740041,
+      "action": "start",
+      "session": "C1"
+    },
+    {
+      "utc": "2026-10-03T05:33:29.139694+00:00",
+      "monotonic_ns": 1037673182011791,
+      "action": "stop",
+      "session": "C1"
+    },
+    {
+      "utc": "2026-10-03T05:33:29.143368+00:00",
+      "monotonic_ns": 1037673185690458,
+      "action": "start",
+      "session": "C2"
+    },
+    {
+      "utc": "2026-10-03T05:36:19.733555+00:00",
+      "monotonic_ns": 1037843775299333,
+      "action": "stop",
+      "session": "C2"
+    },
+    {
+      "utc": "2026-10-03T05:36:19.735765+00:00",
+      "monotonic_ns": 1037843777504291,
+      "action": "start",
+      "session": "C3"
+    },
+    {
+      "utc": "2026-10-03T05:39:01.618193+00:00",
+      "monotonic_ns": 1038005659361541,
+      "action": "stop",
+      "session": "C3"
+    },
+    {
+      "utc": "2026-10-03T05:39:01.620435+00:00",
+      "monotonic_ns": 1038005661601708,
+      "action": "start",
+      "session": "C4"
+    },
+    {
+      "utc": "2026-10-03T05:41:44.311861+00:00",
+      "monotonic_ns": 1038168352462041,
+      "action": "stop",
+      "session": "C4"
+    },
+    {
+      "utc": "2026-10-03T05:41:44.316765+00:00",
+      "monotonic_ns": 1038168357366541,
+      "action": "start",
+      "session": "C5"
+    },
+    {
+      "utc": "2026-10-03T05:45:43.597037+00:00",
+      "monotonic_ns": 1038407636786458,
+      "action": "stop",
+      "session": "C5"
+    },
+    {
+      "utc": "2026-10-03T05:45:43.599884+00:00",
+      "monotonic_ns": 1038407639632958,
+      "action": "start",
+      "session": "A30"
+    },
+    {
+      "utc": "2026-10-03T05:49:05.202347+00:00",
+      "monotonic_ns": 1038609241397250,
+      "action": "stop",
+      "session": "A30"
+    },
+    {
+      "utc": "2026-10-03T05:49:05.205619+00:00",
+      "monotonic_ns": 1038609244661208,
+      "action": "start",
+      "session": "A300"
+    },
+    {
+      "utc": "2026-10-03T05:50:52.143204+00:00",
+      "monotonic_ns": 1038716181870500,
+      "action": "stop",
+      "session": "A300"
+    },
+    {
+      "utc": "2026-10-03T05:50:52.148959+00:00",
+      "monotonic_ns": 1038716187631000,
+      "action": "start",
+      "session": "A100"
+    },
+    {
+      "utc": "2026-10-03T05:52:15.751746+00:00",
+      "monotonic_ns": 1038799790125958,
+      "action": "stop",
+      "session": "A100"
+    },
+    {
+      "utc": "2026-10-03T05:52:15.755039+00:00",
+      "monotonic_ns": 1038799793405500,
+      "action": "start",
+      "session": "A5"
+    },
+    {
+      "utc": "2026-10-03T05:53:29.408296+00:00",
+      "monotonic_ns": 1038873446407416,
+      "action": "stop",
+      "session": "A5"
+    },
+    {
+      "utc": "2026-10-03T05:53:29.412166+00:00",
+      "monotonic_ns": 1038873450369083,
+      "action": "start",
+      "session": "B5-r1"
+    },
+    {
+      "utc": "2026-10-03T05:54:58.456033+00:00",
+      "monotonic_ns": 1038962493826166,
+      "action": "stop",
+      "session": "B5-r1"
+    },
+    {
+      "utc": "2026-10-03T05:54:58.458723+00:00",
+      "monotonic_ns": 1038962496520375,
+      "action": "start",
+      "session": "B1-r2"
+    },
+    {
+      "utc": "2026-10-03T05:57:01.043760+00:00",
+      "monotonic_ns": 1039085081150458,
+      "action": "stop",
+      "session": "B1-r2"
+    },
+    {
+      "utc": "2026-10-03T05:57:01.046304+00:00",
+      "monotonic_ns": 1039085083687583,
+      "action": "start",
+      "session": "B4-r1"
+    },
+    {
+      "utc": "2026-10-03T06:00:24.445525+00:00",
+      "monotonic_ns": 1039288482192375,
+      "action": "stop",
+      "session": "B4-r1"
+    },
+    {
+      "utc": "2026-10-03T06:00:24.447649+00:00",
+      "monotonic_ns": 1039288484314125,
+      "action": "start",
+      "session": "B2-r1"
+    },
+    {
+      "utc": "2026-10-03T06:00:42.031311+00:00",
+      "monotonic_ns": 1039306067922541,
+      "action": "error",
+      "session": "B2-r1",
+      "error": "[Errno 2] No such file or directory: '<workdir>/work/experiment3/queue/1791007173764114000.request.json' -> '<workdir>/work/experiment3/queue/1791007173764114000.request.completed'"
+    },
+    {
+      "utc": "2026-10-03T06:02:07.719049+00:00",
+      "monotonic_ns": 1039391755453833,
+      "action": "start",
+      "session": "B4-r1-retry"
+    },
+    {
+      "utc": "2026-10-03T06:06:58.194681+00:00",
+      "monotonic_ns": 1039682229955625,
+      "action": "stop",
+      "session": "B4-r1-retry"
+    },
+    {
+      "utc": "2026-10-03T06:06:58.197227+00:00",
+      "monotonic_ns": 1039682232499083,
+      "action": "start",
+      "session": "B2-r1-valid"
+    },
+    {
+      "utc": "2026-10-03T06:09:21.124962+00:00",
+      "monotonic_ns": 1039825159752791,
+      "action": "stop",
+      "session": "B2-r1-valid"
+    },
+    {
+      "utc": "2026-10-03T06:09:21.128380+00:00",
+      "monotonic_ns": 1039825163155541,
+      "action": "start",
+      "session": "B3-r1"
+    },
+    {
+      "utc": "2026-10-03T06:11:24.472595+00:00",
+      "monotonic_ns": 1039948542484875,
+      "action": "stop",
+      "session": "B3-r1"
+    },
+    {
+      "utc": "2026-10-03T06:11:24.474223+00:00",
+      "monotonic_ns": 1039948544113916,
+      "action": "start",
+      "session": "B1-r1"
+    },
+    {
+      "utc": "2026-10-03T06:13:38.098204+00:00",
+      "monotonic_ns": 1040082184373083,
+      "action": "stop",
+      "session": "B1-r1"
+    },
+    {
+      "utc": "2026-10-03T06:13:38.102061+00:00",
+      "monotonic_ns": 1040082188237958,
+      "action": "start",
+      "session": "B3-r3"
+    },
+    {
+      "utc": "2026-10-03T06:16:15.086980+00:00",
+      "monotonic_ns": 1040239175203083,
+      "action": "stop",
+      "session": "B3-r3"
+    },
+    {
+      "utc": "2026-10-03T06:16:15.089645+00:00",
+      "monotonic_ns": 1040239177866250,
+      "action": "start",
+      "session": "B2-r2"
+    },
+    {
+      "utc": "2026-10-03T06:18:08.638196+00:00",
+      "monotonic_ns": 1040352727919833,
+      "action": "stop",
+      "session": "B2-r2"
+    },
+    {
+      "utc": "2026-10-03T06:18:08.641466+00:00",
+      "monotonic_ns": 1040352731170083,
+      "action": "start",
+      "session": "B3-r2"
+    },
+    {
+      "utc": "2026-10-03T06:20:18.171250+00:00",
+      "monotonic_ns": 1040482262643416,
+      "action": "stop",
+      "session": "B3-r2"
+    },
+    {
+      "utc": "2026-10-03T06:20:18.173371+00:00",
+      "monotonic_ns": 1040482264760041,
+      "action": "start",
+      "session": "B1-r3"
+    },
+    {
+      "utc": "2026-10-03T06:22:41.238864+00:00",
+      "monotonic_ns": 1040625332123166,
+      "action": "stop",
+      "session": "B1-r3"
+    },
+    {
+      "utc": "2026-10-03T06:22:41.255568+00:00",
+      "monotonic_ns": 1040625348843000,
+      "action": "start",
+      "session": "B2-r3"
+    },
+    {
+      "utc": "2026-10-03T06:29:55.091679+00:00",
+      "monotonic_ns": 1041059190600833,
+      "action": "stop",
+      "session": "B2-r3"
+    }
+  ],
+  "pilot_and_excluded_runs": {
+    "pilot": {
+      "classification": "GPS-LOST",
+      "gps_loss_interval_s": [
+        0,
+        10
+      ],
+      "note": "Earlier Mipo approach; not part of randomized B repetitions."
+    },
+    "B4-r1-invalid": {
+      "classification": "INVALID_SETUP",
+      "reason": "Guidance was not active; the setup screenshot still showed a 400km route selection screen. Trial input had already been queued; all results of this attempt are excluded. Repeat B4-r1-retry preserves randomized condition order."
+    }
+  },
+  "deviations": [
+    "Overpass main endpoint returned HTTP 406 for POST and GET; alternative endpoint timed out after 45s; OSM map API succeeded.",
+    "One script invocation had an incorrect relative output path and exited before launching DHU; corrected.",
+    "Computer-use plugin did not list DHU and rejected its executable path as an app; used documented DHU console tap and screenshot.",
+    "Mora route preview initially used phone position and showed 382km; after starting guidance and resending approach fix, Naver rerouted to 4.3km via tunnel. Excluded initial route preview from trial.",
+    "B4-r1 preparation remained on route selection; its trial input was inadvertently queued and is excluded. B4-r1-retry is the valid repetition.",
+    "While canceling queued setup, a request file already being processed was removed. Controller exited on FileNotFoundError after unused B2-r1 setup; DHU exited. Added an existence check and restarted controller. No valid trial was active during controller failure.",
+    "Android package UID lookup returned the primary-profile UID and a permission error for user 150; no attempt was made to access that other profile.",
+    "B4-r1-retry first preparation had no active guidance; trial was withheld until manual recent-destination selection and fresh position injection produced verified 2.4km guidance.",
+    "One host temporary-log inventory glob matched no file; the ADB server open-file list was used to locate its log."
+  ],
+  "tunnel_geometry": {
+    "tunnel_way": 59038277,
+    "approach_way": 59038272,
+    "tunnel_tag": "yes",
+    "tunnel_geometry_nodes": 2,
+    "tunnel_length_m": 2433.121986654051,
+    "entrance": [
+      35.1714322,
+      129.0250025
+    ],
+    "exit": [
+      35.1853302,
+      129.0043248
+    ],
+    "approach_start": [
+      35.169767905698826,
+      129.0267566165744,
+      328.8559922619735
+    ],
+    "phase_start_m_inside_tunnel": 20,
+    "moving_phase_distance_m": 300,
+    "geometry_limit": "OSM represents this tunnel by two endpoints; interpolated straight segment"
+  },
+  "road_geometry": {
+    "ways": [
+      "1126003976",
+      "627350922",
+      "1359976816",
+      "1359976814",
+      "1359976815",
+      "1359976817",
+      "1495778540",
+      "1359976818",
+      "509125478",
+      "37399935",
+      "1457464649",
+      "1005811762",
+      "509123639",
+      "507420451"
+    ],
+    "length_m": 2520.902677263404,
+    "start": [
+      35.1582787,
+      129.1493314,
+      110.03628306095855
+    ],
+    "A_distance_m": 420,
+    "B_drivein_distance_m": 266,
+    "source": "https://api.openstreetmap.org/api/0.6/map?bbox=129.148,35.154,129.178,35.17",
+    "path_method": "Directed shortest path through motor roads from shared start node to a node near Mipo; screen guidance checked before each run. First 420m of path used."
+  },
+  "cleanup_reference": "install-cleanup.md",
+  "limits": [
+    "TLS payload not decoded; NAN omission versus NaN and sensor timestamp representation unresolved.",
+    "Screen distance is rounded to 0.1km; approximate distance/rate only.",
+    "C4 later motion cannot distinguish fresh-coordinate following from extrapolation at last accepted 5m/s.",
+    "Tunnel exit was not reached. Actual car, dongle and real vehicle timestamps untested.",
+    "Each A value and each C condition was tested once; B repetition counts follow the protocol.",
+    "Optional A accuracy ramp not run; C4 is a separate ramp in a mapped tunnel.",
+    "A/B share this experiment road; its first section differs from experiment2 Dongbaek-ro approach."
+  ],
+  "cleanup": {
+    "mac_cleanup_complete": true,
+    "completed_kst": "2026-10-03T15:34:06.307787+09:00",
+    "removed_work_directory": "work/",
+    "removed_generated_files": [
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_7585be0a-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 153828,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_485e882d-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 150998,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_707bcb95-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 239105,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_df2cdb19-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 321,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_bdbcfc16-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 311,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_02adb1a7-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 239139,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_3bc5ddbf-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 298,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_c4682bd4-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 148699,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_02e54bfa-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 135251,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_53fb20ae-addon2-4_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 73410,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_7585be0a-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 298,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_bdbcfc16-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 138407,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_02adb1a7-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 309,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_3bc5ddbf-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 150779,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_485e882d-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 300,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_df2cdb19-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 141251,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_707bcb95-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 299,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_c4682bd4-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 297,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_02e54bfa-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 299,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_53fb20ae-addon2-4_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 282,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_da506a6d-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 296,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_21a18bbb-addon2-4_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 277,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_72928d85-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 295,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_d1f53559-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 134758,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_679c8624-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 306,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_a38a013e-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 150059,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_8f509c56-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 145202,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_6de44c37-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 155480,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_b7518f9e-repository2-3_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 419185,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_da506a6d-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 150511,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_b7518f9e-repository2-3_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 282,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_d1f53559-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 303,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_679c8624-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 141009,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_b75fa71f-repository2-4_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 419514,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_a38a013e-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 297,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_d2d60124-addons_list-7_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 280,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_72928d85-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 188466,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_6de44c37-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 306,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_d2d60124-addons_list-7_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 3832,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_b75fa71f-repository2-4_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 282,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkbin-1_21a18bbb-addon2-4_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 111374,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/cache/sdkinf-1_8f509c56-sys-img2-5_xml",
+        "birth_kst": "2026-10-03 12:41:54",
+        "bytes": 303,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/adbkey",
+        "birth_kst": "2026-10-03 12:44:46",
+        "bytes": 1704,
+        "deleted": true
+      },
+      {
+        "path": "<android-user-dir>/adbkey.pub",
+        "birth_kst": "2026-10-03 12:44:46",
+        "bytes": 736,
+        "deleted": true
+      },
+      {
+        "path": "<temporary-dir>/adb.501.log",
+        "birth_kst": "2026-10-03 12:44:46",
+        "bytes": 3456,
+        "deleted": true
+      }
+    ],
+    "phone_cleanup_confirmed": false,
+    "retained": "outputs/ user-facing reports and evidence; pre-existing Java/Python runtimes untouched"
+  },
+  "timing_semantics": "Command timestamps are host console dispatch times, not sensor-message timestamps. Screenshot labels are scheduled elapsed seconds; actual timing is in commands-timed.jsonl."
+}

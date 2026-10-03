@@ -1,0 +1,109 @@
+location 35.1697679 129.0267566 5 NAN 14 328.9
+sleep 1
+location 35.1698757 129.0266770 5 NAN 14 328.9
+sleep 1
+location 35.1699834 129.0265973 5 NAN 14 328.9
+sleep 1
+location 35.1700899 129.0265152 5 NAN 14 327.5
+sleep 1
+location 35.1701962 129.0264325 5 NAN 14 327.5
+sleep 1
+location 35.1703003 129.0263463 5 NAN 14 321.2
+sleep 1
+location 35.1703984 129.0262498 5 NAN 14 321.2
+sleep 1
+location 35.1704965 129.0261532 5 NAN 14 321.2
+sleep 1
+location 35.1705946 129.0260567 5 NAN 14 321.2
+sleep 1
+location 35.1706928 129.0259602 5 NAN 14 321.2
+sleep 1
+location 35.1707909 129.0258636 5 NAN 14 321.2
+sleep 1
+location 35.1708834 129.0257600 5 NAN 14 311.6
+sleep 1
+location 35.1709669 129.0256447 5 NAN 14 311.6
+sleep 1
+location 35.1710504 129.0255294 5 NAN 14 311.6
+sleep 1
+location 35.1711340 129.0254142 5 NAN 14 311.6
+sleep 1
+location 35.1712175 129.0252989 5 NAN 14 311.6
+sleep 1
+location 35.1713010 129.0251836 5 NAN 14 311.6
+sleep 1
+location 35.1713845 129.0250684 5 NAN 14 311.6
+sleep 1
+location 35.1714665 129.0249515 5 NAN 14 309.4
+sleep 1
+location 35.1715464 129.0248325 5 NAN 14 309.4
+sleep 1
+screenshot ../../../../experiment3/C2-00.png
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+screenshot ../../../../experiment3/C2-10.png
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+screenshot ../../../../experiment3/C2-20.png
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+screenshot ../../../../experiment3/C2-30.png
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+screenshot ../../../../experiment3/C2-40.png
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+screenshot ../../../../experiment3/C2-50.png
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+screenshot ../../../../experiment3/C2-60.png
+sleep 10
+screenshot ../../../../experiment3/C2-after10.png

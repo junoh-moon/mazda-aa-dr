@@ -1,0 +1,38 @@
+{
+  "randomization": "Python random.Random seed 20261003; shuffle A then B",
+  "part_order": [
+    "C",
+    "A",
+    "B"
+  ],
+  "A": [
+    30,
+    300,
+    100,
+    5
+  ],
+  "B": [
+    "B5-r1",
+    "B1-r2",
+    "B4-r1",
+    "B2-r1",
+    "B3-r1",
+    "B1-r1",
+    "B3-r3",
+    "B2-r2",
+    "B3-r2",
+    "B1-r3",
+    "B2-r3"
+  ],
+  "C": [
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5"
+  ],
+  "pilot": [
+    "NAN accuracy / speed14, then unused restart"
+  ],
+  "C5_note": "Optional condition added after C1-C3 outcomes; no randomization requested for C."
+}

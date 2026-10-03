@@ -1,0 +1,169 @@
+location 35.1697679 129.0267566 5 NAN 14 328.9
+sleep 1
+location 35.1698757 129.0266770 5 NAN 14 328.9
+sleep 1
+location 35.1699834 129.0265973 5 NAN 14 328.9
+sleep 1
+location 35.1700899 129.0265152 5 NAN 14 327.5
+sleep 1
+location 35.1701962 129.0264325 5 NAN 14 327.5
+sleep 1
+location 35.1703003 129.0263463 5 NAN 14 321.2
+sleep 1
+location 35.1703984 129.0262498 5 NAN 14 321.2
+sleep 1
+location 35.1704965 129.0261532 5 NAN 14 321.2
+sleep 1
+location 35.1705946 129.0260567 5 NAN 14 321.2
+sleep 1
+location 35.1706928 129.0259602 5 NAN 14 321.2
+sleep 1
+location 35.1707909 129.0258636 5 NAN 14 321.2
+sleep 1
+location 35.1708834 129.0257600 5 NAN 14 311.6
+sleep 1
+location 35.1709669 129.0256447 5 NAN 14 311.6
+sleep 1
+location 35.1710504 129.0255294 5 NAN 14 311.6
+sleep 1
+location 35.1711340 129.0254142 5 NAN 14 311.6
+sleep 1
+location 35.1712175 129.0252989 5 NAN 14 311.6
+sleep 1
+location 35.1713010 129.0251836 5 NAN 14 311.6
+sleep 1
+location 35.1713845 129.0250684 5 NAN 14 311.6
+sleep 1
+location 35.1714665 129.0249515 5 NAN 14 309.4
+sleep 1
+location 35.1715464 129.0248325 5 NAN 14 309.4
+sleep 1
+screenshot ../../../../experiment3/C5-00.png
+location 35.1715750 129.0247900 NAN NAN 5 309.4
+sleep 1
+location 35.1716036 129.0247475 NAN NAN 5 309.4
+sleep 1
+location 35.1716321 129.0247051 NAN NAN 5 309.4
+sleep 1
+location 35.1716607 129.0246626 NAN NAN 5 309.4
+sleep 1
+location 35.1716892 129.0246201 NAN NAN 5 309.4
+sleep 1
+location 35.1717178 129.0245776 NAN NAN 5 309.4
+sleep 1
+location 35.1717464 129.0245351 NAN NAN 5 309.4
+sleep 1
+location 35.1717749 129.0244926 NAN NAN 5 309.4
+sleep 1
+location 35.1718035 129.0244501 NAN NAN 5 309.4
+sleep 1
+location 35.1718320 129.0244076 NAN NAN 5 309.4
+sleep 1
+screenshot ../../../../experiment3/C5-10.png
+location 35.1718606 129.0243651 NAN NAN 5 309.4
+sleep 1
+location 35.1718892 129.0243226 NAN NAN 5 309.4
+sleep 1
+location 35.1719177 129.0242801 NAN NAN 5 309.4
+sleep 1
+location 35.1719463 129.0242376 NAN NAN 5 309.4
+sleep 1
+location 35.1719748 129.0241951 NAN NAN 5 309.4
+sleep 1
+location 35.1720034 129.0241527 NAN NAN 5 309.4
+sleep 1
+location 35.1720320 129.0241102 NAN NAN 5 309.4
+sleep 1
+location 35.1720605 129.0240677 NAN NAN 5 309.4
+sleep 1
+location 35.1720891 129.0240252 NAN NAN 5 309.4
+sleep 1
+location 35.1721176 129.0239827 NAN NAN 5 309.4
+sleep 1
+screenshot ../../../../experiment3/C5-20.png
+location 35.1721462 129.0239402 NAN NAN 5 309.4
+sleep 1
+location 35.1721748 129.0238977 NAN NAN 5 309.4
+sleep 1
+location 35.1722033 129.0238552 NAN NAN 5 309.4
+sleep 1
+location 35.1722319 129.0238127 NAN NAN 5 309.4
+sleep 1
+location 35.1722604 129.0237702 NAN NAN 5 309.4
+sleep 1
+location 35.1722890 129.0237277 NAN NAN 5 309.4
+sleep 1
+location 35.1723176 129.0236852 NAN NAN 5 309.4
+sleep 1
+location 35.1723461 129.0236428 NAN NAN 5 309.4
+sleep 1
+location 35.1723747 129.0236003 NAN NAN 5 309.4
+sleep 1
+location 35.1724032 129.0235578 NAN NAN 5 309.4
+sleep 1
+screenshot ../../../../experiment3/C5-30.png
+location 35.1724318 129.0235153 NAN NAN 5 309.4
+sleep 1
+location 35.1724604 129.0234728 NAN NAN 5 309.4
+sleep 1
+location 35.1724889 129.0234303 NAN NAN 5 309.4
+sleep 1
+location 35.1725175 129.0233878 NAN NAN 5 309.4
+sleep 1
+location 35.1725460 129.0233453 NAN NAN 5 309.4
+sleep 1
+location 35.1725746 129.0233028 NAN NAN 5 309.4
+sleep 1
+location 35.1726032 129.0232603 NAN NAN 5 309.4
+sleep 1
+location 35.1726317 129.0232178 NAN NAN 5 309.4
+sleep 1
+location 35.1726603 129.0231753 NAN NAN 5 309.4
+sleep 1
+location 35.1726888 129.0231328 NAN NAN 5 309.4
+sleep 1
+screenshot ../../../../experiment3/C5-40.png
+location 35.1727174 129.0230904 NAN NAN 5 309.4
+sleep 1
+location 35.1727460 129.0230479 NAN NAN 5 309.4
+sleep 1
+location 35.1727745 129.0230054 NAN NAN 5 309.4
+sleep 1
+location 35.1728031 129.0229629 NAN NAN 5 309.4
+sleep 1
+location 35.1728316 129.0229204 NAN NAN 5 309.4
+sleep 1
+location 35.1728602 129.0228779 NAN NAN 5 309.4
+sleep 1
+location 35.1728888 129.0228354 NAN NAN 5 309.4
+sleep 1
+location 35.1729173 129.0227929 NAN NAN 5 309.4
+sleep 1
+location 35.1729459 129.0227504 NAN NAN 5 309.4
+sleep 1
+location 35.1729744 129.0227079 NAN NAN 5 309.4
+sleep 1
+screenshot ../../../../experiment3/C5-50.png
+location 35.1730030 129.0226654 NAN NAN 5 309.4
+sleep 1
+location 35.1730316 129.0226229 NAN NAN 5 309.4
+sleep 1
+location 35.1730601 129.0225804 NAN NAN 5 309.4
+sleep 1
+location 35.1730887 129.0225380 NAN NAN 5 309.4
+sleep 1
+location 35.1731172 129.0224955 NAN NAN 5 309.4
+sleep 1
+location 35.1731458 129.0224530 NAN NAN 5 309.4
+sleep 1
+location 35.1731744 129.0224105 NAN NAN 5 309.4
+sleep 1
+location 35.1732029 129.0223680 NAN NAN 5 309.4
+sleep 1
+location 35.1732315 129.0223255 NAN NAN 5 309.4
+sleep 1
+location 35.1732600 129.0222830 NAN NAN 5 309.4
+sleep 1
+screenshot ../../../../experiment3/C5-60.png
+sleep 10
+screenshot ../../../../experiment3/C5-after10.png
