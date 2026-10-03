@@ -69,7 +69,7 @@ read_config_mode() (
             }
             if(value !~ /^[0-9]+$/ || length(value)>12) {bad=1; exit}
             n=value+0
-            if(key=="max_log_bytes") {if(n<65536 || n>8388608) bad=1}
+            if(key=="max_log_bytes") {if(n<65536 || n>41943040) bad=1}
             else if(key=="max_log_files") {if(n<1 || n>3) bad=1}
             else if(key=="sample_ms") {if(n<500 || n>5000) bad=1}
             else bad=1
@@ -207,13 +207,13 @@ for name in trace.2.jsonl trace.1.jsonl trace.0.jsonl collector.1.jsonl collecto
     if [ -e "$file" ] || [ -L "$file" ]; then
         regular "$file"
         bytes=$(wc -c < "$file")
-        case "$name" in *.storage.json) limit=1024;; collector.*) limit=1048576;; *) limit=8388608;; esac
+        case "$name" in *.storage.json) limit=1024;; collector.*) limit=4194304;; *) limit=41943040;; esac
         [ "$bytes" -le "$limit" ] || fail "Log exceeds expected per-file bound: $name"
         retained=$((retained + bytes))
         set -- "$@" "$file"
     fi
 done
-echo "one_boot=$oneboot retained_bytes=$retained trace_cap_bytes=25165824 collector_cap_bytes=2097152 (24+2 MiB, rotates)"
+echo "one_boot=$oneboot retained_bytes=$retained trace_cap_bytes=125829120 collector_cap_bytes=8388608 (120+8 MiB, rotates)"
 echo "guard_last_boot=$guard_last_boot guard_consumed=$guard_consumed; markers do not prove SM received the trial path or that runtime capture began."
 echo "guard_arm=$guard_arm guard_armed_boot=$guard_armed_boot guard_previous_armed_boot=$guard_previous_armed_boot startup_state=$startup_state"
 echo "guard_arm_schema=$guard_arm_schema guard_consumed_schema=$guard_consumed_schema (v2 is retained evidence, not a v3 startup gate)"
@@ -222,11 +222,32 @@ case "$startup_state" in
     new_linux_boot_arm_unconsumed) echo 'New CMU Linux boot observed, but guard arm remains; selection and capture are not yet observed. Wait 60 seconds while parked and run menu 2 once more; if still incomplete, export with 3 and disarm with 4.';;
     guard_selected_same_boot_as_arm) echo 'Guard selected in the arming Linux boot: a new boot was not observed.';;
 esac
-echo 'Retention duration is unknown until this vehicle log rate is measured. Export at the first parked USB return, without reinstalling or rearming. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
+echo 'Measured SHADOW rate is about 17-19 KB/s, so the 120 MiB trace rotates out its oldest data after roughly 105-115 minutes. Export at the first parked USB return, without reinstalling or rearming. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
 space_ok=0
 space_free=$(storage_free_kib "$persist") || space_free=unknown
 if [ "$space_free" != unknown ] && [ "$space_free" -gt 8256 ]; then space_ok=1; fi
 echo "storage_available_kib=$space_free reserve_kib=8192 margin_kib=64"
+# Parked evidence of which stock services run and whether each carries this
+# package's preload. Reads /proc metadata only; never signals or restarts anything.
+# stack_soft is the default thread stack in KiB-bytes the service inherited.
+service_state() (
+    svc=$1; token=$2; found=
+    for dir in "$ROOT"/proc/[0-9]*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ -f "$dir/comm" ] || continue
+        [ "$(head -c 64 "$dir/comm" 2>/dev/null)" = sm_svclauncher ] || continue
+        args=$(tr '\000' ' ' < "$dir/cmdline" 2>/dev/null | head -c 512) || continue
+        case "$args" in *" $svc "*) found=$dir; break;; esac
+    done
+    if [ -z "$found" ]; then echo "service_$svc=not_running"; exit 0; fi
+    stack=$(awk '/^Max stack size/ {print $4}' "$found/limits" 2>/dev/null)
+    uid=$(awk '/^Uid:/ {print $2}' "$found/status" 2>/dev/null)
+    loaded=no
+    if grep -q "/$token" "$found/maps" 2>/dev/null; then loaded=yes; fi
+    echo "service_$svc=running pid=${found##*/} uid=${uid:-unknown} stack_soft_bytes=${stack:-unknown} package_preload=$loaded"
+)
+service_state jciAAPA libmx5dr.so
+service_state jciLDS libmx5dr-ldstap.so
+service_state jciVBS libmx5dr-vimtap.so
 [ "$#" -gt 0 ] || fail 'No retained logs; current collection evidence unavailable'
 LC_ALL=C awk -v boot="$boot_id" -v now="$now" -v oneboot="$oneboot" \
     -v startup_state="$startup_state" -v space_ok="$space_ok" \

@@ -72,6 +72,34 @@ class TrialStatusTests(unittest.TestCase):
         self.assertEqual(before, after)
         return result
 
+    def add_service(self, pid, name, maps, stack='131072', uid=0, comm='sm_svclauncher'):
+        proc = self.root / 'proc' / str(pid)
+        proc.mkdir(parents=True)
+        (proc / 'comm').write_text(comm + '\n')
+        args = ['/jci/sm/sm_svclauncher', '-s', name, '/jci/x/blm.so'] if comm == 'sm_svclauncher' else [comm]
+        (proc / 'cmdline').write_bytes(b'\0'.join(a.encode() for a in args) + b'\0')
+        (proc / 'status').write_text('Name:\t%s\nUid:\t%d\t%d\t%d\t%d\n' % (comm, uid, uid, uid, uid))
+        (proc / 'limits').write_text('Limit Soft Limit Hard Limit Units\n'
+                                     'Max stack size %s unlimited bytes\n' % stack)
+        (proc / 'maps').write_text(maps)
+
+    def test_service_lines_report_stack_limit_uid_and_preload(self):
+        self.add_service(201, 'jciAAPA', '40000000-40100000 r-xp 0 00:00 0 /data_persist/mx5-aa-dr/libmx5dr.so\n')
+        self.add_service(202, 'jciVBS', '40000000-40100000 r-xp 0 00:00 0 /jci/vbs/svcjcivbs.so\n', uid=1001)
+        self.add_service(203, 'jciAudio', '/data_persist/mx5-aa-dr/libmx5dr.so\n')  # another service is ignored
+        self.write('trace.0.jsonl', self.trace)
+        result = self.run_status()
+        out = result.stdout
+        self.assertIn('service_jciAAPA=running pid=201 uid=0 stack_soft_bytes=131072 package_preload=yes', out)
+        self.assertIn('service_jciVBS=running pid=202 uid=1001 stack_soft_bytes=131072 package_preload=no', out)
+        self.assertIn('service_jciLDS=not_running', out)
+        self.assertNotIn('jciAudio', out)
+
+    def test_service_lines_never_trust_a_non_launcher_process(self):
+        self.add_service(204, 'jciAAPA', '/data_persist/mx5-aa-dr/libmx5dr.so\n', comm='jciAAPA')
+        self.write('trace.0.jsonl', self.trace)
+        self.assertIn('service_jciAAPA=not_running', self.run_status().stdout)
+
     def test_current_collection_read_only(self):
         r = self.run_status()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

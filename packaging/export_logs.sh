@@ -108,14 +108,20 @@ process_count=0
 for proc_dir in "$ROOT"/proc/[0-9]*; do
     [ -d "$proc_dir" ] && [ ! -L "$proc_dir" ] && [ -f "$proc_dir/comm" ] || continue
     process_name=$(head -c 64 "$proc_dir/comm") || continue
-    case "$process_name" in init_cmu|autostart|sm|mx5dr-collector|aap_service) ;; *) continue;; esac
+    case "$process_name" in
+        init_cmu|autostart|sm|mx5dr-collector|aap_service) ;;
+        sm_svclauncher) # keep only the three services this package touches
+            launcher_args=$(tr '\000' ' ' < "$proc_dir/cmdline" 2>/dev/null | head -c 512) || continue
+            case "$launcher_args" in *" jciAAPA "*|*" jciLDS "*|*" jciVBS "*) ;; *) continue;; esac;;
+        *) continue;;
+    esac
     process_count=$((process_count + 1))
     if [ "$process_count" -gt 64 ]; then
         printf 'process_metadata=truncated count_limit=64\n' >> "$report"
         diagnostic_partial=1
         break
     fi
-    for detail in comm cmdline status maps; do
+    for detail in comm cmdline status maps limits; do
         bounded_file "proc/${proc_dir##*/}/$detail" "$proc_dir/$detail"
     done
 done

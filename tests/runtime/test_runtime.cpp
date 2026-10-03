@@ -54,6 +54,11 @@ int main() {
             "explicit\nmax_log_bytes=65536\nmax_log_files=1\nsample_ms=500\n");
   require(c.valid && c.mode == 2 && c.max_log_bytes == 65536 &&
           c.max_log_files == 1 && c.sample_ms == 500);
+  // A long drive needs more than 8 MiB per file at the measured SHADOW rate (about 17-19 KB/s).
+  c = parse("mode=SHADOW\nmax_log_bytes=41943040\n");
+  require(c.valid && c.mode == 4 && c.max_log_bytes == 41943040);
+  c = parse("mode=SHADOW\nmax_log_bytes=8388609\n");
+  require(c.valid && c.max_log_bytes == 8388609);
   c = parse("mode=SHADOW\nsample_ms=5000\n");
   require(c.valid && c.mode == 4);
   c = parse("mode=OFF\n");
@@ -75,7 +80,7 @@ int main() {
                        "mode=OBSERVE\nmode=SCRUB\n",
                        "mode=OBSERVE\nsample_ms=499\n",
                        "mode=OBSERVE\nsample_ms=5001\n",
-                       "mode=OBSERVE\nmax_log_bytes=8388609\n",
+                       "mode=OBSERVE\nmax_log_bytes=41943041\n",
                        "mode=OBSERVE\nmax_log_files=0\n",
                        "mode=OBSERVE\nmax_log_files=4\n",
                        "mode=OBSERVE\nmax_log_bytes=-1\n",

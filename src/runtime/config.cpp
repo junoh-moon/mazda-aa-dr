@@ -70,7 +70,7 @@ Config read_config(const char *path) {
       }
       if (!strcmp(k, "max_log_bytes")) {
         bit = 2;
-        if (n < 65536 || n > 8388608)
+        if (n < 65536 || n > 41943040)
           c.valid = false;
         else
           c.max_log_bytes = n;

@@ -180,8 +180,8 @@ require_trial_space() {
     space_missing=0
     if [ "$MODE" != OFF ]; then
         [ ! -L "$BASE" ] && [ ! -L "$BASE/logs" ] || fail 'Symlink log storage'
-        for entry in trace.0.jsonl:8388608 trace.1.jsonl:8388608 trace.2.jsonl:8388608 \
-                     collector.0.jsonl:1048576 collector.1.jsonl:1048576; do
+        for entry in trace.0.jsonl:41943040 trace.1.jsonl:41943040 trace.2.jsonl:41943040 \
+                     collector.0.jsonl:4194304 collector.1.jsonl:4194304; do
             name=${entry%:*}; cap=${entry#*:}; bytes=0
             if [ -e "$BASE/logs/$name" ] || [ -L "$BASE/logs/$name" ]; then
                 regular "$BASE/logs/$name"
@@ -289,7 +289,7 @@ verify_firmware() {
 }
 set_config() {
     tmp=$BASE/mx5dr.conf.new.$$
-    printf 'mode=%s\nmax_log_bytes=8388608\nmax_log_files=3\nsample_ms=1000\n' "$MODE" > "$tmp"
+    printf 'mode=%s\nmax_log_bytes=41943040\nmax_log_files=3\nsample_ms=1000\n' "$MODE" > "$tmp"
     chmod 0644 "$tmp"
     if [ -z "$ROOT" ]; then chown 0 "$tmp"; fi
     mv -f "$tmp" "$BASE/mx5dr.conf"

@@ -459,7 +459,7 @@ int main(int argc, char **argv) {
   config = mx5::runtime::read_config(cfg);
   if (!config.valid || config.mode == 0) return 78;
   // Separate disk budget: at most 2 MiB total for this low-rate stream.
-  if (config.max_log_bytes > 1048576) config.max_log_bytes = 1048576;
+  if (config.max_log_bytes > 4194304) config.max_log_bytes = 4194304;
   if (config.max_log_files > 2) config.max_log_files = 2;
   // Kernel lock survives no process death: stale PID files never authorize kill.
   struct stat st;
