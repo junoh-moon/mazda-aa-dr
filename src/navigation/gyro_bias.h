@@ -67,13 +67,27 @@ public:
         }
         if (!stationary_since_ || stationary_since_>begin) { clear_collection(); return; }
         if (!std::isfinite(mean)||std::fabs(mean-nominal_)>64) { invalidate(); return; }
+        // Robust accumulation (MODEL hypothesis tuned on one public ND log, not a
+        // calibration claim). Once ROBUST_MIN windows agree, an isolated outlier is
+        // skipped rather than discarding the evidence. A run of outliers or too
+        // many of them is a disturbance: restart this collection, but keep a candidate
+        // that already reached READY (its age is still bounded at the anchor).
+        if (n_>=ROBUST_MIN && std::fabs(mean-mean_)>OUTLIER_COUNTS) {
+            ++outliers_; ++outlier_run_;
+            if (outlier_run_>=3 || outliers_>2+n_/10) clear_collection();
+            return;
+        }
+        outlier_run_=0;
         if (!n_) { start_=begin; mean_=low_=high_=mean; m2_=0; n_=1; }
         else {
             const double low=mean<low_?mean:low_,high=mean>high_?mean:high_;
             const double delta=mean-mean_;
             const double next_mean=mean_+delta/double(n_+1);
             const double next_m2=m2_+delta*(mean-next_mean);
-            if (high-low>4 || next_m2/double(n_+1)>1.0) { invalidate(); return; }
+            // The spread/variance gates need a few windows; two windows alone say little.
+            if (n_+1>=ROBUST_MIN && (high-low>4 || next_m2/double(n_+1)>1.0)) {
+                clear_collection(); return;
+            }
             low_=low; high_=high; mean_=next_mean; m2_=next_m2; ++n_;
         }
         const uint64_t received_through=received>wheel_received_?received:wheel_received_;
@@ -109,10 +123,14 @@ private:
     double nominal_,mean_,m2_,low_,high_;
     uint64_t gap_,wheel_time_,wheel_received_,stationary_since_,yaw_time_,yaw_received_,start_,n_;
     uint64_t collection_received_,candidate_received_;
+    unsigned outliers_,outlier_run_;
+    static const unsigned ROBUST_MIN=8;
+    static constexpr double OUTLIER_COUNTS=3.0;
     int wheel_clock_,yaw_clock_;
     GyroBiasStatus status_;
     void clear_collection() {
         n_=start_=collection_received_=0; mean_=m2_=low_=high_=0;
+        outliers_=outlier_run_=0;
         if (enabled_) status_.state=status_.candidate_ready?GYRO_BIAS_READY:
             (status_.calibration_version?GYRO_BIAS_APPLIED:GYRO_BIAS_WAITING);
     }

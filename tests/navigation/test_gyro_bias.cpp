@@ -231,8 +231,61 @@ static void candidate_receipt_causality() {
         CHECK(b.status().active_zero==2067&&b.status().calibration_version==2);
     }
 }
+// Real stationary yaw windows carry occasional single-window wobbles (public ND
+// log). One outlier or a short disturbance must not discard good evidence, while a
+// persistent level shift or sustained noise must still be rejected.
+static void robust_outliers() {
+    double zero[4]={0,0,0,0};
+    // Feed 100 ms windows through `end_ms`; value(ms) gives the window mean at `ms`.
+    #define FEED(b,from,to,expr) for(unsigned ms=(from);ms<=(to);ms+=100) { \
+        b.wheels(T(ms),T(ms),false,zero); if(ms) { const unsigned m_=ms; (void)m_; \
+        b.yaw(T(ms-100),T(ms),T(ms),false,(expr)); } }
+    {   // An isolated outlier after the estimate settled is skipped; READY is reached on time.
+        GyroBias b;b.configure(true,2047,250000000ULL);
+        FEED(b,0,3200,(ms==1500?2074:2067));
+        CHECK(b.status().candidate_ready);CHECK(b.status().candidate_zero==2067);
+        CHECK(b.status().samples>=30);
+    }
+    {   // The same outlier before READY did not restart the collection.
+        GyroBias b;b.configure(true,2047,250000000ULL);
+        FEED(b,0,2900,(ms==1500?2074:2067));
+        CHECK(!b.status().candidate_ready);
+        FEED(b,3000,3200,2067);
+        CHECK(b.status().candidate_ready);CHECK(b.status().candidate_zero==2067);
+    }
+    {   // A disturbance burst keeps an already READY candidate, then restarts the collection.
+        GyroBias b;b.configure(true,2047,250000000ULL);
+        FEED(b,0,3200,2067);
+        CHECK(b.status().candidate_ready);CHECK(b.status().candidate_zero==2067);
+        FEED(b,3300,3500,(ms>=3300?2080:2067));            // three consecutive outliers
+        CHECK(b.status().candidate_ready);CHECK(b.status().candidate_zero==2067);
+        CHECK(b.apply_at_anchor(T(3600)));                  // the pre-burst evidence is still usable
+        CHECK(b.status().active_zero==2067);
+    }
+    {   // A persistent level shift never produces a mixed estimate: it ends at the new level.
+        GyroBias b;b.configure(true,2047,250000000ULL);
+        FEED(b,0,3200,2067);
+        FEED(b,3300,9000,2077);
+        CHECK(b.status().candidate_ready);CHECK(b.status().candidate_zero==2077);
+        CHECK(b.status().variance_counts2<0.01);
+    }
+    {   // Two early windows 3 counts apart are not enough to reject the stop (n=2 variance).
+        GyroBias b;b.configure(true,2047,250000000ULL);
+        FEED(b,0,3200,(ms==100?2064:2067));
+        CHECK(b.status().candidate_ready);
+        CHECK(b.status().candidate_zero>2066.5&&b.status().candidate_zero<2067);
+    }
+    {   // Sustained noise is still rejected, with or without an earlier READY candidate.
+        GyroBias b;b.configure(true,2047,250000000ULL);
+        FEED(b,0,3200,2067);
+        FEED(b,3300,9000,(ms%200?2062:2072));
+        CHECK(b.status().candidate_ready);CHECK(b.status().candidate_zero==2067);
+        CHECK(b.status().evidence_end_ns==T(3200));
+    }
+    #undef FEED
+}
 int main() {
     drift_reduction();estimator_gates();freeze_reanchor_reset();anchor_inside_received_window();anchor_reverse_evidence();
-    candidate_receipt_causality();
+    candidate_receipt_causality();robust_outliers();
     std::printf("MODEL stationary gyro bias: %u checks (synthetic)\n",checks);return 0;
 }
