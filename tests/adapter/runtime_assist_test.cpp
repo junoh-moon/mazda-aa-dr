@@ -2,6 +2,7 @@
 // worker. Neither this source nor its provenance qualifies vehicle inputs.
 #include "runtime/assist_worker.h"
 #include "runtime/worker.h"
+#include "runtime/worker_thread.h"
 #include <atomic>
 #include <cassert>
 #include <cerrno>
