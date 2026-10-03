@@ -1,0 +1,126 @@
+{
+  "schema": "dhu_location_experiment.v1",
+  "language": "ko",
+  "date": "2026-10-03",
+  "timezone": "Asia/Seoul",
+  "question": "Does Naver Map projected through Android Auto follow vehicle-provided GPS injected by the Desktop Head Unit?",
+  "environment": {
+    "host_os": "macOS 15.8 arm64",
+    "phone": "Samsung Galaxy S25 (SM-S931N)",
+    "connection": "USB ADB tunneling, tcp:5277",
+    "adb_version": "37.0.1 (Android Debug Bridge 1.0.41)",
+    "dhu_version": "2.0-mac-arm64",
+    "naver_location_permission": "not revoked during experiment"
+  },
+  "documentation": {
+    "dhu": "https://developer.android.com/training/cars/testing/dhu",
+    "route_data": "https://api.openstreetmap.org/api/0.6/map?bbox=129.154,35.157,129.170,35.164"
+  },
+  "dhu_config_exact": "[general]\ntouch = true\nresolution = 800x480\ndpi = 160\n\n[sensors]\nlocation = true\ndriving_status = true\n",
+  "dhu_help_location_exact": "location lat long [accuracy(m)] [altitude(m)] [speed(m/s)] [bearing(degree)]",
+  "baseline": {
+    "observed_map_area": "Gangnam Station / Yeoksam-dong, Seoul",
+    "image": "dhu-baseline.png",
+    "caveat": "User identified this as the last location previously mocked by Lockito, which had been uninstalled. Actual phone location was not established."
+  },
+  "trials": [
+    {
+      "id": "jump",
+      "injection_time_kst": "12:49:14",
+      "injected_command_exact": "location 35.1587 129.1604 5",
+      "injection_semantics": {
+        "latitude": 35.1587,
+        "longitude": 129.1604,
+        "accuracy_m": 5
+      },
+      "observation": "Approximately 10 seconds later, map and blue position marker moved to Haeundae Beach, Busan. User independently confirmed the movement. Lower place-name label still said Gangnam-gu Yeoksam-dong at that time.",
+      "image": "dhu-jump-10s.png",
+      "console_error": false
+    },
+    {
+      "id": "trajectory",
+      "start_time_kst": "12:53:05",
+      "end_time_kst": "12:54:05",
+      "road": "Haeundaehaebyeon-ro, Busan",
+      "osm_way_ids": [
+        1359976816,
+        1359976814,
+        1359976815,
+        1359976817,
+        1495778540,
+        1359976818,
+        509125478
+      ],
+      "fixes": 61,
+      "interval_s": 1,
+      "distance_m": 588.0,
+      "speed_mps": 9.80,
+      "accuracy_m": 5,
+      "bearing": "Included per road segment",
+      "commands_file": "dhu-trajectory-commands.txt",
+      "commands_file_note": "First three lines are comments and were not entered in the DHU console. Remaining lines were entered verbatim.",
+      "commands_exact": "# DHU console commands: Haeundaehaebyeon-ro, one fix per second for 60 seconds\n# OSM way IDs: 1359976816, 1359976814, 1359976815, 1359976817, 1495778540, 1359976818, 509125478\n# Distance: 588.0 m; speed: 9.80 m/s\nlocation 35.1594705 129.1599639 5 NAN 9.80 77.4\nscreenshot <workdir>/dhu-trajectory-00s.png\nsleep 1\nlocation 35.1594897 129.1600691 5 NAN 9.80 77.4\nsleep 1\nlocation 35.1595088 129.1601743 5 NAN 9.80 77.4\nsleep 1\nlocation 35.1595280 129.1602796 5 NAN 9.80 77.4\nsleep 1\nlocation 35.1595475 129.1603847 5 NAN 9.80 75.6\nsleep 1\nlocation 35.1595693 129.1604891 5 NAN 9.80 75.6\nsleep 1\nlocation 35.1595864 129.1605948 5 NAN 9.80 80.9\nsleep 1\nlocation 35.1596004 129.1607012 5 NAN 9.80 80.9\nsleep 1\nlocation 35.1596136 129.1608078 5 NAN 9.80 81.7\nsleep 1\nlocation 35.1596263 129.1609144 5 NAN 9.80 81.7\nsleep 1\nlocation 35.1596390 129.1610211 5 NAN 9.80 81.7\nsleep 1\nlocation 35.1596517 129.1611278 5 NAN 9.80 81.7\nsleep 1\nlocation 35.1596644 129.1612345 5 NAN 9.80 81.5\nsleep 1\nlocation 35.1596773 129.1613411 5 NAN 9.80 81.5\nsleep 1\nlocation 35.1596903 129.1614477 5 NAN 9.80 81.5\nsleep 1\nlocation 35.1597033 129.1615543 5 NAN 9.80 81.5\nsleep 1\nlocation 35.1597163 129.1616610 5 NAN 9.80 81.5\nsleep 1\nlocation 35.1597292 129.1617676 5 NAN 9.80 81.5\nsleep 1\nlocation 35.1597447 129.1618736 5 NAN 9.80 74.6\nsleep 1\nlocation 35.1597681 129.1619775 5 NAN 9.80 74.6\nsleep 1\nlocation 35.1598040 129.1620744 5 NAN 9.80 55.8\nscreenshot <workdir>/dhu-trajectory-20s.png\nsleep 1\nlocation 35.1598535 129.1621636 5 NAN 9.80 55.8\nsleep 1\nlocation 35.1599041 129.1622516 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1599665 129.1623277 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1600289 129.1624038 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1600914 129.1624799 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1601538 129.1625560 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1602162 129.1626321 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1602786 129.1627082 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1603410 129.1627843 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1604035 129.1628604 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1604659 129.1629365 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1605283 129.1630126 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1605907 129.1630887 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1606532 129.1631648 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1607156 129.1632409 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1607780 129.1633170 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1608404 129.1633931 5 NAN 9.80 44.9\nsleep 1\nlocation 35.1609019 129.1634703 5 NAN 9.80 46.0\nsleep 1\nlocation 35.1609631 129.1635479 5 NAN 9.80 46.0\nsleep 1\nlocation 35.1610242 129.1636255 5 NAN 9.80 46.0\nscreenshot <workdir>/dhu-trajectory-40s.png\nsleep 1\nlocation 35.1610854 129.1637032 5 NAN 9.80 46.0\nsleep 1\nlocation 35.1611466 129.1637808 5 NAN 9.80 46.0\nsleep 1\nlocation 35.1612077 129.1638584 5 NAN 9.80 46.0\nsleep 1\nlocation 35.1612686 129.1639363 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1613294 129.1640143 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1613902 129.1640924 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1614510 129.1641704 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1615118 129.1642485 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1615726 129.1643265 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1616334 129.1644046 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1616942 129.1644827 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1617550 129.1645607 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1618158 129.1646388 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1618765 129.1647168 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1619373 129.1647949 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1619981 129.1648729 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1620589 129.1649510 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1621197 129.1650290 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1621805 129.1651071 5 NAN 9.80 46.4\nsleep 1\nlocation 35.1622413 129.1651851 5 NAN 9.80 46.4\nscreenshot <workdir>/dhu-trajectory-60s.png\n",
+      "observation": "At 0, 20, 40 and 60 seconds, the map and blue position marker visibly progressed along the route.",
+      "images": [
+        "dhu-trajectory-00s.png",
+        "dhu-trajectory-20s.png",
+        "dhu-trajectory-40s.png",
+        "dhu-trajectory-60s.png"
+      ]
+    },
+    {
+      "id": "after_injection_stop",
+      "observations": [
+        {
+          "elapsed_s": 37,
+          "time_kst": "12:54:42",
+          "image": "dhu-after-stop-37s.png",
+          "observation": "Remained near last Busan position; marker became gray."
+        },
+        {
+          "elapsed_s": 84,
+          "time_kst": "12:55:29",
+          "image": "dhu-after-stop-84s.png",
+          "observation": "Still near last Busan position; lower label updated to Busan Haeundae-gu Jung-dong."
+        }
+      ]
+    }
+  ],
+  "verdict": {
+    "category": 1,
+    "statement": "Naver Map followed the DHU-injected vehicle location and trajectory under Android Auto.",
+    "supports": "Naver Map consumes vehicle-provided location in this Android Auto + DHU setup.",
+    "does_not_establish": [
+      "Behavior in a Mazda vehicle",
+      "Vehicle GPS timestamp handling",
+      "Wireless dongle behavior",
+      "Initial actual phone GPS location"
+    ]
+  },
+  "cleanup": {
+    "mac": [
+      "DHU quit",
+      "adb forward --remove tcp:5277",
+      "adb kill-server",
+      "Removed work/ containing SDK, DHU, download ZIP, config, and temporary files"
+    ],
+    "phone_user_confirmed": [
+      "Stopped Android Auto head unit server",
+      "Disconnected USB cable",
+      "Disabled USB debugging"
+    ]
+  },
+  "supporting_files": [
+    "naver-android-auto-dhu-report.md",
+    "dhu-experiment-log.md",
+    "dhu-trajectory-commands.txt",
+    "dhu-baseline.png",
+    "dhu-jump-10s.png",
+    "dhu-trajectory-00s.png",
+    "dhu-trajectory-20s.png",
+    "dhu-trajectory-40s.png",
+    "dhu-trajectory-60s.png",
+    "dhu-after-stop-37s.png",
+    "dhu-after-stop-84s.png"
+  ]
+}
