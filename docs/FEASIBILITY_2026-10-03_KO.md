@@ -40,19 +40,26 @@ Android Auto 프로토콜 쪽 공개 자료도 일치한다. AA 센서 채널로
 [openauto](https://github.com/f1xpl/openauto)). Mazda 오너 보고에도 "GPS를 폰이 아니라
 차에서 가져온다"는 사례가 있다([mazda3revolution](https://www.mazda3revolution.com/threads/android-auto-gps-problem.248138/)).
 
-## B. 폰의 수용: 강하게 지지됨, 단 staleness 관문은 없다
+## B. 폰의 수용: 지지되나, timestamp 처리는 미확인
 
 **AA wire LOCATION의 timestamp 필드(offset 0x00, uint64)를 OEM 인코더가 0으로
-박는다.** capstone 분석에서 `MakeLocation / SendLocation / OrderSendVehicleData`는
-`clock_gettime / gettimeofday / time`을 전혀 호출하지 않는다 — 송신 시 현재 시각을
-찍지 않는다는 뜻이고, 기존 문서의 "wire timestamp=0" 기록과 일치한다.
+박는다는 정적 근거가 있다.** capstone 분석에서 `MakeLocation / SendLocation /
+OrderSendVehicleData`는 `clock_gettime / gettimeofday / time`을 전혀 호출하지
+않는다 — 이 VDM 단계에서 현재 시각을 찍지 않는다는 뜻이고, 기존 문서의 "후단
+인코더가 wire timestamp=0" 기록과 일치한다.
 ([archive/DESIGN_V1_KO.md](archive/DESIGN_V1_KO.md) §4, §7)
 
-함의가 중요하다. 터널에서 폰 지도에 (멈춘) 점이 뜬다는 것은 폰이 **timestamp=0을
-그대로 수용한다**는 뜻이다. 즉 "낡았다고 버리는 staleness 관문이 없다." 우리가 DR
-좌표를 주입할 때 timestamp를 신선하게 맞출 필요가 없고, **좌표(lat/lon)만 올바르면
-폰이 표시한다.** 레포 규칙("wire timestamp는 0으로 유지, 새 fix로 위장 금지,
-좌표는 DERIVED로 계산")은 이 사실 위에 서 있다.
+**단, "폰에 최신성(staleness) 검사가 없다"는 결론은 나오지 않는다.** 기존 실행
+기록은 송신 전 native 구조체를 관찰했을 뿐, 최종 직렬화 메시지와 폰 수신은 검사하지
+않았다. 또 Android `Location`은 UTC 시각(`getTime`)과 경과시간
+(`getElapsedRealtimeNanos`)을 구분하므로, AA 수신 과정에서 폰이 시각을 부여하거나
+다른 기준으로 오래됨을 판단할 가능성이 남는다. 즉 **timestamp=0을 폰이 항상
+수용한다는 주장도, 반드시 거절한다는 주장도 입증되지 않았다.** 터널에서 (멈춘) 점이
+뜨는 것이 "ts=0 수용"의 증거라고 단정하지 않는다 — 그 점이 차의 좌표인지 폰의
+마지막 fix인지도 아직 구분되지 않았다. 따라서 주입 시 timestamp 처리는 실측으로
+확인해야 하는 열린 항목이다. ([Android Location.getElapsedRealtimeNanos](https://developer.android.com/reference/android/location/Location#getElapsedRealtimeNanos()))
+레포 규칙("wire timestamp는 0으로 유지, 새 fix로 위장 금지, 좌표는 DERIVED로
+계산")은 이 불확실성 위에서 보수적으로 둔 것이다.
 
 또 하나 결정적인 점: **GPS 단절 중에도 송신 채널이 살아 있다.** OEM은 mode=0 캐시
 좌표를 약 1Hz로 계속 재송신한다. 송신이 "새 GPS fix"가 아니라 **AA 쪽 1Hz 요청
@@ -73,12 +80,22 @@ Android Auto 프로토콜 쪽 공개 자료도 일치한다. AA 센서 채널로
 정해지므로, 네이버 APK를 뜯어도 답이 나오지 않는다(네이버는 표준 위치 API를
 호출할 뿐). 위 사례들은 구글맵·Waze 기준이며 **네이버 지도 수용을 보장하지 않는다.**
 
-이 관문은 다음 한 번의 관찰로 가른다(코드·설치·SSH 불필요).
+이 관문을 가르는 테스트 후보는 아래와 같다.
 
-1. 폰에서 Android Auto(또는 네이버 지도)의 위치 권한을 거부로 설정한다.
-2. **유선**으로 S25를 연결하고 네이버를 AA로 띄워 지상 도로를 평범하게 주행한다.
-3. 점이 차 움직임을 따라가면 → 네이버가 차 GPS를 쓴다 → 우리 DR 주입이 의미를 가진다.
-   "위치 없음"으로 죽으면 → 네이버가 차 GPS를 안 쓴다 → 접근을 바꿔야 한다.
+**주의 — "위치 권한 OFF"는 깨끗한 분리법이 아니다.** Google 차량 센서 API는 차량
+위치를 받는 앱에도 위치 권한을 요구한다. 권한을 끄면 폰 GPS뿐 아니라 **차량 위치
+소비까지 막힐 수 있다.** 따라서 "권한 OFF 후 위치 없음 → 차 GPS 미지원"이라는
+판정은 성립하지 않는다. ([Car Hardware API](https://developer.android.com/training/cars/apps/library/car-hardware-api))
+
+**더 판별력 있는 후보(차·주행 불필요): Google 공식 DHU(Desktop Head Unit).**
+노트북에서 DHU로 AA를 투영하고 S25의 네이버를 띄운 뒤, DHU가 **구별되는 가상 차량
+궤적(GPS 센서)을 주입**한다. 네이버 점이 그 궤적을 따라가면 입력 출처를 깨끗이
+구분한 것이다. 한계: S25·배포 네이버 앱의 DHU 호환성은 미확인이고, 이 시험도 Mazda의
+timestamp 처리까지 증명하지는 않는다. ([DHU 센서](https://developer.android.com/training/cars/testing/dhu#sensors))
+
+**실차 후보(최종 확인):** 정상 권한을 유지하고 **유선**으로 S25+네이버를 AA로 띄워
+주행하며, 차 GPS와 폰 GPS가 어긋나는 구간(터널/지하)에서 어느 쪽을 따르는지 본다.
+이는 Lockito 결과(폰 단독)와 달리 AA 투영 경로를 직접 본다.
 
 유선부터 하면 무선 동글이 센서 채널을 통과시키는지의 변수를 제거하고 시작할 수 있다.
 
@@ -119,7 +136,8 @@ CMU 입력만으로 같은 성능을 기대할 수 없다. 또 나선 램프(다
 | 고리 | 근거 강도 |
 | --- | --- |
 | A. 차→폰 위치 송신 존재·사용 | 바이너리 + 프로토콜 자료로 확인 |
-| B. 폰의 수용 (timestamp=0, 터널 중 1Hz 재송신) | 정적 + VM으로 강하게 지지 |
+| B. 폰이 차 위치를 수용 (터널 중 1Hz 재송신 채널 존재) | 지지됨 |
+| B'. 폰의 timestamp=0 최신성 처리 | **미확인 (ts=0은 정적 근거, 폰 해석은 불명)** |
 | C-1. 네이버가 fused 위치를 읽고 표시 | 모의 위치 실측으로 확인 (폰 단독) |
 | C-2. 네이버가 자체 DR로 덮어쓰기 | 리스크 크게 감소 (모의 위치를 따름) |
 | C-3. AA 투영 경로에서도 동일한가 | **미확인 — 실차 유선 관찰 필요** |
