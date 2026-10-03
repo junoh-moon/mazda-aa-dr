@@ -509,6 +509,21 @@ int main(int argc,char** argv) {
         } else if(scenario=="audit") {
             disable_mutation();assert(!callback(publisher));
         } else if(scenario=="journal_failure") {
+            // The matched callback queued its POSITION/SEND rows for the worker. Wait until they
+            // are in the file before breaking the journal: renaming the directory first races the
+            // worker (a slow machine, such as QEMU, loses it) and the rows never exist.
+            const uint64_t rows_deadline=clock_ns(0)+5000*MS;
+            while(clock_ns(0)<rows_deadline) {
+                const std::string seen=read_file(trace);
+                if(seen.find("\"kind\":\"position\"")!=std::string::npos&&
+                   seen.find("\"kind\":\"send\"")!=std::string::npos)break;
+                usleep(5000);
+            }
+            {
+                const std::string seen=read_file(trace);
+                assert(seen.find("\"kind\":\"position\"")!=std::string::npos);
+                assert(seen.find("\"kind\":\"send\"")!=std::string::npos);
+            }
             assert(!rename(logs.c_str(),(logs+"-retained").c_str()));
             callback(publisher); // Actual journal statvfs fails on the next queued raw row.
             const uint64_t deadline=clock_ns(0)+2000*MS;
