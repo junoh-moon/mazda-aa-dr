@@ -15,6 +15,7 @@
 #include "../adapter/bus_hooks.h"
 #include "worker_tick.h"
 #include "worker.h"
+#include "worker_thread.h"
 #include "assist_worker.h"
 #include "journal_queue.h"
 #include "model_session.h"
@@ -1042,9 +1043,8 @@ void bootstrap(void *h) {
       A::set_mode(A::OBSERVE);
   }
   pthread_t thread;
-  if (pthread_create(&thread, 0, worker, 0) == 0)
-    pthread_detach(thread);
-  else {
+  if (!mx5::runtime::create_thread(&thread, worker, 0,
+                                   mx5::runtime::WORKER_STACK_BYTES, true)) {
     A::set_mode(A::OBSERVE);
     A::invalidate();
   }

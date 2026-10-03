@@ -5,6 +5,7 @@
 #include "adapter/bus_hooks.h"
 #include "adapter/session_hooks.h"
 #include "runtime/worker.h"
+#include "runtime/worker_thread.h"
 #include "runtime/lds_association_protocol.h"
 #include <cassert>
 #include <cerrno>
@@ -461,7 +462,7 @@ int main(int argc,char** argv) {
     ::snprintf(running.sideband,sizeof running.sideband,"mx5-assoc-side-%ld",long(getpid()));
     ::snprintf(running.association,sizeof running.association,"mx5-assoc-map-%ld",long(getpid()));
     if(scenario=="pre_stopped")assert(!mkdir((logs+"/capture.stop").c_str(),0700));
-    pthread_t thread;assert(!pthread_create(&thread,0,run,&running));
+    pthread_t thread;assert(R::create_thread(&thread,run,&running,R::WORKER_STACK_BYTES,false));
     if(scenario!="pre_stopped") {
         wait_boot(trace);offer(publisher,running.association);wait_match(publisher);
         matched=last_position;

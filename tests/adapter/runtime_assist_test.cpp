@@ -213,7 +213,7 @@ int main(int argc,char** argv) {
     char root[]="/tmp/mx5dr-runtime-assist-XXXXXX";assert(mkdtemp(root));
     const std::string logs=std::string(root)+"/logs";assert(!mkdir(logs.c_str(),0700));
     if(scenario=="pre_stopped")assert(!mkdir((logs+"/capture.stop").c_str(),0700));
-    Running running={root,&assist};pthread_t thread;assert(!pthread_create(&thread,0,run,&running));
+    Running running={root,&assist};pthread_t thread;assert(mx5::runtime::create_thread(&thread,run,&running,mx5::runtime::WORKER_STACK_BYTES,false));
     const std::string trace=logs+"/trace.0.jsonl";
     if(scenario!="pre_stopped") {
         for(unsigned i=0;i<200&&read_file(trace).find("\"kind\":\"boot\"")==std::string::npos;++i)usleep(5000);
