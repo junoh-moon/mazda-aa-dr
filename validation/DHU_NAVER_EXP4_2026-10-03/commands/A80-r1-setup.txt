@@ -1,0 +1,18 @@
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 0.5
+tap 200 50
+sleep 10
+tap 345 145
+sleep 3
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+sleep 2
+screenshot ../../../../experiment4/A80-r1-guidance.png

@@ -1,0 +1,22 @@
+{
+  "seed": 20261004,
+  "algorithm": "Python random.Random; shuffle A then ramps",
+  "A": [
+    "A70-r1",
+    "A80-r1",
+    "A60-r2",
+    "A40-r2",
+    "A70-r2",
+    "A80-r2",
+    "A50-r2",
+    "A60-r1",
+    "A40-r1",
+    "A50-r1"
+  ],
+  "B": [
+    "R60-r1",
+    "R100-r2",
+    "R100-r1",
+    "R60-r2"
+  ]
+}

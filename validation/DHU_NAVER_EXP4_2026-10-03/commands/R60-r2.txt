@@ -1,0 +1,243 @@
+location 35.1582787 129.1493314 10.000 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-00.png
+sleep 0.8
+location 35.1582356 129.1494761 10.833 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-01.png
+sleep 0.8
+location 35.1581924 129.1496208 11.667 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-02.png
+sleep 0.8
+location 35.1581493 129.1497654 12.500 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-03.png
+sleep 0.8
+location 35.1581061 129.1499101 13.333 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-04.png
+sleep 0.8
+location 35.1580630 129.1500548 14.167 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-05.png
+sleep 0.8
+location 35.1580199 129.1501995 15.000 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-06.png
+sleep 0.8
+location 35.1579767 129.1503442 15.833 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-07.png
+sleep 0.8
+location 35.1579336 129.1504888 16.667 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-08.png
+sleep 0.8
+location 35.1578905 129.1506335 17.500 NAN 14 110.0
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-09.png
+sleep 0.8
+location 35.1578485 129.1507787 18.333 NAN 14 108.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-10.png
+sleep 0.8
+location 35.1578088 129.1509248 19.167 NAN 14 108.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-11.png
+sleep 0.8
+location 35.1577820 129.1510745 20.000 NAN 14 96.5
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-12.png
+sleep 0.8
+location 35.1577676 129.1512275 20.833 NAN 14 96.5
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-13.png
+sleep 0.8
+location 35.1578025 129.1513748 21.667 NAN 14 72.7
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-14.png
+sleep 0.8
+location 35.1578399 129.1515218 22.500 NAN 14 72.7
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-15.png
+sleep 0.8
+location 35.1578779 129.1516686 23.333 NAN 14 72.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-16.png
+sleep 0.8
+location 35.1579161 129.1518154 24.167 NAN 14 72.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-17.png
+sleep 0.8
+location 35.1579544 129.1519621 25.000 NAN 14 72.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-18.png
+sleep 0.8
+location 35.1579926 129.1521088 25.833 NAN 14 72.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-19.png
+sleep 0.8
+location 35.1580260 129.1522570 26.667 NAN 14 80.4
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-20.png
+sleep 0.8
+location 35.1580471 129.1524088 27.500 NAN 14 80.4
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-21.png
+sleep 0.8
+location 35.1580681 129.1525606 28.333 NAN 14 80.4
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-22.png
+sleep 0.8
+location 35.1580888 129.1527126 29.167 NAN 14 81.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-23.png
+sleep 0.8
+location 35.1581082 129.1528647 30.000 NAN 14 81.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-24.png
+sleep 0.8
+location 35.1581276 129.1530169 30.833 NAN 14 81.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-25.png
+sleep 0.8
+location 35.1581471 129.1531690 31.667 NAN 14 81.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-26.png
+sleep 0.8
+location 35.1581748 129.1533192 32.500 NAN 14 76.6
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-27.png
+sleep 0.8
+location 35.1582091 129.1534672 33.333 NAN 14 72.4
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-28.png
+sleep 0.8
+location 35.1582471 129.1536141 34.167 NAN 14 72.4
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-29.png
+sleep 0.8
+location 35.1582851 129.1537609 35.000 NAN 14 72.4
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-30.png
+sleep 0.8
+location 35.1583230 129.1539077 35.833 NAN 14 72.4
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-31.png
+sleep 0.8
+location 35.1583612 129.1540545 36.667 NAN 14 71.9
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-32.png
+sleep 0.8
+location 35.1584003 129.1542009 37.500 NAN 14 71.9
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-33.png
+sleep 0.8
+location 35.1584395 129.1543472 38.333 NAN 14 71.9
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-34.png
+sleep 0.8
+location 35.1584786 129.1544936 39.167 NAN 14 71.9
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-35.png
+sleep 0.8
+location 35.1585073 129.1546432 40.000 NAN 14 79.7
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-36.png
+sleep 0.8
+location 35.1585287 129.1547949 40.833 NAN 14 84.8
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-37.png
+sleep 0.8
+location 35.1585401 129.1549483 41.667 NAN 14 84.8
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-38.png
+sleep 0.8
+location 35.1585445 129.1551020 42.500 NAN 14 90.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-39.png
+sleep 0.8
+location 35.1585443 129.1552560 43.333 NAN 14 90.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-40.png
+sleep 0.8
+location 35.1585396 129.1554099 44.167 NAN 14 93.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-41.png
+sleep 0.8
+location 35.1585327 129.1555636 45.000 NAN 14 93.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-42.png
+sleep 0.8
+location 35.1585258 129.1557174 45.833 NAN 14 93.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-43.png
+sleep 0.8
+location 35.1585189 129.1558712 46.667 NAN 14 93.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-44.png
+sleep 0.8
+location 35.1585121 129.1560250 47.500 NAN 14 93.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-45.png
+sleep 0.8
+location 35.1585053 129.1561787 48.333 NAN 14 93.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-46.png
+sleep 0.8
+location 35.1584978 129.1563325 49.167 NAN 14 93.5
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-47.png
+sleep 0.8
+location 35.1584927 129.1564863 50.000 NAN 14 90.2
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-48.png
+sleep 0.8
+location 35.1585027 129.1566394 50.833 NAN 14 78.7
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-49.png
+sleep 0.8
+location 35.1585338 129.1567883 51.667 NAN 14 70.5
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-50.png
+sleep 0.8
+location 35.1585886 129.1569262 52.500 NAN 14 59.9
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-51.png
+sleep 0.8
+location 35.1586517 129.1570595 53.333 NAN 14 59.9
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-52.png
+sleep 0.8
+location 35.1587148 129.1571927 54.167 NAN 14 59.9
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-53.png
+sleep 0.8
+location 35.1587780 129.1573260 55.000 NAN 14 59.9
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-54.png
+sleep 0.8
+location 35.1588346 129.1574634 55.833 NAN 14 64.2
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-55.png
+sleep 0.8
+location 35.1588861 129.1576039 56.667 NAN 14 67.1
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-56.png
+sleep 0.8
+location 35.1589351 129.1577458 57.500 NAN 14 70.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-57.png
+sleep 0.8
+location 35.1589776 129.1578907 58.333 NAN 14 70.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-58.png
+sleep 0.8
+location 35.1590201 129.1580357 59.167 NAN 14 70.3
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-59.png
+sleep 0.8
+location 35.1590618 129.1581810 60.000 NAN 14 71.5
+sleep 0.2
+screenshot ../../../../experiment4/R60-r2-60.png
