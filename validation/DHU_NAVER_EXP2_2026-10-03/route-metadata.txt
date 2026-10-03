@@ -1,0 +1,4 @@
+OSM ways: 702600670, 239279167
+Route: start north, then turn east onto Dongbaek-ro
+Drive-in distance: 266 m in 19 intervals; nominal speed: 14 m/s
+Last drive-in fix: 35.1593503, 129.1507531, bearing 126.7

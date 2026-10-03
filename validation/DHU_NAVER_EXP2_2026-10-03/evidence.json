@@ -1,0 +1,388 @@
+{
+  "schema": "dhu_location_experiment2.v1",
+  "language": "ko",
+  "date": "2026-10-03",
+  "timezone": "Asia/Seoul",
+  "question": "Which feature of repeated frozen vehicle GPS fixes makes Naver Map treat location as lost under Android Auto?",
+  "evidence_policy": "observations and user-supplied premises are separate; no claims about vehicle wire payload or timestamps",
+  "environment": {
+    "host_os": "macOS 15.8 arm64",
+    "phone": "Samsung Galaxy S25 SM-S931N",
+    "phone_environment": "indoors; user observed Kakao Map placing phone near the building, actual GPS signal strength unverified",
+    "connection": "USB ADB tunnel to Android Auto head unit server, tcp:5277",
+    "adb_version": "37.0.1 / Android Debug Bridge 1.0.41",
+    "dhu_version": "2.0-mac-arm64",
+    "naver_location_permissions": "kept on; no permission revoked",
+    "guidance_destination": "미포항 (Mipo Harbor), Busan",
+    "guidance_route": "2.6 km on trials 1-3 and final trial 4; early section north then east on Dongbaek-ro",
+    "route_data": "OpenStreetMap ways 702600670 and 239279167",
+    "route_data_url": "https://api.openstreetmap.org/api/0.6/map?bbox=129.149,35.155,129.173,35.169"
+  },
+  "source_premise_unverified": {
+    "description": "The linked prompt says a real car repeats a frozen position at roughly 1 Hz with stale nonzero speed/bearing and no accuracy. This was not independently measured in this run.",
+    "source": "user-supplied linked protocol"
+  },
+  "official_documentation": "https://developer.android.com/training/cars/testing/dhu#sensors",
+  "config_exact": "[general]\ntouch = true\nresolution = 800x480\ndpi = 160\n\n[sensors]\nlocation = true\ndriving_status = true\n",
+  "console_help_location_exact": "location lat long [accuracy(m)] [altitude(m)] [speed(m/s)] [bearing(degree)]",
+  "console_help_note": "Pass in NAN to skip optional parameters if needed.",
+  "nan_accuracy_test": {
+    "command_exact": "location 35.1582787 129.1493314 NAN NAN 0 0",
+    "console_error": null,
+    "conclusion": "NAN in the accuracy slot was accepted by DHU syntax. The actual Android Auto sensor payload or whether an accuracy field was absent was not captured."
+  },
+  "common_drive_in": {
+    "fixes": 20,
+    "nominal_interval_s": 1,
+    "nominal_speed_mps": 14,
+    "accuracy_m": 5,
+    "path_m": 266,
+    "osm_way_ids": [
+      702600670,
+      239279167
+    ],
+    "last_fix": {
+      "latitude": 35.1593503,
+      "longitude": 129.1507531,
+      "speed_mps": 14,
+      "bearing_deg": 126.7
+    },
+    "observation": "All four trials began with active guidance; the blue marker followed the route and remaining distance shrank from about 2.6 km to 2.4 km during drive-in, then about 2.3 km as position settled."
+  },
+  "trials": [
+    {
+      "id": 1,
+      "label": "real-car imitation",
+      "tunnel_variant": {
+        "coordinates": "identical last drive-in fix",
+        "accuracy": "NAN",
+        "speed_mps": 14,
+        "bearing_deg": 126.7,
+        "fixes": 60,
+        "nominal_interval_s": 1
+      },
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 19.7\nsleep 1\nlocation 35.1583973 129.1493832 5 NAN 14 19.7\nsleep 1\nlocation 35.1585158 129.1494350 5 NAN 14 19.7\nsleep 1\nlocation 35.1586344 129.1494868 5 NAN 14 19.7\nsleep 1\nlocation 35.1587530 129.1495386 5 NAN 14 19.7\nsleep 1\nlocation 35.1588715 129.1495904 5 NAN 14 19.7\nsleep 1\nlocation 35.1589901 129.1496422 5 NAN 14 19.7\nsleep 1\nlocation 35.1591087 129.1496940 5 NAN 14 19.7\nsleep 1\nlocation 35.1592273 129.1497458 5 NAN 14 19.7\nsleep 1\nlocation 35.1593458 129.1497976 5 NAN 14 19.7\nsleep 1\nlocation 35.1594644 129.1498494 5 NAN 14 19.7\nsleep 1\nlocation 35.1595830 129.1499012 5 NAN 14 19.7\nsleep 1\nlocation 35.1597015 129.1499530 5 NAN 14 19.7\nsleep 1\nlocation 35.1598014 129.1500118 5 NAN 14 126.4\nsleep 1\nlocation 35.1597265 129.1501357 5 NAN 14 126.7\nsleep 1\nlocation 35.1596513 129.1502592 5 NAN 14 126.7\nsleep 1\nlocation 35.1595761 129.1503826 5 NAN 14 126.7\nsleep 1\nlocation 35.1595008 129.1505061 5 NAN 14 126.7\nsleep 1\nlocation 35.1594256 129.1506296 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nscreenshot ../../../../experiment2/screenshots/trial1-drivein.png\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial1-tunnel-00.png\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial1-tunnel-10.png\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial1-tunnel-20.png\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial1-tunnel-30.png\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial1-tunnel-40.png\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial1-tunnel-50.png\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial1-tunnel-60.png\n",
+      "times_kst": {
+        "drive_in_end": "13:35:03",
+        "tunnel_0": "13:35:04",
+        "tunnel_60": "13:36:05"
+      },
+      "image_files": [
+        "screenshots/trial1-drivein.png",
+        "screenshots/trial1-tunnel-00.png",
+        "screenshots/trial1-tunnel-10.png",
+        "screenshots/trial1-tunnel-20.png",
+        "screenshots/trial1-tunnel-30.png",
+        "screenshots/trial1-tunnel-40.png",
+        "screenshots/trial1-tunnel-50.png",
+        "screenshots/trial1-tunnel-60.png"
+      ],
+      "observation": {
+        "classification": "GPS-LOST",
+        "first_gray_arrow": "after t=0 and by t=10 s",
+        "first_satellite_x": "by t=10 s",
+        "dot": "held near last fix; no sustained route extrapolation",
+        "remaining_distance": "about 2.3 km through t=60",
+        "displayed_speed": "50 km/h at t=0; faded after GPS loss"
+      }
+    },
+    {
+      "id": 2,
+      "label": "accuracy control",
+      "tunnel_variant": {
+        "coordinates": "identical last drive-in fix",
+        "accuracy_m": 5,
+        "speed_mps": 14,
+        "bearing_deg": 126.7,
+        "fixes": 60,
+        "nominal_interval_s": 1
+      },
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 19.7\nsleep 1\nlocation 35.1583973 129.1493832 5 NAN 14 19.7\nsleep 1\nlocation 35.1585158 129.1494350 5 NAN 14 19.7\nsleep 1\nlocation 35.1586344 129.1494868 5 NAN 14 19.7\nsleep 1\nlocation 35.1587530 129.1495386 5 NAN 14 19.7\nsleep 1\nlocation 35.1588715 129.1495904 5 NAN 14 19.7\nsleep 1\nlocation 35.1589901 129.1496422 5 NAN 14 19.7\nsleep 1\nlocation 35.1591087 129.1496940 5 NAN 14 19.7\nsleep 1\nlocation 35.1592273 129.1497458 5 NAN 14 19.7\nsleep 1\nlocation 35.1593458 129.1497976 5 NAN 14 19.7\nsleep 1\nlocation 35.1594644 129.1498494 5 NAN 14 19.7\nsleep 1\nlocation 35.1595830 129.1499012 5 NAN 14 19.7\nsleep 1\nlocation 35.1597015 129.1499530 5 NAN 14 19.7\nsleep 1\nlocation 35.1598014 129.1500118 5 NAN 14 126.4\nsleep 1\nlocation 35.1597265 129.1501357 5 NAN 14 126.7\nsleep 1\nlocation 35.1596513 129.1502592 5 NAN 14 126.7\nsleep 1\nlocation 35.1595761 129.1503826 5 NAN 14 126.7\nsleep 1\nlocation 35.1595008 129.1505061 5 NAN 14 126.7\nsleep 1\nlocation 35.1594256 129.1506296 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nscreenshot ../../../../experiment2/screenshots/trial2-drivein.png\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial2-tunnel-00.png\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial2-tunnel-10.png\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial2-tunnel-20.png\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial2-tunnel-30.png\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial2-tunnel-40.png\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial2-tunnel-50.png\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial2-tunnel-60.png\n",
+      "times_kst": {
+        "drive_in_end": "13:39:40",
+        "tunnel_0": "13:39:41",
+        "tunnel_60": "13:40:42"
+      },
+      "image_files": [
+        "screenshots/trial2-drivein.png",
+        "screenshots/trial2-tunnel-00.png",
+        "screenshots/trial2-tunnel-10.png",
+        "screenshots/trial2-tunnel-20.png",
+        "screenshots/trial2-tunnel-30.png",
+        "screenshots/trial2-tunnel-40.png",
+        "screenshots/trial2-tunnel-50.png",
+        "screenshots/trial2-tunnel-60.png"
+      ],
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "blue_arrow": "remained blue through t=60 s",
+        "satellite_x": "not observed in captured images",
+        "dot": "held near repeated coordinate",
+        "remaining_distance": "about 2.3 km from t=10 to t=60",
+        "displayed_speed": "50 km/h through t=60"
+      }
+    },
+    {
+      "id": 3,
+      "label": "silence control",
+      "tunnel_variant": {
+        "location_commands": 0,
+        "duration_s": 60
+      },
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 19.7\nsleep 1\nlocation 35.1583973 129.1493832 5 NAN 14 19.7\nsleep 1\nlocation 35.1585158 129.1494350 5 NAN 14 19.7\nsleep 1\nlocation 35.1586344 129.1494868 5 NAN 14 19.7\nsleep 1\nlocation 35.1587530 129.1495386 5 NAN 14 19.7\nsleep 1\nlocation 35.1588715 129.1495904 5 NAN 14 19.7\nsleep 1\nlocation 35.1589901 129.1496422 5 NAN 14 19.7\nsleep 1\nlocation 35.1591087 129.1496940 5 NAN 14 19.7\nsleep 1\nlocation 35.1592273 129.1497458 5 NAN 14 19.7\nsleep 1\nlocation 35.1593458 129.1497976 5 NAN 14 19.7\nsleep 1\nlocation 35.1594644 129.1498494 5 NAN 14 19.7\nsleep 1\nlocation 35.1595830 129.1499012 5 NAN 14 19.7\nsleep 1\nlocation 35.1597015 129.1499530 5 NAN 14 19.7\nsleep 1\nlocation 35.1598014 129.1500118 5 NAN 14 126.4\nsleep 1\nlocation 35.1597265 129.1501357 5 NAN 14 126.7\nsleep 1\nlocation 35.1596513 129.1502592 5 NAN 14 126.7\nsleep 1\nlocation 35.1595761 129.1503826 5 NAN 14 126.7\nsleep 1\nlocation 35.1595008 129.1505061 5 NAN 14 126.7\nsleep 1\nlocation 35.1594256 129.1506296 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nscreenshot ../../../../experiment2/screenshots/trial3-drivein.png\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial3-tunnel-00.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial3-tunnel-10.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial3-tunnel-20.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial3-tunnel-30.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial3-tunnel-40.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial3-tunnel-50.png\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial3-tunnel-60.png\n",
+      "times_kst": {
+        "drive_in_end": "13:44:05",
+        "tunnel_0": "13:44:06",
+        "tunnel_60": "13:45:06"
+      },
+      "image_files": [
+        "screenshots/trial3-drivein.png",
+        "screenshots/trial3-tunnel-00.png",
+        "screenshots/trial3-tunnel-10.png",
+        "screenshots/trial3-tunnel-20.png",
+        "screenshots/trial3-tunnel-30.png",
+        "screenshots/trial3-tunnel-40.png",
+        "screenshots/trial3-tunnel-50.png",
+        "screenshots/trial3-tunnel-60.png"
+      ],
+      "observation": {
+        "classification": "GPS-LOST",
+        "first_gray_arrow": "after t=0 and by t=10 s",
+        "first_satellite_x": "by t=10 s",
+        "dot": "held near last fix; no sustained route extrapolation",
+        "remaining_distance": "about 2.3 km through t=60",
+        "displayed_speed": "50 km/h at t=0; faded after GPS loss"
+      }
+    },
+    {
+      "id": 4,
+      "label": "speed-zero, no-accuracy control",
+      "tunnel_variant": {
+        "coordinates": "identical last drive-in fix",
+        "accuracy": "NAN",
+        "speed_mps": 0,
+        "bearing_deg": 126.7,
+        "fixes": 60,
+        "nominal_interval_s": 1
+      },
+      "commands_exact": "location 35.1582787 129.1493314 5 NAN 14 19.7\nsleep 1\nlocation 35.1583973 129.1493832 5 NAN 14 19.7\nsleep 1\nlocation 35.1585158 129.1494350 5 NAN 14 19.7\nsleep 1\nlocation 35.1586344 129.1494868 5 NAN 14 19.7\nsleep 1\nlocation 35.1587530 129.1495386 5 NAN 14 19.7\nsleep 1\nlocation 35.1588715 129.1495904 5 NAN 14 19.7\nsleep 1\nlocation 35.1589901 129.1496422 5 NAN 14 19.7\nsleep 1\nlocation 35.1591087 129.1496940 5 NAN 14 19.7\nsleep 1\nlocation 35.1592273 129.1497458 5 NAN 14 19.7\nsleep 1\nlocation 35.1593458 129.1497976 5 NAN 14 19.7\nsleep 1\nlocation 35.1594644 129.1498494 5 NAN 14 19.7\nsleep 1\nlocation 35.1595830 129.1499012 5 NAN 14 19.7\nsleep 1\nlocation 35.1597015 129.1499530 5 NAN 14 19.7\nsleep 1\nlocation 35.1598014 129.1500118 5 NAN 14 126.4\nsleep 1\nlocation 35.1597265 129.1501357 5 NAN 14 126.7\nsleep 1\nlocation 35.1596513 129.1502592 5 NAN 14 126.7\nsleep 1\nlocation 35.1595761 129.1503826 5 NAN 14 126.7\nsleep 1\nlocation 35.1595008 129.1505061 5 NAN 14 126.7\nsleep 1\nlocation 35.1594256 129.1506296 5 NAN 14 126.7\nsleep 1\nlocation 35.1593503 129.1507531 5 NAN 14 126.7\nscreenshot ../../../../experiment2/screenshots/trial4-drivein.png\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial4-tunnel-00.png\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial4-tunnel-10.png\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial4-tunnel-20.png\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial4-tunnel-30.png\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial4-tunnel-40.png\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial4-tunnel-50.png\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nlocation 35.1593503 129.1507531 NAN NAN 0 126.7\nsleep 1\nscreenshot ../../../../experiment2/screenshots/trial4-tunnel-60.png\n",
+      "times_kst": {
+        "drive_in_end": "13:59:48",
+        "tunnel_0": "13:59:49",
+        "tunnel_60": "14:00:50"
+      },
+      "image_files": [
+        "screenshots/trial4-drivein.png",
+        "screenshots/trial4-tunnel-00.png",
+        "screenshots/trial4-tunnel-10.png",
+        "screenshots/trial4-tunnel-20.png",
+        "screenshots/trial4-tunnel-30.png",
+        "screenshots/trial4-tunnel-40.png",
+        "screenshots/trial4-tunnel-50.png",
+        "screenshots/trial4-tunnel-60.png"
+      ],
+      "observation": {
+        "classification": "FOLLOWS-AND-HOLDS",
+        "blue_arrow": "remained blue through t=60 s",
+        "satellite_x": "not observed in captured images",
+        "dot": "held near repeated coordinate",
+        "remaining_distance": "about 2.3 km from t=10 to t=60",
+        "displayed_speed": "0 km/h by t=10 and through t=60"
+      }
+    }
+  ],
+  "hypotheses": {
+    "H1_no_accuracy_alone_causes_rejection": {
+      "verdict": "not supported as a sufficient condition",
+      "reason": "Trial 4 used NAN accuracy and held a blue marker for 60 s, unlike trial 1; the precise wire representation of NAN was not verified."
+    },
+    "H2_identical_fix_alone_is_stale": {
+      "verdict": "not supported as a sufficient condition",
+      "reason": "Trials 2 and 4 repeated identical coordinates for 60 s yet retained blue markers."
+    },
+    "H3_nonzero_stale_speed_extrapolates_only_with_guidance": {
+      "verdict": "not supported in this DHU run",
+      "reason": "Trial 1 had active guidance and nonzero stale speed, but displayed GPS loss and held rather than advancing along the route."
+    }
+  },
+  "interaction_observed": "NAN accuracy + 14 m/s + unchanged coordinates led to GPS-LOST; accuracy 5 + 14 m/s and NAN accuracy + 0 m/s led to FOLLOWS-AND-HOLDS. This pattern does not identify a single underlying validation rule.",
+  "deviations_and_limits": [
+    "After trial 1, reposition attempts with one and five accurate fixes did not move the gray marker. DHU restart and guidance restart were needed before trial 2.",
+    "After trial 2, a single accurate reposition fix again failed. DHU and guidance were restarted before trial 3.",
+    "Before trial 4, route selection temporarily showed a different 2.8 km local route and then a 401 km Seoul-origin route. Those attempts were discarded. DHU was restarted and the same 2.6 km route was confirmed before trial 4.",
+    "Screenshot sampling every 10 s bounds GPS loss onset to (0,10] s; it does not identify an exact second.",
+    "No Android Auto sensor protocol trace was captured; NAN command acceptance does not prove the exact transmitted field representation.",
+    "Real Mazda vehicle, its GPS timestamp handling, and any wireless dongle were not tested.",
+    "The actual satellite GPS strength of the phone was not measured."
+  ],
+  "console_errors": [
+    "help keycode -> [E]: Command 'keycode' was not found. This unrelated command was not used for the trials."
+  ],
+  "screenshot_capture_metadata": [
+    {
+      "file": "screenshots/pretrial1.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/pretrial2-guidance.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/pretrial3-guidance.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/pretrial4b-guidance.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial1-drivein.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial1-tunnel-00.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial1-tunnel-10.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial1-tunnel-20.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial1-tunnel-30.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial1-tunnel-40.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial1-tunnel-50.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial1-tunnel-60.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial2-drivein.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial2-tunnel-00.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial2-tunnel-10.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial2-tunnel-20.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial2-tunnel-30.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial2-tunnel-40.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial2-tunnel-50.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial2-tunnel-60.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial3-drivein.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial3-tunnel-00.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial3-tunnel-10.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial3-tunnel-20.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial3-tunnel-30.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial3-tunnel-40.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial3-tunnel-50.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial3-tunnel-60.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial4-after-restart-options.png",
+      "captured_at_kst": "2026-10-03 14:03:54"
+    },
+    {
+      "file": "screenshots/trial4-drivein.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial4-options3.png",
+      "captured_at_kst": "2026-10-03 14:03:54"
+    },
+    {
+      "file": "screenshots/trial4-tunnel-00.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial4-tunnel-10.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial4-tunnel-20.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial4-tunnel-30.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial4-tunnel-40.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial4-tunnel-50.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    },
+    {
+      "file": "screenshots/trial4-tunnel-60.png",
+      "captured_at_kst": "2026-10-03 14:03:53"
+    }
+  ],
+  "cleanup": {
+    "mac": [
+      "DHU quit",
+      "adb forward --remove tcp:5277",
+      "adb kill-server",
+      "user-local SDK and temporary work files removed after packaging"
+    ],
+    "phone_user_confirmed": [
+      "Stop head unit server",
+      "USB cable disconnected",
+      "USB debugging disabled"
+    ]
+  }
+}

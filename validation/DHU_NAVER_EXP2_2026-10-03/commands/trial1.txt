@@ -1,0 +1,168 @@
+location 35.1582787 129.1493314 5 NAN 14 19.7
+sleep 1
+location 35.1583973 129.1493832 5 NAN 14 19.7
+sleep 1
+location 35.1585158 129.1494350 5 NAN 14 19.7
+sleep 1
+location 35.1586344 129.1494868 5 NAN 14 19.7
+sleep 1
+location 35.1587530 129.1495386 5 NAN 14 19.7
+sleep 1
+location 35.1588715 129.1495904 5 NAN 14 19.7
+sleep 1
+location 35.1589901 129.1496422 5 NAN 14 19.7
+sleep 1
+location 35.1591087 129.1496940 5 NAN 14 19.7
+sleep 1
+location 35.1592273 129.1497458 5 NAN 14 19.7
+sleep 1
+location 35.1593458 129.1497976 5 NAN 14 19.7
+sleep 1
+location 35.1594644 129.1498494 5 NAN 14 19.7
+sleep 1
+location 35.1595830 129.1499012 5 NAN 14 19.7
+sleep 1
+location 35.1597015 129.1499530 5 NAN 14 19.7
+sleep 1
+location 35.1598014 129.1500118 5 NAN 14 126.4
+sleep 1
+location 35.1597265 129.1501357 5 NAN 14 126.7
+sleep 1
+location 35.1596513 129.1502592 5 NAN 14 126.7
+sleep 1
+location 35.1595761 129.1503826 5 NAN 14 126.7
+sleep 1
+location 35.1595008 129.1505061 5 NAN 14 126.7
+sleep 1
+location 35.1594256 129.1506296 5 NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 5 NAN 14 126.7
+screenshot ../../../../experiment2/screenshots/trial1-drivein.png
+sleep 1
+screenshot ../../../../experiment2/screenshots/trial1-tunnel-00.png
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+screenshot ../../../../experiment2/screenshots/trial1-tunnel-10.png
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+screenshot ../../../../experiment2/screenshots/trial1-tunnel-20.png
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+screenshot ../../../../experiment2/screenshots/trial1-tunnel-30.png
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+screenshot ../../../../experiment2/screenshots/trial1-tunnel-40.png
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+screenshot ../../../../experiment2/screenshots/trial1-tunnel-50.png
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+location 35.1593503 129.1507531 NAN NAN 14 126.7
+sleep 1
+screenshot ../../../../experiment2/screenshots/trial1-tunnel-60.png
