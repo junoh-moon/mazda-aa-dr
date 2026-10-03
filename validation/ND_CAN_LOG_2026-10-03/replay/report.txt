@@ -1,0 +1,106 @@
+== 0. input sanity ==
+windows 2882 (288.2 s synthetic); yaw count per window always [5.]; max yaw_sum 14596 (u16 wrap needs >65535)
+floor(sum/count) - float mean: mean -0.393 counts (min -0.80 max 0.00)
+  auto r_wheel  results {0: 2882}
+  auto r_rev    results {0: 2882}
+  auto r_yaw    results {0: 2881, 1: 1}
+  auto r_pos    results {0: 2882}
+  auto r_drain  results {0: 2881, 8: 1}
+  auto resets 0 rejected 0 events 8660 intervals 1929
+  diagnostic results {0: 1918, 3: 959, 9: 5}
+
+== 1. stationary periods (all 4 wheels <= 0.05 m/s; floored window means) ==
+stop  k0    k1    dur_s  mean_fm   std_fm  mean_float std_float  min max  rcm_mean_dps  long_G  lat_G (diag only)
+S1      0   518   51.8  2045.305   1.123   2045.733   1.114   2034 2057  +0.0154      +0.024  +0.010
+S2    875  1004   12.9  2045.202   0.534   2045.631   0.522   2044 2047  +0.0136      +0.029  +0.015
+S3   1639  1684    4.5  2044.044   0.419   2044.404   0.405   2043 2045  +0.0143      +0.039  +0.038
+S4   2068  2281   21.3  2047.197   0.473   2047.607   0.487   2046 2049  +0.0141      +0.096  +0.011
+S5   2449  2671   22.2  2044.005   0.308   2044.264   0.320   2043 2047  +0.0109      +0.145  -0.077
+S6   2821  2882    6.1  2047.148   0.398   2047.528   0.429   2046 2048  +0.0133      -0.102  +0.050
+  (robust mean excluding |fm-median|>4: 2045.288, 2045.202, 2044.044, 2047.197, 2044.005, 2047.148)
+
+== 2. GyroBias on real data (auto_bias=true run) ==
+stop  READY_at_s  invalidations(k:reason)  final_cand  n   var    ev_end_s  next_stop_mean  err_cnt  err_dps
+S1     3.0   316:spread 2044..2049,318:var 4.00,428:spread 2044..2057,430:spread 2034..2055,432:spread 2038..2051,434:var 4.00,438:var 2.19,443:var 1.36,445:var 4.00  2045.375   72  0.373    51.83   2045.202   +0.173  +0.0065
+S2     3.0   -                                         2045.203  128  0.287   100.43   2044.044   +1.159  +0.0437
+S3     3.0   -                                         2044.045   44  0.180   168.43   2047.197   -3.152  -0.1189
+S4     3.0   -                                         2047.198  212  0.225   228.13   2044.005   +3.194  +0.1205
+S5     3.0   -                                         2044.005  221  0.095   267.13   2047.148   -3.143  -0.1186
+S6     3.0   -                                         2047.150   60  0.161   288.23        nan     +nan     +nan
+applied at anchors (window: version, active_zero, evidence age s):
+  anchor seed k=541 (t=54.1 s): version 1 active_zero 2045.375 (candidate evidence end 51.83 s, age 2.38 s)
+  anchor seed k=1028 (t=102.8 s): version 2 active_zero 2045.203 (candidate evidence end 100.43 s, age 2.48 s)
+  anchor seed k=1729 (t=172.9 s): version 3 active_zero 2044.045 (candidate evidence end 168.43 s, age 4.58 s)
+  anchor seed k=2297 (t=229.7 s): version 4 active_zero 2047.198 (candidate evidence end 228.13 s, age 1.68 s)
+  anchor seed k=2696 (t=269.6 s): version 5 active_zero 2044.005 (candidate evidence end 267.13 s, age 2.58 s)
+
+== 3. production budget (auto run, default config + research profile) ==
+anchor  t(s)  10s:budget/hdg/dist  20s  30s  45s  60s   end_state  end_elapsed end_dist end_budget  limit
+k=541    54.1  19.2/0.170/  38   37.8/0.190/ 120   57.0/0.210/ 205   62.3/0.243/ 210     --     ACTIVE   48.4   214.9   65.02  next anchor/stop
+k=1028  102.8  31.3/0.170/ 103   64.4/0.190/ 270     --        --        --     LIMIT   29.4   442.1  101.87  budget>100m
+k=1729  172.9  31.9/0.170/ 109   52.8/0.190/ 214   70.2/0.210/ 285   75.9/0.262/ 294     --     ACTIVE   56.5   296.5   80.62  next anchor/stop
+k=2297  229.7  33.5/0.170/ 120   39.9/0.198/ 147   42.9/0.239/ 147     --        --     ACTIVE   39.6   152.5   47.89  next anchor/stop
+k=2696  269.6  25.2/0.170/  74     --        --        --        --     ACTIVE   18.4    77.3   27.98  next anchor/stop
+(analytic: budget(t)=10+0.3t+int v*2sin((0.15+0.002t)/2)dt; at constant v the 100 m budget is hit at:)
+   v= 5 m/s: >60 s (distance 300 m; 1500 m limit at 300 s)
+   v= 8 m/s: 47.9 s (distance 383 m; 1500 m limit at 188 s)
+   v=10 m/s: 40.8 s (distance 408 m; 1500 m limit at 150 s)
+   v=15 m/s: 30.1 s (distance 451 m; 1500 m limit at 100 s)
+   v=20 m/s: 23.9 s (distance 478 m; 1500 m limit at 75 s)
+
+== 3b. zero sensitivity (relaxed budget: only 60 s/1500 m limits; positions identical to production while alive) ==
+max |production - relaxed| east/north while both ACTIVE: 0.00e+00 m
+anchor zero_nom zero_est zero_oracle(prev) zero_next |  T   |est-oracle| |nom-oracle| |next-oracle| m   hdg(est-orc,nom-orc) deg
+k=541    2047.0 2045.375 2045.305  2045.202 |  15 |    0.02    0.58    0.04      +0.04  +0.96
+k=541    2047.0 2045.375 2045.305  2045.202 |  30 |    0.16    3.88    0.24      +0.08  +1.92
+k=1028   2047.0 2045.203 2045.202  2044.044 |  15 |    0.00    1.97    1.27      +0.00  +1.02
+k=1028   2047.0 2045.203 2045.202  2044.044 |  30 |    0.01    9.15    5.89      +0.00  +2.04
+k=1028   2047.0 2045.203 2045.202  2044.044 |  60 |    0.03   34.03   21.88      +0.00  +4.07
+k=1729   2047.0 2044.045 2044.044  2047.197 |  15 |    0.00    2.77    2.96      +0.00  +1.67
+k=1729   2047.0 2044.045 2044.044  2047.197 |  30 |    0.00    7.58    8.09      +0.00  +3.35
+k=2297   2047.0 2047.198 2047.197  2044.005 |  15 |    0.00    0.12    1.99      +0.00  -0.11
+k=2297   2047.0 2047.198 2047.197  2044.005 |  30 |    0.00    0.12    1.99      +0.00  -0.12
+k=2696   2047.0 2044.005 2044.005  2047.148 |  15 |    0.00    0.83    0.87      +0.00  +1.53
+
+== 4. inter-sensor heading disagreement over MOVING windows from each synthetic anchor (NOT truth) ==
+anchor  T  | hdg a-b  a-c  b-c (deg) | pos |a-b| |a-c| |b-c| (m) | dist m
+k=541   10 |  -0.19  -1.04  -0.85 |    0.0    0.4    0.3 |     38 |
+k=541   30 |  -0.58  -7.99  -7.41 |    0.9   13.5   12.6 |    204 |
+k=541   60 | (segment has only 35.0 s moving before next anchor)
+k=1028  10 |  -2.84 -15.12 -12.28 |    4.0   18.9   14.9 |    104 |
+k=1028  30 |  -1.76 -19.60 -17.84 |   19.0  126.9  108.1 |    456 |
+k=1028  60 |  -0.24 -26.54 -26.30 |   25.9  316.4  290.7 |    944 |
+k=1729  10 |  -0.42  +0.94  +1.36 |    0.1    2.2    2.3 |    110 |
+k=1729  30 |  -2.94  -6.15  -3.21 |    4.7    6.5    1.8 |    285 |
+k=1729  60 | (segment has only 34.1 s moving before next anchor)
+k=2297  10 |  +0.26  +1.14  +0.88 |    0.9    6.2    5.4 |    121 |
+k=2297  30 | (segment has only 16.8 s moving before next anchor)
+k=2297  60 | (segment has only 16.8 s moving before next anchor)
+k=2696  10 |  +1.28  -6.85  -8.13 |    2.1    5.5    7.6 |     74 |
+k=2696  30 | (segment has only 11.9 s moving before next anchor)
+k=2696  60 | (segment has only 11.9 s moving before next anchor)
+
+scale check (moving, |rate|>0.05 rad/s): slope of a vs b, a vs c over all segments:
+  a/b 1.023  a/c 1.104
+
+== 4b. in-motion zero of yaw12 implied by RCM 0x075 (regression fm = z + g*rcm_cw, moving v>3 m/s) ==
+segment(after stop)  windows  z_counts  gain(counts per rad/s)  prev_stop_mean  next_stop_mean
+M1 (k 518-875)          270   2045.765    -1549.7            2045.305        2045.202
+M2 (k 1004-1639)          600   2043.846    -1567.0            2045.202        2044.044
+M3 (k 1684-2068)          325   2046.786    -1539.4            2044.044        2047.197
+M4 (k 2281-2449)          138   2045.731    -1537.1            2047.197        2044.005
+M5 (k 2671-2821)          117   2046.578    -1551.4            2044.005        2047.148
+
+== 5a. cross-check: Python re-integration of pipeline heading until the core first enters STOPPED ==
+  anchor k=541: 344 rows, max |pipeline - python| heading = 0.000029 deg
+  anchor k=1028: 600 rows, max |pipeline - python| heading = 0.000085 deg
+  anchor k=1729: 342 rows, max |pipeline - python| heading = 0.000083 deg
+  anchor k=2297: 160 rows, max |pipeline - python| heading = 0.000036 deg
+  anchor k=2696: 134 rows, max |pipeline - python| heading = 0.000037 deg
+
+== 5b. wheel-vs-yaw window alignment in the pipeline (speed held from window j-1 while yaw window j integrates) ==
+  anchor k=541, 30 s: aligned-vs-lagged speed final position difference 0.20 m (path 204 m)
+  anchor k=1028, 30 s: aligned-vs-lagged speed final position difference 1.37 m (path 453 m)
+  anchor k=1729, 30 s: aligned-vs-lagged speed final position difference 0.20 m (path 284 m)
+  anchor k=2297, 30 s: aligned-vs-lagged speed final position difference 0.58 m (path 146 m)
+  anchor k=2696, 18 s: aligned-vs-lagged speed final position difference 0.52 m (path 76 m)
