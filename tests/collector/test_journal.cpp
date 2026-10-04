@@ -17,12 +17,6 @@ int main(int argc,char** argv) {
     config.max_log_bytes=65536;config.max_log_files=2;
     check_storage<Journal>("collector",argv[2]);return 0;
   }
-  char preload[] = "LD_PRELOAD=/fixture.so", audit[] = "LD_AUDIT=/audit.so";
-  char library[] = "LD_LIBRARY_PATH=/jci/lib", data[] = "JCI_FIXTURE=data";
-  char *input[] = {preload, library, data, audit, 0}, *output[3];
-  assert(child_environment(input, output, 3));
-  assert(output[0] == library && output[1] == data && !output[2]);
-  assert(!child_environment(input, output, 2));
   char tmp[] = "/tmp/mx5dr-collector-journal-XXXXXX";
   assert(mkdtemp(tmp));
   std::string identity_path = std::string(tmp) + "/boot-id";

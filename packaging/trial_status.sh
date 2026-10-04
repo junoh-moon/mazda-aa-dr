@@ -233,9 +233,11 @@ echo "storage_available_kib=$space_free reserve_kib=8192 margin_kib=64"
 service_state() (
     svc=$1; token=$2; found=
     for dir in "$ROOT"/proc/[0-9]*; do
-        [ -d "$dir" ] && [ ! -L "$dir" ] && [ -f "$dir/comm" ] || continue
-        [ "$(head -c 64 "$dir/comm" 2>/dev/null)" = sm_svclauncher ] || continue
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ -f "$dir/cmdline" ] || continue
+        # Real CMU form: comm L_<svc>, argv "/jci/sm/sm_svclauncher -l <svc> <plugin> 0 -a".
+        # Do not rely on comm; require the stock launcher as argv[0] and the service as a whole argument.
         args=$(tr '\000' ' ' < "$dir/cmdline" 2>/dev/null | head -c 512) || continue
+        case "$args" in /jci/sm/sm_svclauncher\ *) ;; *) continue;; esac
         case "$args" in *" $svc "*) found=$dir; break;; esac
     done
     if [ -z "$found" ]; then echo "service_$svc=not_running"; exit 0; fi

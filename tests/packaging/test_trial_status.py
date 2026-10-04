@@ -72,11 +72,20 @@ class TrialStatusTests(unittest.TestCase):
         self.assertEqual(before, after)
         return result
 
-    def add_service(self, pid, name, maps, stack='131072', uid=0, comm='sm_svclauncher'):
+    def add_service(self, pid, name, maps, stack='131072', uid=0, comm=None):
+        # Default is the form observed on the real CMU (2026-10-04): comm L_<svc> and
+        # argv "/jci/sm/sm_svclauncher -l <svc> <plugin> 0 -a". comm='sm_svclauncher'
+        # keeps the earlier assumed form working; any other comm is a non-launcher.
+        comm = comm or 'L_' + name
         proc = self.root / 'proc' / str(pid)
         proc.mkdir(parents=True)
         (proc / 'comm').write_text(comm + '\n')
-        args = ['/jci/sm/sm_svclauncher', '-s', name, '/jci/x/blm.so'] if comm == 'sm_svclauncher' else [comm]
+        if comm == 'sm_svclauncher':
+            args = ['/jci/sm/sm_svclauncher', '-s', name, '/jci/x/blm.so']
+        elif comm == 'L_' + name:
+            args = ['/jci/sm/sm_svclauncher', '-l', name, '/jci/x/blm.so', '0', '-a']
+        else:
+            args = [comm]
         (proc / 'cmdline').write_bytes(b'\0'.join(a.encode() for a in args) + b'\0')
         (proc / 'status').write_text('Name:\t%s\nUid:\t%d\t%d\t%d\t%d\n' % (comm, uid, uid, uid, uid))
         (proc / 'limits').write_text('Limit Soft Limit Hard Limit Units\n'
@@ -94,6 +103,14 @@ class TrialStatusTests(unittest.TestCase):
         self.assertIn('service_jciVBS=running pid=202 uid=1001 stack_soft_bytes=131072 package_preload=no', out)
         self.assertIn('service_jciLDS=not_running', out)
         self.assertNotIn('jciAudio', out)
+
+    def test_service_lines_accept_the_real_cmu_process_form_and_the_earlier_form(self):
+        self.add_service(211, 'jciVBS', '/data_persist/mx5-aa-dr/libmx5dr-vimtap.so\n')
+        self.add_service(212, 'jciLDS', '/data_persist/mx5-aa-dr/libmx5dr-ldstap.so\n', comm='sm_svclauncher')
+        self.write('trace.0.jsonl', self.trace)
+        out = self.run_status().stdout
+        self.assertIn('service_jciVBS=running pid=211 uid=0 stack_soft_bytes=131072 package_preload=yes', out)
+        self.assertIn('service_jciLDS=running pid=212 uid=0 stack_soft_bytes=131072 package_preload=yes', out)
 
     def test_service_lines_never_trust_a_non_launcher_process(self):
         self.add_service(204, 'jciAAPA', '/data_persist/mx5-aa-dr/libmx5dr.so\n', comm='jciAAPA')
@@ -698,8 +715,7 @@ exec "$MX5DR_REAL_OD" "$@"
         updated = hashlib.sha256((self.base / 'mx5dr.conf').read_bytes()).hexdigest()
         (self.base / 'guard/consumed').write_text(MANIFEST.replace(CONFIG_DIGEST, updated, 1))
         proc = subprocess.Popen([str(COLLECTOR), '--root', str(self.base),
-                                 '--bus-address', 'unix:path=' + str(self.root / 'absent'),
-                                 '--smdb', '/nonexistent-mx5dr-smdb'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                 '--bus-address', 'unix:path=' + str(self.root / 'absent')], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         captured = []
         try:
             deadline = time.monotonic() + 3

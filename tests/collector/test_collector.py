@@ -33,7 +33,7 @@ class CollectorTests(unittest.TestCase):
         self.config = self.root / 'mx5dr.conf'
         self.config.write_text('mode=OBSERVE\nmax_log_bytes=65536\nmax_log_files=2\nsample_ms=500\n')
         self.cmd = [str(COLLECTOR), '--root', str(self.root), '--bus-address',
-                    'unix:path=' + str(self.root / 'missing-bus'), '--smdb', '/nonexistent-mx5dr-smdb']
+                    'unix:path=' + str(self.root / 'missing-bus')]
 
     def rows(self):
         result = []
@@ -75,7 +75,9 @@ class CollectorTests(unittest.TestCase):
             self.assertIsNone(row['producer_mono_ns'])
             self.assertEqual(row['producer_time_status'], 'unknown')
         poll = next(row for row in rows if row['kind'] == 'poll')
-        self.assertEqual(poll['speed_raw'], 'unavailable')
+        self.assertEqual(poll['speed_raw'], 'smdb_disabled')
+        self.assertEqual(poll['yaw_raw'], 'smdb_disabled')
+        self.assertEqual(poll['gear_raw'], 'smdb_disabled')
         self.assertEqual(poll['freshness'], 'unproven_poll')
         self.assertIn('position_poll_error', [row['kind'] for row in rows])
         self.assertFalse(list((self.root / 'logs').glob('trace.*')))
@@ -125,18 +127,27 @@ class CollectorTests(unittest.TestCase):
         for test in ([str(BUILD / 'test_journal')], [str(BUILD / 'test_adapter'), 'scrub']):
             self.assertEqual(subprocess.run(test, timeout=2, capture_output=True).returncode, 0)
 
-    def test_smdb_timeout_is_local_and_does_not_accumulate_children(self):
-        # Single process helper; no shell background children.
-        helper = self.root / 'slow-smdb'
-        helper.write_text('#!/bin/sh\nexec sleep 10\n')
-        helper.chmod(0o700)
-        self.cmd[-1] = str(helper)
+    def test_collector_never_touches_the_stock_smdb_or_other_processes(self):
+        # A killed smdb-read can leak libjcismdb's named semaphore and stall
+        # jciblmVdt (vehicle reset 2026-10-04). The collector must not read the
+        # SMDB, fork, exec, signal or wait on any process.
+        imports = subprocess.check_output(['nm', '-u', str(COLLECTOR)], text=True)
+        names = {line.split()[-1].split('@')[0] for line in imports.splitlines() if line.strip()}
+        for name in ('fork', 'vfork', '__fork', '__libc_fork', 'posix_spawn', 'posix_spawnp',
+                     'execv', 'execve', 'execvp', 'execl', 'execlp', 'system', 'popen',
+                     'waitpid', '__waitpid', 'wait', 'wait4', 'kill', 'killpg', 'sem_open',
+                     'sem_wait', 'sem_post', 'shm_open'):
+            with self.subTest(name=name):
+                self.assertNotIn(name, names)
+        strings = subprocess.check_output(['strings', '-a', str(COLLECTOR)], text=True)
+        self.assertNotIn('smdb-read', strings)
+        self.assertNotIn('/jci/smdb', strings)
+        self.assertNotIn('vdm_vdt_current_data', strings)
         p = self.spawn('--samples', '1')
         p.communicate(timeout=3)
         self.assertEqual(p.returncode, 0)
         poll = next(row for row in self.rows() if row['kind'] == 'poll')
-        self.assertIn('[timeout]', poll['speed_raw'])
-        self.assertIn('[timeout]', poll['yaw_raw'])
+        self.assertEqual(poll['speed_raw'], 'smdb_disabled')
 
     def test_symlink_log_file_and_pid_are_rejected(self):
         target = self.root / 'untouched'

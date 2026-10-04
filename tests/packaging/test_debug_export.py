@@ -132,6 +132,21 @@ class DebugExportTests(unittest.TestCase):
             self.assertEqual(tar.extractfile(self.member(tar, 'proc/42/maps.txt')).read(),
                              b'authored mapped libmx5dr.so\n')
 
+    def test_real_launcher_comm_names_of_the_three_services_are_collected(self):
+        # Real CMU form (2026-10-04): comm L_<svc>, argv "/jci/sm/sm_svclauncher -l <svc> ...".
+        for pid, name in ((51, 'jciAAPA'), (52, 'jciLDS'), (53, 'jciVBS'), (54, 'jciAudio')):
+            process = self.root / 'proc' / str(pid)
+            process.mkdir()
+            (process / 'comm').write_text('L_' + name + '\n')
+            (process / 'cmdline').write_bytes(
+                b'\0'.join(x.encode() for x in ['/jci/sm/sm_svclauncher', '-l', name, '/jci/x.so', '0', '-a']) + b'\0')
+            (process / 'maps').write_text('authored maps for ' + name + '\n')
+        with self.archive(self.run_export()) as tar:
+            for pid in (51, 52, 53):
+                self.assertEqual(tar.extractfile(self.member(tar, 'proc/%d/maps.txt' % pid)).read(),
+                                 b'authored maps for ' + {51: b'jciAAPA', 52: b'jciLDS', 53: b'jciVBS'}[pid] + b'\n')
+            self.assertFalse(any('/proc/54/' in m.name for m in tar))
+
     def test_oem_redirect_fifos_are_metadata_only_and_log_tails_are_bounded(self):
         redirects = self.root / 'tmp/redirlogs'
         redirects.mkdir(parents=True)

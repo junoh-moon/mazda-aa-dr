@@ -11,13 +11,11 @@
 #include <math.h>
 #include <pthread.h>
 #include <signal.h>
-#include <spawn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -29,10 +27,6 @@ const char *const ROOT = "/data_persist/mx5-aa-dr";
 const char *bus_address = "unix:path=/tmp/dbus_service_socket";
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
 volatile sig_atomic_t stop_requested = 0;
-bool child_reap_failed = false;
-#ifdef MX5_COLLECTOR_TESTING
-const char *test_smdb = 0;
-#endif
 void stop_signal(int) { stop_requested = 1; }
 uint64_t clock_ns(void *) {
   struct timespec t;
@@ -157,121 +151,14 @@ struct Journal {
   }
 };
 
-bool child_environment(char *const *source, char **out, size_t capacity) {
-  size_t n = 0;
-  if (!capacity)
-    return false;
-  for (size_t i = 0; source && source[i]; ++i) {
-    if (!strncmp(source[i], "LD_PRELOAD=", 11) ||
-        !strncmp(source[i], "LD_AUDIT=", 9))
-      continue;
-    if (n + 1 >= capacity)
-      return false;
-    out[n++] = source[i];
-  }
-  out[n] = 0;
-  return true;
-}
-
-// Spawn only fixed, read-only SMDB commands, with LD_PRELOAD removed. Preserve
-// the service's library/search/data environment rather than guessing it. The
-// Normal child wait is 250 ms, then SIGKILL/reap gets another 100 ms polling
-// budget. Spawn/kernel scheduling can exceed these budgets; this is not a hard
-// real-time guarantee. It never touches the GPS tty.
-void raw_field(const char *name, char *out, size_t cap) {
-  out[0] = 0;
-  if (child_reap_failed) { snprintf(out, cap, "collector_stopping_unreaped_child"); return; }
-  const char *exe = access("/jci/bin/smdb-read", X_OK) == 0
-                        ? "/jci/bin/smdb-read"
-                        : "/jci/smdb/smdb-read";
-#ifdef MX5_COLLECTOR_TESTING
-  if (test_smdb) exe = test_smdb;
-#endif
-  if (access(exe, X_OK)) {
-    snprintf(out, cap, "unavailable");
-    return;
-  }
-  int p[2];
-  if (pipe(p)) {
-    snprintf(out, cap, "pipe_error");
-    return;
-  }
-  fcntl(p[0], F_SETFD, FD_CLOEXEC);
-  fcntl(p[1], F_SETFD, FD_CLOEXEC);
-  fcntl(p[0], F_SETFL, O_NONBLOCK);
-  posix_spawn_file_actions_t fa;
-  posix_spawn_file_actions_init(&fa);
-  posix_spawn_file_actions_adddup2(&fa, p[1], 1);
-  posix_spawn_file_actions_adddup2(&fa, p[1], 2);
-  posix_spawn_file_actions_addclose(&fa, p[0]);
-  posix_spawn_file_actions_addclose(&fa, p[1]);
-  char *args[] = {const_cast<char *>(exe),
-                  const_cast<char *>("-n"),
-                  const_cast<char *>("vdm_vdt_current_data"),
-                  const_cast<char *>("-e"),
-                  const_cast<char *>(name),
-                  0};
-  char *env[256];
-  if (!child_environment(environ, env, sizeof env / sizeof env[0])) {
-    posix_spawn_file_actions_destroy(&fa);
-    close(p[0]);
-    close(p[1]);
-    snprintf(out, cap, "environment_limit");
-    return;
-  }
-  pid_t pid;
-  int result = posix_spawn(&pid, exe, &fa, 0, args, env);
-  posix_spawn_file_actions_destroy(&fa);
-  close(p[1]);
-  if (result) {
-    close(p[0]);
-    snprintf(out, cap, "spawn_error:%d", result);
-    return;
-  }
-  size_t used = 0;
-  uint64_t start = clock_ns(0);
-  int status = 0;
-  bool done = false;
-  while (clock_ns(0) - start < 250000000ULL) {
-    ssize_t n = read(p[0], out + used, cap - used - 1);
-    if (n > 0)
-      used += n;
-    pid_t w = waitpid(pid, &status, WNOHANG);
-    if (w == pid) {
-      done = true;
-      break;
-    }
-    if (w < 0 && errno != EINTR) {
-      done = errno == ECHILD;
-      break;
-    }
-    struct timespec t = {0, 10000000};
-    nanosleep(&t, 0);
-  }
-  if (!done) {
-    kill(pid, SIGKILL);
-    // Never block indefinitely waiting for an uninterruptible SMDB child.
-    // Stop this collector after a failed reap instead of accumulating children.
-    uint64_t deadline = clock_ns(0) + 100000000ULL;
-    while (clock_ns(0) < deadline) {
-      pid_t w = waitpid(pid, &status, WNOHANG);
-      if (w == pid || (w < 0 && errno == ECHILD)) { done = true; break; }
-      struct timespec pause = {0, 10000000};
-      nanosleep(&pause, 0);
-    }
-    if (!done) child_reap_failed = true;
-    snprintf(out + used, cap - used, " [timeout]");
-  } else {
-    ssize_t n = read(p[0], out + used, cap - used - 1);
-    if (n > 0)
-      used += n;
-    out[used] = 0;
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-      snprintf(out + used, cap - used, " [child_failed]");
-  }
-  close(p[0]);
-}
-
+// The stock SMDB (shared memory database behind jciblmVdt/VDM) is deliberately
+// NOT read by this collector. libjcismdb guards it with a named POSIX semaphore
+// that a killed reader never releases, and an earlier collector that spawned
+// the stock smdb-read tool and SIGKILLed it on timeout is the leading suspect
+// for a vehicle reset (jciblmVdt stopped answering SM heartbeats, SM stopped
+// the watchdog). The same wheel/yaw/gear values reach the AA runtime trace
+// through the VBS tap. This collector never forks, execs, signals or waits on
+// another process. See validation/COLLECTOR_SMDB_RESET_2026-10-04.md.
 DBusConnection *connect_bus() {
   DBusError e;
   dbus_error_init(&e);
@@ -348,22 +235,16 @@ void owner_log(Journal &j, DBusConnection *c) {
   dbus_message_unref(r);
 }
 void sensor_log(Journal &j, DBusConnection *c, uint64_t serial) {
-  char line[4096], speed[160], yaw[160], reverse[160], es[1024], ey[1024],
-      er[1024];
+  char line[4096];
   uint64_t begin = clock_ns(0);
-  raw_field("VehicleSpeed", speed, sizeof speed);
-  raw_field("YawRate", yaw, sizeof yaw);
-  raw_field("TransmChangeLeverPosition", reverse, sizeof reverse);
-  json_text(speed, es, sizeof es);
-  json_text(yaw, ey, sizeof ey);
-  json_text(reverse, er, sizeof er);
   snprintf(line, sizeof line,
            "{\"kind\":\"poll\",\"seq\":%llu,\"begin_ns\":%llu,\"end_ns\":%llu,"
-           "\"speed_raw\":\"%s\",\"yaw_raw\":\"%s\",\"gear_raw\":\"%s\","
+           "\"speed_raw\":\"smdb_disabled\",\"yaw_raw\":\"smdb_disabled\","
+           "\"gear_raw\":\"smdb_disabled\","
            "\"freshness\":\"unproven_poll\",\"quality\":\"unknown\",\"assist_"
            "ready\":false}",
            (unsigned long long)serial, (unsigned long long)begin,
-           (unsigned long long)clock_ns(0), es, ey, er);
+           (unsigned long long)clock_ns(0));
   j.line(line);
   DBusMessage *r = call(c, "com.jci.lds.data", "/com/jci/lds/data",
                         "com.jci.lds.data", "GetPosition");
@@ -430,7 +311,6 @@ int main(int argc, char **argv) {
 #ifdef MX5_COLLECTOR_TESTING
     else if (!strcmp(argv[i], "--root") && i + 1 < argc) root = argv[++i];
     else if (!strcmp(argv[i], "--bus-address") && i + 1 < argc) bus_address = argv[++i];
-    else if (!strcmp(argv[i], "--smdb") && i + 1 < argc) test_smdb = argv[++i];
     else if (!strcmp(argv[i], "--samples") && i + 1 < argc) max_samples = unsigned(atoi(argv[++i]));
 #endif
     else { fprintf(stderr, "Usage: mx5dr-collector [--session-seconds 1..86400]\n"); return 64; }
@@ -497,7 +377,7 @@ int main(int argc, char **argv) {
   DBusConnection *connection = 0;
   uint64_t serial = 0, started = clock_ns(0);
   const char *reason = "session_limit";
-  while (!journal.failed && !child_reap_failed && !stop_requested &&
+  while (!journal.failed && !stop_requested &&
          clock_ns(0) - started < uint64_t(session_seconds) * 1000000000ULL) {
     if (access(stop_path, F_OK) == 0) { reason = "stop_marker"; break; }
     mx5::runtime::Config current = mx5::runtime::read_config(cfg);
@@ -521,12 +401,11 @@ int main(int argc, char **argv) {
     }
   }
   if (stop_requested) reason = "signal";
-  if (child_reap_failed) reason = "child_reap_failed";
   snprintf(line, sizeof line, "{\"kind\":\"collector_stop\",\"reason\":\"%s\",\"samples\":%llu}",
            reason, (unsigned long long)serial);
   journal.line(line); journal.flush();
   if (connection) { dbus_connection_close(connection); dbus_connection_unref(connection); }
   unlink(pid_path);
   close(lock_fd);
-  return journal.failed || child_reap_failed ? 74 : 0;
+  return journal.failed ? 74 : 0;
 }

@@ -109,7 +109,7 @@ for proc_dir in "$ROOT"/proc/[0-9]*; do
     [ -d "$proc_dir" ] && [ ! -L "$proc_dir" ] && [ -f "$proc_dir/comm" ] || continue
     process_name=$(head -c 64 "$proc_dir/comm") || continue
     case "$process_name" in
-        init_cmu|autostart|sm|mx5dr-collector|aap_service) ;;
+        init_cmu|autostart|sm|mx5dr-collector|aap_service|L_jciAAPA|L_jciLDS|L_jciVBS) ;; # L_<svc> is the real launcher comm
         sm_svclauncher) # keep only the three services this package touches
             launcher_args=$(tr '\000' ' ' < "$proc_dir/cmdline" 2>/dev/null | head -c 512) || continue
             case "$launcher_args" in *" jciAAPA "*|*" jciLDS "*|*" jciVBS "*) ;; *) continue;; esac;;
