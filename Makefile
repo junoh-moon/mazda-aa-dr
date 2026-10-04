@@ -248,7 +248,7 @@ $(BUILD)/mx5dr-sha256: $(HASH_OBJECTS) | $(BUILD)
 	$(ARM_PREFIX)g++ $(ARM_CXXFLAGS) -static -Wl,-z,noexecstack $^ -o $@
 
 $(BUILD)/libmx5dr-vimtap.so: $(SENSOR_OBJECTS)
-	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr-vimtap.so -static-libstdc++ -static-libgcc $^ -ldl -lpthread -lrt -o $@
+	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined,--exclude-libs,ALL -Wl,-soname,libmx5dr-vimtap.so -static-libstdc++ -static-libgcc $^ -ldl -lpthread -lrt -o $@
 
 # The LDS process has its own loader and immutable hook state. Its bus wrapper
 # tracks connection lifetimes without linking the AA prediction/TLS adapter.
@@ -261,7 +261,7 @@ $(BUILD)/arm-lds/%.o: %.cpp
 	$(ARM_PREFIX)g++ $(ARM_CXXFLAGS) $(ARM_CPPFLAGS) $(ARM_DEPFLAGS) -c $< -o $@
 	mv $(@:.o=.d).tmp $(@:.o=.d)
 $(BUILD)/libmx5dr-ldstap.so: $(LDS_OBJECTS)
-	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -Wl,-soname,libmx5dr-ldstap.so -static-libstdc++ -static-libgcc $^ -ldl -lpthread -lrt -o $@
+	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined,--exclude-libs,ALL -Wl,-soname,libmx5dr-ldstap.so -static-libstdc++ -static-libgcc $^ -ldl -lpthread -lrt -o $@
 
 $(BUILD)/test_vim_tap: tests/sensors/test_vim_tap.cpp src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp $(RUNTIME_SUPPORT) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(filter-out src/sensors/vim_tap.cpp,$^) -ldl -pthread -lrt -o $@
