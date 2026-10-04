@@ -160,6 +160,18 @@ class DebugExportTests(unittest.TestCase):
             self.assertIn('sm-reports/ps_info.out=missing', report)
             self.assertFalse(any('unrelated' in m.name for m in tar))
 
+    def test_installed_oem_aa_mod_patch_is_identified_by_hash(self):
+        mod = self.root / 'data_persist/oem-aa-mod'
+        mod.mkdir(parents=True, exist_ok=True)
+        (mod / 'libpatch-blmjciaapa.so').write_bytes(b'authored patch bytes')
+        (mod / 'libpatch.conf').write_text('authored conf\n')
+        with self.archive(self.run_export()) as tar:
+            report = tar.extractfile(self.member(tar, 'collection.txt')).read().decode()
+            digest = hashlib.sha256(b'authored patch bytes').hexdigest()
+            self.assertIn('oem_aa_mod.libpatch-blmjciaapa.so=sha256:%s bytes=20' % digest, report)
+            self.assertEqual(tar.extractfile(self.member(tar, 'oem-aa-mod/libpatch.conf.txt')).read(),
+                             b'authored conf\n')
+
     def test_oem_redirect_fifos_are_metadata_only_and_log_tails_are_bounded(self):
         redirects = self.root / 'tmp/redirlogs'
         redirects.mkdir(parents=True)

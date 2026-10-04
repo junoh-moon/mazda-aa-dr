@@ -179,6 +179,20 @@ for sm_report in thread_info.out ps_info.out top_info.out meminfo.out free_info.
     fi
 done
 
+# The user's third-party AA patch (oem-aa-mod) interposes the BLM's session functions and decides
+# whether the AA hook can observe sessions. Record which files are installed (hash, size) and its
+# small config, so the exact libpatch version can be compared with the published releases.
+if [ "$persist_ok" = 1 ] && [ -d "$persist/oem-aa-mod" ] && [ ! -L "$persist/oem-aa-mod" ]; then
+    for oem_mod in "$persist"/oem-aa-mod/*.so; do
+        [ -f "$oem_mod" ] && [ ! -L "$oem_mod" ] || continue
+        printf 'oem_aa_mod.%s=sha256:%s bytes=%s\n' "${oem_mod##*/}" \
+            "$(hash "$oem_mod" 2>/dev/null | awk 'NR==1{print $1}')" "$(stat -c %s "$oem_mod" 2>/dev/null || echo unknown)" >> "$report"
+    done
+    bounded_file oem-aa-mod/libpatch.conf "$persist/oem-aa-mod/libpatch.conf"
+else
+    printf 'oem_aa_mod=absent_or_unavailable\n' >> "$report"
+fi
+
 bounded_command() {
     capture_key=$1; shift
     # No OEM program, guard or service is executed. Limit output even if a
