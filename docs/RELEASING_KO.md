@@ -17,8 +17,7 @@
 - 예외적으로 [드문 실차 기회의 통합 시험](FIELD_TRIAL_KO.md)을 준비할 때는 의도적으로 선택한 `--default-mode=SHADOW` 묶음을 만들 수 있다. 일반 묶음의 OBSERVE 기본값은 유지한다. 이 경우 `bundle-default-mode`, build-info의 `default_mode`, 설치 안내와 릴리즈 노트가 모두 SHADOW로 일치해야 한다. 아래 일반 OBSERVE 예시를 그대로 복사해 잘못 표시하지 않는다. ASSIST 차단은 그대로다.
 - 아래 명령은 **LDS 관측기를 포함한 여섯 바이너리 구성** 기준이다. 예전 태그를 재현할 때는 그 태그의 Makefile/packaging을 사용하며, 현재 스크립트나 바이너리를 섞지 않는다.
 - 실차 미검증 개발판은 pre-release로 발행한다. 빌드·호스트·QEMU 성공을 실제 차량 복구, 위치 정확도, 폰/지도 앱 수용 검증으로 표현하지 않는다. [현재 상태](STATUS_KO.md)가 기능·실차 시험 범위를 정한다.
-- **예외(2026-10-04, 소유자 지시)**: `v0.3.12-shadow.3`은 이전 릴리즈(v0.3.9)처럼 MP3·JS 진입 파일과 `USB_ENTRY_NOTICE.md`를 **포함해** 만든다(`--shell-only` 없이). 셸 전용 묶음(`v0.3.11-shadow.2`, `v0.3.12-shadow.1`·`.2`)에는 진입 수단이 없어 사용자가 이전 묶음의 파일을 따로 복사해야 했다. 아래 문장은 그 지시가 없을 때의 기본이다.
-- 새 공개 묶음은 `--shell-only`로 생성한다. 이미 승인된 셸 접근과 재부팅 후 재접속이 전제이며, 접근 우회 페이로드는 포함하지 않는다. 기존 진입 파일을 새 ZIP에 수동 추가하거나 과거 USB 진입 안내를 설치 문서로 복사하지 않는다.
+- **설치 ZIP은 그 자체로 완결적이어야 한다(2026-10-04, 소유자 지시).** 사용자가 ZIP만 내려받아 USB에 복사하면 바로 설치를 시작할 수 있어야 하므로, 새 공개 묶음에는 `mp3/`와 `js/`의 셸 진입 파일과 `USB_ENTRY_NOTICE.md`를 **항상 포함한다**(`make_usb_zip.py`를 `--shell-only` 없이 실행). 진입 파일이 빠진 셸 전용 ZIP(`v0.3.11-shadow.2`, `v0.3.12-shadow.1`·`.2`)은 사용자가 이전 묶음에서 파일을 따로 복사해야 해서 이 기준을 충족하지 못했다. `--shell-only`는 소유자가 명시적으로 요청할 때만 쓴다. 진입 파일의 출처와 라이선스 상태는 `USB_ENTRY_NOTICE.md`에 있는 그대로 보존한다.
 
 ## 1. 환경과 배포 대상 고정
 
@@ -128,7 +127,7 @@ SHADOW 통합 시험은 아래 모드를 `SHADOW`로 명시하십시오. 기존 
 검사한 바이너리와 동일한 build 디렉터리를 사용하십시오.
 
 ```bash
-python3 tools/make_usb_zip.py --shell-only --build-dir "$RELEASE_BUILD" --default-mode SHADOW \
+python3 tools/make_usb_zip.py --build-dir "$RELEASE_BUILD" --default-mode SHADOW \
   --output "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
 unzip -t "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
 mkdir "$RELEASE_WORK/unpacked"
@@ -137,7 +136,7 @@ unzip -q "$RELEASE_WORK/dist/$RELEASE_NAME.zip" -d "$RELEASE_WORK/unpacked"
 ```
 
 ZIP에는 상위 폴더가 없어야 하며 `trial`, `install.sh`가 최상위에 있어야 합니다.
-MP3/JS 진입 파일이 없고 build-info가 셸 전용 배포임을 표시하는지 확인하십시오.
+`mp3/`(4개)와 `js/run.js`, `USB_ENTRY_NOTICE.md`가 포함되어 있고 build-info가 진입 파일 포함 배포임을 표시하는지 확인하십시오. ZIP만으로 설치를 시작할 수 있어야 한다.
 `INSTALL_KO.md`는 `packaging/SHELL_START_KO.md`와 일치해야 합니다.
 묶음 내 파일을 고치면 다시 빌드하십시오.
 
@@ -153,7 +152,7 @@ python3 tests/packaging/cmu_emulation.py \
 SHA-256은 손상/동일성 검사이며 서명이 아닙니다. `build-info.json`의
 `source_modified`는 정식 릴리즈에서 false여야 합니다. 로컬 수정 후보를
 배포 커밋 그대로의 빌드로 표시하지 마십시오. ZIP에 원본 펌웨어, 위치 로그,
-개인 공유 링크나 접근 우회 페이로드가 없음을 확인하십시오.
+개인 공유 링크가 없음을 확인하십시오(진입 파일은 의도적으로 포함된다).
 
 ## 5. 릴리즈 노트와 게시
 
