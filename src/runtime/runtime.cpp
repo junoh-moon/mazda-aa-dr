@@ -50,6 +50,7 @@ volatile uint32_t audit_fault = 0;
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
+mx5::adapter::InstallReport install_report = mx5::adapter::InstallReport();
 namespace LA=mx5::runtime::lds_association;
 // Construct off the callback on the worker; retain until process exit. A later
 // DSO constructor/destructor must not reset or free state an OEM callback uses.
@@ -705,9 +706,19 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
            "\"boot_id\":\"%s\","
            "\"mode\":%u,\"install\":\"%s\",\"assist_ready\":false,\"assist_"
            "block\":\"sensor_timing_quality_calibration_unverified\",\"wire_"
-           "timestamp_modified\":false}",
+           "timestamp_modified\":false,"
+           "\"session_hooks\":\"%s\","
+           "\"install_diag\":{\"stage\":%u,\"slot_offset\":%llu,\"expected_offset\":%llu,"
+           "\"observed_offset\":%llu,\"owner\":\"%s\",\"symbol\":\"%s\"}}",
            (long)getpid(), (unsigned long long)clock_ns(0), boot_id, config.mode,
-           boot_result);
+           boot_result,
+           !hook_installed ? "none"
+               : install_report.sessions_declined ? "declined_third_party_interposer" : "observing",
+           install_report.declined_stage,
+           (unsigned long long)install_report.slot_offset,
+           (unsigned long long)install_report.slot_expected_offset,
+           (unsigned long long)install_report.observed_offset,
+           install_report.owner, install_report.symbol);
   j.line(line);
   j.flush();
   // Optional observation transport failure must not suppress raw capture.
@@ -1021,6 +1032,7 @@ void bootstrap(void *h) {
     io.runtime.allow_assist = false;
     io.observe_requests = true;
     io.blm_handle = h;
+    io.report = &install_report;
     io.runtime.request_reader = A::read_request_trace;
     io.runtime.session_reader = A::read_send_session;
     A::InstallResult result = A::install_v74(io);

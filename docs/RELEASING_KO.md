@@ -114,6 +114,7 @@ done > "$RELEASE_WORK/evidence/elf.txt"
 - ELF32 little-endian ARM, softfp 호출 규약, TEXTREL 부재, GLIBC 버전/의존성을 확인한다. 현재 기대값은 GLIBC_2.4만 필요하고 동적 libstdc++ 의존성이 없는 것이다. D-Bus는 collector에 필요하며 AA preload로 돌아가면 안 된다. 과거 elf.txt를 새 바이너리의 결과로 재사용하지 않는다.
 - ARM 로그 처음과 끝의 `ARM_TEST_INPUTS`에서 `release_verified=true`, 여섯 artifact 해시, 도구체인과 sysroot를 확인한다. 릴리즈 검사는 `MX5DR_ARM_BUILD`가 필수다. 개발용 `MX5DR_ARM_LIBRARY` 검사에는 입력 해시만 기록하며 릴리즈 검증으로 표시하지 않는다.
 - `MX5DR_LDS_STOCK` 누락은 원본 LDS 설치 검사의 명시적인 생략이다. 필수 원본 파일 누락은 종료 77이며 릴리즈 통과로 세지 않는다. 원본 설치기의 사례 수는 해당 고정 커밋에서 실행한 로그로 집계하고, 실제 제품 DSO의 자동 기동·원본 입력부터 AA 기록까지의 검증과 구분하여 기록한다.
+- **차량 배치 전 AA 설치 시험(선택, 권장)**: `MX5DR_AA_STOCK`(순정 루트)과 `MX5DR_LIBPATCH`(공개된 oem-aa-mod `libpatch-blmjciaapa.so`, 저장소에 두지 않음)를 지정하면 ARM 러너가 `tests/adapter/run_aa_install_probe.sh`를 실행한다. 실제 BLM에 제품 preload와 서드파티 `libpatch`를 차량과 같은 순서로 올려 (1) 패치 없음: 설치 ok와 세션 관측, (2) 알려진 경로의 패치: 위치 후킹 설치와 세션 관측만 생략, (3) 알려지지 않은 경로: 안전 실패를 확인한다. 이 조합은 2026-10-04 실차 시험 전까지 한 번도 실행되지 않아 후킹이 조용히 거부됐다. 미지정이면 러너가 SKIP으로 출력하므로 릴리즈 기록에 생략으로 적는다. 순정 런처 대신 프로브를 쓰고 `libpatch` 한 버전만 보므로 차량 검증이 아니다.
 - ARM runner는 명시한 compiler/sysroot/preload를 사용한다. 상속된 GCC 검색 경로와 `LD_LIBRARY_PATH`, `LD_PRELOAD`, QEMU guest 환경 덮어쓰기는 제거하고 실제 loader 시험에서 지정한 preload만 적용한다.
 - 변경 부분에 따른 추가 ARM 로더/guard 시험은 [통합 검증](../validation/INTEGRATION_2026-09-28.md), SHADOW 범위는 [기능 검증](../validation/LIVE_SHADOW_2026-09-29.md)을 참고한다.
 - 원본 펌웨어, 개인 경로, 실차 위치 로그를 공개하지 않는다. 실행 로그는 먼저 비공개 evidence에 보관하고, 공개 검증 요약에 실행 환경·커밋·생략·미검증을 적는다.

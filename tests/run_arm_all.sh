@@ -50,6 +50,19 @@ if [ -n "${MX5DR_LDS_STOCK:-}" ]; then
 else
     echo 'SKIP: original LDS cold installer needs private MX5DR_LDS_STOCK'
 fi
+# The real AA BLM with the product preload and the user's third-party oem-aa-mod patch (not stored in
+# this repository). Skipped, and reported as skipped, unless both private inputs are provided.
+if [ -n "${MX5DR_AA_STOCK:-}" ] && [ -n "${MX5DR_LIBPATCH:-}" ]; then
+    if MX5DR_ARM_BUILD="${MX5DR_ARM_BUILD:-$(dirname -- "$preload")}" sh tests/adapter/run_aa_install_probe.sh; then
+        :
+    else
+        probe_status=$?
+        [ "$probe_status" -eq 77 ] || exit "$probe_status"
+        echo 'SKIP: AA install probe prerequisites are incomplete (see message above)'
+    fi
+else
+    echo 'SKIP: AA install probe needs private MX5DR_AA_STOCK and MX5DR_LIBPATCH'
+fi
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/adapter/lds_hooks_test.cpp tests/adapter/lds_relay.S src/adapter/lds_hooks.cpp src/sensors/lds_lineage.cpp src/sensors/nmea_course_token.cpp src/runtime/lds_sideband.cpp -pthread -lrt -o "$build/lds-hooks-test"
 for scenario in chain prepare inactive register inline retained read_copy snapshot missing_read wrong_pointer lifetime late unwind cancel chain_mismatch endpoint endpoint_post nested_path failed_send failed_build path_unwind all_ids initialize_overlap initialize_unwind locked locked_pair locked_unknown locked_unthreaded locked_null locked_generation locked_mutex locked_native_pc locked_message_pc locked_native_fail locked_no_native locked_native_twice locked_message_twice locked_reply locked_destination locked_endpoint locked_failed_send locked_unwind locked_extra_send locked_inactive locked_clock locked_type locked_zero_request locked_endpoint_changed locked_snapshot locked_nested_send course_values course_bindings course_nested_callback course_boundary_overlap course_identity course_parse_nested course_unwind course_cancel course_open course_close course_reset course_write_boundary course_saved_read course_routes course_callback_parse course_inactive course_one_commit course_copy_twice status_values status_inheritance status_no_commit; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/lds-hooks-test" "$scenario"

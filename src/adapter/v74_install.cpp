@@ -3,6 +3,7 @@
 #include "request_hooks.h"
 #include "session_hooks.h"
 #include "bus_hooks.h"
+#include "install_policy.h"
 #include <cstring>
 
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -21,6 +22,32 @@ __attribute__((visibility("hidden"))) void* mx5_position_trampoline = 0;
 namespace {
 namespace A=mx5::adapter;
 namespace C=A::cold_patch;
+void copy_safe(char* out,size_t capacity,const char* in) {
+    size_t n=0;
+    for(;in&&in[n]&&n+1<capacity;++n) {
+        const char c=in[n];
+        out[n]=((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')||c=='.'||c=='_'||c=='/'||c=='-'||c=='+')?c:'_';
+    }
+    out[n]=0;
+}
+// Diagnostic only; the caller still returns NEXT_CHAIN_MISMATCH. Remembers the first
+// failing slot comparison and the module that owns the value found there.
+A::InstallResult mismatch(const A::InstallOptions& in,unsigned stage,uintptr_t address,uintptr_t expected) {
+    A::InstallReport* r=in.report;
+    if(r&&!r->declined_stage) {
+        const uintptr_t observed=*reinterpret_cast<uintptr_t*>(address);
+        r->declined_stage=stage;
+        r->slot_offset=address-in.blm_load_bias;
+        r->slot_expected_offset=expected-in.interface_load_bias;
+        Dl_info info;
+        if(dladdr(reinterpret_cast<void*>(observed),&info)) {
+            copy_safe(r->owner,sizeof r->owner,info.dli_fname);
+            copy_safe(r->symbol,sizeof r->symbol,info.dli_sname);
+            r->observed_offset=observed-reinterpret_cast<uintptr_t>(info.dli_fbase);
+        }
+    }
+    return A::NEXT_CHAIN_MISMATCH;
+}
 const uintptr_t kRequest = 0xc7460, kSendSlot = 0xf88bc, kSendExport = 0x1a538;
 const char* const kBlmHash = "10e7235bfce075b44c1a8ffc99bbc9b63af85d9262df868ca1874ec36d8d3b71";
 const char* const kInterfaceHash = "e9eb5e0d42719c98efc5ef86a270b4b3c86467aced55d4c8158bd99e06bbd436";
@@ -189,7 +216,7 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
     for(unsigned i=0;i<5;++i) {
         const C::Slot& s=slots[i];const uintptr_t base=i<2?bb:(i==3?blm:db);
         if(!segment(base,s.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
-        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return A::NEXT_CHAIN_MISMATCH;
+        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return mismatch(in,2,s.address,s.expected);
         plan.slots[i]=s;
     }
     plan.slot_count=5;
@@ -199,13 +226,13 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
     const C::Slot submit=plan.slots[--plan.slot_count];
     const C::Slot signal={bb+0x34240,bb+0x2098c,reinterpret_cast<uintptr_t>(&mx5_bus_signal)};
     if(!segment(bb,signal.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
-    if(*reinterpret_cast<uintptr_t*>(signal.address)!=signal.expected)return A::NEXT_CHAIN_MISMATCH;
+    if(*reinterpret_cast<uintptr_t*>(signal.address)!=signal.expected)return mismatch(in,2,signal.address,signal.expected);
     plan.slots[plan.slot_count++]=signal;
     // Registration support must be reachable before either connect owner and
     // submit. It participates in the same preflight/prepare/publication plan.
     const C::Slot registration={bb+0x34604,lb+0x89ac,reinterpret_cast<uintptr_t>(&mx5_bus_register)};
     if(!segment(bb,registration.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
-    if(*reinterpret_cast<uintptr_t*>(registration.address)!=registration.expected)return A::NEXT_CHAIN_MISMATCH;
+    if(*reinterpret_cast<uintptr_t*>(registration.address)!=registration.expected)return mismatch(in,2,registration.address,registration.expected);
     plan.slots[plan.slot_count++]=registration;
     const uintptr_t bus_slots[]={0x34560,0x34274,0x34400,0x345ec};
     const uintptr_t blm_slots[]={0xf7710,0xf7ce8,0xf8b84,0xf81a0};
@@ -217,7 +244,7 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
         const uintptr_t base=owner?blm:bb;
         const C::Slot s={base+(owner?blm_slots[i]:bus_slots[i]),bb+targets[i],replacements[i]};
         if(!segment(base,s.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
-        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return A::NEXT_CHAIN_MISMATCH;
+        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return mismatch(in,2,s.address,s.expected);
         plan.slots[plan.slot_count++]=s;
     }
     // Observe raw headers using data pointers only. JCIDBUS's notify callback
@@ -232,7 +259,7 @@ A::InstallResult request_plan(const A::InstallOptions& in,C::Plan& plan,A::Reque
     for(unsigned i=0;i<4;++i) {
         const C::Slot& s=wire_slots[i];
         if(!segment(bb,s.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
-        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return A::NEXT_CHAIN_MISMATCH;
+        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return mismatch(in,2,s.address,s.expected);
         plan.slots[plan.slot_count++]=s;
     }
     plan.slots[plan.slot_count++]=submit;
@@ -296,7 +323,7 @@ A::InstallResult session_plan(const A::InstallOptions& in,C::Plan& plan,A::Sessi
     for(unsigned i=0;i<2;++i) {
         const C::Slot& s=slots[i];
         if(!segment(blm,s.address,4,PROT_READ|PROT_WRITE))return A::MODULE_MISMATCH;
-        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return A::NEXT_CHAIN_MISMATCH;
+        if(*reinterpret_cast<uintptr_t*>(s.address)!=s.expected)return mismatch(in,3,s.address,s.expected);
         plan.slots[plan.slot_count++]=s; // Destruction is reachable before creation.
     }
     bindings.create=reinterpret_cast<A::SessionCreate>(api+0x1740c);
@@ -304,7 +331,7 @@ A::InstallResult session_plan(const A::InstallOptions& in,C::Plan& plan,A::Sessi
     bindings.status=reinterpret_cast<A::SessionStatus>(blm+0x8b128);
     return A::INSTALL_OK;
 }
-struct Setup { const A::InstallOptions* options; uintptr_t send; A::RequestBindings bindings; A::SessionBindings session; A::BusBindings bus; };
+struct Setup { const A::InstallOptions* options; uintptr_t send; A::RequestBindings bindings; A::SessionBindings session; A::BusBindings bus; bool sessions_enabled; };
 int protect(void* p,size_t n,int flags,void*) { return mprotect(p,n,flags); }
 void* allocate(size_t n,void*) {
     void* p=mmap(0,n,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
@@ -322,7 +349,7 @@ bool prepare(void* tramp,void* user) {
         setup.bindings.work_trampoline=static_cast<char*>(tramp)+32;
         setup.bindings.destroy_trampoline=static_cast<char*>(tramp)+48;
         if(!A::prepare_request_hooks(setup.bindings,in.runtime.clock,in.runtime.user))return false;
-        if(!A::prepare_session_hooks(setup.session))return false;
+        if(setup.sessions_enabled&&!A::prepare_session_hooks(setup.session))return false;
         if(!A::prepare_bus_hooks(setup.bus))return false;
     }
     mx5_position_trampoline=tramp;
@@ -358,19 +385,29 @@ InstallResult install_v74(const InstallOptions& in) {
     uintptr_t* slot = reinterpret_cast<uintptr_t*>(slot_address);
     // Binding must already be eager (RTLD_NOW or process LD_BIND_NOW=1).
     // A lazy PLT resolver or another shim is intentionally not skipped.
-    if (*slot != expected_next) return NEXT_CHAIN_MISMATCH;
+    if (*slot != expected_next) return mismatch(in,1,slot_address,expected_next);
     C::Plan plan=C::Plan();
     const C::Entry position={entry,kPrologue,reinterpret_cast<uintptr_t>(&mx5_position_veneer)};
     const C::Slot send={slot_address,expected_next,reinterpret_cast<uintptr_t>(&mx5_send_vehicle_data)};
     plan.entries[0]=position;plan.entry_count=1;plan.slots[0]=send;plan.slot_count=1;
-    Setup setup={&in,expected_next,A::RequestBindings(),A::SessionBindings(),A::BusBindings()};
+    Setup setup={&in,expected_next,A::RequestBindings(),A::SessionBindings(),A::BusBindings(),true};
     if(in.observe_requests) {
         if(in.runtime.request_reader!=A::read_request_trace ||
            in.runtime.session_reader!=A::read_send_session)return INVALID_INSTALL_ARGUMENT;
         const InstallResult check=request_plan(in,plan,setup.bindings,setup.bus);
         if(check!=INSTALL_OK)return check;
+        const unsigned slots_before=plan.slot_count;
         const InstallResult sessions=session_plan(in,plan,setup.session);
-        if(sessions!=INSTALL_OK)return sessions;
+        if(sessions==NEXT_CHAIN_MISMATCH && in.report && in.report->declined_stage==3 &&
+           A::known_session_shim(in.report->owner)) {
+            // The user's oem-aa-mod patch interposes aap_create/destroy_session. Observing sessions
+            // would call the original entry points directly and bypass that shim, so skip only the
+            // session observation; the position/send hook below does not involve those slots.
+            plan.slot_count=slots_before;
+            setup.session=A::SessionBindings();
+            setup.sessions_enabled=false;
+            in.report->sessions_declined=true;
+        } else if(sessions!=INSTALL_OK)return sessions;
     }
     const long page_size=sysconf(_SC_PAGESIZE);
     if(page_size<=0 || (page_size&(page_size-1)))return MEMORY_PROTECTION_FAILED;

@@ -126,6 +126,19 @@ enum InstallResult {
     TRAMPOLINE_ALLOCATION_FAILED, CONFIGURATION_FAILED, RESTORE_FAILED_FATAL, COLD_START_LOST
 };
 typedef bool (*VerifyFileHash)(const char* path, const char* expected_sha256);
+// Diagnostic output of install_v74; never influences the decision. Records the
+// first slot comparison that failed and which loaded module owns the value found
+// there (the BLM's own PLT stub = lazy binding, a preload = interposition),
+// as module-relative offsets so no absolute address is exposed.
+struct InstallReport {
+    unsigned declined_stage;       // 0 none; 1 send slot; 2 request/bus/JCIDBUS slot; 3 session slot
+    uintptr_t slot_offset;         // mismatching slot, relative to the BLM load bias
+    uintptr_t slot_expected_offset;// expected target, relative to the interface load bias
+    uintptr_t observed_offset;     // value found, relative to its owner's load base
+    char owner[96];                // dladdr path of the owner of the value found (sanitized)
+    char symbol[48];               // dladdr symbol name, if any (sanitized)
+    bool sessions_declined;        // session observation skipped: third-party shim owns the session slots
+};
 struct InstallOptions {
     uintptr_t blm_load_bias, interface_load_bias;
     const char* blm_path;
@@ -144,6 +157,7 @@ struct InstallOptions {
     // The existing BLM handle supplies its dependency scope during preflight.
     bool observe_requests;
     void* blm_handle;
+    InstallReport* report; // optional, may be null
 };
 InstallResult install_v74(const InstallOptions&);
 const char* install_result_name(InstallResult);
