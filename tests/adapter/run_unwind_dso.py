@@ -278,6 +278,8 @@ def main():
     elif args.suite not in ('request-wire', 'session', 'bus', 'assist', 'runtime-assist', 'provenance-context', 'association-context', 'context-pool', 'context-pool-association', 'small-stack'):
         names.append(fixture + '_fixture.S')
     sources = [repo / 'tests/adapter' / name for name in names]
+    if args.suite == 'runtime-assist':
+        sources.append(repo / 'tests/adapter/statvfs_shim.c')
     for root, directories, files in os.walk(repo / 'src'):
         depth = len(Path(root).relative_to(repo / 'src').parts)
         require(depth < 16 or not directories, 'Source snapshot depth limit exceeded')
@@ -310,9 +312,25 @@ def main():
     for name in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'QEMU_LD_PREFIX',
                  'QEMU_SET_ENV', 'QEMU_UNSET_ENV'):
         environment.pop(name, None)
+    preload = str(library)
+    shim = None
+    if args.suite == 'runtime-assist':
+        # qemu-user shows the HOST mount table to the guest. glibc statvfs() walks it,
+        # so a host with hundreds of mounts makes every product storage check cost
+        # milliseconds and starves the authored 80-250 ms windows. Replace only that
+        # libc call, only on such hosts; see tests/adapter/statvfs_shim.c.
+        with open('/proc/mounts') as table:
+            mount_lines = sum(1 for _ in table)
+        if mount_lines > 64:
+            shim = build / 'statvfs_shim.so'
+            subprocess.run([args.cross_prefix + 'gcc', '-std=gnu99', '-O2', '-Wall', '-Wextra', '-Werror',
+                            '-mcpu=cortex-a9', '-mfpu=neon', '-mfloat-abi=softfp', '-marm', '-shared', '-fPIC',
+                            '-o', str(shim), str(build / 'source/tests/adapter/statvfs_shim.c')], check=True)
+            preload = str(shim) + ':' + str(library)
+            print('NOTE: host /proc/mounts has %d lines; preloading the statvfs test shim' % mount_lines)
     results = []
     for case in cases:
-        run = ['qemu-arm', '-L', str(args.sysroot), '-E', 'LD_PRELOAD=' + str(library),
+        run = ['qemu-arm', '-L', str(args.sysroot), '-E', 'LD_PRELOAD=' + preload,
                '-E', 'MX5_UNWIND_LIBRARY=' + str(library), str(executable), case]
         result = subprocess.run(run, env=environment, capture_output=True, text=True,
                                 timeout=60 if args.suite == 'context-pool' else 20)
@@ -325,7 +343,8 @@ def main():
             'Source changed during test; completed results do not describe current source')
     record = dict(library_sha256=library_hash, executable_sha256=digest(executable),
                   source_sha256=inputs, command=command,
-                  offsets=offsets, exported=exported, cases=results, oem_executed=False)
+                  offsets=offsets, exported=exported, cases=results, oem_executed=False,
+                  statvfs_shim=str(shim) if shim else None)
     (build / 'unwind-dso.json').write_text(json.dumps(record, indent=2) + '\n')
     print('PASS production DSO: %s suite, %d cases; archive runtime exports hidden' % (args.suite, len(cases)))
 
