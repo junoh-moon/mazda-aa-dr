@@ -39,10 +39,68 @@ boot_boundary() {
     echo "reboot_check=$reboot_check (boot ID comparison; capture is checked separately)"
 }
 
+# Short GO/NO-GO block for the small CMU screen. It only restates fields the
+# status text already contains; the full detail stays in startup-result.txt.
+# ok = satisfied, NO = not satisfied, wait = may still be starting (re-run menu 2).
+startup_verdict() {
+    awk '
+    { line[NR]=$0 }
+    function field(key,   i,p,rest,w) {
+        for (i=1;i<=NR;i++) {
+            p=index(line[i],key)
+            if (p && (p==1 || substr(line[i],p-1,1)==" ")) {
+                rest=substr(line[i],p+length(key)); split(rest,w," "); return w[1]
+            }
+        }
+        return ""
+    }
+    function show(res,tag,txt) {
+        printf "%-4s %-5s %s\n",res,tag,substr(txt,1,24)
+        if (res=="NO") bad=1; else if (res=="wait") pend=1
+    }
+    function service(name,tag,   i,v,rest,w) {
+        for (i=1;i<=NR;i++) if (index(line[i],"service_" name "=")==1) {
+            rest=substr(line[i],length("service_" name "=")+1); split(rest,w," "); v=w[1]
+            if (v=="not_running") { show("wait",tag,"not running"); return }
+            if (v!="running") { show("NO",tag,v); return }
+            if (index(line[i],"package_preload=yes")) show("ok",tag,"preload yes")
+            else show("NO",tag,"preload no")
+            return
+        }
+        show("NO",tag,"missing")
+    }
+    END {
+        print "---- GO / NO-GO ----"
+        v=field("reboot_check=")
+        if (v=="new_boot_observed") show("ok","BOOT","new boot"); else show("NO","BOOT",v==""?"missing":v)
+        v=field("startup_state=")
+        if (v=="guard_committed_after_new_boot") show("ok","GUARD","committed")
+        else if (v=="new_linux_boot_arm_unconsumed") show("wait","GUARD","not consumed yet")
+        else show("NO","GUARD",v==""?"missing":v)
+        v=field("one_boot=")
+        if (v=="consumed_this_boot") show("ok","ONCE","consumed"); else show("NO","ONCE",v==""?"missing":v)
+        v=field("config_mode=")
+        if (v=="SHADOW") show("ok","MODE","SHADOW"); else show("NO","MODE",v==""?"missing":v)
+        v=field("runtime_disable_next_start=")
+        if (v=="absent") show("ok","STOP","not disabled"); else show("NO","STOP",v==""?"missing":v)
+        v=field("retained_bytes=")
+        if (v=="") show("NO","DATA","missing")
+        else if (v+0>0) show("ok","DATA",v " bytes")
+        else show("wait","DATA","0 bytes")
+        v=field("collector_poll_recent=")
+        if (v=="observed") show("ok","POLL","collector polling"); else show("wait","POLL",v==""?"missing":v)
+        service("jciAAPA","AAPA"); service("jciLDS","LDS"); service("jciVBS","VBS")
+        if (bad) print "NO-GO"
+        else if (pend) print "WAIT 60 s, then run 2 again"
+        else print "GO"
+    }'
+}
+
 current_status() {
     boundary_output=$(boot_boundary)
     if status_output=$(sh "$HERE/trial_status.sh" 2>&1); then last_rc=0; else last_rc=$?; fi
     printf '%s\n%s\nstatus_exit=%s\n' "$boundary_output" "$status_output" "$last_rc"
+    verdict_output=$(printf '%s\n%s\n' "$boundary_output" "$status_output" | startup_verdict)
     # Save the parked startup check before the single USB port changes to AA.
     # A separate subshell releases its remount lock before another menu action.
     if (
@@ -57,8 +115,8 @@ current_status() {
         report_tmp=$(mktemp ./startup-result.XXXXXX) || fail 'Cannot stage startup report'
         # This subshell is an if condition: POSIX shells suppress set -e here.
         # Check writes explicitly and keep the previous report on write error.
-        if ! printf 'scope=parked_startup_check\n%s\n%s\nstatus_exit=%s\n' \
-            "$boundary_output" "$status_output" "$last_rc" > "$report_tmp"; then
+        if ! printf 'scope=parked_startup_check\n%s\n%s\nstatus_exit=%s\n%s\n' \
+            "$boundary_output" "$status_output" "$last_rc" "$verdict_output" > "$report_tmp"; then
             rm -f "$report_tmp" || :
             fail 'Cannot write startup report'
         fi
@@ -69,6 +127,8 @@ current_status() {
         sync || fail 'Cannot sync startup report'
     ); then echo 'Startup check saved: startup-result.txt'
     else echo 'Startup check could not be saved; the displayed status remains valid.'; fi
+    printf '%s\n' "$verdict_output"
+    short_menu=1
 }
 
 finish_and_export() {
@@ -110,16 +170,22 @@ finish_and_export() {
 }
 
 last_rc=0
+short_menu=0
 while :; do
-    printf '\n%s\n' 'Parked USB trial menu' \
-        '1 Install for the next boot' \
-        '2 Check CMU reboot, current capture and retained records' \
-        '3 Finish capture and save logs plus startup diagnostics to this USB' \
-        '4 Uninstall (keeps collected logs)' \
-        '5 Reboot CMU now through the original system reboot command' \
-        '0 Exit'
-    echo 'After install choose 5; keep this USB connected. After restart reopen this menu and choose 2 before switching to AA. For recovery choose 3 without reinstalling or rearming.'
-    echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
+    if [ "$short_menu" = 1 ]; then
+        short_menu=0
+        printf '\n%s\n' '0 Exit (1-5 as listed before)'
+    else
+        printf '\n%s\n' 'Parked USB trial menu' \
+            '1 Install for the next boot' \
+            '2 Check CMU reboot, current capture and retained records' \
+            '3 Finish capture and save logs plus startup diagnostics to this USB' \
+            '4 Uninstall (keeps collected logs)' \
+            '5 Reboot CMU now through the original system reboot command' \
+            '0 Exit'
+        echo 'After install choose 5; keep this USB connected. After restart reopen this menu and choose 2 before switching to AA. For recovery choose 3 without reinstalling or rearming.'
+        echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
+    fi
     printf 'Number, then Enter: '
     if ! IFS= read -r choice; then exit "$last_rc"; fi
     case "$choice" in

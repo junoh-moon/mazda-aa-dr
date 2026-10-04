@@ -40,15 +40,16 @@ class StorageTests(unittest.TestCase):
     def test_existing_bounded_logs_are_reused_without_demanding_twice_the_space(self):
         logs = self.base / 'logs'
         logs.mkdir(parents=True)
-        for stream, count, size in (('trace', 3, 8 * 1024 * 1024),
-                                    ('collector', 2, 1024 * 1024)):
+        # Files already at the per-file caps (trace 40 MiB x3, collector 4 MiB x2).
+        for stream, count, size in (('trace', 3, 40 * 1024 * 1024),
+                                    ('collector', 2, 4 * 1024 * 1024)):
             for i in range(count):
                 with (logs / f'{stream}.{i}.jsonl').open('wb') as f:
                     f.truncate(size)
         with self.free_space(16 * 1024):
             r = self.fixture.run_script('install.sh')
         self.assertIn('remaining_log_kib=0', r.stdout)
-        self.assertEqual((logs / 'trace.0.jsonl').stat().st_size, 8 * 1024 * 1024)
+        self.assertEqual((logs / 'trace.0.jsonl').stat().st_size, 40 * 1024 * 1024)
 
     def test_export_cannot_accumulate_archives_on_persistent_storage(self):
         self.fixture.run_script('install.sh')

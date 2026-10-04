@@ -66,45 +66,50 @@ reboot_command_exit=0
 `reboot_completion=unconfirmed`는 **정상입니다.** 요청만 보냈다는 뜻입니다. 이제 **시동 버튼을 누르지 말고** CMU 화면이 꺼졌다가 다시 켜질 때까지 기다리십시오.
 `reboot_command_exit=0`이 아니면 사진을 남기고 `5`를 한 번만 다시 누르십시오. 또 실패하면 중단하고 알려 주십시오.
 
-**S5. 재부팅이 됐는지는 화면이 아니라 다음 확인으로만 판정합니다.** 화면이 돌아오면 같은 방식으로 셸을 열고 S2의 한 줄을 입력한 뒤 **`2`와 Enter**를 누르십시오.
-첫 줄이 이 값이면 새 부팅입니다.
+**S5.** 화면이 돌아오면 같은 방식으로 셸을 열고 S2의 한 줄을 입력한 뒤 **`2`와 Enter**를 누르십시오. 재부팅이 됐는지도, 시험이 시작됐는지도 **화면 맨 아래의 판정 블록 하나로만** 판단합니다.
+상세 값은 USB의 `startup-result.txt`에 전부 저장되므로 화면에서 긴 줄을 읽을 필요가 없습니다.
 
-- `reboot_check=new_boot_observed` → 재부팅됨. S6으로 가십시오.
-- `reboot_check=same_boot` → **재부팅되지 않았습니다.** `5`를 한 번 더 누르고 5분 기다린 뒤 다시 `2`로 확인하십시오(5분은 이 절차가 정한 기준입니다). 그래도 `same_boot`면 중단하고 S9의 `3`, `4`를 하고 알려 주십시오.
-- `reboot_check=unavailable` → 요청 기록을 읽지 못한 것입니다. 중단하고 사진을 남기고 알려 주십시오.
-- 5분이 지나도 화면이 바뀌지 않으면 셸을 열어 `2`를 확인하십시오. 확인 결과가 위 셋 중 무엇인지가 판정입니다.
+```
+---- GO / NO-GO ----
+ok   BOOT  new boot
+ok   GUARD committed
+ok   ONCE  consumed
+ok   MODE  SHADOW
+ok   STOP  not disabled
+ok   DATA  1275 bytes
+ok   POLL  collector polling
+ok   AAPA  preload yes
+ok   LDS   preload yes
+ok   VBS   preload yes
+GO
+```
 
-**S6. 시험 시작 판정.** `2`의 화면에서 다음이 **모두** 있어야 합니다(순정 BusyBox 실행에서 실제로 나온 줄입니다).
+위는 순정 BusyBox 실행의 실제 메뉴 2 출력(합성 `/proc`)에 판정 함수를 적용한 결과입니다. 이 시험에서 VBS 줄만 제가 `preload yes`로 바꿔 넣었습니다. 숫자(`1275`)는 차에서는 다릅니다.
+각 줄은 40자 이내이고 `ok`, `NO`, `wait` 중 하나로 시작합니다. 메뉴 2가 끝나면 긴 메뉴 안내를 다시 찍지 않고 짧은 한 줄(`0 Exit (1-5 as listed before)`)만 나오므로 판정 블록이 화면 아래에 남습니다.
 
-| # | 화면에 있어야 하는 문자열(그대로) |
+**S6. 마지막 줄로 판정합니다.**
+
+- `GO` → 출발합니다. S7로 가십시오.
+- `WAIT 60 s, then run 2 again` → `wait`인 줄이 아직 시작 중인 항목입니다(서비스가 `not running`, `DATA 0 bytes`, `POLL`이 아직 없음, 새 부팅 직후의 `GUARD not consumed yet`). **60초 기다린 뒤 `2`를 한 번 더** 누르십시오. 두 번째에도 `WAIT`나 `NO-GO`면 출발하지 마십시오(아래 NO-GO와 같음).
+- `NO-GO` → **출발하지 마십시오.** `NO`인 줄과 그 값을 사진으로 남기고 S9의 `3`과 `4`를 하십시오. 다시 `1`을 누르지 마십시오. 단 하나의 예외가 있습니다.
+  - `NO   BOOT  same_boot` → 재부팅이 되지 않은 것입니다. `5`를 한 번 더 누르고 5분 기다린 뒤 `2`로 다시 확인하십시오(5분은 이 절차가 정한 기준입니다). 그래도 `same_boot`면 위의 NO-GO와 같이 중단하십시오.
+  - `NO   BOOT  unavailable`이면 요청 기록을 읽지 못한 것이니 중단하고 알려 주십시오.
+
+판정 블록의 줄과 기준은 아래와 같습니다. `AAPA`, `LDS`, `VBS`는 이 묶음에 새로 넣은 확인이라 **실제 CMU에서 처음 읽는 값**입니다.
+
+| 줄 | ok의 조건 |
 | --- | --- |
-| 1 | `reboot_check=new_boot_observed` |
-| 2 | `startup_state=guard_committed_after_new_boot` |
-| 3 | `one_boot=consumed_this_boot` |
-| 4 | `config_mode=SHADOW` |
-| 5 | `runtime_disable_next_start=absent` |
-| 6 | `retained_bytes=` 뒤의 숫자가 0보다 큼 |
-| 7 | `collector_poll_recent=observed` |
-| 8 | `service_jciAAPA=running`, `service_jciLDS=running`, `service_jciVBS=running` 세 줄이 **각각** `package_preload=yes`를 포함 |
+| BOOT | `reboot_check=new_boot_observed` |
+| GUARD | `startup_state=guard_committed_after_new_boot` |
+| ONCE | `one_boot=consumed_this_boot` |
+| MODE | `config_mode=SHADOW` |
+| STOP | `runtime_disable_next_start=absent` |
+| DATA | `retained_bytes`가 0보다 큼 |
+| POLL | `collector_poll_recent=observed` |
+| AAPA, LDS, VBS | 각 서비스가 `running`이고 `package_preload=yes` |
 
-서비스 줄의 형식은 실제 실행에서 이렇게 나왔습니다.
-
-```
-service_jciAAPA=running pid=812 uid=0 stack_soft_bytes=131072 package_preload=yes
-service_jciLDS=running pid=813 uid=0 stack_soft_bytes=131072 package_preload=yes
-status_exit=0
-Startup check saved: startup-result.txt
-```
-
-`jciVBS` 줄도 같은 형식이며 차에서는 `package_preload=yes`여야 합니다. 이 묶음은 시험 설정에서 `jciVBS`에 VBS 탭 preload를 거는데, 그 탭이 센서의 원천이기 때문입니다.
-(에뮬레이션의 `jciVBS` 줄이 `package_preload=no`로 나온 것은 제가 그 시험용 `/proc`에 탭을 넣지 않아서이며 설계가 아닙니다.)
-`pid` 숫자, `uid`, `status_exit`, 그 밖의 `observed` 줄은 판정에 쓰지 않습니다. 정차 중이라 센서가 아직 없거나 AA가 없어서 `status_exit=1`이 나올 수 있습니다.
-8번은 이 묶음에 새로 넣은 확인이라 **실제 CMU에서 처음 읽는 값**입니다. 에뮬레이션의 값은 제가 만든 `/proc` 자료로 나온 것입니다.
-
-- 1~8이 모두 맞으면 **출발(GO)**.
-- 서비스 줄이 `not_running`이거나 `retained_bytes`가 0이거나 `collector_poll_recent`만 없으면 **60초 기다린 뒤 `2`를 한 번 더** 확인하십시오.
-- 그래도 1~8 중 하나라도 맞지 않으면 **출발하지 마십시오(NO-GO).** S9의 `3`, `4`를 하고 USB를 가져와 알려 주십시오. 다시 `1`을 누르지 마십시오.
-- `startup_state=`가 위와 다른 값(예: `invalid_arm_marker`)이면 같은 NO-GO입니다. 설치·재무장·수동 수정을 시도하지 마십시오.
+이 블록은 화면의 상세 출력(`status_exit`, 그 밖의 `observed` 줄)을 대신 판단하지 않습니다. 정차 중에는 센서가 없거나 AA가 없어서 상세 출력의 `status_exit=1`이 나올 수 있고 그것은 판정에 쓰지 않습니다.
+`NO   GUARD invalid_arm_marker`처럼 `startup_state`가 위와 다른 값이면 설치·재무장·수동 수정을 시도하지 마십시오.
 
 **S7.** GO면 `0`과 Enter로 메뉴를 끝내고, USB를 빼고 **AA 동글을 연결하십시오.** 시동은 계속 켜 둡니다. AA가 평소처럼 연결되는지 주차 상태에서 확인하십시오.
 

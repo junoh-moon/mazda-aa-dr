@@ -92,12 +92,15 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('current_boot_id=' + BOOT.strip(), before.stdout)
         self.assertIn('startup_state=awaiting_linux_reboot', before.stdout)
         self.assertIn('one_boot=arm_present retained_bytes=0', before.stdout)
+        self.assertIn('NO   GUARD awaiting_linux_reboot', before.stdout)
+        self.assertIn('NO-GO', before.stdout)
         self.assertIn('startup_state=awaiting_linux_reboot',
                       (self.usb / 'startup-result.txt').read_text())
         (self.root / 'proc/sys/kernel/random/boot_id').write_text(
             BOOT.replace('12345678', '87654321'))
         after = self.menu('2\n0\n')
         self.assertIn('startup_state=new_linux_boot_arm_unconsumed', after.stdout)
+        self.assertIn('wait GUARD not consumed yet', after.stdout)
         self.assertIn('one_boot=arm_present retained_bytes=0', after.stdout)
         self.assertFalse((self.base / 'guard/last-boot').exists())
 
@@ -141,11 +144,74 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('reboot_check=same_boot', result.stdout)
         report = self.usb / 'startup-result.txt'
         self.assertIn('reboot_check=same_boot', report.read_text())
+        self.assertIn('NO   BOOT  same_boot', result.stdout)
         (self.root / 'proc/sys/kernel/random/boot_id').write_text(
             BOOT.replace('12345678', '87654321'))
         result = self.menu('2\n0\n')
         self.assertIn('reboot_check=new_boot_observed', result.stdout)
         self.assertIn('reboot_check=new_boot_observed', report.read_text())
+        self.assertIn('ok   BOOT  new boot', result.stdout)
+        # The verdict is also kept at the end of the saved startup report.
+        self.assertIn('---- GO / NO-GO ----', report.read_text())
+        self.assertIn('ok   BOOT  new boot', report.read_text())
+
+    def test_verdict_is_the_last_thing_on_the_screen_after_menu_two(self):
+        self.prepare_logs()
+        result = self.menu('2\n0\n')
+        self.assertEqual(result.stdout.count('Parked USB trial menu'), 1)
+        out = result.stdout
+        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-5 as listed before)'))
+        self.assertIn('Startup check saved', out[:out.index('---- GO / NO-GO ----')])
+        for line in out[out.index('---- GO / NO-GO ----'):].splitlines():
+            self.assertLessEqual(len(line), 40, line)
+
+    def verdict(self, text):
+        script = (self.usb / 'trial').read_text()
+        start = script.index('startup_verdict() {')
+        function = script[start:script.index('\n}\n', start) + 3]
+        return subprocess.run(['sh', '-c', function + '\nstartup_verdict'], input=text,
+                              text=True, capture_output=True, check=True).stdout
+
+    GO = ('reboot_check=new_boot_observed (boot ID comparison)\n'
+          'runtime_disable_next_start=absent\n'
+          'one_boot=consumed_this_boot retained_bytes=1275 trace_cap_bytes=1\n'
+          'guard_arm=absent guard_armed_boot=different startup_state=guard_committed_after_new_boot\n'
+          'config_mode=SHADOW\n'
+          'service_jciAAPA=running pid=812 uid=0 stack_soft_bytes=131072 package_preload=yes\n'
+          'service_jciLDS=running pid=813 uid=0 stack_soft_bytes=131072 package_preload=yes\n'
+          'service_jciVBS=running pid=814 uid=0 stack_soft_bytes=131072 package_preload=yes\n'
+          'collector_poll_recent=observed window=8s\n')
+
+    def test_verdict_go_wait_and_no_go(self):
+        go = self.verdict(self.GO).splitlines()
+        self.assertEqual(go[0], '---- GO / NO-GO ----')
+        self.assertEqual(go[-1], 'GO')
+        self.assertEqual(sum(l.startswith('ok   ') for l in go), 10)
+        wait = self.verdict(self.GO.replace(
+            'service_jciAAPA=running pid=812 uid=0 stack_soft_bytes=131072 package_preload=yes',
+            'service_jciAAPA=not_running')).splitlines()
+        self.assertIn('wait AAPA  not running', wait)
+        self.assertEqual(wait[-1], 'WAIT 60 s, then run 2 again')
+        wait = self.verdict(self.GO.replace('retained_bytes=1275', 'retained_bytes=0').replace(
+            'collector_poll_recent=observed', 'collector_poll_recent=none')).splitlines()
+        self.assertIn('wait DATA  0 bytes', wait)
+        self.assertIn('wait POLL  none', wait)
+        # A definite failure wins over a pending item.
+        mixed = self.verdict(self.GO.replace('package_preload=yes', 'package_preload=no', 1).replace(
+            'collector_poll_recent=observed', 'collector_poll_recent=none')).splitlines()
+        self.assertIn('NO   AAPA  preload no', mixed)
+        self.assertEqual(mixed[-1], 'NO-GO')
+        for text, expect in (('reboot_check=same_boot\n', 'NO   BOOT  same_boot'),
+                             (self.GO.replace('config_mode=SHADOW', 'config_mode=OFF'), 'NO   MODE  OFF'),
+                             (self.GO.replace('guard_committed_after_new_boot', 'invalid_arm_marker'),
+                              'NO   GUARD invalid_arm_marker'),
+                             (self.GO.replace('absent', 'present'), 'NO   STOP  present')):
+            result = self.verdict(text).splitlines()
+            self.assertIn(expect, result)
+            self.assertEqual(result[-1], 'NO-GO')
+        empty = self.verdict('').splitlines()
+        self.assertEqual(empty[-1], 'NO-GO')
+        self.assertEqual(sum(l.startswith('NO ') for l in empty), 9)
 
     def test_invalid_reboot_receipt_does_not_claim_a_new_boot(self):
         self.prepare_logs()
