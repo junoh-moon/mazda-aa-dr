@@ -3,13 +3,12 @@
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
 **The current public development pre-release is
-[v0.3.11-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.2).**
-It preserves lexical RMC A/V status through the LDS heading assignment into AA
-observation records. The final shell-only ZIP passed three stock BusyBox paths,
-and the published assets were downloaded and compared with the pinned candidate;
-see [publication evidence](validation/RELEASE_V0311_SHADOW2_2026-10-02.md).
-Installation requires an already authorized shell that remains accessible after
-reboot; this ZIP does not provide shell entry. Whole normal SM/vehicle startup and
+[v0.3.12-shadow.3](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.12-shadow.3).**
+It adds a short GO/NO-GO block to the parked status check (menu 2) for the small CMU screen and
+fixes an AA worker stack limit that could crash jciAAPA. The ZIP is self-contained: it includes the
+MP3/JS shell-entry files, so the download alone is enough to start an installation. The final ZIP passed
+the full ARM suite and the stock BusyBox install paths, and the published asset was downloaded and compared;
+see [publication evidence](validation/RELEASE_V0312_SHADOW3_2026-10-04.md). Whole normal SM/vehicle startup and
 recovery, physical sensors and phone acceptance remain unverified; live ASSIST
 stays disabled. The earlier v0.3.10-shadow.1 and .2 packages remain withdrawn.
 
@@ -64,11 +63,10 @@ and the distinct scope of earlier original-library execution.
 [v0.3.8](validation/RELEASE_V038_2026-10-01.md) and
 [v0.3.7](validation/RELEASE_V037_2026-10-01.md) retain their historical evidence.
 
-For a separately arranged trial with the current .2 shell-only ZIP, use the
-[power-state and installation instructions](packaging/SHELL_START_KO.md).
-They require an already authorized diagnostic shell that remains accessible
-after the CMU reboot. The USB menu uses `1 → 5 → 2` while parked, followed by
-the documented AA/USB switch and parked export. This publication does not grant
+For a separately arranged trial with the current ZIP, use the
+[exact trial procedure](docs/FIELD_PROCEDURE_2026-10-04_KO.md) and the bundled
+[power-state and installation instructions](packaging/USB_START_KO.md). The USB menu uses `1 → 5 → 2`
+while parked, followed by the documented AA/USB switch and parked export. This publication does not grant
 another vehicle trial. Do not enter commands or change USB devices while driving.
 
 Historical packaging evidence for BusyBox 1.19.2, absent sha256sum, numeric UID 0,

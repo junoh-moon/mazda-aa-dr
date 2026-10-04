@@ -2,12 +2,11 @@
 
 **AA = Android Auto, DR = Dead Reckoning(추측항법).** 2019 MX-5 ND2의 1세대 Mazda Connect **NA 74.00.324A**에서 차량 위치 전달과 터널 내 추측항법을 연구한다.
 
-**현재 공개 개발판은 [v0.3.11-shadow.2](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.11-shadow.2)입니다.**
-RMC A/V 상태가 실제 방위각 할당을 따라 LDS→AA 기록에 남도록 했습니다.
-최종 shell-only ZIP의 BusyBox 세 경로와 공개 파일 재다운로드 검증을
-통과했습니다. [발행 기록](validation/RELEASE_V0311_SHADOW2_2026-10-02.md)에
-테스트 범위와 한계를 적었습니다. 설치에는 재부팅 뒤에도 접근 가능한
-기존 승인 셸이 필요합니다. 진입 수단은 ZIP에 없습니다. 전체 OEM 기동·실차
+**현재 공개 개발판은 [v0.3.12-shadow.3](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.12-shadow.3)입니다.**
+작은 CMU 화면에서 읽을 수 있게 주차 중 상태 확인(메뉴 2)에 짧은 GO/NO-GO 판정 블록을 추가했고, jciAAPA를 죽일 수 있던 AA 작업 스레드의
+스택 한도 결함을 고쳤습니다. **ZIP은 그 자체로 완결적입니다.** 셸 진입 파일(MP3·JS)이 들어 있어 내려받은 ZIP만으로 설치를 시작할 수 있습니다.
+최종 ZIP은 ARM 전체 검사와 순정 BusyBox 설치 경로를 통과했고 공개 파일을 다시 받아 대조했습니다.
+[발행 기록](validation/RELEASE_V0312_SHADOW3_2026-10-04.md)에 범위와 한계를 적었습니다. 전체 OEM 기동·실차
 복구·물리 센서·폰 수용은 미검증이고 ASSIST는 비활성입니다.
 
 **현재 소스는 OBSERVE와 실제 센서 SHADOW 계산을 포함한 시험 후보**입니다. OFF 로딩, 폴링 프로세스 분리, 일회성 기동 보호를 구현했습니다. 실차 시험을 수행했지만 회수 archive에 수집 기록이 없어 기동·저장 경로를 조사 중입니다. 센서 동작과 휴대폰 수용은 입증되지 않았습니다. ASSIST는 비활성이며 터널 내비게이션이 완성된 상태가 아닙니다. [빈 기록 조사](validation/EMPTY_CAPTURE_2026-10-02.md)를 참조하십시오.
@@ -54,10 +53,8 @@ guard 표식 진단, 메뉴 `5`의 순정 CMU 재부팅 요청과 확대 회수�
 [v0.3.8](validation/RELEASE_V038_2026-10-01.md)과
 [v0.3.7](validation/RELEASE_V037_2026-10-01.md)의 검증 이력은 별도로 보존합니다.
 
-현재 공개 .2 ZIP은 이미 승인된 진단 셸에 들어갈 수 있는 경우에 사용하는
-shell-only 묶음입니다. 차량에서 별도로 정한 시험을 수행하는 경우 ZIP에
-동봉한 [정확한 전원 상태·설치·재부팅·USB 교체·회수 안내](packaging/SHELL_START_KO.md)와
-[통합 시험 절차](docs/FIELD_TRIAL_KO.md)를 따르십시오. 이 발행 자체는
+현재 공개 ZIP으로 차량에서 별도로 정한 시험을 수행하는 경우 [정확한 시험 절차](docs/FIELD_PROCEDURE_2026-10-04_KO.md)와
+ZIP에 동봉한 [전원 상태·설치·재부팅·USB 교체·회수 안내](packaging/USB_START_KO.md)를 따르십시오. 이 발행 자체는
 추가 차량 시험 승인이 아닙니다.
 
 현재 묶음은 BusyBox 1.19.2, `sha256sum` 부재, UID 0 계정 이름,
