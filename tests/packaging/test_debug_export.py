@@ -147,6 +147,19 @@ class DebugExportTests(unittest.TestCase):
                                  b'authored maps for ' + {51: b'jciAAPA', 52: b'jciLDS', 53: b'jciVBS'}[pid] + b'\n')
             self.assertFalse(any('/proc/54/' in m.name for m in tar))
 
+    def test_sm_reset_reports_in_data_are_collected_when_present(self):
+        data = self.root / 'data'
+        data.mkdir()
+        (data / 'thread_info.out').write_text('authored kernel stacks: jciblmVdt futex_wait\n')
+        (data / 'unrelated.bin').write_text('must not be collected\n')
+        with self.archive(self.run_export()) as tar:
+            self.assertIn(b'jciblmVdt futex_wait',
+                          tar.extractfile(self.member(tar, 'sm-reports/thread_info.out.txt')).read())
+            report = tar.extractfile(self.member(tar, 'collection.txt')).read().decode()
+            self.assertIn('sm-reports/thread_info.out.mtime=', report)
+            self.assertIn('sm-reports/ps_info.out=missing', report)
+            self.assertFalse(any('unrelated' in m.name for m in tar))
+
     def test_oem_redirect_fifos_are_metadata_only_and_log_tails_are_bounded(self):
         redirects = self.root / 'tmp/redirlogs'
         redirects.mkdir(parents=True)

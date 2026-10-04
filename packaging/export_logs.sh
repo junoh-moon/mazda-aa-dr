@@ -166,6 +166,19 @@ printf 'oem_log_scope=retained_unknown_boot\n' >> "$report"
 oem_log_directory running "$ROOT/var/log/running_log"
 [ "$persist_ok" != 1 ] || oem_log_directory errors "$persist/log/error_logs"
 
+# SM writes its reset reports (meminfo, ps, top, kernel thread stacks, df, dmesg) to /data just
+# before it stops the watchdog. They can survive the reboot and show what a hung service was
+# waiting on. Read only these fixed names; each is bounded like the other captured files.
+sm_reports_dir=$ROOT/data
+[ -d "$sm_reports_dir" ] || sm_reports_dir=$ROOT/tmp/mnt/data
+for sm_report in thread_info.out ps_info.out top_info.out meminfo.out free_info.out df_info.out dmesg.out; do
+    bounded_file "sm-reports/$sm_report" "$sm_reports_dir/$sm_report"
+    if [ -f "$sm_reports_dir/$sm_report" ] && [ ! -L "$sm_reports_dir/$sm_report" ]; then
+        printf 'sm-reports/%s.mtime=%s\n' "$sm_report" \
+            "$(stat -c %y "$sm_reports_dir/$sm_report" 2>/dev/null || echo unknown)" >> "$report"
+    fi
+done
+
 bounded_command() {
     capture_key=$1; shift
     # No OEM program, guard or service is executed. Limit output even if a
