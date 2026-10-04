@@ -1,7 +1,6 @@
 # 순정 BusyBox에서의 USB 메뉴 실행 — 2026-10-04
 
-시험 묶음(`build/freeze/mx5dr-usb.zip`, SHA-256 `bbdd0ab9a51b61d0e3df94fb497bc5579d6ea32bbfda1c8d341c68c49109bdc9`, 소스 커밋
-`1988686`)의 `trial` 메뉴를 CMU 순정 루트(ARM BusyBox 1.19.2, glibc 2.11.1)에서 실행했다. 차량·실제 CMU에서 실행한 것은 없다.
+시험 묶음(로컬 동결본, 소스 커밋 `1988686`, `--shell-only` 없이 만들어 `mp3/`, `js/`를 포함. 같은 스크립트·바이너리의 셸 전용 공개 묶음에 대한 확인은 릴리즈 검증 기록에 따로 적는다)의 `trial` 메뉴를 CMU 순정 루트(ARM BusyBox 1.19.2, glibc 2.11.1)에서 실행했다. 차량·실제 CMU에서 실행한 것은 없다.
 
 ## 방법
 
