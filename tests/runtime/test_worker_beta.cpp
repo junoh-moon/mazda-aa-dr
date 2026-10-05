@@ -185,7 +185,7 @@ int main(int argc,char** argv) {
     assert(argc==2);const std::string scenario=argv[1];
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix");
-    alarm(scenario=="budget"?60:40);
+    alarm(scenario=="budget"?80:scenario=="main"?80:60);
     if(scenario=="budget")kmh=59;
     char root[]="/tmp/mx5dr-worker-beta-XXXXXX";assert(mkdtemp(root));
     const std::string logs=std::string(root)+"/logs";
@@ -234,7 +234,15 @@ int main(int argc,char** argv) {
     }
     assert(A::mode()==A::BETA);
     N::MotionSender sender;assert(sender.open_channel(motion_channel));uint64_t sequence=0;
-    const unsigned end_ms=scenario=="budget"?20000:scenario=="main"?9600:6400;
+    // BETA_DECISIONS 3.2: an anchor needs 10 s of consecutive increasing
+    // fixes after the first fix and after every GPS return. The scenario
+    // timelines below (t) are the former ones with a mode-1 prelude of
+    // PRELUDE ms inserted before t=0 and, for main, a second one after the
+    // GPS return at t=7500 (the former 3 s / 2.5 s fix phases are too short).
+    const unsigned PRELUDE=8000,PRELUDE2=10000; // >= 1 s margin over the 10 s rule
+    const bool shifted=scenario!="nofix" && scenario!="no_anchor";
+    const unsigned scenario_end=scenario=="budget"?20000:scenario=="main"?9600:6400;
+    const unsigned end_ms=scenario_end+(shifted?PRELUDE:0)+(scenario=="main"?PRELUDE2:0);
     const uint64_t start=clock_ns(0);
     bool motion=true;
     unsigned first_outage_replaced=0,second_outage_replaced=0,after_hold_replaced=0,after_storage_replaced=0;
@@ -245,18 +253,34 @@ int main(int argc,char** argv) {
     for(unsigned ms=0;ms<=end_ms;ms+=20) {
         until(start+uint64_t(ms)*1000000ULL);
         const uint64_t now=clock_ns(0);
-        if(scenario=="silence" && ms==4000)motion=false;
+        // Scenario time t; prelude: forced 2 Hz mode-1 fixes, no scenario event.
+        bool prelude=false;unsigned t=ms;
+        if(shifted) {
+            if(ms<PRELUDE) { prelude=true;t=0; } else t=ms-PRELUDE;
+            if(scenario=="main" && t>7500) { if(t<=7500+PRELUDE2) { prelude=true;t=7500; } else t-=PRELUDE2; }
+        }
+        if(scenario=="silence" && !prelude && t==4000)motion=false;
         // nofix: the car drives, then stands still, all before the first fix.
         const double wheel_kmh=scenario=="nofix" && ms>=2500?0.0:kmh;
         for(unsigned kind=1;kind<=3 && motion;++kind) {
             if(kind==N::YAW && ms%100)continue;
-            if(kind==N::REVERSE && ms)continue; // change-only producer: one message
+            // Change-only producer: reverse at boot, then forward (a 1->0
+            // transition, BETA_DECISIONS 3.4), nothing else.
+            if(kind==N::REVERSE && ms!=0 && ms!=100)continue;
             N::RawEvent r=N::RawEvent();r.kind=static_cast<N::SensorKind>(kind);
-            r.epoch=1;r.receive_seq=++sequence;r.received_ns=now;r.count=1;r.reverse=0;
-            for(unsigned i=0;i<4;++i)r.raw[i]=kind==N::WHEELS?uint16_t(lround(wheel_kmh*100+10000)):2047;
+            r.epoch=1;r.receive_seq=++sequence;r.received_ns=now;r.count=1;r.reverse=ms==0?1:0;
+            // The BETA yaw zero is 2048 (straight); the MODEL keeps its own.
+            for(unsigned i=0;i<4;++i)r.raw[i]=kind==N::WHEELS?uint16_t(lround(wheel_kmh*100+10000)):2048;
             if(!sender.send_event(r)) { fprintf(stderr,"motion send failed at %u errno=%d\n",ms,errno);assert(0); }
         }
-        if(scenario=="disable" && ms==4000) {
+        if(prelude) {
+            if(ms%500==0) {
+                const bool replaced=oem_call(ms,1);
+                assert(!replaced);
+            }
+            continue;
+        }
+        if(scenario=="disable" && t==4000) {
             const std::string marker=logs+"/disable-next-start";
             const int fd=open(marker.c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);assert(fd>=0);close(fd);
         }
@@ -272,20 +296,20 @@ int main(int argc,char** argv) {
             continue;
         }
         if(scenario=="no_anchor") {
-            // GPS lost before any gated anchor (yaw history < 2 s): never replaced.
-            if(ms<1000) { if(ms%500==0)mode=1; } else if(ms%200==0)mode=0;
+            // GPS lost before any gated anchor (fewer than 10 s of fixes): never replaced.
+            if(t<1000) { if(t%500==0)mode=1; } else if(t%200==0)mode=0;
         }
-        else if(ms<=3000) { if(ms%500==0)mode=1; }
+        else if(t<=3000) { if(t%500==0)mode=1; }
         else if(scenario=="main") {
-            if(ms>=3200 && ms<5000 && ms%200==0)mode=0;
-            else if(ms>=5000 && ms<=7500 && ms%500==0)mode=1;
-            else if(ms>=7700 && ms<9000 && ms%200==0)mode=0;
-            else if(ms>=9000 && ms%500==0)mode=1;
-        } else if(ms>=3200 && ms%200==0)mode=0;
+            if(t>=3200 && t<5000 && t%200==0)mode=0;
+            else if(t>=5000 && t<=7500 && t%500==0)mode=1;
+            else if(t>=7700 && t<9000 && t%200==0)mode=0;
+            else if(t>=9000 && t%500==0)mode=1;
+        } else if(t>=3200 && t%200==0)mode=0;
         if(mode<0)continue;
-        if(scenario=="main" && ms==4400)fail_next_replaced=-7;
-        if(scenario=="main" && ms==8600 && !storage_changed) { storage=&storage_b_object;storage_changed=true; }
-        if(scenario=="fault" && ms==4600) {
+        if(scenario=="main" && t==4400)fail_next_replaced=-7;
+        if(scenario=="main" && t==8600 && !storage_changed) { storage=&storage_b_object;storage_changed=true; }
+        if(scenario=="fault" && t==4600) {
             // A second LOCATION inside one POSITION is an adapter contract
             // fault: sticky, OBSERVE, and BETA goes to FAULT.
             uint8_t position[72];memset(position,0,sizeof position);
@@ -303,22 +327,22 @@ int main(int argc,char** argv) {
             continue;
         }
         const bool replaced=oem_call(ms,mode);
-        if(scenario=="fault" && ms>4600 && replaced)++replaced_after_disable;
+        if(scenario=="fault" && t>4600 && replaced)++replaced_after_disable;
         if(replaced)last_replaced_ms=ms;
         if(scenario=="main") {
-            if(ms>=3200 && ms<5000 && replaced) {
+            if(t>=3200 && t<5000 && replaced) {
                 ++first_outage_replaced;
                 if(failed_once)++after_hold_replaced;
                 if(calls.back().result==-7)failed_once=true;
             }
-            if(ms==5000)assert(!replaced); // GPS return: the very next send is ORIGINAL.
-            if(ms>=7700 && ms<9000 && replaced) {
+            if(t==5000)assert(!replaced); // GPS return: the very next send is ORIGINAL.
+            if(t>=7700 && t<9000 && replaced) {
                 if(storage_changed)++after_storage_replaced;else ++second_outage_replaced;
             }
-            if(ms>=9000)assert(!replaced);
+            if(t>=9000)assert(!replaced);
         }
-        if(scenario=="silence" && replaced && ms>=4400)++replaced_after_silence;
-        if(scenario=="disable" && replaced && ms>=5200)++replaced_after_disable;
+        if(scenario=="silence" && replaced && t>=4400)++replaced_after_silence;
+        if(scenario=="disable" && replaced && t>=5200)++replaced_after_disable;
     }
     // capture.stop takes precedence: the adapter returns to OBSERVE.
     assert(!mkdir((logs+"/capture.stop").c_str(),0700));
@@ -348,6 +372,17 @@ int main(int argc,char** argv) {
     assert(rows.boot_beta_ok==1);
     assert(rows.replaced_rows==replaced_total+double_send_replaced && !rows.replaced_bad_mode);
     assert(rows.overlay_rows==overlay_total);
+    // BETA_DECISIONS 3.2: every gate evaluation is journaled.
+    unsigned anchor_accepted=0,anchor_settling=0,anchor_bad_fix=0;
+    for(size_t i=0;i<rows.lines.size();++i) if(rows.lines[i].find("\"kind\":\"beta_anchor\"")!=std::string::npos) {
+        if(rows.lines[i].find("\"gate\":\"ACCEPTED\"")!=std::string::npos)++anchor_accepted;
+        if(rows.lines[i].find("\"gate\":\"SETTLING\"")!=std::string::npos)++anchor_settling;
+        if(rows.lines[i].find("\"gate\":\"BAD_FIX\"")!=std::string::npos)++anchor_bad_fix;
+    }
+    printf("anchor rows: accepted=%u settling=%u bad_fix=%u\n",anchor_accepted,anchor_settling,anchor_bad_fix);
+    if(scenario=="nofix")assert(anchor_bad_fix>=5 && !anchor_accepted);
+    else if(scenario=="no_anchor")assert(!anchor_accepted);
+    else assert(anchor_accepted>=1 && anchor_settling>=5);
     if(scenario!="nofix")assert(!overlay_total);
     assert(!replaced_after_stop);
     assert(rows.storage_rows>=1 && rows.summaries>=2);

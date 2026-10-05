@@ -154,7 +154,13 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
         !bounded(s.speed_mps,100.0) || !bounded(s.body_heading_rad,2.0*PI) || s.body_heading_rad==2.0*PI)
         return CORE_BRIDGE_NUMERIC;
     // The reported radius is the budget at lease end; no clamp, no rounding down.
-    const double accuracy=s.error_budget_m+(s.speed_mps+p.speed_error_mps)*lease_s;
+    // The core already carries (v+sv)*age to the query time; the rotation part
+    // of the heading budget is carried here through the query age and lease.
+    if (!nonnegative(in.rotation_rad) || !nonnegative(in.rotation_budget_m) ||
+        !nonnegative(p.rotation_budget_per_rad)) return CORE_BRIDGE_NUMERIC;
+    const double age_s=double(in.query_mono_ns-s.frontier_ns)/1e9;
+    const double accuracy=s.error_budget_m+in.rotation_budget_m+(s.speed_mps+p.speed_error_mps)*lease_s+
+        s.speed_mps*p.rotation_budget_per_rad*in.rotation_rad*(age_s+lease_s);
     if (!std::isfinite(accuracy)) return CORE_BRIDGE_NUMERIC;
     if (accuracy>p.accuracy_max_m) return CORE_BRIDGE_LIMIT;
     // Rule 5: a withdrawn bearing withdraws the whole first-beta snapshot.

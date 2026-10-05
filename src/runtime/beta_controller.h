@@ -113,7 +113,7 @@ public:
           seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
           last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
-          last_original_accuracy_(-1),last_speed_(-1) {}
+          last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0) {}
     BetaState state() const { return state_; }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
@@ -197,6 +197,7 @@ public:
         const uint32_t source=bus_epoch && bus_epoch<=UINT32_MAX?uint32_t(bus_epoch):0;
         shared_.source_epoch.store(source,std::memory_order_release);
         journal_events(j,now);
+        journal_anchors(j,nav);
         if(!live())return;
         if((state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) && adapter::beta_held())
             withdraw_episode(j,now,"send_result_hold");
@@ -226,6 +227,35 @@ private:
     uint64_t last_original_utc_;   // utc_s of the newest POSITION
     double last_original_accuracy_; // original LOCATION accuracy (m), -1 when absent
     double last_speed_;            // last published overlay speed (m/s), -1 none
+    uint64_t seen_anchor_seq_,anchor_rows_dropped_;
+
+    // BETA_DECISIONS 3.2: every anchor gate evaluation, including each
+    // rejection reason, becomes one beta_anchor row (ring overrun is counted).
+    template<class J> void journal_anchors(J& j,const navigation::Pipeline& nav) {
+        const uint64_t latest=nav.beta_anchor_sequence();
+        if(latest<seen_anchor_seq_)seen_anchor_seq_=0;
+        for(uint64_t seq=seen_anchor_seq_+1;seq<=latest;++seq) {
+            navigation::BetaAnchorRecord r;
+            if(!nav.beta_anchor_record(seq,&r)) { ++anchor_rows_dropped_;continue; }
+            char hdop[48],kmh[48],ratio[48],streak[48];
+            finite_or_null(r.hdop,hdop);finite_or_null(r.kmh,kmh);
+            finite_or_null(r.displacement_ratio,ratio);finite_or_null(r.streak_s,streak);
+            char line[500];
+            const int n=snprintf(line,sizeof line,
+                "{\"kind\":\"beta_anchor\",\"mono_ns\":%llu,\"domain\":\"beta\",\"seq\":%llu,"
+                "\"mode\":%d,\"utc_s\":%llu,\"gate\":\"%s\",\"hdop\":%s,\"kmh\":%s,"
+                "\"displacement_ratio\":%s,\"streak_s\":%s,\"reverse_exit_seen\":%s,"
+                "\"dropped\":%llu}",
+                (unsigned long long)r.mono_ns,(unsigned long long)r.seq,r.mode,
+                (unsigned long long)r.utc_s,navigation::beta_anchor_gate_name(r.gate),hdop,kmh,ratio,streak,
+                nav.reverse_exit_seen()?"true":"false",(unsigned long long)anchor_rows_dropped_);
+            if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+        }
+        seen_anchor_seq_=latest;
+    }
+    static void finite_or_null(double v,char out[48]) {
+        if(std::isfinite(v))snprintf(out,48,"%.9g",v);else strcpy(out,"null");
+    }
 
     // Engaged -> WITHDRAWN for the rest of this class episode.
     template<class J> void withdraw_episode(J& j,uint64_t now,const char* reason) {
@@ -297,6 +327,7 @@ private:
             // before the 300 ms receipt silence; both mean sensor silence.
             if(last_bridge_!=CORE_BRIDGE_OK)
                 withdrawn=nav.status().result==navigation::PIPELINE_MISSING_SENSOR?"sensor_silence":
+                    nav.beta_reverse_suspect()?"reverse_latch_suspect":
                     budget(last_bridge_,in,nav)?"budget_limit":
                     last_bridge_==CORE_BRIDGE_TIME?"lease_expired":"model_not_ready";
         }

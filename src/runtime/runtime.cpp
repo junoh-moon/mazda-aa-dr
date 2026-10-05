@@ -446,6 +446,8 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
           uint64_t(raw.source_mono_ms)<=UINT64_MAX/1000000ULL &&
           uint64_t(raw.source_mono_ms)*1000000ULL<model_since_ns;
       if(enabled && (raw.received_ns<model_since_ns || old_transport)) {
+        // BETA_DECISIONS 3.4: an excluded REVERSE change ends the latch.
+        if(raw.kind==N::REVERSE)navigation.exclude_reverse();
         journal_motion(j,batch,raw);flush_motion(j,batch);
         journal_model_motion_excluded(j,raw,model_since_ns,
             raw.received_ns<model_since_ns?
@@ -455,6 +457,7 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
       }
       const uint64_t resets=navigation.status().resets;
       if(enabled) {navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);}
+      else if(raw.kind==N::REVERSE)navigation.exclude_reverse(); // change not computed
       journal_motion(j,batch,raw);
       if(enabled && navigation.status().resets!=resets) {
         // Write the offending raw input before its diagnostic. These are

@@ -55,10 +55,25 @@ struct Diagnostic {
     mx5_dr_result result;
 };
 // Why the last GPS fix did (not) become a BETA anchor (accuracy rule 3).
+// BETA_DECISIONS_2026-10-05.md 3.1-3.4 added: UTC (same utc second: not a
+// new pair, the baseline is kept), UTC_MONO (utc and receipt steps disagree),
+// HDOP, SETTLING (fewer than 10 s of consecutive increasing fixes since the
+// first fix or GPS return), DISPLACEMENT (pair distance outside
+// [0.5,1.5] x v*dt) and REVERSE_UNPROVEN (no reverse 1->0 seen yet).
 enum BetaAnchorGate {
     BETA_GATE_DISABLED=0, BETA_GATE_WAITING, BETA_GATE_ACCEPTED, BETA_GATE_BAD_FIX,
     BETA_GATE_SPEED, BETA_GATE_PREVIOUS, BETA_GATE_COURSE, BETA_GATE_YAW,
-    BETA_GATE_WHEEL, BETA_GATE_REVERSE, BETA_GATE_CORE
+    BETA_GATE_WHEEL, BETA_GATE_REVERSE, BETA_GATE_CORE,
+    BETA_GATE_UTC, BETA_GATE_UTC_MONO, BETA_GATE_HDOP, BETA_GATE_SETTLING,
+    BETA_GATE_DISPLACEMENT, BETA_GATE_REVERSE_UNPROVEN
+};
+// One BETA anchor gate evaluation (every mode 1/2 POSITION drained by the
+// BETA core), kept in a small ring for the worker journal (beta_anchor rows).
+struct BetaAnchorRecord {
+    uint64_t seq, mono_ns, utc_s;
+    int mode;
+    BetaAnchorGate gate;
+    double hdop, kmh, displacement_ratio, streak_s; // NaN when not evaluated
 };
 const char* beta_anchor_gate_name(BetaAnchorGate);
 // BETA speed overlay input (BETA_DECISIONS_2026-10-05.md 2): the last drained
@@ -178,6 +193,18 @@ public:
     BetaAnchorGate beta_gate() const { return beta_gate_; }
     mx5_dr_result beta_core_result() const { return beta_core_result_; }
     double beta_rotation_rad() const { return beta_rotation_rad_; }
+    double beta_rotation_budget_m() const { return beta_rotation_budget_m_; }
+    // 3.4: the latched reverse contradicted the wheels (> 15 km/h for > 2 s)
+    // and the BETA core was disabled; cleared by the next accepted anchor.
+    bool beta_reverse_suspect() const { return beta_reverse_suspect_; }
+    bool reverse_exit_seen() const { return reverse_exit_seen_; }
+    // Newest anchor record sequence (0: none) and a record by sequence; false
+    // when it was overwritten (ring of BETA_RECORD_CAPACITY).
+    uint64_t beta_anchor_sequence() const { return beta_record_seq_; }
+    bool beta_anchor_record(uint64_t seq,BetaAnchorRecord* out) const;
+    // A REVERSE message the runtime did not hand to this pipeline (excluded
+    // or not computed): its change is lost, so the latch is cleared.
+    void exclude_reverse();
     bool reverse_latched() const { return reverse_latch_&&latch_valid_; }
     const Status& status() const { return status_; }
     const GyroBiasStatus& calibration() const { return gyro_bias_.status(); }
@@ -243,8 +270,17 @@ private:
     mx5_dr_result beta_core_result_;
     int beta_mode_;
     uint64_t beta_position_seq_, beta_conflict_since_;
-    double beta_rotation_rad_;
+    double beta_rotation_rad_, beta_rotation_budget_m_;
     adapter::Observation beta_prev_;
+    // 3.1-3.2: start of the current run of consecutive increasing fixes.
+    bool beta_streak_;
+    uint64_t beta_streak_mono_, beta_streak_utc_;
+    // 3.4 reverse latch safety.
+    bool reverse_exit_seen_, beta_reverse_suspect_;
+    uint64_t beta_reverse_fast_since_;
+    static const size_t BETA_RECORD_CAPACITY=32;
+    BetaAnchorRecord beta_records_[BETA_RECORD_CAPACITY];
+    uint64_t beta_record_seq_;
     YawRecord beta_yaw_[HISTORY_CAPACITY];
     size_t beta_yaw_size_, beta_yaw_next_;
     PipelineResult enqueue_raw_event(const RawEvent&);
@@ -255,7 +291,9 @@ private:
     void reset_beta(mx5_dr_context);
     mx5_dr_result beta_control(mx5_dr_control_kind);
     void beta_position(const adapter::Observation&);
-    BetaAnchorGate evaluate_beta_gate(const adapter::Observation&) const;
+    BetaAnchorGate evaluate_beta_gate(const adapter::Observation&,double* ratio) const;
+    bool beta_pair_continues(const adapter::Observation&) const;
+    void beta_record(const adapter::Observation&,BetaAnchorGate,double ratio);
     void beta_step(const mx5_dr_interval&,double rate);
     PipelineResult insert(const Event&);
     PipelineResult fault(PipelineResult);

@@ -57,9 +57,14 @@ struct BetaModelInput {
     uint64_t query_mono_ns;       // earliest admissible query time >= frontier
     uint64_t lease_cap_mono_ns;   // queued GPS/anchor revocation - 1, else max
     double heading_budget_rad;    // rule 5 heading budget at query time
+    // BETA_DECISIONS 3.3: cumulative |rotation| since the anchor (through the
+    // frontier) and its position-budget part integral(v*c_rot*R) in metres.
+    double rotation_rad, rotation_budget_m;
 };
-// BETA mapping (design decision 4, accuracy rule 2 and 5). accuracy_m =
-// error budget + (speed + sv) * lease, valid_until = frontier + lease (capped).
+// BETA mapping (design decision 4, accuracy rule 2 and 5, BETA_DECISIONS 3.3).
+// accuracy_m = error budget + rotation budget + (speed + sv) * lease
+//   + speed * c_rot * rotation * (query age + lease),
+// valid_until = frontier + lease (capped).
 // accuracy_m > accuracy_max_m, heading budget > heading_budget_max_rad, an
 // expired lease or any non-ACTIVE/non-MODEL input returns non-OK with *out
 // zeroed (ready=false). Never clamps or lowers the accuracy. beta=true marks

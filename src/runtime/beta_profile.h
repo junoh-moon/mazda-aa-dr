@@ -29,9 +29,20 @@ struct BetaProfile {
     uint64_t yaw_quiet_window_ns;
     double wheel_gps_speed_max_diff_kmh;
     uint64_t fix_pair_max_ns;     // "consecutive" fixes: at most this far apart
-    // Rule 4: fixed profile yaw zero; stationary auto-bias is never applied.
+    // BETA_DECISIONS_2026-10-05.md 3.1-3.2 (pair and settling rules).
+    uint64_t utc_step_max_s;      // strictly increasing utc pair: at most this step
+    double utc_mono_tolerance_s;  // |utc step - receipt mono step| (integer utc seconds)
+    double anchor_hdop_max;       // HDOP (position horizontal) of the anchor fix
+    double displacement_ratio_min, displacement_ratio_max; // pair distance / (v*dt)
+    uint64_t anchor_settle_ns;    // consecutive increasing fixes before an anchor
+    // 3.4: a latched reverse with wheels above this speed for this long is wrong.
+    double reverse_suspect_kmh;
+    uint64_t reverse_suspect_ns;
+    // Rule 4 / 3.5: fixed yaw zero; stationary auto-bias is never applied.
     double yaw_zero;
     // Rule 5 heading budget: h0 + k*t + rotation_budget_per_rad*sum|rotation|.
+    // 3.3: the same heading budget hb(tau) drives the position budget, so the
+    // rotation part adds integral(v * rotation_budget_per_rad * R(tau)) to it.
     double rotation_budget_per_rad, heading_budget_max_rad;
     // Decision 4: accuracy = budget + (v+sv)*lease, valid_until = frontier+lease.
     uint64_t lease_ns;
@@ -49,7 +60,13 @@ inline BetaProfile beta_profile() {
     p.previous_speed_min_kmh=15.0; p.course_step_max_deg=3.0;
     p.yaw_quiet_max_rad_s=0.05; p.yaw_quiet_window_ns=2000000000ULL;
     p.wheel_gps_speed_max_diff_kmh=4.0; p.fix_pair_max_ns=2000000000ULL;
-    p.yaw_zero=2047.0;
+    p.utc_step_max_s=2; p.utc_mono_tolerance_s=1.0; p.anchor_hdop_max=3.0;
+    p.displacement_ratio_min=0.5; p.displacement_ratio_max=1.5;
+    p.anchor_settle_ns=10000000000ULL;
+    p.reverse_suspect_kmh=15.0; p.reverse_suspect_ns=2000000000ULL;
+    // 3.5: the middle of the 2045..2050 stationary/driving estimates of both
+    // drives (2026-10-04/05). The k=0.002 rad/s heading term covers +-3 counts.
+    p.yaw_zero=2048.0;
     p.rotation_budget_per_rad=0.10;
     p.heading_budget_max_rad=20.0*3.14159265358979323846/180.0;
     p.lease_ns=500000000ULL; p.accuracy_max_m=40.0;
