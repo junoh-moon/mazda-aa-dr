@@ -23,7 +23,7 @@ fi
     src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp \
     tests/adapter/veneer_arm_test.cpp tests/adapter/veneer_arm_fixture.S \
     -ldl -o "$build/veneer-test"
-for test in observe scrub native malformed nested assist assist_beta epoch reacquire expiry encoder backend request beta_disallowed beta_replace beta_accuracy beta_branches beta_hold; do
+for test in observe scrub native malformed nested assist assist_beta epoch reacquire expiry encoder backend request beta_disallowed beta_replace beta_accuracy beta_branches beta_hold beta_send_storage beta_undeclined beta_overlay small_payload; do
     qemu-arm -L "$sysroot" "$build/adapter-test" "$test"
 done
 "${cross}g++" $flags -I src tests/adapter/association_context_test.cpp src/adapter/adapter.cpp src/adapter/bus_hooks.cpp src/runtime/request_trace.cpp -o "$build/association-context-test"
