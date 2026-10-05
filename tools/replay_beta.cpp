@@ -1166,9 +1166,12 @@ int main(int argc, char** argv) {
     size_t real_mode0 = 0, real_replaced = 0;
     for (size_t i = 0; i < baseline.size(); ++i)
         if (baseline[i].mode == 0) { ++real_mode0; if (baseline[i].replaced) ++real_replaced; }
+    // Only a DR replacement carries a position; a speed-only overlay keeps the
+    // original coordinates (its lat/lon fields are not set), so it has no
+    // return jump. No replacement at all: the statistic is null.
     std::vector<double> return_jumps;
     for (size_t i = 0; i + 1 < baseline.size(); ++i)
-        if (baseline[i].replaced && baseline[i + 1].mode != 0) {
+        if (baseline[i].change == CHANGE_REPLACED && baseline[i + 1].mode != 0) {
             double lat, lon, kmh, course; bool hc;
             if (truth_at(uint64_t(llround(baseline[i + 1].t_s * 1e9)), &lat, &lon, &kmh, &course, &hc))
                 return_jumps.push_back(dist_m(lat, lon, baseline[i].lat, baseline[i].lon));
@@ -1255,7 +1258,8 @@ int main(int argc, char** argv) {
          ",\"moving_latched_s\":" + num(latch_exposure.moving_latched_ticks * TICK_NS / 1e9) + "}";
     j += ",\"real_outages\":{\"runs\":" + std::to_string(real_runs) + ",\"mode0_sends\":" +
          std::to_string(real_mode0) + ",\"replaced\":" + std::to_string(real_replaced) +
-         ",\"longest_engaged_s\":" + num(baseline_longest) + ",\"return_jump_m\":" + stat_json(stat(return_jumps)) + "},";
+         ",\"longest_engaged_s\":" + num(baseline_longest) + ",\"return_jump_m\":" +
+         (return_jumps.empty() ? std::string("null") : stat_json(stat(return_jumps))) + "},";
     j += "\"worst_margin\":[";
     for (size_t i = 0; i < worst.size() && i < 5; ++i)
         j += std::string(i ? "," : "") + "{\"t0_s\":" + num(worst[i].t0) + ",\"d_s\":" + num(worst[i].d) +

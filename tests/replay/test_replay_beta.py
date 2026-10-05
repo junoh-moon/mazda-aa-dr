@@ -63,7 +63,7 @@ def truth():
     return out
 
 
-def write_fixture(directory):
+def write_fixture(directory, tunnel=True):
     states = truth()
     ns = lambda t: int(round(t * 1e9))
     with open(os.path.join(directory, "trace.0.jsonl"), "w") as f:
@@ -107,7 +107,7 @@ def write_fixture(directory):
                 # No fix since boot (shadow.5): mode 1, utc_s 0 and a stored
                 # stale fix about 300 m away, while the car already moves.
                 row.update(utc_s=0, lat=LAT0 + 0.0027, lon=LON0, heading=335, kmh=4)
-            elif TUNNEL[0] <= t < TUNNEL[1]:
+            elif tunnel and TUNNEL[0] <= t < TUNNEL[1]:
                 row = dict(frozen, receipt_ns=ns(t), mode=0)
             else:
                 frozen = row
@@ -194,6 +194,27 @@ class ReplayBetaSynthetic(unittest.TestCase):
             self.assertLess(abs(float(row["speed_mps"]) - float(row["wheel_mps"])), 0.6, row)
         after = [row for row in sends if float(row["t_s"]) >= TUNNEL[1]]
         self.assertTrue(after and all(row["choice"] == "0" for row in after))
+        # The 40 m budget withdrew BETA before the GPS return, so no replaced
+        # send is followed directly by the fix: no return jump (null).
+        self.assertIn(("ENGAGED", "WITHDRAWN"), transitions)
+        self.assertIsNone(real["return_jump_m"])
+
+    def test_no_replacement_reports_no_return_jump(self):
+        # NO_FIX overlays then FIX, no mode 0: a speed-only send before the
+        # first fix carries no position, so there is no return jump (it was
+        # once reported as n=1 with about 1.2e7 m from unset coordinates).
+        trip = os.path.join(self.tmp.name, "no_tunnel")
+        os.mkdir(trip)
+        write_fixture(trip, tunnel=False)
+        report = os.path.join(self.tmp.name, "no_tunnel.json")
+        p = subprocess.run([TOOL, "--trip", trip, "--real-only", "--report", report, "--check"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=300)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(report) as f:
+            r = json.load(f)
+        self.assertGreater(r["recorded_classes"]["NO_FIX"]["speed_only"], 0)
+        self.assertEqual(r["real_outages"]["replaced"], 0)
+        self.assertIsNone(r["real_outages"]["return_jump_m"])
 
     def test_check_fails_on_low_coverage(self):
         # GPS shifted by 3 s (about 30 m at 40 km/h) cannot be covered.
