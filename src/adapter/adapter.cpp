@@ -30,6 +30,10 @@ struct Context {
     runtime::request_trace::Trace request_trace;
     runtime::lds_association::Owned lds_association;
     bool decoded;
+    PositionClass position_class;
+    // This POSITION's coordinates in LOCATION units (BETA overlay match).
+    int32_t latitude_e7, longitude_e7;
+    bool coordinates_e7;
 };
 // Each active POSITION owns exactly one slot. A flat pool preserves the full
 // request trace across the OEM call without allocating it on a small OEM stack
@@ -84,7 +88,15 @@ static SendFunction next_send = 0;
 static Options options = Options();
 static bool configured = false; // Written before producers start, then immutable.
 static std::atomic<unsigned> run_mode(OBSERVE), prediction_generation(1), sequence(0);
-static std::atomic<int> previous_mode(-1);
+static std::atomic<int> previous_mode(-1), previous_class(-1);
+// Position classification state (BETA_DECISIONS 1). Guarded by a one-shot
+// try flag: a concurrent POSITION is classified UNDECODED (original), never
+// waits. utc fits 32 bits until 2106; a larger value is UNDECODED.
+static std::atomic<unsigned> class_busy(0);
+static bool class_have_utc = false;
+static uint32_t class_last_utc = 0;
+static uint64_t class_last_increase_ns = 0;
+static const uint64_t UTC_STALL_NS = 3000000000ULL;
 static std::atomic<unsigned> fault(0);
 // BETA send-result hold (design S4). Not a fault: only the BETA path reads it.
 static std::atomic<unsigned> beta_hold(0);
@@ -119,6 +131,36 @@ bool scaled(double v, double scale, int32_t* out) {
     *out = static_cast<int32_t>(rounded); return true;
 }
 uint64_t now() { return options.clock ? options.clock(options.user) : 0; }
+PositionClass classify(bool decoded, const PositionInput& p, uint64_t time) {
+    if (!decoded) return POSITION_UNDECODED;
+    if (p.mode == 0) return POSITION_LOST;
+    if (p.mode == 3) return POSITION_NATIVE_DR;
+    if (p.mode != 1 && p.mode != 2) return POSITION_UNDECODED;
+    if (!p.utc_seconds) return POSITION_NO_FIX_STALE;
+    if (p.utc_seconds > 0xffffffffULL) return POSITION_UNDECODED;
+    if (class_busy.exchange(1, std::memory_order_acquire)) return POSITION_UNDECODED;
+    const uint32_t utc = static_cast<uint32_t>(p.utc_seconds);
+    PositionClass result;
+    if (!class_have_utc || utc > class_last_utc) {
+        class_have_utc = true; class_last_utc = utc; class_last_increase_ns = time;
+        result = POSITION_FIX;
+    } else if (utc == class_last_utc && time && class_last_increase_ns &&
+               time >= class_last_increase_ns && time - class_last_increase_ns <= UTC_STALL_NS) {
+        result = POSITION_FIX; // same second, not yet stalled
+    } else {
+        // Backwards or stalled: a new baseline, never a FIX until it increases.
+        if (utc < class_last_utc) { class_last_utc = utc; class_last_increase_ns = 0; }
+        result = POSITION_UTC_STALL;
+    }
+    class_busy.store(0, std::memory_order_release);
+    return result;
+}
+// Revoke on every class change and (as before) every raw mode change.
+void revoke_on_transition(int mode, PositionClass cls) {
+    const int before_mode = previous_mode.exchange(mode, std::memory_order_acq_rel);
+    const int before_class = previous_class.exchange(int(cls), std::memory_order_acq_rel);
+    if (before_mode != mode || before_class != int(cls)) invalidate();
+}
 void emit(const Observation& event) {
     if (options.sink) options.sink(&event, options.user);
 }
@@ -148,8 +190,11 @@ void unavailable_position(const void* input) {
     event.call_sequence=sequence.fetch_add(1,std::memory_order_relaxed)+1;
     const bool decoded=decode_position(input,&event.position);
     event.original_mode=decoded?event.position.mode:-1;
+    event.mono_ns=now();
+    event.position_class=classify(decoded,event.position,event.mono_ns);
     previous_mode.exchange(event.original_mode,std::memory_order_acq_rel);
-    event.prediction_generation=generation();event.mono_ns=now();
+    previous_class.exchange(int(event.position_class),std::memory_order_acq_rel);
+    event.prediction_generation=generation();
     if(tls.depth<=CONTEXT_DEPTH_LIMIT+1)
         tls.failures[tls.depth-1]={event.call_sequence,event.prediction_generation,event.original_mode};
     if(mode()!=OFF)emit(event);
@@ -194,7 +239,8 @@ Reason choose_dr(Context& ctx, uint64_t time,
         s.source_epoch != ctx.provenance.source_epoch ||
         s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
     // A BETA (MODEL-domain) snapshot never satisfies the qualified gate.
-    if (!s.ready || !s.profile_verified || !s.input_quality_verified || !s.limits_ok || s.beta)
+    if (!s.ready || !s.profile_verified || !s.input_quality_verified || !s.limits_ok || s.beta ||
+        s.speed_only)
         return NOT_READY;
     if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
         time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
@@ -229,12 +275,48 @@ Reason choose_beta(Context& ctx, uint64_t time,
     if (ctx.generation != live_generation || s.prediction_generation != live_generation ||
         s.source_epoch != ctx.provenance.source_epoch ||
         s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
-    if (!s.ready || !s.beta) return NOT_READY;
+    if (!s.ready || !s.beta || s.speed_only) return NOT_READY;
     if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
         time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
     // Never clamp or under-report: above the limit the original passes.
     if (!(s.accuracy_m <= BETA_MAX_ACCURACY_M)) return NOT_READY;
     if (!encode_beta_location(s, original, bytes)) return BAD_ENCODING;
+    if (prediction_generation.load(std::memory_order_acquire) != live_generation)
+        return EPOCH_MISMATCH;
+    return PASS;
+}
+// Mode::BETA, class NO_FIX_STALE (BETA_DECISIONS 2). The stored position and
+// bearing stay original; only the speed is overlaid, and only when this
+// LOCATION carries this POSITION's coordinates and there is speed to show.
+Reason choose_beta_speed(Context& ctx, uint64_t time,
+                         const runtime::session_trace::Snapshot& session,
+                         const uint8_t original[48], uint8_t bytes[48]) {
+    if (beta_hold.load(std::memory_order_acquire)) return HELD;
+    if (!options.allow_beta || !options.clock ||
+        ctx.provenance.domain != Provenance::Domain::BETA) return BAD_PROVENANCE;
+    if (session.result != runtime::session_trace::OBSERVED &&
+        !(session.result == runtime::session_trace::UNOBSERVED && options.sessions_declined))
+        return EPOCH_MISMATCH;
+    // The LOCATION must be the one built from this POSITION (e7 rounding or
+    // truncation: one unit, about 1 cm).
+    if (!ctx.coordinates_e7) return OVERLAY_MISMATCH;
+    const int64_t dlat = int64_t(int32_t(get32(original + 8))) - ctx.latitude_e7;
+    const int64_t dlon = int64_t(int32_t(get32(original + 12))) - ctx.longitude_e7;
+    if (dlat < -1 || dlat > 1 || dlon < -1 || dlon > 1) return OVERLAY_MISMATCH;
+    if (pthread_mutex_trylock(&snapshot_mutex) != 0) return LOCK_BUSY;
+    const DrSnapshot s = candidate;
+    pthread_mutex_unlock(&snapshot_mutex);
+    const uint32_t live_generation = prediction_generation.load(std::memory_order_acquire);
+    if (ctx.generation != live_generation || s.prediction_generation != live_generation ||
+        s.source_epoch != ctx.provenance.source_epoch ||
+        s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
+    if (!s.ready || !s.beta || !s.speed_only) return NOT_READY;
+    if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
+        time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
+    // Nothing to correct: the original shows no speed and the wheels stand.
+    const bool original_speed = original[32] != 0 && int32_t(get32(original + 36)) > 0;
+    if (!original_speed && (s.stopped || !(s.speed_mps > 0))) return OVERLAY_NOT_NEEDED;
+    if (!encode_speed_overlay(s, original, bytes)) return BAD_ENCODING;
     if (prediction_generation.load(std::memory_order_acquire) != live_generation)
         return EPOCH_MISMATCH;
     return PASS;
@@ -339,6 +421,19 @@ bool encode_location(const DrSnapshot& in, uint8_t out[48]) {
     put32(out + 44, uint32_t(bearing_e6));
     return true;
 }
+bool encode_speed_overlay(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]) {
+    if (!out || !original || !std::isfinite(in.speed_mps) || in.speed_mps < 0 ||
+        in.speed_mps > BETA_MAX_SPEED_MPS) return false;
+    int32_t speed_e3;
+    if (!scaled(in.stopped ? 0.0 : in.speed_mps, 1000, &speed_e3)) return false;
+    std::memcpy(out, original, 48);
+    out[32] = 1; put32(out + 36, uint32_t(speed_e3));
+    return true;
+}
+const char* position_class_name(PositionClass c) {
+    static const char* const names[]={"UNDECODED","NO_FIX","FIX","LOST","NATIVE_DR","UTC_STALL"};
+    return unsigned(c)<sizeof names/sizeof names[0]?names[c]:"UNKNOWN";
+}
 bool encode_beta_location(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]) {
     if (!out || !original || !std::isfinite(in.latitude_deg) || in.latitude_deg < -90 ||
         in.latitude_deg > 90 || !std::isfinite(in.longitude_deg) ||
@@ -402,10 +497,14 @@ void position_enter(void* manager, const void* input) {
     ctx.sequence = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     ctx.decoded = decode_position(input, &event.position);
     ctx.original_mode = ctx.decoded ? event.position.mode : -1;
+    ctx.position_class = classify(ctx.decoded, event.position, now());
+    ctx.coordinates_e7 = ctx.decoded &&
+        scaled(event.position.latitude_deg, 1e7, &ctx.latitude_e7) &&
+        scaled(event.position.longitude_deg, 1e7, &ctx.longitude_e7);
     // Revoke before queuing the observation: async estimator cannot preserve an
-    // old DR_ACTIVE candidate across GPS/native-DR return and another outage.
-    const int before = previous_mode.exchange(ctx.original_mode, std::memory_order_acq_rel);
-    if (before != ctx.original_mode) invalidate();
+    // old DR_ACTIVE candidate across GPS/native-DR return and another outage,
+    // nor a speed overlay candidate across NO_FIX -> FIX (class change).
+    revoke_on_transition(ctx.original_mode, ctx.position_class);
     ctx.generation = generation();
     if (ctx.decoded) {
         const PositionContext input_context={event.position,ctx.request_result,
@@ -429,6 +528,7 @@ void position_enter(void* manager, const void* input) {
     event.call_sequence = ctx.sequence; event.prediction_generation = ctx.generation;
     event.original_mode = ctx.original_mode; event.provenance = ctx.provenance;
     event.lds_association = ctx.lds_association;
+    event.position_class = ctx.position_class;
     event.mono_ns = now();
     if (mode() != OFF) emit(event);
     completion_guard.complete=true;
@@ -490,7 +590,7 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
         event.call_sequence = ctx->sequence; event.original_mode = ctx->original_mode;
         event.prediction_generation = ctx->generation; event.provenance = ctx->provenance;
         event.request_result = ctx->request_result; event.request_trace = ctx->request_trace;
-        event.lds_association = ctx->lds_association;
+        event.lds_association = ctx->lds_association; event.position_class = ctx->position_class;
     }
     uint8_t replacement[48];
     VehicleData local = VehicleData();
@@ -513,10 +613,20 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
                 event.reason = pool_unavailable?CONTEXT_UNAVAILABLE:NO_CONTEXT;
             else if (ctx->location_count > 1) event.reason = EXTRA_LOCATION;
             else if (reentrant || tls.depth != 1) event.reason = NESTED_CALL;
+            else if (current == BETA && ctx->position_class == POSITION_NO_FIX_STALE) {
+                if (fault.load(std::memory_order_acquire)) event.reason = DISABLED;
+                else {
+                    event.mono_ns = now();
+                    event.reason = choose_beta_speed(*ctx, event.mono_ns, event.send_session,
+                                                     event.original, replacement);
+                    if (event.reason == PASS) event.choice = BETA_SPEED_OVERLAY;
+                }
+            }
             else if (ctx->original_mode != 0) event.reason = NOT_UNKNOWN;
             else if (fault.load(std::memory_order_acquire) || current < SCRUB_STALE)
                 event.reason = DISABLED;
             else if (current == BETA) {
+                // Mode 0 is always class LOST: the DR path is unchanged.
                 event.mono_ns = now();
                 event.reason = choose_beta(*ctx, event.mono_ns, event.send_session,
                                            event.original, replacement);
@@ -548,7 +658,7 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     if (current != OFF && !reentrant) emit(event);
     // BETA hold (design S4): a failed replaced send withdraws BETA until the
     // OEM path itself is seen succeeding again with its own payload.
-    if (event.choice == BETA_REPLACEMENT && result != 0) {
+    if ((event.choice == BETA_REPLACEMENT || event.choice == BETA_SPEED_OVERLAY) && result != 0) {
         // Revoke first: the failed candidate is unselectable even after a
         // later ORIGINAL 0 clears the hold (BETA_DECISIONS 3.6).
         invalidate();

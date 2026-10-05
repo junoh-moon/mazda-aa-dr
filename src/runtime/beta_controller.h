@@ -84,10 +84,14 @@ inline bool beta_provenance(const BetaShared& s,adapter::Provenance* out) {
     return true;
 }
 
+// NO_FIX / SPEED_ENGAGED (BETA_DECISIONS_2026-10-05.md 1-2): the stored
+// no-fix position (mode 1/2, utc 0) may only receive the wheel speed overlay.
+// GPS_LOST / ENGAGED: class LOST (mode 0), the DR replacement.
 enum BetaState { BETA_DISABLED=0, BETA_ARMED, BETA_GPS_LOST, BETA_ENGAGED,
-                 BETA_WITHDRAWN, BETA_FAULT };
+                 BETA_WITHDRAWN, BETA_FAULT, BETA_NO_FIX, BETA_SPEED_ENGAGED };
 inline const char* beta_state_name(BetaState s) {
-    static const char* const names[]={"DISABLED","ARMED","GPS_LOST","ENGAGED","WITHDRAWN","FAULT"};
+    static const char* const names[]={"DISABLED","ARMED","GPS_LOST","ENGAGED","WITHDRAWN","FAULT",
+                                      "NO_FIX","SPEED_ENGAGED"};
     return unsigned(s)<sizeof names/sizeof names[0]?names[s]:"UNKNOWN";
 }
 // Sensor silence (design fault-injection list): no motion receipt for this long.
@@ -98,14 +102,18 @@ class BetaController {
 public:
     struct Counters {
         uint64_t publications, publish_skipped, withdrawals, replaced_sends,
-                 replaced_nonzero, original_mode0_sends, transitions;
+                 replaced_nonzero, original_mode0_sends, transitions,
+                 speed_publications, speed_overlay_sends, speed_overlay_nonzero,
+                 original_nofix_sends;
     };
     explicit BetaController(BetaShared& shared)
         : shared_(shared),profile_(beta_profile()),state_(BETA_DISABLED),reason_("not_enabled"),
           counters_(),have_position_(false),position_mode_(-1),position_generation_(0),
+          position_class_(adapter::POSITION_UNDECODED),withdrawn_class_(adapter::POSITION_UNDECODED),
           seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
           last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_valid_until_(0),
-          last_frontier_(0),last_skip_("none") {}
+          last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
+          last_original_accuracy_(-1),last_speed_(-1) {}
     BetaState state() const { return state_; }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
@@ -125,27 +133,49 @@ public:
         transition(j,now,BETA_ARMED,"enabled");
         return true;
     }
-    // Every popped POSITION observation, in queue order.
+    // Every popped POSITION observation, in queue order. The adapter has
+    // already revoked the generation on every class change; this only
+    // follows the class (BETA_DECISIONS 1).
     template<class J> void position(J& j,const adapter::Observation& o,uint64_t now) {
         if(!live())return;
         have_position_=true;position_mode_=o.original_mode;
         position_generation_=o.prediction_generation;
-        if(o.original_mode==0) {
-            if(state_==BETA_ARMED)transition(j,now,BETA_GPS_LOST,"gps_lost");
+        const adapter::PositionClass cls=o.position_class;
+        position_class_=cls;last_original_utc_=o.position.utc_seconds;
+        // A withdrawal holds for the rest of the class episode it happened in.
+        if(state_==BETA_WITHDRAWN && cls==withdrawn_class_)return;
+        if(cls==adapter::POSITION_LOST) {
+            if(state_==BETA_SPEED_ENGAGED) { withdraw();transition(j,now,BETA_GPS_LOST,"gps_lost"); }
+            else if(state_==BETA_ARMED || state_==BETA_NO_FIX || state_==BETA_WITHDRAWN)
+                transition(j,now,BETA_GPS_LOST,"gps_lost");
             return;
         }
-        // GPS present (or undecodable): the adapter already passes the
-        // original for this call; withdraw so no candidate survives.
-        if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_ARMED,"gps_returned"); }
-        else if(state_==BETA_GPS_LOST || state_==BETA_WITHDRAWN)
-            transition(j,now,BETA_ARMED,"gps_returned");
+        if(cls==adapter::POSITION_NO_FIX_STALE) {
+            if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_NO_FIX,"no_fix"); }
+            else if(state_==BETA_ARMED || state_==BETA_GPS_LOST || state_==BETA_WITHDRAWN)
+                transition(j,now,BETA_NO_FIX,"no_fix");
+            return;
+        }
+        // FIX, native DR, utc stall or undecodable: the adapter already passes
+        // the original for this call; withdraw so no candidate survives.
+        const char* reason=cls==adapter::POSITION_FIX?"gps_returned":
+            cls==adapter::POSITION_NATIVE_DR?"native_dr":
+            cls==adapter::POSITION_UTC_STALL?"utc_stall":"position_undecoded";
+        if(state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) { withdraw();transition(j,now,BETA_ARMED,reason); }
+        else if(state_==BETA_GPS_LOST || state_==BETA_NO_FIX || state_==BETA_WITHDRAWN)
+            transition(j,now,BETA_ARMED,reason);
     }
     // Every popped SEND observation (diagnostic counters only).
     void send(const adapter::Observation& o) {
         if(o.kind!=adapter::Observation::SEND || o.type!=1 || !o.has_payload)return;
+        last_original_accuracy_=o.original[16]?double(uint32_t(o.original[20])|(uint32_t(o.original[21])<<8)|
+            (uint32_t(o.original[22])<<16)|(uint32_t(o.original[23])<<24))/1000.0:-1;
         if(o.choice==adapter::BETA_REPLACEMENT) {
             ++counters_.replaced_sends;if(o.result)++counters_.replaced_nonzero;
-        } else if(o.original_mode==0)++counters_.original_mode0_sends;
+        } else if(o.choice==adapter::BETA_SPEED_OVERLAY) {
+            ++counters_.speed_overlay_sends;if(o.result)++counters_.speed_overlay_nonzero;
+        } else if(o.position_class==adapter::POSITION_NO_FIX_STALE)++counters_.original_nofix_sends;
+        else if(o.original_mode==0)++counters_.original_mode0_sends;
     }
     // Permanent for this boot: capture.stop, disable-next-start.
     template<class J> void disable(J& j,uint64_t now,const char* reason) {
@@ -168,11 +198,12 @@ public:
         shared_.source_epoch.store(source,std::memory_order_release);
         journal_events(j,now);
         if(!live())return;
-        if(state_==BETA_ENGAGED && adapter::beta_held()) {
-            withdraw();transition(j,now,BETA_WITHDRAWN,"send_result_hold");
-        }
+        if((state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) && adapter::beta_held())
+            withdraw_episode(j,now,"send_result_hold");
         if(state_==BETA_GPS_LOST || state_==BETA_ENGAGED)
             publish(j,now,nav,input_ready,last_motion_ns,source);
+        else if(state_==BETA_NO_FIX || state_==BETA_SPEED_ENGAGED)
+            publish_speed(j,now,nav,input_ready,last_motion_ns,source);
         summary(j,now,false);
     }
 private:
@@ -184,13 +215,22 @@ private:
     bool have_position_;
     int32_t position_mode_;
     uint32_t position_generation_;
+    adapter::PositionClass position_class_,withdrawn_class_;
     uint32_t seen_storage_epoch_,seen_hold_set_,seen_hold_cleared_;
     uint64_t last_summary_;
     CoreBridgeResult last_bridge_;
     double last_accuracy_;
     uint64_t last_valid_until_,last_frontier_;
     const char* last_skip_;
+    const char* payload_;          // "dr", "speed_only" or "none": what the candidate is
+    uint64_t last_original_utc_;   // utc_s of the newest POSITION
+    double last_original_accuracy_; // original LOCATION accuracy (m), -1 when absent
+    double last_speed_;            // last published overlay speed (m/s), -1 none
 
+    // Engaged -> WITHDRAWN for the rest of this class episode.
+    template<class J> void withdraw_episode(J& j,uint64_t now,const char* reason) {
+        withdraw();withdrawn_class_=position_class_;transition(j,now,BETA_WITHDRAWN,reason);
+    }
     void stop_adapter() {
         shared_.active.store(0,std::memory_order_release);
         // set_mode revokes the generation even when it refuses nothing.
@@ -204,14 +244,14 @@ private:
         adapter::DrSnapshot empty=adapter::DrSnapshot();
         empty.prediction_generation=adapter::generation();
         adapter::publish_snapshot(empty);
-        ++counters_.withdrawals;
+        ++counters_.withdrawals;payload_="none";
     }
     template<class J> void journal_events(J& j,uint64_t now) {
         const uint32_t set=shared_.hold_set.load(std::memory_order_acquire);
         const uint32_t cleared=shared_.hold_cleared.load(std::memory_order_acquire);
         if(set!=seen_hold_set_) {
             seen_hold_set_=set;event(j,now,"hold_set",set);
-            if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_WITHDRAWN,"send_result_hold"); }
+            if(state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) withdraw_episode(j,now,"send_result_hold");
         }
         if(cleared!=seen_hold_cleared_) { seen_hold_cleared_=cleared;event(j,now,"hold_cleared",cleared); }
         const uint32_t storage=shared_.storage_epoch.load(std::memory_order_acquire);
@@ -226,7 +266,8 @@ private:
             if(storage==UINT32_MAX) { fault(j,now,"session_epoch_exhausted");return; }
             // The send-time reader already revoked the generation; also drop
             // the stored values and keep this outage withdrawn (decision 8).
-            if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_WITHDRAWN,"session_storage_changed"); }
+            if(state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED)
+                withdraw_episode(j,now,"session_storage_changed");
         }
     }
     template<class J> void event(J& j,uint64_t now,const char* what,uint32_t count) {
@@ -261,7 +302,7 @@ private:
         }
         if(withdrawn) {
             last_skip_=withdrawn;
-            if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_WITHDRAWN,withdrawn); }
+            if(state_==BETA_ENGAGED) withdraw_episode(j,now,withdrawn);
             return;
         }
         // Identity checks that only defer (no state change): the candidate
@@ -273,17 +314,64 @@ private:
         const char* skip=0;
         if(!source)skip="source_epoch_unavailable";
         else if(!session || session==UINT32_MAX)skip="session_storage_unobserved";
-        else if(!have_position_ || position_mode_!=0 || position_generation_!=generation)
+        else if(!have_position_ || position_mode_!=0 || position_class_!=adapter::POSITION_LOST ||
+                position_generation_!=generation)
             skip="generation_unobserved";
         if(!skip) {
             s.prediction_generation=generation;s.source_epoch=source;s.session_epoch=session;
             if(!adapter::publish_snapshot(s))skip="publish_rejected";
         }
         if(skip) { last_skip_=skip;++counters_.publish_skipped;return; }
-        ++counters_.publications;last_skip_="none";
+        ++counters_.publications;last_skip_="none";payload_="dr";
         last_accuracy_=s.accuracy_m;last_valid_until_=s.valid_until_mono_ns;
         last_frontier_=s.frontier_mono_ns;
         if(state_==BETA_GPS_LOST)transition(j,now,BETA_ENGAGED,"published");
+    }
+    // NO_FIX (BETA_DECISIONS 2): a speed-only candidate from the last wheel
+    // SPEED event. No anchor, no core, no accuracy claim. A transient input
+    // gap returns SPEED_ENGAGED to NO_FIX (the next fresh speed re-engages);
+    // hold and storage changes withdraw the whole NO_FIX episode instead.
+    template<class J> void publish_speed(J& j,uint64_t now,const navigation::Pipeline& nav,
+                                         bool input_ready,uint64_t last_motion_ns,uint32_t source) {
+        const char* gap=0;
+        navigation::SpeedPublication sp=navigation::SpeedPublication();
+        if(!input_ready)gap="model_input_unavailable";
+        else if(!last_motion_ns || now<last_motion_ns || now-last_motion_ns>BETA_SENSOR_SILENCE_NS)
+            gap="sensor_silence";
+        else {
+            sp=nav.speed_publication(now);
+            if(!sp.ok)gap="speed_unavailable";
+        }
+        if(gap) {
+            last_skip_=gap;
+            if(state_==BETA_SPEED_ENGAGED) { withdraw();transition(j,now,BETA_NO_FIX,gap); }
+            return;
+        }
+        const uint32_t generation=adapter::generation();
+        const uint32_t session=shared_.storage_epoch.load(std::memory_order_acquire);
+        const char* skip=0;
+        adapter::DrSnapshot s=adapter::DrSnapshot();
+        if(!source)skip="source_epoch_unavailable";
+        else if(!session || session==UINT32_MAX)skip="session_storage_unobserved";
+        else if(!have_position_ || position_class_!=adapter::POSITION_NO_FIX_STALE ||
+                position_generation_!=generation)
+            skip="generation_unobserved";
+        if(!skip) {
+            s.prediction_generation=generation;s.source_epoch=source;s.session_epoch=session;
+            s.frontier_mono_ns=sp.measured_ns;
+            s.valid_until_mono_ns=sp.measured_ns+profile_.lease_ns;
+            s.speed_mps=sp.speed_mps;s.stopped=sp.stopped;
+            s.ready=true;s.beta=true;s.speed_only=true;
+            // No position, bearing or accuracy claim; qualified flags stay false.
+            if(!adapter::publish_snapshot(s))skip="publish_rejected";
+        }
+        if(skip) { last_skip_=skip;++counters_.publish_skipped;return; }
+        ++counters_.speed_publications;last_skip_="none";payload_="speed_only";
+        last_speed_=s.speed_mps;last_valid_until_=s.valid_until_mono_ns;last_frontier_=s.frontier_mono_ns;
+        if(state_==BETA_NO_FIX)transition(j,now,BETA_SPEED_ENGAGED,"speed_published");
+    }
+    static void number_or_null(double v,char out[48]) {
+        if(std::isfinite(v) && v>=0)snprintf(out,48,"%.17g",v);else strcpy(out,"null");
     }
     template<class J> void transition(J& j,uint64_t now,BetaState to,const char* reason) {
         const BetaState from=state_;
@@ -291,18 +379,23 @@ private:
         char accuracy[48];
         if(std::isfinite(last_accuracy_))snprintf(accuracy,sizeof accuracy,"%.17g",last_accuracy_);
         else strcpy(accuracy,"null");
-        char line[600];
+        char original_accuracy[48],speed[48];
+        number_or_null(last_original_accuracy_,original_accuracy);number_or_null(last_speed_,speed);
+        char line[800];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"beta_state\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
             "\"from\":\"%s\",\"to\":\"%s\",\"reason\":\"%s\",\"adapter_mode\":%u,"
             "\"generation\":%u,\"source_epoch\":%u,\"session_epoch\":%u,\"held\":%s,"
-            "\"bridge\":\"%s\",\"accuracy_m\":%s,\"valid_until_ns\":%llu}",
+            "\"bridge\":\"%s\",\"accuracy_m\":%s,\"valid_until_ns\":%llu,"
+            "\"position_class\":\"%s\",\"payload\":\"%s\",\"original_utc_s\":%llu,"
+            "\"original_accuracy_m\":%s,\"speed_mps\":%s}",
             (unsigned long long)now,beta_state_name(from),beta_state_name(to),reason,
             unsigned(adapter::mode()),adapter::generation(),
             shared_.source_epoch.load(std::memory_order_acquire),
             shared_.storage_epoch.load(std::memory_order_acquire),
             adapter::beta_held()?"true":"false",core_bridge_result_name(last_bridge_),accuracy,
-            (unsigned long long)last_valid_until_);
+            (unsigned long long)last_valid_until_,adapter::position_class_name(position_class_),
+            payload_,(unsigned long long)last_original_utc_,original_accuracy,speed);
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
     // At most 1 Hz (forced rows bypass the limit once, e.g. at stop).
@@ -312,7 +405,9 @@ private:
         char accuracy[48];
         if(std::isfinite(last_accuracy_))snprintf(accuracy,sizeof accuracy,"%.17g",last_accuracy_);
         else strcpy(accuracy,"null");
-        char line[800];
+        char original_accuracy[48],speed[48];
+        number_or_null(last_original_accuracy_,original_accuracy);number_or_null(last_speed_,speed);
+        char line[1200];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"beta_summary\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
             "\"state\":\"%s\",\"reason\":\"%s\",\"adapter_mode\":%u,\"held\":%s,"
@@ -320,7 +415,10 @@ private:
             "\"withdrawals\":%llu,\"replaced_sends\":%llu,\"replaced_nonzero\":%llu,"
             "\"original_mode0_sends\":%llu,\"transitions\":%llu,\"bridge\":\"%s\","
             "\"accuracy_m\":%s,\"frontier_ns\":%llu,\"valid_until_ns\":%llu,"
-            "\"source_epoch\":%u,\"session_epoch\":%u,\"generation\":%u}",
+            "\"source_epoch\":%u,\"session_epoch\":%u,\"generation\":%u,"
+            "\"position_class\":\"%s\",\"payload\":\"%s\",\"original_utc_s\":%llu,"
+            "\"original_accuracy_m\":%s,\"speed_mps\":%s,\"speed_publications\":%llu,"
+            "\"speed_overlay_sends\":%llu,\"speed_overlay_nonzero\":%llu,\"original_nofix_sends\":%llu}",
             (unsigned long long)now,beta_state_name(state_),reason_,unsigned(adapter::mode()),
             adapter::beta_held()?"true":"false",
             (unsigned long long)counters_.publications,(unsigned long long)counters_.publish_skipped,
@@ -330,7 +428,12 @@ private:
             core_bridge_result_name(last_bridge_),accuracy,(unsigned long long)last_frontier_,
             (unsigned long long)last_valid_until_,
             shared_.source_epoch.load(std::memory_order_acquire),
-            shared_.storage_epoch.load(std::memory_order_acquire),adapter::generation());
+            shared_.storage_epoch.load(std::memory_order_acquire),adapter::generation(),
+            adapter::position_class_name(position_class_),payload_,(unsigned long long)last_original_utc_,
+            original_accuracy,speed,(unsigned long long)counters_.speed_publications,
+            (unsigned long long)counters_.speed_overlay_sends,
+            (unsigned long long)counters_.speed_overlay_nonzero,
+            (unsigned long long)counters_.original_nofix_sends);
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
 };

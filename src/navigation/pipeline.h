@@ -61,6 +61,15 @@ enum BetaAnchorGate {
     BETA_GATE_WHEEL, BETA_GATE_REVERSE, BETA_GATE_CORE
 };
 const char* beta_anchor_gate_name(BetaAnchorGate);
+// BETA speed overlay input (BETA_DECISIONS_2026-10-05.md 2): the last drained
+// wheel SPEED event only. No anchor, core or GPS is involved. stopped means
+// all four wheels <= 0.05 m/s and then speed_mps is 0. MODEL evidence.
+struct SpeedPublication {
+    bool ok;
+    bool stopped;
+    double speed_mps;            // unscaled mean wheel speed (BETA uses no learned scale)
+    uint64_t measured_ns, received_ns;
+};
 struct FaultCalibration {
     bool valid;
     GyroBiasStatus gyro;
@@ -161,6 +170,10 @@ public:
     // earliest admissible later time), suppressed by any due GPS/anchor event,
     // and lease-capped before any queued one. Never extrapolates coordinates.
     runtime::BetaModelInput model_publication(uint64_t now_ns) const;
+    // Speed overlay input at now_ns: ok only with a BETA-enabled MODEL
+    // pipeline, a drained SPEED event no older than the BETA lease, finite and
+    // non-negative, without the one-stopped-wheel contradiction.
+    SpeedPublication speed_publication(uint64_t now_ns) const;
     bool beta_enabled() const { return beta_enabled_; }
     BetaAnchorGate beta_gate() const { return beta_gate_; }
     mx5_dr_result beta_core_result() const { return beta_core_result_; }

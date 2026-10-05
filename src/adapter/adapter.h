@@ -11,12 +11,29 @@ namespace mx5 { namespace adapter {
 // BETA is the explicit opt-in MODEL-domain replacement. It is never the
 // qualified ASSIST gate and ASSIST stays unreachable without allow_assist.
 enum Mode { OFF = 0, OBSERVE = 1, SCRUB_STALE = 2, ASSIST = 3, BETA = 4 };
-enum Choice { ORIGINAL = 0, SCRUBBED = 1, DR_REPLACEMENT = 2, BETA_REPLACEMENT = 3 };
+// BETA_SPEED_OVERLAY (BETA_DECISIONS_2026-10-05.md 2, NO_FIX only): the
+// original 48 bytes with only hasSpeed (32) and speed_e3 (36..39) replaced.
+enum Choice { ORIGINAL = 0, SCRUBBED = 1, DR_REPLACEMENT = 2, BETA_REPLACEMENT = 3,
+              BETA_SPEED_OVERLAY = 4 };
 enum Reason { PASS = 0, NO_CONTEXT, NESTED_CALL, EXTRA_LOCATION,
               BAD_LENGTH, DISABLED, LOCK_BUSY, NOT_UNKNOWN, NOT_READY,
               EPOCH_MISMATCH, EXPIRED, BAD_ENCODING, BAD_PROVENANCE,
               CONTEXT_UNAVAILABLE,
-              HELD }; // BETA: a replaced send returned non-zero; awaiting an ORIGINAL 0.
+              HELD, // BETA: a replaced send returned non-zero; awaiting an ORIGINAL 0.
+              // BETA overlay: the LOCATION does not carry this POSITION's
+              // coordinates, or neither the original nor the wheels show speed.
+              OVERLAY_MISMATCH, OVERLAY_NOT_NEEDED };
+// Send-time position class (BETA_DECISIONS_2026-10-05.md 1), computed right
+// after decode_position from mode and GetPosition utc_s only (HDOP is not a
+// key). NO_FIX_STALE: mode 1/2 with utc 0 (stored value, unknown age).
+// FIX: mode 1/2, utc > 0, increased (or unchanged for at most 3 s).
+// LOST: mode 0. NATIVE_DR: mode 3. UTC_STALL: mode 1/2 whose utc went
+// backwards or did not increase for more than 3 s. UNDECODED: anything else,
+// including a concurrent classification. Only NO_FIX_STALE and LOST can ever
+// be replaced in Mode::BETA; everything else passes the original.
+enum PositionClass { POSITION_UNDECODED = 0, POSITION_NO_FIX_STALE = 1, POSITION_FIX = 2,
+                     POSITION_LOST = 3, POSITION_NATIVE_DR = 4, POSITION_UTC_STALL = 5 };
+const char* position_class_name(PositionClass);
 
 // Native OEM wrapper. Exactly 12 bytes only on the ARM32 target.
 struct VehicleData { uint32_t type; void* payload; uint32_t length; };
@@ -53,6 +70,10 @@ struct DrSnapshot {
     // adapter static_asserts trivial default construction.
     double accuracy_m;
     bool beta;
+    // BETA speed overlay candidate: only speed_mps/stopped and the identity,
+    // lease fields are meaningful. choose_dr/choose_beta reject it and the
+    // overlay accepts nothing else. No accuracy is claimed.
+    bool speed_only;
 };
 
 struct Observation {
@@ -62,6 +83,7 @@ struct Observation {
     Choice choice;
     Reason reason;
     uint64_t mono_ns;
+    PositionClass position_class; // POSITION and its SEND (UNDECODED without context)
     PositionInput position;
     Provenance provenance;
     // Observation only; successful association grants no ASSIST qualification.
@@ -156,6 +178,11 @@ bool encode_location(const DrSnapshot& in, uint8_t out[48]);
 // timestamp (0..7), altitude (24..31) and padding stay original. Rejects
 // rather than clamps out-of-range values (accuracy must be in (0, 40] m).
 bool encode_beta_location(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]);
+// BETA speed overlay: copy the original 48 bytes, then set only hasSpeed
+// (32) = 1 and speed_e3 (36..39); 0 when stopped. Everything else, including
+// the original accuracy, stays byte-identical. Rejects non-finite, negative
+// or > 100 m/s speeds.
+bool encode_speed_overlay(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]);
 
 enum InstallResult {
     INSTALL_OK = 0, ALREADY_INSTALLED, UNSUPPORTED_ARCH,

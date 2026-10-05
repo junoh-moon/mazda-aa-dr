@@ -342,7 +342,43 @@ static void shadow_diagnostic_unchanged_by_beta() {
     }
     CHECK(compared>40);
 }
+static void speed_publication_without_anchor() {
+    // BETA_DECISIONS 2: the NO_FIX overlay speed comes from the last drained
+    // wheel SPEED event. No GPS fix, anchor or core is needed.
+    Pipeline p; init(p);
+    Plan plan; plan.end_ms=3000; plan.reverse.push_back(std::make_pair(0u,0));
+    plan.wheel=[](unsigned ms){return ms<2000?36.0:0.0;};
+    std::vector<SpeedPublication> seen(31);
+    plan.each=[&](Pipeline& q,unsigned ms){ seen[ms/100]=q.speed_publication(T(ms)); };
+    run(p,plan);
+    CHECK(!p.diagnostic(T(3000)).snapshot.model_valid); // nothing seeded
+    CHECK(seen[15].ok && !seen[15].stopped && std::fabs(seen[15].speed_mps-10)<1e-9);
+    CHECK(seen[15].measured_ns<=T(1500) && T(1500)-seen[15].measured_ns<=runtime::beta_profile().lease_ns);
+    CHECK(seen[29].ok && seen[29].stopped && seen[29].speed_mps==0);
+    // Stale: no newer SPEED within the BETA lease.
+    CHECK(!p.speed_publication(T(3000)+600000000ULL).ok);
+    // Not before the measurement.
+    CHECK(!p.speed_publication(T(0)).ok);
+    // Without the BETA core the accessor never answers.
+    Pipeline plain; init(plain,true,false);
+    run(plain,plan);
+    CHECK(!plain.speed_publication(T(1500)).ok && !plain.speed_publication(T(3000)).ok);
+    // One stopped wheel with three agreeing moving wheels is a contradiction.
+    Pipeline q; init(q);
+    Plan one; one.end_ms=1500; one.reverse.push_back(std::make_pair(0u,0));
+    run(q,one);
+    CHECK(q.speed_publication(T(1500)).ok);
+    RawEvent w=raw(WHEELS,1600,900000,1);
+    w.raw[0]=uint16_t(wheel_raw(0));for(unsigned i=1;i<4;++i)w.raw[i]=uint16_t(wheel_raw(36));
+    CHECK(q.enqueue_raw(w)==PIPELINE_OK);
+    RawEvent y=raw(YAW,1700,900001,1); y.raw[0]=2047;
+    CHECK(q.enqueue_raw(y)==PIPELINE_OK);
+    q.drain(T(1700));
+    const SpeedPublication c=q.speed_publication(T(1700));
+    CHECK(!c.ok);
+}
 int main() {
+    speed_publication_without_anchor();
     latch_seeds_from_change_only_stream();
     unknown_reverse_never_seeds();
     epoch_change_and_lost_reverse_unseed();

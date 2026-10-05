@@ -35,7 +35,7 @@ static R::Result trace_result=R::OK;
 static unsigned trace_reads;
 static unsigned session_reads;
 // BETA-case knobs. Defaults leave every pre-existing case unchanged.
-static bool beta_fixture;
+static bool beta_fixture, speed_fixture;
 static void (*mutate_snapshot)(DrSnapshot&);
 static Provenance::Domain provenance_domain = Provenance::Domain::NONE;
 static mx5::runtime::session_trace::Result beta_session_result = mx5::runtime::session_trace::OBSERVED;
@@ -82,6 +82,11 @@ static DrSnapshot fixture() {
         s.profile_verified = s.input_quality_verified = s.limits_ok = false;
         s.travel_bearing_deg = 123.456789; s.accuracy_m = 24.0001; s.beta = true;
     }
+    if (speed_fixture) {
+        // A speed-only candidate: no position, bearing or accuracy claim.
+        s.latitude_deg = s.longitude_deg = s.travel_bearing_deg = 0;
+        s.accuracy_m = 0; s.derived_utc_ns = 0; s.speed_only = true;
+    }
     if (mutate_snapshot) mutate_snapshot(s);
     return s;
 }
@@ -95,7 +100,8 @@ static int32_t fake_next(void* session, VehicleData* data) {
 }
 static void sink(const Observation* e, void*) {
     ++events; last_event = *e;
-    if (e->kind == Observation::POSITION && publish_on_position && e->original_mode == 0)
+    if (e->kind == Observation::POSITION && publish_on_position &&
+        (e->original_mode == 0 || (speed_fixture && e->position_class == POSITION_NO_FIX_STALE)))
         assert(publish_snapshot(fixture()));
     errno = EBUSY; // The shim must hide this side effect from OEM code.
 }
@@ -111,6 +117,9 @@ static bool beta_provenance(void*, const PositionContext&, Provenance* out, void
 }
 static void put32(uint8_t* p, uint32_t v) {
     for (unsigned i=0;i<4;++i) p[i] = uint8_t(v >> (8*i));
+}
+static void putd(uint8_t* p, double v) {
+    uint64_t b;std::memcpy(&b,&v,8);put32(p,uint32_t(b));put32(p+4,uint32_t(b>>32));
 }
 static uint32_t get32(const uint8_t* p) {
     return uint32_t(p[0]) | uint32_t(p[1])<<8 | uint32_t(p[2])<<16 | uint32_t(p[3])<<24;
@@ -161,6 +170,50 @@ static void m_bearing_neg(DrSnapshot& s){s.travel_bearing_deg=-0.5;}
 static void m_bearing_nan(DrSnapshot& s){s.travel_bearing_deg=std::numeric_limits<double>::quiet_NaN();}
 static void m_stopped(DrSnapshot& s){s.stopped=true;s.travel_bearing_deg=std::numeric_limits<double>::quiet_NaN();}
 static void m_beta_qualified(DrSnapshot& s){s.beta=true;s.accuracy_m=10;}
+static void m_speed_only(DrSnapshot& s){s.speed_only=true;}
+static void m_qualified_speed_only(DrSnapshot& s){s.beta=false;s.speed_only=true;}
+static void m_stopped_speed(DrSnapshot& s){s.stopped=true;}
+static void m_not_speed_only(DrSnapshot& s){s.speed_only=false;s.latitude_deg=-37.1;s.longitude_deg=127.1;
+    s.travel_bearing_deg=10;s.accuracy_m=20;}
+// NO_FIX overlay fixture: the stored LOCATION (8.8 m accuracy, 4 km/h) built
+// from the stored POSITION (mode 1, utc 0) with the same coordinates.
+static uint8_t overlay_payload[48];
+static const double STORED_LAT=37.5001234, STORED_LON=127.0412345;
+static void make_overlay_payload(uint32_t speed_e3) {
+    for(unsigned i=0;i<48;++i)overlay_payload[i]=uint8_t(0x30+i);
+    put32(overlay_payload,0);put32(overlay_payload+4,0);
+    put32(overlay_payload+8,uint32_t(int32_t(::round(STORED_LAT*1e7))));
+    put32(overlay_payload+12,uint32_t(int32_t(::round(STORED_LON*1e7))));
+    overlay_payload[16]=1;put32(overlay_payload+20,8800);
+    overlay_payload[32]=1;put32(overlay_payload+36,speed_e3);
+    overlay_payload[40]=1;put32(overlay_payload+44,335000000);
+}
+static Observation last_position;
+static void overlay_send(void (*mutate)(DrSnapshot&), Reason expected, double lat=STORED_LAT,
+                         int32_t mode=1, uint64_t utc=0) {
+    mutate_snapshot=mutate;
+    uint8_t position[72]={};put32(position,uint32_t(mode));
+    put32(position+8,uint32_t(utc));put32(position+12,uint32_t(utc>>32));
+    putd(position+16,lat);putd(position+24,STORED_LON);putd(position+40,335.0);putd(position+48,4.0);
+    putd(position+56,4.4);putd(position+64,9.7);
+    uint8_t before[48];std::memcpy(before,overlay_payload,48);
+    VehicleData data={1,overlay_payload,48};
+    position_enter(0,position);last_position=last_event;
+    run_send(data,expected!=PASS);
+    position_leave();mutate_snapshot=0;
+    if (last_event.reason!=expected) {
+        std::fprintf(stderr,"overlay reason %d expected %d\n",int(last_event.reason),int(expected));assert(false);
+    }
+    assert(!std::memcmp(overlay_payload,before,48)); // OEM memory untouched
+    if (expected==PASS) {
+        assert(last_event.choice==BETA_SPEED_OVERLAY);
+        // Only hasSpeed (32) and speed (36..39) may differ.
+        for(unsigned i=0;i<48;++i)
+            if(i!=32 && !(i>=36 && i<40))assert(sent[i]==overlay_payload[i]);
+        assert(sent[32]==1);
+        assert(!std::memcmp(last_event.original,overlay_payload,48) && !std::memcmp(last_event.outgoing,sent,48));
+    } else { assert(last_event.choice==ORIGINAL); assert(!std::memcmp(sent,overlay_payload,48)); }
+}
 static void check_beta_bytes(uint32_t accuracy_e3) {
     for(unsigned i=0;i<8;++i)assert(sent[i]==beta_payload[i]);            // timestamp original
     assert(int32_t(get32(sent+8))==int32_t(::round(-37.12345675*1e7)) && int32_t(get32(sent+12))==1271000000);
@@ -246,12 +299,22 @@ static int beta_main(const char* test) {
         beta_send(m_bearing_360,BAD_ENCODING);beta_send(m_bearing_neg,BAD_ENCODING);
         beta_send(m_bearing_nan,BAD_ENCODING);
         beta_send(0,PASS);
-        // Native modes 1..3 always pass the original.
+        // Native FIX (modes 1/2 with an increasing utc) and native DR (3)
+        // always pass the original. (Mode 1/2 with utc 0 is the NO_FIX class
+        // since BETA_DECISIONS 1; see beta_overlay.)
         for(int32_t m=1;m<=3;++m) {
-            uint8_t position[72]={};put32(position,uint32_t(m));VehicleData data={1,beta_payload,48};
+            uint8_t position[72]={};put32(position,uint32_t(m));put32(position+8,1700000000u+uint32_t(m));
+            VehicleData data={1,beta_payload,48};
             position_enter(0,position);run_send(data,true);position_leave();
             assert(last_event.reason==NOT_UNKNOWN && !std::memcmp(sent,beta_payload,48));
+            assert(last_event.position_class==(m==3?POSITION_NATIVE_DR:POSITION_FIX));
         }
+        // NO_FIX with only a DR candidate: the overlay never takes it.
+        { uint8_t position[72]={};put32(position,1);VehicleData data={1,beta_payload,48};
+          position_enter(0,position);run_send(data,true);position_leave();
+          assert(last_event.position_class==POSITION_NO_FIX_STALE && last_event.choice==ORIGINAL);
+          assert(last_event.reason==OVERLAY_MISMATCH || last_event.reason==EPOCH_MISMATCH ||
+                 last_event.reason==NOT_READY); }
         // Back to mode 0: the mode change revoked the old generation; the sink
         // republishes for the new one, so replacement resumes.
         beta_send(0,PASS);
@@ -263,6 +326,82 @@ static int beta_main(const char* test) {
           assert(last_event.reason==EXTRA_LOCATION);position_leave(); }
         publish_on_position=false; // publication is refused once faulted
         beta_send(0,DISABLED);assert(faulted());
+    } else if (!std::strcmp(test,"beta_overlay")) {
+        // BETA_DECISIONS 1-2: NO_FIX (mode 1/2, utc 0) gets only the wheel
+        // speed; the stored position, bearing and 8.8 m accuracy stay original.
+        speed_fixture=true;make_overlay_payload(1111);
+        overlay_send(0,PASS);
+        assert(last_position.position_class==POSITION_NO_FIX_STALE && last_event.position_class==POSITION_NO_FIX_STALE);
+        assert(get32(sent+36)==12346 && get32(sent+20)==8800 && sent[16]==1);
+        overlay_send(m_stopped_speed,PASS);assert(get32(sent+36)==0 && sent[32]==1);
+        // Mode 2 is the same class.
+        overlay_send(0,PASS,STORED_LAT,2);
+        // The LOCATION is not the one built from this POSITION.
+        overlay_send(0,OVERLAY_MISMATCH,STORED_LAT+2e-7);
+        overlay_send(0,PASS,STORED_LAT+0.6e-7); // e7 rounding: one unit tolerated
+        // Nothing to correct: original speed 0 and the wheels stand.
+        make_overlay_payload(0);
+        overlay_send(m_stopped_speed,OVERLAY_NOT_NEEDED);
+        overlay_send(0,PASS);assert(get32(sent+36)==12346);
+        make_overlay_payload(1111);
+        // Candidate checks.
+        overlay_send(m_not_speed_only,NOT_READY);
+        overlay_send(m_not_ready,NOT_READY);
+        overlay_send(m_qualified_speed_only,NOT_READY);
+        overlay_send(m_source_epoch,EPOCH_MISMATCH);overlay_send(m_session_epoch,EPOCH_MISMATCH);
+        overlay_send(m_future,EXPIRED);overlay_send(m_lease_over,EXPIRED);overlay_send(m_too_old,EXPIRED);
+        overlay_send(m_speed_neg,BAD_ENCODING);overlay_send(m_speed_absurd,BAD_ENCODING);
+        overlay_send(m_speed_inf,BAD_ENCODING);
+        force_lock_busy=true;overlay_send(0,LOCK_BUSY);force_lock_busy=false;
+        provenance_domain=Provenance::Domain::QUALIFIED;overlay_send(0,BAD_PROVENANCE);
+        provenance_domain=Provenance::Domain::BETA;
+        beta_session_result=mx5::runtime::session_trace::TRANSITION;overlay_send(0,EPOCH_MISMATCH);
+        beta_session_result=mx5::runtime::session_trace::UNOBSERVED;overlay_send(0,PASS); // declined install
+        beta_session_result=mx5::runtime::session_trace::OBSERVED;
+        // A speed-only candidate never feeds the DR replacement (class LOST).
+        speed_fixture=true;publish_on_position=false;
+        { uint8_t position[72]={};VehicleData data={1,beta_payload,48};
+          position_enter(0,position);
+          assert(publish_snapshot(fixture()));
+          run_send(data,true);position_leave();
+          assert(last_event.position_class==POSITION_LOST && last_event.reason==NOT_READY); }
+        publish_on_position=true;
+        // NO_FIX -> FIX revokes: a candidate published for NO_FIX is gone.
+        overlay_send(0,PASS);
+        { const uint32_t g=generation();
+          overlay_send(0,NOT_UNKNOWN,STORED_LAT,1,1700000100);
+          assert(last_position.position_class==POSITION_FIX && generation()>g); }
+        // FIX keeps its class within the same utc second; a stall > 3 s and a
+        // backwards utc are UTC_STALL (original).
+        clock_ns+=1000000000;overlay_send(0,NOT_UNKNOWN,STORED_LAT,1,1700000100);
+        assert(last_position.position_class==POSITION_FIX);
+        clock_ns+=2500000000ULL;overlay_send(0,NOT_UNKNOWN,STORED_LAT,1,1700000100);
+        assert(last_position.position_class==POSITION_UTC_STALL);
+        overlay_send(0,NOT_UNKNOWN,STORED_LAT,1,1700000101);assert(last_position.position_class==POSITION_FIX);
+        overlay_send(0,NOT_UNKNOWN,STORED_LAT,1,1700000050);assert(last_position.position_class==POSITION_UTC_STALL);
+        overlay_send(0,NOT_UNKNOWN,STORED_LAT,1,1700000051);assert(last_position.position_class==POSITION_FIX);
+        // Native DR and undecodable modes pass the original.
+        overlay_send(0,NOT_UNKNOWN,STORED_LAT,3);assert(last_position.position_class==POSITION_NATIVE_DR);
+        overlay_send(0,NOT_UNKNOWN,STORED_LAT,7);assert(last_position.position_class==POSITION_UNDECODED);
+        // Back to NO_FIX: the new generation's candidate overlays again.
+        overlay_send(0,PASS);
+        // Hold: a failed overlay send revokes and holds; HELD until an
+        // ORIGINAL LOCATION returns 0.
+        { const uint32_t g=generation();
+          next_result=-3;overlay_send(0,PASS);
+          assert(beta_held() && hold_set_events==1 && generation()>g);
+          next_result=0;overlay_send(0,HELD);
+          assert(!beta_held() && hold_cleared_events==1);
+          overlay_send(0,PASS); }
+        // Encoder unit checks.
+        { DrSnapshot o=DrSnapshot();o.speed_mps=13.0;uint8_t out[48];
+          assert(encode_speed_overlay(o,overlay_payload,out) && get32(out+36)==13000);
+          for(unsigned i=0;i<48;++i)if(i!=32&&!(i>=36&&i<40))assert(out[i]==overlay_payload[i]);
+          o.speed_mps=100.0;assert(encode_speed_overlay(o,overlay_payload,out));
+          o.speed_mps=100.001;assert(!encode_speed_overlay(o,overlay_payload,out));
+          o.speed_mps=-0.001;assert(!encode_speed_overlay(o,overlay_payload,out));
+          o.speed_mps=std::numeric_limits<double>::quiet_NaN();assert(!encode_speed_overlay(o,overlay_payload,out));
+          o.speed_mps=50;o.stopped=true;assert(encode_speed_overlay(o,overlay_payload,out) && get32(out+36)==0); }
     } else if (!std::strcmp(test,"beta_undeclined")) {
         // Sessions were not declined by the installer: an UNOBSERVED send
         // session means the fence is missing, so the original passes.
@@ -330,7 +469,8 @@ int main(int argc,char** argv) {
         assert(payload[32]==33 && payload[40]==41);assert(last_event.choice==SCRUBBED);
     } else if (!std::strcmp(test,"native")) {
         assert(set_mode(SCRUB_STALE));
-        for(unsigned m=1;m<=3;++m) {put32(position,m);position_enter(0,position);run_send(data,true);position_leave();assert(!std::memcmp(sent,payload,48));}
+        for(unsigned m=1;m<=3;++m) {put32(position,m);position_enter(0,position);run_send(data,true);position_leave();assert(!std::memcmp(sent,payload,48));
+            assert(last_event.reason==NOT_UNKNOWN);} // NO_FIX overlay is BETA only
         run_send(data,true);assert(last_event.reason==NO_CONTEXT);
     } else if (!std::strcmp(test,"malformed")) {
         assert(set_mode(SCRUB_STALE));position_enter(0,position);
@@ -352,6 +492,8 @@ int main(int argc,char** argv) {
         provenance_domain=Provenance::Domain::BETA;position_enter(0,position);
         run_send(data,true);position_leave();assert(last_event.reason==BAD_PROVENANCE);
         provenance_domain=Provenance::Domain::QUALIFIED;mutate_snapshot=m_beta_qualified;position_enter(0,position);
+        run_send(data,true);position_leave();assert(last_event.reason==NOT_READY);
+        mutate_snapshot=m_speed_only;position_enter(0,position);
         run_send(data,true);position_leave();assert(last_event.reason==NOT_READY);
         mutate_snapshot=0;position_enter(0,position);run_send(data,false);position_leave();
         assert(last_event.choice==DR_REPLACEMENT && sent[16]==0);

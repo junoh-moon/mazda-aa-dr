@@ -60,7 +60,7 @@ static void put64(uint8_t* p,uint64_t v) { put32(p,uint32_t(v));put32(p+4,uint32
 static void putd(uint8_t* p,double v) { uint64_t b;memcpy(&b,&v,8);put64(p,b); }
 static uint32_t get32(const uint8_t* p) { return p[0]|(p[1]<<8)|(p[2]<<16)|(uint32_t(p[3])<<24); }
 
-struct Call { unsigned ms;int mode;bool replaced;int32_t result;uint32_t accuracy_e3,speed_e3; };
+struct Call { unsigned ms;int mode;bool replaced,overlay;int32_t result;uint32_t accuracy_e3,speed_e3; };
 static std::vector<Call> calls;
 static int manager;
 static double kmh=36;
@@ -68,16 +68,23 @@ static void* storage_a=&manager;
 static int storage_b_object;
 static void* storage=storage_a;
 static double latitude(unsigned ms) { return 35+kmh/3.6*(ms/1000.0)/111320; }
+static bool replaced_overlay(const uint8_t* original);
 // One OEM position callback: POSITION enter, one LOCATION send, leave.
-static bool oem_call(unsigned ms,int mode) {
+// stored: the boot-time no-fix value (mode 1, utc 0, fixed coordinates,
+// 335 deg, 4 km/h, HDOP 4.4 -> accuracy 8.8 m), as observed on 2026-10-05.
+static bool oem_call(unsigned ms,int mode,bool stored=false) {
     uint8_t position[72];memset(position,0,sizeof position);
-    put32(position,uint32_t(mode));put64(position+8,1700000000ULL+ms/1000);
-    putd(position+16,latitude(ms));putd(position+24,135.0);put32(position+32,30);
-    putd(position+40,0.0);putd(position+48,kmh);putd(position+56,mode?1.0:99.0);
-    putd(position+64,mode?1.0:99.0);
+    const double lat=stored?35.0:latitude(ms);
+    put32(position,uint32_t(mode));put64(position+8,stored?0:1700000000ULL+ms/1000);
+    putd(position+16,lat);putd(position+24,135.0);put32(position+32,30);
+    putd(position+40,stored?335.0:0.0);putd(position+48,stored?4.0:kmh);
+    putd(position+56,stored?4.4:mode?1.0:99.0);putd(position+64,stored?9.7:mode?1.0:99.0);
     uint8_t original[48];
     for(unsigned i=0;i<48;++i)original[i]=uint8_t(0xA0+i);
     original[16]=0;original[32]=1;original[40]=1;put64(original,1700000000000ULL+ms);
+    // The LOCATION carries this POSITION's coordinates (MakeLocation).
+    put32(original+8,uint32_t(int32_t(lround(lat*1e7))));put32(original+12,1350000000u);
+    if(stored) { original[16]=1;put32(original+20,8800);put32(original+36,1111);put32(original+44,335000000); }
     memcpy(current_original,original,48);
     A::VehicleData data={1,original,48};
     A::position_enter(&manager,position);
@@ -85,14 +92,21 @@ static bool oem_call(unsigned ms,int mode) {
     A::position_leave();
     assert(sent_type==1);
     const bool replaced=memcmp(sent,original,48)!=0;
-    Call c={ms,mode,replaced,result,get32(sent+20),get32(sent+36)};
+    const bool overlay=replaced && stored;
+    Call c={ms,mode,replaced && !overlay,overlay,result,get32(sent+20),get32(sent+36)};
     calls.push_back(c);
-    if(replaced) {
+    if(overlay)assert(replaced_overlay(original));
+    else if(replaced) {
         // Never on a non-mode-0 call; copy-then-overwrite keeps 0..7, 24..31.
         assert(mode==0);
         assert(replaced_payload(original));
     }
     return replaced;
+}
+// Speed overlay: only hasSpeed (32) and speed (36..39) differ.
+static bool replaced_overlay(const uint8_t* original) {
+    for(unsigned i=0;i<48;++i)if(i!=32 && !(i>=36 && i<40) && sent[i]!=original[i])return false;
+    return sent[32]==1;
 }
 static bool replaced_payload(const uint8_t* original) {
     for(unsigned i=0;i<8;++i)if(sent[i]!=original[i])return false;
@@ -105,6 +119,7 @@ struct Rows {
     std::vector<std::string> lines;
     std::vector<std::string> transitions; // "FROM>TO:reason"
     unsigned hold_set,hold_cleared,storage_rows,summaries,boot_beta_ok,replaced_rows,replaced_bad_mode;
+    unsigned overlay_rows,overlay_summary;
 };
 static std::string field(const std::string& line,const char* name) {
     const std::string key=std::string("\"")+name+"\":\"";
@@ -124,7 +139,13 @@ static Rows read_rows(const std::string& logs) {
             if(field(line,"event")=="hold_set")++r.hold_set;else ++r.hold_cleared;
         }
         if(line.find("\"kind\":\"beta_session_storage\"")!=std::string::npos)++r.storage_rows;
-        if(line.find("\"kind\":\"beta_summary\"")!=std::string::npos)++r.summaries;
+        if(line.find("\"kind\":\"beta_summary\"")!=std::string::npos) {
+            ++r.summaries;
+            if(line.find("\"speed_overlay_sends\":0,")==std::string::npos &&
+               line.find("\"speed_overlay_sends\":")!=std::string::npos)++r.overlay_summary;
+        }
+        if(line.find("\"kind\":\"send\"")!=std::string::npos && line.find("\"choice\":4,")!=std::string::npos)
+            ++r.overlay_rows;
         if(line.find("\"kind\":\"boot\"")!=std::string::npos &&
            line.find("\"beta\":{\"mode\":\"BETA\",\"enabled\":true,\"reason\":\"adapter_opt_in\","
                      "\"session_fence\":\"declined_send_storage_counter\"}")!=std::string::npos &&
@@ -163,7 +184,7 @@ static bool wait_rows(const std::string& logs,const char* const* needles,unsigne
 int main(int argc,char** argv) {
     assert(argc==2);const std::string scenario=argv[1];
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
-           scenario=="fault"||scenario=="no_anchor");
+           scenario=="fault"||scenario=="no_anchor"||scenario=="nofix");
     alarm(scenario=="budget"?60:40);
     if(scenario=="budget")kmh=59;
     char root[]="/tmp/mx5dr-worker-beta-XXXXXX";assert(mkdtemp(root));
@@ -225,12 +246,14 @@ int main(int argc,char** argv) {
         until(start+uint64_t(ms)*1000000ULL);
         const uint64_t now=clock_ns(0);
         if(scenario=="silence" && ms==4000)motion=false;
+        // nofix: the car drives, then stands still, all before the first fix.
+        const double wheel_kmh=scenario=="nofix" && ms>=2500?0.0:kmh;
         for(unsigned kind=1;kind<=3 && motion;++kind) {
             if(kind==N::YAW && ms%100)continue;
             if(kind==N::REVERSE && ms)continue; // change-only producer: one message
             N::RawEvent r=N::RawEvent();r.kind=static_cast<N::SensorKind>(kind);
             r.epoch=1;r.receive_seq=++sequence;r.received_ns=now;r.count=1;r.reverse=0;
-            for(unsigned i=0;i<4;++i)r.raw[i]=kind==N::WHEELS?uint16_t(lround(kmh*100+10000)):2047;
+            for(unsigned i=0;i<4;++i)r.raw[i]=kind==N::WHEELS?uint16_t(lround(wheel_kmh*100+10000)):2047;
             if(!sender.send_event(r)) { fprintf(stderr,"motion send failed at %u errno=%d\n",ms,errno);assert(0); }
         }
         if(scenario=="disable" && ms==4000) {
@@ -239,6 +262,15 @@ int main(int argc,char** argv) {
         }
         // GPS mode per scenario.
         int mode=-1;
+        if(scenario=="nofix") {
+            // Stored no-fix value until 4 s, then a real fix.
+            if(ms%200==0) {
+                const bool replaced=oem_call(ms,1,ms<4000);
+                if(ms<4000 && replaced)last_replaced_ms=ms;
+                if(ms>=4000)assert(!replaced);
+            }
+            continue;
+        }
         if(scenario=="no_anchor") {
             // GPS lost before any gated anchor (yaw history < 2 s): never replaced.
             if(ms<1000) { if(ms%500==0)mode=1; } else if(ms%200==0)mode=0;
@@ -295,6 +327,14 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<3;++i) if(oem_call(end_ms+200+i*200,0))++replaced_after_stop;
     const Rows rows=read_rows(logs);
     unsigned replaced_total=0;
+    unsigned overlay_moving=0,overlay_stopped=0,overlay_total=0;
+    for(size_t i=0;i<calls.size();++i)if(calls[i].overlay) {
+        ++overlay_total;
+        if(fabs(double(calls[i].speed_e3)/1000.0-kmh/3.6)<0.05*kmh/3.6)++overlay_moving;
+        else if(calls[i].speed_e3==0) { ++overlay_stopped;assert(calls[i].ms>=2500); }
+        else assert(calls[i].ms>=2500 && calls[i].ms<3200); // braking transition only
+        assert(calls[i].accuracy_e3==8800); // original accuracy untouched
+    }
     for(size_t i=0;i<calls.size();++i)if(calls[i].replaced) {
         ++replaced_total;assert(calls[i].mode==0);
         // speed is the DR wheel speed (unscaled BETA): within 5% of the stream.
@@ -307,6 +347,8 @@ int main(int argc,char** argv) {
     fflush(stdout);
     assert(rows.boot_beta_ok==1);
     assert(rows.replaced_rows==replaced_total+double_send_replaced && !rows.replaced_bad_mode);
+    assert(rows.overlay_rows==overlay_total);
+    if(scenario!="nofix")assert(!overlay_total);
     assert(!replaced_after_stop);
     assert(rows.storage_rows>=1 && rows.summaries>=2);
     if(scenario=="main") {
@@ -339,6 +381,23 @@ int main(int argc,char** argv) {
         for(size_t i=0;i<rows.transitions.size();++i)
             if(rows.transitions[i].compare(0,13,"ENGAGED>FAULT")==0)fault=true;
         assert(fault && rows.transitions.back().compare(0,13,"ENGAGED>FAULT")==0); // sticky
+    } else if(scenario=="nofix") {
+        // BETA_DECISIONS 2: the stored no-fix value receives only the wheel
+        // speed (0 when stopped); no DR replacement; a real fix ends it.
+        assert(!replaced_total && overlay_moving>=5 && overlay_stopped>=3 && rows.overlay_summary>=1);
+        std::vector<std::string> expected;
+        expected.push_back("DISABLED>ARMED:enabled");
+        expected.push_back("ARMED>NO_FIX:no_fix");
+        expected.push_back("NO_FIX>SPEED_ENGAGED:speed_published");
+        expected.push_back("SPEED_ENGAGED>ARMED:gps_returned");
+        expected.push_back("ARMED>DISABLED:capture_stop");
+        assert(ordered(rows,expected) && rows.transitions.size()==expected.size());
+        bool position_class=false;
+        for(size_t i=0;i<rows.lines.size();++i)
+            if(rows.lines[i].find("\"to\":\"SPEED_ENGAGED\"")!=std::string::npos &&
+               rows.lines[i].find("\"position_class\":\"NO_FIX\",\"payload\":\"speed_only\",\"original_utc_s\":0,"
+                                  "\"original_accuracy_m\":8.8")!=std::string::npos)position_class=true;
+        assert(position_class);
     } else if(scenario=="no_anchor") {
         assert(!replaced_total && has(rows,"ARMED>GPS_LOST:gps_lost") && !has(rows,"GPS_LOST>ENGAGED:published"));
         assert(has(rows,"GPS_LOST>DISABLED:capture_stop"));

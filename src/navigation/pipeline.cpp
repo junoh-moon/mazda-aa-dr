@@ -1158,6 +1158,18 @@ runtime::BetaModelInput Pipeline::model_publication(uint64_t now) const {
     in.heading_budget_rad=in.snapshot.heading_budget_rad+beta_.rotation_budget_per_rad*beta_rotation_rad_;
     return in;
 }
+SpeedPublication Pipeline::speed_publication(uint64_t now) const {
+    SpeedPublication out;
+    std::memset(&out,0,sizeof out);
+    if (!configured_||!model_||!beta_enabled_||!status_.have_speed) return out;
+    const Event& e=speed_;
+    if (!e.time||e.time>now||e.received>now||now-e.time>beta_.lease_ns) return out;
+    if (!finite(e.value)||e.value<0||!finite(e.wheel_max)||e.wheel_zero_conflict) return out;
+    out.stopped=e.wheel_max<=0.05;
+    out.speed_mps=out.stopped?0.0:e.value;
+    out.measured_ns=e.time; out.received_ns=e.received; out.ok=true;
+    return out;
+}
 const char* beta_anchor_gate_name(BetaAnchorGate gate) {
     static const char* const names[]={"DISABLED","WAITING","ACCEPTED","BAD_FIX","SPEED",
         "PREVIOUS","COURSE","YAW","WHEEL","REVERSE","CORE"};

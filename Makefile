@@ -111,7 +111,7 @@ $(BUILD)/test_install_policy: tests/adapter/test_install_policy.cpp src/adapter/
 	$(CXX) $(CXX_WARN) tests/adapter/test_install_policy.cpp -o $@
 test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_pool_association $(BUILD)/test_association_context $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_context_pool $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire $(BUILD)/test_install_policy
 	$(BUILD)/test_install_policy
-	@set -e; for case in observe scrub native malformed nested assist assist_beta epoch reacquire expiry encoder backend request beta_disallowed beta_replace beta_accuracy beta_branches beta_hold beta_send_storage beta_undeclined; do $(BUILD)/test_adapter $$case; done
+	@set -e; for case in observe scrub native malformed nested assist assist_beta epoch reacquire expiry encoder backend request beta_disallowed beta_replace beta_accuracy beta_branches beta_hold beta_send_storage beta_undeclined beta_overlay; do $(BUILD)/test_adapter $$case; done
 	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed presence_empty presence_present legacy_layout invalid_presence presence_without_origin status_empty status_a status_v status_other invalid_status status_without_origin legacy_layout_v2; do $(BUILD)/test_association_context $$scenario; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
 	$(BUILD)/test_context_pool saturation
@@ -150,7 +150,7 @@ test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association 
 	$(BUILD)/test_model_session_input
 	@set -e; for case in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do $(BUILD)/test_worker_session $$case; done
 	MX5DR_TEST_STALE_RAW=1 $(BUILD)/test_worker_session bus_reuse
-	@set -e; for case in main silence disable budget fault no_anchor; do $(BUILD)/test_worker_beta $$case; done
+	@set -e; for case in main silence disable budget fault no_anchor nofix; do $(BUILD)/test_worker_beta $$case; done
 	MX5DR_TEST_SLOW_YAW=1 $(BUILD)/test_worker_session bus_reuse
 	@set -e; for case in bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do MX5DR_TEST_PREGAP=1 $(BUILD)/test_worker_session $$case; done
 test-journal-boundaries:

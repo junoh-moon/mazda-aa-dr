@@ -222,10 +222,11 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
     n=snprintf(line,capacity,
       "{\"kind\":\"position\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,"
       "\"mode\":%d,\"utc_s\":%llu,\"lat\":%s,\"lon\":%s,\"heading\":%s,\"kmh\":%s,"
-      "\"altitude_m\":%d,\"horizontal\":%s,\"vertical\":%s,\"reason\":%u,\"request\":%s,\"lds_association\":%s}",
+      "\"altitude_m\":%d,\"horizontal\":%s,\"vertical\":%s,\"reason\":%u,\"request\":%s,\"lds_association\":%s,"
+      "\"class\":%u}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
       (unsigned long long)o.position.utc_seconds,lat,lon,h,v,o.position.altitude_m,horizontal,vertical,
-      unsigned(o.reason),request,association);
+      unsigned(o.reason),request,association,unsigned(o.position_class));
   } else {
     char a[97]="",b[97]="";
     char session[200];
@@ -234,9 +235,11 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
     n=snprintf(line,capacity,
       "{\"kind\":\"send\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,\"mode\":%d,"
       "\"type\":%u,\"length\":%u,\"choice\":%u,\"reason\":%u,\"result\":%d,"
-      "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s,\"send_session\":%s,\"lds_association\":%s}",
+      "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s,\"send_session\":%s,\"lds_association\":%s,"
+      "\"class\":%u}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
-      o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request,session,association);
+      o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request,session,association,
+      unsigned(o.position_class));
   }
   return n>0 && size_t(n)<capacity;
 }
