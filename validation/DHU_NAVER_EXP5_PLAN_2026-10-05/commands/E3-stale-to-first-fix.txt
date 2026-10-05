@@ -1,0 +1,366 @@
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 0.5
+tap 200 50
+sleep 10
+tap 345 145
+sleep 3
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+location 35.1582787 129.1493314 5 NAN 0 110.0
+sleep 1
+sleep 2
+screenshot ../../../../experiment5/setup-guidance.png
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-000.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 1.400 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 2.800 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 4.200 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 5.600 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 7.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-005.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 8.400 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 9.800 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 11.200 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 12.600 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-010.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-015.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-020.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-025.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 14.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-030.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 12.600 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 11.200 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 9.800 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 8.400 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 7.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-035.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 5.600 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 4.200 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 2.800 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 1.400 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-040.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-045.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-050.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-stale-055.png
+sleep 0.8
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1582787 129.1493314 8.800 NAN 0.000 335.0
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-000.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-002.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-004.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-006.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-008.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-010.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-012.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-014.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-016.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment5/E3-first-fix-018.png
+sleep 0.8
+location 35.1581431 129.1497861 3.000 NAN 0.000 NAN
+sleep 1
+location 35.1581000 129.1499308 5.000 NAN 14.000 110.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-000.png
+sleep 0.8
+location 35.1580568 129.1500755 5.000 NAN 14.000 110.0
+sleep 1
+location 35.1580137 129.1502201 5.000 NAN 14.000 110.0
+sleep 1
+location 35.1579706 129.1503648 5.000 NAN 14.000 110.0
+sleep 1
+location 35.1579274 129.1505095 5.000 NAN 14.000 110.0
+sleep 1
+location 35.1578843 129.1506542 5.000 NAN 14.000 110.0
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-005.png
+sleep 0.8
+location 35.1578428 129.1507996 5.000 NAN 14.000 108.3
+sleep 1
+location 35.1578032 129.1509457 5.000 NAN 14.000 108.3
+sleep 1
+location 35.1577799 129.1510963 5.000 NAN 14.000 96.5
+sleep 1
+location 35.1577704 129.1512488 5.000 NAN 14.000 72.7
+sleep 1
+location 35.1578078 129.1513958 5.000 NAN 14.000 72.7
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-010.png
+sleep 0.8
+location 35.1578453 129.1515428 5.000 NAN 14.000 72.7
+sleep 1
+location 35.1578834 129.1516896 5.000 NAN 14.000 72.3
+sleep 1
+location 35.1579216 129.1518363 5.000 NAN 14.000 72.3
+sleep 1
+location 35.1579598 129.1519831 5.000 NAN 14.000 72.3
+sleep 1
+location 35.1579981 129.1521298 5.000 NAN 14.000 72.3
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-015.png
+sleep 0.8
+location 35.1580290 129.1522787 5.000 NAN 14.000 80.4
+sleep 1
+location 35.1580501 129.1524305 5.000 NAN 14.000 80.4
+sleep 1
+location 35.1580711 129.1525823 5.000 NAN 14.000 80.4
+sleep 1
+location 35.1580915 129.1527343 5.000 NAN 14.000 81.1
+sleep 1
+location 35.1581110 129.1528864 5.000 NAN 14.000 81.1
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-020.png
+sleep 0.8
+location 35.1581304 129.1530386 5.000 NAN 14.000 81.1
+sleep 1
+location 35.1581498 129.1531908 5.000 NAN 14.000 76.6
+sleep 1
+location 35.1581789 129.1533406 5.000 NAN 14.000 76.6
+sleep 1
+location 35.1582146 129.1534882 5.000 NAN 14.000 72.4
+sleep 1
+location 35.1582525 129.1536350 5.000 NAN 14.000 72.4
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-025.png
+sleep 0.8
+location 35.1582905 129.1537819 5.000 NAN 14.000 72.4
+sleep 1
+location 35.1583285 129.1539287 5.000 NAN 14.000 72.4
+sleep 1
+location 35.1583668 129.1540754 5.000 NAN 14.000 71.9
+sleep 1
+location 35.1584059 129.1542218 5.000 NAN 14.000 71.9
+sleep 1
+location 35.1584451 129.1543681 5.000 NAN 14.000 71.9
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-030.png
+sleep 0.8
+location 35.1584842 129.1545145 5.000 NAN 14.000 71.9
+sleep 1
+location 35.1585105 129.1546649 5.000 NAN 14.000 79.7
+sleep 1
+location 35.1585303 129.1548168 5.000 NAN 14.000 84.8
+sleep 1
+location 35.1585417 129.1549702 5.000 NAN 14.000 84.8
+sleep 1
+location 35.1585445 129.1551240 5.000 NAN 14.000 90.1
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-035.png
+sleep 0.8
+location 35.1585443 129.1552780 5.000 NAN 14.000 90.1
+sleep 1
+location 35.1585386 129.1554318 5.000 NAN 14.000 93.1
+sleep 1
+location 35.1585317 129.1555856 5.000 NAN 14.000 93.1
+sleep 1
+location 35.1585248 129.1557394 5.000 NAN 14.000 93.1
+sleep 1
+location 35.1585179 129.1558931 5.000 NAN 14.000 93.1
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-040.png
+sleep 0.8
+location 35.1585111 129.1560469 5.000 NAN 14.000 93.1
+sleep 1
+location 35.1585043 129.1562007 5.000 NAN 14.000 93.5
+sleep 1
+location 35.1584967 129.1563544 5.000 NAN 14.000 93.5
+sleep 1
+location 35.1584926 129.1565083 5.000 NAN 14.000 90.2
+sleep 1
+location 35.1585063 129.1566610 5.000 NAN 14.000 78.7
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-045.png
+sleep 0.8
+location 35.1585397 129.1568090 5.000 NAN 14.000 70.5
+sleep 1
+location 35.1585976 129.1569453 5.000 NAN 14.000 59.9
+sleep 1
+location 35.1586607 129.1570785 5.000 NAN 14.000 59.9
+sleep 1
+location 35.1587239 129.1572118 5.000 NAN 14.000 59.9
+sleep 1
+location 35.1587870 129.1573450 5.000 NAN 14.000 59.9
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-050.png
+sleep 0.8
+location 35.1588424 129.1574832 5.000 NAN 14.000 64.2
+sleep 1
+location 35.1588932 129.1576241 5.000 NAN 14.000 67.1
+sleep 1
+location 35.1589412 129.1577665 5.000 NAN 14.000 70.3
+sleep 1
+location 35.1589836 129.1579114 5.000 NAN 14.000 70.3
+sleep 1
+location 35.1590261 129.1580564 5.000 NAN 14.000 70.3
+sleep 0.2
+screenshot ../../../../experiment5/E3-moving-055.png
+sleep 0.8
+location 35.1590674 129.1582019 5.000 NAN 14.000 71.5
+sleep 1
+location 35.1591073 129.1583480 5.000 NAN 14.000 71.5
+sleep 1
+location 35.1591426 129.1584958 5.000 NAN 14.000 74.1
+sleep 1
+location 35.1591770 129.1586439 5.000 NAN 14.000 74.1
+sleep 1
