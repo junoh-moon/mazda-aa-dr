@@ -177,9 +177,20 @@ int main(int argc,char** argv) {
     // The product options for mode 5: counted send-session reader, BETA
     // opt-in with its event hook, qualified ASSIST closed.
     assert(options.allow_beta && !options.allow_assist && options.beta_event==beta_event);
-    assert(options.session_reader==read_send_session_beta && options.provenance==provenance);
+    // The installer accepts only the product session reader; the BETA storage
+    // fence is a separate send hook (the v74 installer rejected a wrapper).
+    assert(options.session_reader==A::read_send_session && options.provenance==provenance);
+    assert(options.send_storage==observe_send_storage_beta);
     assert(options.sink==sink && options.clock==clock_ns && options.max_snapshot_age_ns==500000000ULL);
+    // BETA_DECISIONS 3.7 regression: the v74 installer (observe_requests)
+    // accepts these product options in both SHADOW and BETA.
+    assert(A::install_readers_supported(options));
+    config.mode=4;
+    { const A::Options shadow=product_options();
+      assert(A::install_readers_supported(shadow) && !shadow.allow_beta && !shadow.send_storage); }
+    config.mode=5;
     options.request_reader=authored_request;
+    assert(!A::install_readers_supported(options));
     assert(A::configure(next_send,options));
     assert(A::set_mode(A::OBSERVE));
     // Declined case: session hooks are never prepared, the reader is UNOBSERVED.

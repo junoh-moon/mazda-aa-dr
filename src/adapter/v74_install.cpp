@@ -359,6 +359,11 @@ bool prepare(void* tramp,void* user) {
 #endif
 
 namespace mx5 { namespace adapter {
+bool install_readers_supported(const Options& o) {
+    // Request/worker observation installs only with the product readers. Any
+    // per-mode addition (e.g. the BETA storage fence) uses its own hook.
+    return o.request_reader==read_request_trace && o.session_reader==read_send_session;
+}
 InstallResult install_v74(const InstallOptions& in) {
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     if (installed) return ALREADY_INSTALLED;
@@ -392,8 +397,7 @@ InstallResult install_v74(const InstallOptions& in) {
     plan.entries[0]=position;plan.entry_count=1;plan.slots[0]=send;plan.slot_count=1;
     Setup setup={&in,expected_next,A::RequestBindings(),A::SessionBindings(),A::BusBindings(),true};
     if(in.observe_requests) {
-        if(in.runtime.request_reader!=A::read_request_trace ||
-           in.runtime.session_reader!=A::read_send_session)return INVALID_INSTALL_ARGUMENT;
+        if(!A::install_readers_supported(in.runtime))return INVALID_INSTALL_ARGUMENT;
         const InstallResult check=request_plan(in,plan,setup.bindings,setup.bus);
         if(check!=INSTALL_OK)return check;
         const unsigned slots_before=plan.slot_count;

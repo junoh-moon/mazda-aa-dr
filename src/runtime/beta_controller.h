@@ -35,7 +35,7 @@ struct BetaShared {
 static_assert(ATOMIC_INT_LOCK_FREE==2 && (sizeof(uintptr_t)==sizeof(unsigned) || ATOMIC_LONG_LOCK_FREE==2),
               "BETA OEM-thread state must be lock-free");
 
-// OEM SEND thread (session_reader wrapper). A changed storage argument bumps
+// OEM SEND thread (Options.send_storage, after the session reader). A changed storage argument bumps
 // the counter and then revokes the adapter generation, so the very send that
 // observed the change, and every candidate published before it, passes the
 // original. The counter saturates instead of wrapping (wrap could revive an

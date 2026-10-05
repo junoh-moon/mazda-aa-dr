@@ -36,13 +36,14 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
     -L"$stock/jci/lib" -ljcicommon -ljcicommon_util -ljcism_service -ljcids \
     -Wl,-rpath-link,"$stock/jci/lib:$stock/usr/lib:$stock/lib" -ldl -lpthread -lrt -lm -lstdc++ -lgcc_s
 
-# run NAME PATCH_DIR_OR_EMPTY; prints the first trace row. PATCH_DIR is the directory name under
-# /data_persist that holds libpatch-blmjciaapa.so (empty = no third-party patch).
+# run NAME PATCH_DIR_OR_EMPTY [MODE]; keeps the first trace row in boot.json. PATCH_DIR is the
+# directory name under /data_persist that holds libpatch-blmjciaapa.so (empty = no third-party
+# patch). MODE is the mx5dr.conf mode token (default SHADOW).
 run() {
-    name=$1; patch_dir=$2
+    name=$1; patch_dir=$2; conf_mode=${3:-SHADOW}
     dp="$work/$name"; mkdir -p "$dp/mx5-aa-dr/logs"
     cp "$MX5DR_ARM_BUILD/libmx5dr.so" "$dp/mx5-aa-dr/libmx5dr.so"
-    printf 'mode=SHADOW\nmax_log_bytes=41943040\nmax_log_files=3\nsample_ms=1000\n' > "$dp/mx5-aa-dr/mx5dr.conf"
+    printf 'mode=%s\nmax_log_bytes=41943040\nmax_log_files=3\nsample_ms=1000\n' "$conf_mode" > "$dp/mx5-aa-dr/mx5dr.conf"
     cp "$work/aa_probe" "$dp/aa_probe"
     preload=/data_persist/mx5-aa-dr/libmx5dr.so
     if [ -n "$patch_dir" ]; then
@@ -79,3 +80,24 @@ run unknown-patch other-shim
 [ "$(field "d['install_diag']['stage']" "$work/unknown-patch/boot.json")" = 3 ] ||
     { echo 'FAIL AA install probe unknown-patch: an unrecognised owner of the session slots must stay fail-closed'; cat "$work/unknown-patch/boot.json"; exit 1; }
 echo 'PASS AA install probe the same library at an unrecognised path stays fail-closed'
+
+# The opt-in BETA mode with the same real BLM and libpatch (validation/BETA_DECISIONS_2026-10-05.md
+# 3.7: a BETA-specific session reader made the installer refuse the whole hook). The boot row must
+# show the installed hook, the declined session observation and the BETA opt-in with its
+# send-storage fence, and the worker must arm BETA. Boot evidence only; no send is driven here.
+run beta-known-patch oem-aa-mod BETA
+b="$work/beta-known-patch/boot.json"
+[ "$(field "d['install']" "$b")" = ok ] &&
+[ "$(field "d['mode']" "$b")" = 5 ] &&
+[ "$(field "d['session_hooks']" "$b")" = declined_third_party_interposer ] &&
+[ "$(field "d['install_diag']['stage']" "$b")" = 3 ] &&
+[ "$(field "d['assist_ready']" "$b")" = False ] &&
+[ "$(field "d['beta']['mode']" "$b")" = BETA ] &&
+[ "$(field "d['beta']['enabled']" "$b")" = True ] &&
+[ "$(field "d['beta']['reason']" "$b")" = adapter_opt_in ] &&
+[ "$(field "d['beta']['session_fence']" "$b")" = declined_send_storage_counter ] ||
+    { echo 'FAIL AA install probe beta-known-patch: expected install=ok, sessions declined and the BETA opt-in'; cat "$b"; exit 1; }
+grep -q '"kind":"beta_state",.*"from":"DISABLED","to":"ARMED","reason":"enabled"' \
+    "$work/beta-known-patch/mx5-aa-dr/logs/trace.0.jsonl" ||
+    { echo 'FAIL AA install probe beta-known-patch: the worker did not arm BETA'; grep beta_ "$work/beta-known-patch/mx5-aa-dr/logs/trace.0.jsonl"; exit 1; }
+echo 'PASS AA install probe BETA mode with libpatch: install=ok, session observation declined, BETA opted in'

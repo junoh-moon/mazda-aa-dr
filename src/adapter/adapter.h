@@ -111,6 +111,13 @@ struct Options {
     // strings). Runs inside the OEM send after next() returned; it MUST be
     // bounded, nonblocking, allocation-free and noexcept. errno is restored.
     void (*beta_event)(void* user, const char* what);
+    // Optional BETA send-storage fence. Runs inside every OEM send right after
+    // session_reader and before the replacement decision, with the actual
+    // session_storage argument as an identity only (never dereferenced). Same
+    // constraints as beta_event. Kept separate from session_reader because the
+    // production installer accepts only the product session reader
+    // (validation/BETA_DECISIONS_2026-10-05.md 3.7).
+    void (*send_storage)(void* user, const void* session_storage);
 };
 
 // Initialization only: before installation / before OEM producers start.
@@ -182,6 +189,9 @@ struct InstallOptions {
     void* blm_handle;
     InstallReport* report; // optional, may be null
 };
+// The observe_requests installation accepts only the product request/session
+// readers (host-testable part of install_v74's argument check).
+bool install_readers_supported(const Options&);
 InstallResult install_v74(const InstallOptions&);
 const char* install_result_name(InstallResult);
 

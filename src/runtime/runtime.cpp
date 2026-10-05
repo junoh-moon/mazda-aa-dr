@@ -123,10 +123,11 @@ bool provenance(void *, const A::PositionContext& context, A::Provenance *out, v
   // alone cannot supply epochs or physical qualification for live ASSIST.
   return false;
 }
-// OEM SEND thread, BETA only: the product session reader plus the design S3
-// storage fence. Lock-free; no allocation, I/O or dereference of storage.
-void read_send_session_beta(const void* storage, A::S::Snapshot* out, void* user) {
-  A::read_send_session(storage, out, user);
+// OEM SEND thread, BETA only: the design S3 storage fence, called by the
+// adapter right after the product session reader (which the v74 installer
+// requires unchanged, BETA_DECISIONS 3.7). Lock-free; no allocation, I/O or
+// dereference of storage.
+void observe_send_storage_beta(void*, const void* storage) {
   mx5::runtime::beta_observe_storage(beta_shared, storage);
 }
 // OEM SEND thread, BETA only: counts hold transitions for the worker journal.
@@ -143,9 +144,11 @@ A::Options product_options() {
   o.allow_assist = false; // The qualified ASSIST gate stays closed.
   o.request_reader = A::read_request_trace;
   const bool beta = config.valid && config.mode == 5;
-  o.session_reader = beta ? read_send_session_beta : A::read_send_session;
+  // Always the stock reader: install_v74 refuses any other session reader.
+  o.session_reader = A::read_send_session;
   o.allow_beta = beta;
   o.beta_event = beta ? beta_event : 0;
+  o.send_storage = beta ? observe_send_storage_beta : 0;
   return o;
 }
 void hex48(const uint8_t *p, char *out) {

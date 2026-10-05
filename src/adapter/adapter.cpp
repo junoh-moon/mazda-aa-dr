@@ -463,6 +463,8 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     event.kind = Observation::SEND; event.original_mode = -1;
     if(options.session_reader)
         options.session_reader(session_storage,&event.send_session,options.user);
+    if(options.send_storage)
+        options.send_storage(options.user,session_storage);
     event.request_result = runtime::request_trace::NOT_FOUND;
     event.choice = ORIGINAL;
     const bool pool_unavailable=tls.depth && (tls.depth>CONTEXT_DEPTH_LIMIT ||

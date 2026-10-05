@@ -51,6 +51,13 @@ static void beta_event(void* user,const char* what) {
     else if(!std::strcmp(what,"hold_cleared"))++hold_cleared_events;
     else assert(!"unexpected beta event");
 }
+static unsigned storage_calls;
+static bool storage_revokes;
+static void send_storage(void* user,const void* storage) {
+    assert(user==&hold_set_events && storage==expected_session);
+    ++storage_calls;errno=ENOTTY;
+    if(storage_revokes)invalidate();
+}
 static void session_reader(const void* storage,mx5::runtime::session_trace::Snapshot* out,void*) {
     assert(storage==expected_session);++session_reads;errno=EIO;
     const mx5::runtime::session_trace::Snapshot s={mx5::runtime::session_trace::OBSERVED,77,9,-2,true,100};*out=s;
@@ -172,6 +179,7 @@ static int beta_main(const char* test) {
     Options o = Options();o.sink=sink;o.clock=clock_fn;o.provenance=beta_provenance;
     o.max_snapshot_age_ns=150000000;o.allow_beta=true;o.user=&hold_set_events;
     o.beta_event=beta_event;o.session_reader=beta_session_reader;
+    if(!std::strcmp(test,"beta_send_storage"))o.send_storage=send_storage;
     for(unsigned i=0;i<48;++i)beta_payload[i]=uint8_t(0xa0+i);
     next_result=0; // OEM success unless a case injects a failure
     static uint32_t session_handle=0xabcdef; expected_session=&session_handle;
@@ -250,6 +258,17 @@ static int beta_main(const char* test) {
           assert(last_event.reason==EXTRA_LOCATION);position_leave(); }
         publish_on_position=false; // publication is refused once faulted
         beta_send(0,DISABLED);assert(faulted());
+    } else if (!std::strcmp(test,"beta_send_storage")) {
+        // BETA_DECISIONS 3.7: the storage fence is its own hook; the session
+        // reader stays whatever the installer accepted.
+        assert(!storage_calls);
+        beta_send(0,PASS);assert(storage_calls==1 && session_reads==1);
+        storage_revokes=true;beta_send(0,EPOCH_MISMATCH);assert(storage_calls==2);
+        storage_revokes=false;
+        { VehicleData other={3,beta_payload,48};original_wrapper=&other;expect_original=true;errno=17;
+          assert(send_vehicle_data(expected_session,&other)==0 && errno==EDOM); }
+        assert(storage_calls==3); // every send, LOCATION or not
+        beta_send(0,PASS);assert(storage_calls==4);
     } else if (!std::strcmp(test,"beta_hold")) {
         next_result=-5;beta_send(0,PASS);                 // replaced send failed
         assert(beta_held() && hold_set_events==1 && !hold_cleared_events);
