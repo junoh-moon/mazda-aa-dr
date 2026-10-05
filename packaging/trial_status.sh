@@ -222,7 +222,7 @@ case "$startup_state" in
     new_linux_boot_arm_unconsumed) echo 'New CMU Linux boot observed, but guard arm remains; selection and capture are not yet observed. Wait 60 seconds while parked and run menu 2 once more; if still incomplete, export with 3 and disarm with 4.';;
     guard_selected_same_boot_as_arm) echo 'Guard selected in the arming Linux boot: a new boot was not observed.';;
 esac
-echo 'Measured SHADOW rate is about 17-19 KB/s, so the 120 MiB trace rotates out its oldest data after roughly 105-115 minutes. Export at the first parked USB return, without reinstalling or rearming. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
+echo 'Measured SHADOW rate (2026-10-05 drive) is about 28 KB/s on average and 36 KB/s with AA connected, so the 120 MiB trace can rotate out its oldest data after about 58 minutes. Park and export within about 50 minutes, at the first parked USB return, without reinstalling or rearming. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
 space_ok=0
 space_free=$(storage_free_kib "$persist") || space_free=unknown
 if [ "$space_free" != unknown ] && [ "$space_free" -gt 8256 ]; then space_ok=1; fi
@@ -251,6 +251,10 @@ service_state jciAAPA libmx5dr.so
 service_state jciLDS libmx5dr-ldstap.so
 service_state jciVBS libmx5dr-vimtap.so
 [ "$#" -gt 0 ] || fail 'No retained logs; current collection evidence unavailable'
+# Take the snapshot time immediately before reading the growing journals; the
+# service scan above can take seconds. Rows newer than this are ignored.
+now=$(awk 'NR==1 && $1 ~ /^[0-9]+\.[0-9]+$/ {print $1}' "$ROOT/proc/uptime")
+[ -n "$now" ] || fail 'Cannot read current monotonic uptime'
 LC_ALL=C awk -v boot="$boot_id" -v now="$now" -v oneboot="$oneboot" \
     -v startup_state="$startup_state" -v space_ok="$space_ok" \
     -f "$HERE/trial_status.awk" "$@"

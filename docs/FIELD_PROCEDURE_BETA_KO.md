@@ -63,7 +63,8 @@ BETA는 SHADOW 기록을 그대로 하면서, **순정이 GPS 없음(mode 0)을 
    ok   MODE  BETA
    ok   STOP  not disabled
    ok   DATA  1275 bytes
-   ok   POLL  collector polling
+   ok   POLL  polling 1s ago
+   ok   HLTH  runtime 0s ago
    ok   AAPA  preload yes
    ok   LDS   preload yes
    ok   VBS   preload yes
@@ -80,6 +81,7 @@ BETA는 SHADOW 기록을 그대로 하면서, **순정이 GPS 없음(mode 0)을 
 
    | 줄 | ok의 조건 | 아니면 |
    | --- | --- | --- |
+   | POLL, HLTH | 마지막 collector 폴링과 런타임 health가 몇 초 전인지 함께 표시 | `wait … last poll 12s ago`: 60초 뒤 `2`를 다시 누르십시오 |
    | MODE | `config_mode=BETA`이고 이 USB의 모드와 같음 | `NO MODE SHADOW not BETA` 등: 출발하지 말고 3절 회수·제거 |
    | BETA | 이 부팅의 첫 결정이 `armed` | `NO BETA disabled:…`: BETA가 꺼진 이유입니다. 사진을 남기십시오 |
    | HOOK | AA 위치 후킹 설치(`install=ok`) | `NO HOOK not_installed`: BETA가 동작할 수 없습니다 |
@@ -95,7 +97,7 @@ BETA는 SHADOW 기록을 그대로 하면서, **순정이 GPS 없음(mode 0)을 
 
 - 하늘이 열린 곳에서 몇 분 서 있다가 출발하고, 지상 도로를 5분 이상 달려 GPS를 잡으십시오.
 - **지하주차장 진입 → 안에서 1분 이상(회전이 있으면 더 좋음) → 지상 복귀**를 2~3회, 가능하면 **터널** 통과를 1회 이상 하십시오. 복귀 뒤 매번 지상에서 2분 이상 달려 GPS를 다시 잡으십시오. GPS 복귀 직후의 위치가 BETA 정확도를 재는 기준입니다.
-- 재부팅부터 회수까지 30분 이상, 90분 이내. 시동을 끄지 마십시오.
+- 재부팅부터 회수까지 30분 이상, **50분 이내**. 기록량이 AA 연결 중 약 35.8 KB/s라 120 MiB 기록은 약 58분 뒤부터 가장 오래된 부분이 순환됩니다(2026-10-05 주행 측정). 시동을 끄지 마십시오.
 - 동승자가 있으면 단절 구간에서 네이버의 속도 표시가 차 속도를 따르는지, 방위가 진행 방향과 맞는지, "GPS 끊김" 표시가 나오는지, 복귀 때 위치가 튀는지를 메모해 주십시오. 혼자라면 보지 마십시오. 기록으로 판단합니다.
 
 **중단 기준**: AA 연결이 끊기거나, 지도 위치가 멈추거나 크게 튀는 증상이 **새로** 생기거나, CMU가 재부팅되면 더 진행하지 말고 안전한 곳에 주차한 뒤 3절로 회수하십시오.
@@ -141,5 +143,5 @@ GPS는 참값이 아니며, 하위 송신 결과 0은 폰이 그 값을 채택�
 - 이 문서의 모든 화면은 호스트 합성 시험의 출력이며 순정 BusyBox와 실제 CMU에서 실행하지 않았습니다.
 - BETA 치환이 실제 Mazda wire와 네이버에서 속도·방위로 반영되는지, 터널에서 순정 mode 0이 얼마나 이어지는지, `libpatch`와 함께 설치된 후킹이 실차에서 터치·HUD에 영향이 없는지는 모릅니다.
 - 세션 관측이 켜진(`FENCE observed`) BETA는 런타임 시험이 없습니다.
-- 1분, 2분, 90분 같은 숫자는 측정값이 아니라 이 절차가 정한 기준입니다.
+- 1분, 2분, 50분 같은 숫자는 측정값이 아니라 이 절차가 정한 기준입니다.
 - 이 시험은 v1.0 완료나 자격 ASSIST 활성화를 승인하지 않습니다.

@@ -96,7 +96,15 @@ startup_verdict() {
         else if (v+0>0) show("ok","DATA",v " bytes")
         else show("wait","DATA","0 bytes")
         v=field("collector_poll_recent=")
-        if (v=="observed") show("ok","POLL","collector polling"); else show("wait","POLL",v==""?"missing":v)
+        a=field("poll_age_s=")
+        if (v=="observed") show("ok","POLL",a ~ /^[0-9]+$/ ? "polling " a "s ago" : "collector polling")
+        else if (a ~ /^[0-9]+$/) show("wait","POLL","last poll " a "s ago")
+        else if (a=="none") show("wait","POLL","no poll yet")
+        else show("wait","POLL",v==""?"missing":v)
+        a=field("health_age_s=")
+        if (a ~ /^[0-9]+$/ && field("health_recent=")=="observed") show("ok","HLTH","runtime " a "s ago")
+        else if (a ~ /^[0-9]+$/) show("wait","HLTH","last health " a "s ago")
+        else if (a=="none") show("wait","HLTH","no health yet")
         service("jciAAPA","AAPA"); service("jciLDS","LDS"); service("jciVBS","VBS")
         if (beta) {
             # BETA rows describe the last retained runtime boot; only the

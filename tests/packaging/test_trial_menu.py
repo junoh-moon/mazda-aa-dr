@@ -193,6 +193,22 @@ class TrialMenuTests(unittest.TestCase):
         for line in lines:
             self.assertLessEqual(len(line), 40, line)
 
+    def test_verdict_shows_poll_and_health_age(self):
+        text = self.GO.replace('collector_poll_recent=observed window=8s',
+                               'collector_poll_recent=observed window=8s poll_age_s=1') + \
+            'health_recent=observed window=5s health_age_s=0\n'
+        lines = self.verdict(text).splitlines()
+        self.assertIn('ok   POLL  polling 1s ago', lines)
+        self.assertIn('ok   HLTH  runtime 0s ago', lines)
+        self.assertEqual(lines[-1], 'GO')
+        stale = text.replace('collector_poll_recent=observed window=8s poll_age_s=1',
+                             'collector_poll_recent=unavailable window=8s poll_age_s=12').replace(
+            'health_recent=observed window=5s health_age_s=0', 'health_recent=unavailable window=5s health_age_s=none')
+        lines = self.verdict(stale).splitlines()
+        self.assertIn('wait POLL  last poll 12s ago', lines)
+        self.assertIn('wait HLTH  no health yet', lines)
+        self.assertEqual(lines[-1], 'WAIT 60 s, then run 2 again')
+
     def test_beta_verdict_failures_and_mode_mismatch(self):
         for old, new, expect in (
                 ('beta_enable=armed', 'beta_enable=disabled:hook_not_installed', 'NO   BETA  disabled:hook_not_instal'),

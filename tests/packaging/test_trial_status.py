@@ -37,7 +37,7 @@ class TrialStatusTests(unittest.TestCase):
         bootfile.parent.mkdir(parents=True)
         bootfile.write_text(BOOT + '\n')
         (self.root / 'proc/uptime').write_text('100.00 1.00\n')
-        self.trace = [dict(kind='boot', boot_id=BOOT, mono_ns=1000000000, mode=4),
+        self.trace = [dict(kind='boot', boot_id=BOOT, mono_ns=1000000000, mode=4, install='ok'),
                       dict(kind='shadow_boot', active=True, capture_active=True),
                       dict(kind='health', mono_ns=99000000000, hook_installed=True,
                            audit_fault=0, dropped=0, capture_active=True, computation_active=True),
@@ -772,6 +772,48 @@ exec "$MX5DR_REAL_OD" "$@"
         target.write_text('do not interpret\n')
         (self.logs / 'trace.2.jsonl').symlink_to(target)
         self.assertNotEqual(self.run_status().returncode, 0)
+
+    def test_rows_written_after_the_snapshot_time_do_not_hide_a_live_runtime(self):
+        # 2026-10-05 shadow.5 export: the journals kept growing after `now` was
+        # read, and the newest health/poll rows (newer than `now`) replaced the
+        # live values, giving health_recent/hooks/POLL unavailable during a GO.
+        later = 100500000000  # 0.5 s after the fixture uptime of 100.00 s
+        trace = self.trace + [
+            dict(kind='health', mono_ns=later, hook_installed=True, audit_fault=0, dropped=0,
+                 capture_active=True, computation_active=True),
+            dict(kind='position', mono_ns=later, mode=0),
+            dict(kind='shadow', mono_ns=later, domain='model', assist_ready=False, model_valid=False,
+                 events=9, intervals=0, result='E_NO_SEED', pipeline='WAITING'),
+            dict(kind='capture_end', boot_id=BOOT, mono_ns=later)]
+        collector = self.collector + [dict(kind='poll', end_ns=later, seq=1)]
+        self.write('collector.0.jsonl', collector)
+        # A collector stop recorded after `now` (exact production envelope).
+        with (self.logs / 'collector.0.jsonl').open('a') as stream:
+            stream.write(json.dumps(dict(stream='collector', collector_pid=123, observed_at_mono_ns=later,
+                                         producer_mono_ns=None, producer_time_status='unknown',
+                                         kind='collector_stop', samples=2, reason='stop_marker'),
+                                    separators=(',', ':')) + '\n')
+        self.write('trace.0.jsonl', trace)
+        result = subprocess.run(['sh', str(PACK / 'trial_status.sh')], capture_output=True, text=True,
+                                env=dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root)))
+        r = result
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('health_recent=observed window=5s health_age_s=1', r.stdout)
+        self.assertIn('hooks=observed install=ok health_hook_installed=true', r.stdout)
+        self.assertIn('capture_active=observed', r.stdout)
+        self.assertIn('collector_poll_recent=observed window=8s poll_age_s=1', r.stdout)
+        self.assertIn('oem_position_recent=observed mode=1', r.stdout)
+
+    def test_hook_check_uses_boot_install_and_ages_are_shown(self):
+        trace = [dict(self.trace[0], install='symbol_missing')] + self.trace[1:]
+        r = self.run_status(trace)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('hooks=unavailable install=symbol_missing health_hook_installed=true', r.stdout)
+        (self.root / 'proc/uptime').write_text('120.00 1.00\n')
+        r = self.run_status()
+        self.assertIn('health_recent=unavailable window=5s health_age_s=21', r.stdout)
+        self.assertIn('hooks=observed install=ok', r.stdout)  # a stale health row does not hide the hook
+        self.assertIn('collector_poll_recent=unavailable window=8s poll_age_s=21', r.stdout)
 
     def beta_trace(self, install='ok', enabled=True):
         config = 'mode=BETA\nsample_ms=1000\n'
