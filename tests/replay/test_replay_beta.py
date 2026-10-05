@@ -21,6 +21,7 @@ BOOT = "00000000-0000-4000-8000-0000000000b7"
 YAW_RAD_PER_COUNT = -0.000658615  # research_model_profile()
 LAT0, LON0 = 35.0, 135.0
 TUNNEL = (200.0, 225.0)
+NO_FIX_END = 30.0  # polls before this are NO_FIX (mode 1, utc_s 0, stored fix)
 END = 260.0
 
 
@@ -99,7 +100,11 @@ def write_fixture(directory):
             row = {"stream": "collector", "kind": "position_poll", "receipt_ns": ns(t), "mode": 1,
                    "utc_s": 1700000000 + k, "lat": s[1], "lon": s[2], "heading": round(s[3], 1),
                    "kmh": round(s[4]), "request_provenance": False}
-            if TUNNEL[0] <= t < TUNNEL[1]:
+            if t < NO_FIX_END:
+                # No fix since boot (shadow.5): mode 1, utc_s 0 and a stored
+                # stale fix about 300 m away, while the car already moves.
+                row.update(utc_s=0, lat=LAT0 + 0.0027, lon=LON0, heading=335, kmh=4)
+            elif TUNNEL[0] <= t < TUNNEL[1]:
                 row = dict(frozen, receipt_ns=ns(t), mode=0)
             else:
                 frozen = row
@@ -156,6 +161,16 @@ class ReplayBetaSynthetic(unittest.TestCase):
     def test_real_tunnel_follows_wheel_speed_and_stops_at_gps_return(self):
         r, sends, _ = self.run_tool("--real-only", "--check")
         self.assertEqual(r["check"], "pass")
+        # Send-time classes: the current code changes nothing outside LOST
+        # (mode 0); NO_FIX (mode 1, utc_s 0) passes the original.
+        classes = r["recorded_classes"]
+        self.assertEqual(classes["NO_FIX"]["sends"], 28)
+        self.assertEqual(classes["NO_FIX"]["speed_only"] + classes["NO_FIX"]["replaced"], 0)
+        self.assertEqual(classes["FIX"]["replaced"] + classes["FIX"]["speed_only"], 0)
+        self.assertEqual(classes["LOST"]["sends"], 25)
+        self.assertEqual([(t["from"], t["to"]) for t in r["beta_transitions"]][:2],
+                         [("DISABLED", "ARMED"), ("ARMED", "GPS_LOST")])
+        self.assertGreater(r["reverse_latch"]["moving_latched_s"], 200)
         real = r["real_outages"]
         self.assertEqual(real["runs"], 1)
         self.assertGreater(real["replaced"], 5)
@@ -181,9 +196,9 @@ class ReplayBetaSynthetic(unittest.TestCase):
         self.assertIn("coverage of reported accuracy", err)
 
     def test_check_detects_corrupted_payload_accuracy_and_mode(self):
-        for case, text in (("payload", "bytes outside the allowed fields"),
+        for case, text in (("payload", "LOST send: bytes outside the fields allowed for this class differ"),
                            ("accuracy", "outside (0,40]"),
-                           ("mode", "replaced with original mode 1")):
+                           ("mode", "position replaced on a FIX send (original mode 1)")):
             r, _, err = self.run_tool("--t0", "60", "--durations", "10", "--check",
                                       "--self-test-corrupt", case, expect=1)
             self.assertEqual(r["check"], "fail", case)

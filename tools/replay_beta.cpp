@@ -214,7 +214,10 @@ bool valid_truth(const Fix& f) {
            std::fabs(f.lat) < 85 && std::fabs(f.lon) <= 180 && std::isfinite(f.kmh) && f.kmh >= 0;
 }
 
-bool load(const std::string& dir, const std::string& want_boot, Input* in, std::string* error) {
+// source: "auto" (adapter rows when present, else collector polls),
+// "adapter" or "poll". Polls also cover time without an AA session.
+bool load(const std::string& dir, const std::string& want_boot, double poll_hdop,
+          const std::string& source, Input* in, std::string* error) {
     *in = Input();
     const std::vector<std::string> trace = journal_files(dir, "trace.");
     const std::vector<std::string> collector = journal_files(dir, "collector.");
@@ -224,8 +227,9 @@ bool load(const std::string& dir, const std::string& want_boot, Input* in, std::
     const std::vector<Row> rows = read_rows(trace, "boot", &trace_boots);
     std::string boot = want_boot;
     if (boot.empty()) {
-        if (trace_boots.size() > 1) { *error = "several trace boots; pass --boot-id"; return false; }
-        if (trace_boots.size() == 1) boot = trace_boots[0];
+        // Several boots (rotation keeps an older boot in trace.1): default to
+        // the first boot row of the newest file, trace.0.jsonl.
+        if (!trace_boots.empty()) boot = trace_boots[0];
     }
     in->boot_id = boot;
     std::map<uint64_t, Fix> positions;     // adapter POSITION rows by call
@@ -308,7 +312,7 @@ bool load(const std::string& dir, const std::string& want_boot, Input* in, std::
             sends[call] = hex;
         }
     }
-    if (!positions.empty()) {
+    if (source == "adapter" || (source == "auto" && !positions.empty())) {
         in->position_source = "adapter_position";
         for (std::map<uint64_t, Fix>::iterator i = positions.begin(); i != positions.end(); ++i) {
             Fix f = i->second;
@@ -333,7 +337,9 @@ bool load(const std::string& dir, const std::string& want_boot, Input* in, std::
             num_field(l, "lat", &f.lat); num_field(l, "lon", &f.lon);
             num_field(l, "heading", &f.heading); num_field(l, "kmh", &f.kmh);
             f.mode = int32_t(mode); f.utc = utc;
-            f.horizontal = f.vertical = mode ? 1.0 : 99.0;
+            // position_poll has no HDOP; --poll-hdop states the assumption
+            // (a stricter anchor gate with an HDOP limit reads this value).
+            f.horizontal = f.vertical = mode ? poll_hdop : 99.0;
             f.has_send = true;
             in->calls.push_back(f);
         }
@@ -353,12 +359,12 @@ bool load(const std::string& dir, const std::string& want_boot, Input* in, std::
 
 // ------------------------------------------------------------ options ----
 struct Options {
-    std::string trip, report, csv, boot_id, corrupt, journal;
+    std::string trip, report, csv, boot_id, corrupt, journal, position_source;
     std::vector<double> t0s, durations;
     double sweep_from, sweep_to, sweep_step;
     bool sweep, check, real_only;
     uint64_t cadence_ns, grace_ns, truth_lag_ns, truth_gap_ns;
-    double course_min_kmh, coverage_min;
+    double course_min_kmh, coverage_min, poll_hdop;
 };
 Options opt;
 
@@ -406,7 +412,7 @@ R::BetaController* beta;
 R::WorkerTick model_tick;
 
 struct SendRecord {
-    uint64_t t;
+    uint64_t t, utc;
     int32_t mode, choice, reason, result;
     bool synthetic, one_call;
     uint8_t original[48], outgoing[48];
@@ -437,7 +443,7 @@ void oem_call(const Fix& f, bool synthetic, uint64_t t, const uint8_t* original_
         const size_t before = pending.size();
         const int32_t result = A::send_vehicle_data(&storage_object, &data);
         SendRecord r = SendRecord();
-        r.t = t; r.mode = f.mode; r.synthetic = synthetic; r.result = result;
+        r.t = t; r.utc = f.utc; r.mode = f.mode; r.synthetic = synthetic; r.result = result;
         r.one_call = fake_calls == 1 && fake_sent_valid && result == 0 &&
                      !memcmp(payload, original, 48); // caller buffer untouched
         memcpy(r.original, original, 48);
@@ -453,8 +459,14 @@ void oem_call(const Fix& f, bool synthetic, uint64_t t, const uint8_t* original_
 }
 
 size_t raw_index;
+// Recorded-replay exposure of the MODEL reverse latch (design decision 7):
+// BETA cannot seed or keep a DR anchor while it is unknown.
+struct LatchExposure { uint64_t moving_ticks, moving_latched_ticks; };
+LatchExposure latch_exposure;
+bool count_latch = true;  // parent only; window children stop counting
 // One worker turn at the tick grid, in runtime order: pop observations,
 // receive motion, drain on the MODEL tick, then the BETA tick.
+bool wheel_at(uint64_t t, double* mps);
 void worker_turn(uint64_t now) {
     g_now = now;
     for (size_t i = 0; i < pending.size(); ++i) {
@@ -480,6 +492,11 @@ void worker_turn(uint64_t now) {
             A::faulted() ? "adapter_fault" :
             A::mode() != A::BETA ? "adapter_mode_changed" : 0;
         beta->tick(journal, now, nav, true, nav.status().last_received_ns, 1, fault);
+        double w;
+        if (count_latch && wheel_at(now, &w) && w > 1.0) {
+            ++latch_exposure.moving_ticks;
+            if (nav.reverse_latched()) ++latch_exposure.moving_latched_ticks;
+        }
     }
 }
 
@@ -500,12 +517,34 @@ bool start_product(uint64_t t) {
 }
 
 // ----------------------------------------------------------- evaluation ----
+// Send-time position classes (validation/BETA_DECISIONS_2026-10-05.md 1), from
+// the original POSITION mode and GetPosition utc_s only:
+//   LOST   mode 0 (lost after a fix: frozen fields, HDOP 99/99)
+//   NO_FIX mode 1/2 with utc_s 0 (no fix since boot: stored stale fix)
+//   FIX    mode 1/2 with utc_s > 0
+//   OTHER  mode 3, undecodable, anything else
+// What may change per class (the checker, independent of what the product
+// currently implements): LOST the BETA replacement fields; NO_FIX only the
+// speed (bytes 32..39, the planned speed overlay; position/accuracy/bearing
+// never); FIX and OTHER nothing.
+enum FixClass { CLASS_LOST = 0, CLASS_NO_FIX, CLASS_FIX, CLASS_OTHER, CLASS_COUNT };
+const char* class_name(int c) {
+    static const char* const names[] = {"LOST", "NO_FIX", "FIX", "OTHER"};
+    return c >= 0 && c < CLASS_COUNT ? names[c] : "UNKNOWN";
+}
+int classify(int32_t mode, uint64_t utc) {
+    if (mode == 0) return CLASS_LOST;
+    if (mode == 1 || mode == 2) return utc ? CLASS_FIX : CLASS_NO_FIX;
+    return CLASS_OTHER;
+}
+// change: 0 unchanged, 1 speed only (bytes 32..39), 2 replacement.
+enum Change { CHANGE_NONE = 0, CHANGE_SPEED = 1, CHANGE_REPLACED = 2 };
 struct SendEval {
     int32_t window;
     double t_s, elapsed_s;
-    int32_t mode, choice, reason, result;
+    int32_t mode, choice, reason, result, cls, change;
     uint8_t synthetic, replaced, payload_ok, accuracy_ok, contract_ok, after_return,
-            has_truth, has_course, has_wheel;
+            has_truth, has_course, has_wheel, speed_ok;
     double accuracy_m, error_m, speed_mps, wheel_mps, gps_kmh, bearing_deg, course_deg,
            bearing_error_deg, lat, lon;
 };
@@ -567,17 +606,34 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
     s.elapsed_s = run_start != NONE && r.t >= run_start ? (r.t - run_start) / 1e9 : NAN;
     s.mode = r.mode; s.choice = r.choice; s.reason = r.reason; s.result = r.result;
     s.synthetic = r.synthetic;
+    s.cls = classify(r.mode, r.utc);
     uint8_t out[48];
     memcpy(out, r.outgoing, 48);
     s.replaced = memcmp(out, r.original, 48) != 0;
     if (s.replaced && opt.corrupt == "payload") out[0] ^= 1;       // checker self-test only
     if (s.replaced && opt.corrupt == "accuracy") put32(out + 20, 41000);
-    if (s.replaced && opt.corrupt == "mode") s.mode = 1;
-    s.contract_ok = r.one_call && (s.replaced == (r.choice == int32_t(A::BETA_REPLACEMENT)));
-    s.payload_ok = 1;
+    if (s.replaced && opt.corrupt == "mode") { s.mode = 1; s.cls = CLASS_FIX; }
+    bool speed_only = s.replaced;
     for (unsigned i = 0; i < 48; ++i)
-        if (!allowed_byte(i) && out[i] != r.original[i]) s.payload_ok = 0;
-    if (!s.replaced) {
+        if (out[i] != r.original[i] && (i < 32 || i > 39)) speed_only = false;
+    s.change = !s.replaced ? CHANGE_NONE : speed_only ? CHANGE_SPEED : CHANGE_REPLACED;
+    // Today only the BETA replacement changes bytes; a future overlay must
+    // report its own choice, so the contract check names choices per change.
+    s.contract_ok = r.one_call && (s.change != CHANGE_REPLACED || r.choice == int32_t(A::BETA_REPLACEMENT)) &&
+                    (s.change != CHANGE_NONE || r.choice == int32_t(A::ORIGINAL));
+    s.payload_ok = 1;
+    for (unsigned i = 0; i < 48; ++i) {
+        if (out[i] == r.original[i]) continue;
+        const bool allowed = s.cls == CLASS_LOST ? allowed_byte(i) :
+                             s.cls == CLASS_NO_FIX ? (i >= 32 && i <= 39) : false;
+        if (!allowed) s.payload_ok = 0;
+    }
+    s.speed_ok = 1;
+    if (s.change == CHANGE_SPEED) {
+        s.accuracy_ok = 1;
+        s.accuracy_m = s.error_m = s.bearing_deg = NAN;
+        s.speed_mps = int32_t(get32(out + 36)) / 1000.0;
+    } else if (!s.replaced) {
         s.accuracy_ok = 1;
         s.accuracy_m = s.error_m = s.speed_mps = s.bearing_deg = NAN;
     } else {
@@ -591,14 +647,14 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
     // After the pseudo return only recorded callbacks run. A recorded mode-0
     // run that starts inside the grace period is a real outage of its own;
     // any replacement of a GPS (mode != 0) callback after the return is not.
-    s.after_return = s.replaced && window >= 0 && end_ns != NONE && r.t >= end_ns && s.mode != 0;
+    s.after_return = s.replaced && window >= 0 && end_ns != NONE && r.t >= end_ns && s.cls != CLASS_LOST;
     (void)t0;
     double lat, lon, kmh, course;
     bool has_course = false;
     s.error_m = s.bearing_error_deg = s.course_deg = s.gps_kmh = s.wheel_mps = NAN;
     if (truth_at(r.t, &lat, &lon, &kmh, &course, &has_course)) {
         s.gps_kmh = kmh;
-        if (s.replaced) {
+        if (s.change == CHANGE_REPLACED) {
             s.has_truth = 1;
             s.error_m = dist_m(lat, lon, s.lat, s.lon);
             if (has_course && std::isfinite(s.bearing_deg)) {
@@ -609,6 +665,9 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
     }
     double w;
     if (wheel_at(r.t, &w)) { s.has_wheel = 1; s.wheel_mps = w; }
+    if (s.change == CHANGE_SPEED)
+        s.speed_ok = out[32] == 1 && s.has_wheel &&
+                     std::fabs(s.speed_mps - s.wheel_mps) <= std::max(0.5, 0.05 * s.wheel_mps);
     return s;
 }
 
@@ -737,6 +796,7 @@ void replay(Cursor& c, uint64_t until, bool parent, size_t window_index) {
             if (pid < 0) { perror("fork"); exit(2); }
             if (!pid) {
                 close(fds[0]);
+                count_latch = false;
                 outage = Outage();
                 outage.active = true; outage.id = w.id; outage.t0 = w.t0; outage.end = w.t0 + w.d;
                 outage.next_synth = w.t0; outage.frozen = frozen;
@@ -869,7 +929,7 @@ void usage() {
         "usage: replay_beta --trip DIR [--t0 S,S..] [--sweep FROM:TO:STEP] [--durations S,S..]\n"
         "                   [--real-only] [--cadence-ms N] [--grace-s S] [--truth-lag-ms N]\n"
         "                   [--truth-gap-ms N] [--course-min-kmh K] [--coverage-min F]\n"
-        "                   [--boot-id ID] [--report FILE.json] [--csv FILE.csv] [--check]\n"
+        "                   [--boot-id ID] [--poll-hdop H] [--position-source auto|adapter|poll] [--report FILE.json] [--csv FILE.csv] [--check]\n"
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
         "Times are journal monotonic seconds. Without --t0/--sweep only recorded\n"
         "(real) outages are replayed.\n");
@@ -882,6 +942,7 @@ uint64_t ns(double s) { return uint64_t(llround(s * 1e9)); }
 int main(int argc, char** argv) {
     opt.cadence_ns = 1000000000ULL; opt.grace_ns = 10000000000ULL; opt.truth_lag_ns = 0;
     opt.truth_gap_ns = 3000000000ULL; opt.course_min_kmh = 15; opt.coverage_min = 0.95;
+    opt.poll_hdop = 1.0; opt.position_source = "auto";
     opt.durations = parse_list("10,20,30,45,60");
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -903,6 +964,12 @@ int main(int argc, char** argv) {
         else if (a == "--truth-gap-ms" && more) opt.truth_gap_ns = uint64_t(atof(argv[++i]) * 1e6);
         else if (a == "--course-min-kmh" && more) opt.course_min_kmh = atof(argv[++i]);
         else if (a == "--coverage-min" && more) opt.coverage_min = atof(argv[++i]);
+        else if (a == "--poll-hdop" && more) opt.poll_hdop = atof(argv[++i]);
+        else if (a == "--position-source" && more) {
+            opt.position_source = argv[++i];
+            if (opt.position_source != "auto" && opt.position_source != "adapter" &&
+                opt.position_source != "poll") usage();
+        }
         else if (a == "--self-test-corrupt" && more) opt.corrupt = argv[++i];
         else if (a == "--journal" && more) opt.journal = argv[++i];
         else if (a == "--check") opt.check = true;
@@ -913,7 +980,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < opt.durations.size(); ++i)
         if (!(opt.durations[i] > 0)) usage();
     std::string error;
-    if (!load(opt.trip, opt.boot_id, &in, &error)) { fprintf(stderr, "replay_beta: %s\n", error.c_str()); return 2; }
+    if (!load(opt.trip, opt.boot_id, opt.poll_hdop, opt.position_source, &in, &error)) { fprintf(stderr, "replay_beta: %s\n", error.c_str()); return 2; }
 
     // Window list: every (T0, D) pair, ordered by T0.
     std::vector<double> t0s = opt.t0s;
@@ -987,6 +1054,9 @@ int main(int argc, char** argv) {
             p = semi + 1;
         }
     }
+    struct ClassCount { size_t sends, speed_only, replaced; };
+    ClassCount classes[CLASS_COUNT] = {};
+    std::vector<double> no_fix_speed_err;
     std::vector<SendEval> all = baseline;
     all.insert(all.end(), results.begin(), results.end());
     for (size_t i = 0; i < all.size(); ++i) {
@@ -997,11 +1067,24 @@ int main(int argc, char** argv) {
                      by_id[s.window]->d_s, s.t_s);
         else snprintf(where, sizeof where, "recorded t=%.3f", s.t_s);
         if (!s.contract_ok) violations.push_back(std::string(where) + ": OEM send contract (one call, result, choice) broken");
-        if (!s.payload_ok) violations.push_back(std::string(where) + ": bytes outside the allowed fields differ");
+        if (s.window < 0) {
+            ClassCount& c = classes[s.cls];
+            ++c.sends;
+            if (s.change == CHANGE_SPEED) ++c.speed_only;
+            else if (s.change == CHANGE_REPLACED) ++c.replaced;
+            if (s.cls == CLASS_NO_FIX && s.change == CHANGE_SPEED && s.has_wheel)
+                no_fix_speed_err.push_back(std::fabs(s.speed_mps - s.wheel_mps));
+        }
+        if (s.change == CHANGE_REPLACED && s.cls != CLASS_LOST)
+            violations.push_back(std::string(where) + ": position replaced on a " + class_name(s.cls) +
+                                 " send (original mode " + std::to_string(s.mode) + ")");
+        else if (!s.payload_ok)
+            violations.push_back(std::string(where) + ": " + class_name(s.cls) +
+                                 " send: bytes outside the fields allowed for this class differ");
+        if (!s.speed_ok) violations.push_back(std::string(where) + ": speed-only change does not follow the wheel speed");
         if (s.mode == 0 && !s.replaced) ++reasons_mode0[reason_name(s.reason)];
-        if (!s.replaced) continue;
+        if (s.change != CHANGE_REPLACED) continue;
         ++replaced;
-        if (s.mode != 0) violations.push_back(std::string(where) + ": replaced with original mode " + std::to_string(s.mode));
         if (!s.accuracy_ok) violations.push_back(std::string(where) + ": reported accuracy " + num(s.accuracy_m) + " m outside (0,40]");
         if (s.after_return) violations.push_back(std::string(where) + ": replaced after the (pseudo) GPS return");
         if (s.has_wheel) speed_err.push_back(std::fabs(s.speed_mps - s.wheel_mps));
@@ -1060,7 +1143,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < opt.durations.size(); ++i) j += (i ? "," : "") + num(opt.durations[i]);
     j += "],\"cadence_ms\":" + num(opt.cadence_ns / 1e6) + ",\"grace_s\":" + num(opt.grace_ns / 1e9) +
          ",\"truth_lag_ms\":" + num(opt.truth_lag_ns / 1e6) + ",\"course_min_kmh\":" + num(opt.course_min_kmh) +
-         ",\"coverage_min\":" + num(opt.coverage_min) + "},";
+         ",\"coverage_min\":" + num(opt.coverage_min) + ",\"poll_hdop_assumed\":" + num(opt.poll_hdop) + "},";
     j += "\"windows\":{\"requested\":" + std::to_string(windows.size()) + ",\"skipped_no_gps\":" +
          std::to_string(skipped_no_gps) + ",\"beyond_recording\":" + std::to_string(windows_unreached) +
          ",\"evaluated\":" + std::to_string(window_results.size() - crashed) + ",\"engaged\":" +
@@ -1114,7 +1197,22 @@ int main(int argc, char** argv) {
         j += std::string(first ? "" : ",") + "\"" + i->first + "\":" + std::to_string(i->second);
         first = false;
     }
-    j += "},\"real_outages\":{\"runs\":" + std::to_string(real_runs) + ",\"mode0_sends\":" +
+    j += "},\"recorded_classes\":{";
+    for (int c = 0; c < CLASS_COUNT; ++c)
+        j += std::string(c ? "," : "") + "\"" + class_name(c) + "\":{\"sends\":" + std::to_string(classes[c].sends) +
+             ",\"speed_only\":" + std::to_string(classes[c].speed_only) + ",\"replaced\":" +
+             std::to_string(classes[c].replaced) + "}";
+    j += "},\"no_fix_speed_error_vs_wheel_mps\":" + stat_json(stat(no_fix_speed_err));
+    j += ",\"beta_transitions\":[";
+    {
+        const std::vector<Transition> tr = transitions_since(0);
+        for (size_t i = 0; i < tr.size() && i < 200; ++i)
+            j += std::string(i ? "," : "") + "{\"t_s\":" + num(tr[i].t / 1e9) + ",\"from\":\"" + tr[i].from +
+                 "\",\"to\":\"" + tr[i].to + "\",\"reason\":\"" + json_escape(tr[i].reason) + "\"}";
+    }
+    j += "],\"reverse_latch\":{\"moving_s\":" + num(latch_exposure.moving_ticks * TICK_NS / 1e9) +
+         ",\"moving_latched_s\":" + num(latch_exposure.moving_latched_ticks * TICK_NS / 1e9) + "}";
+    j += ",\"real_outages\":{\"runs\":" + std::to_string(real_runs) + ",\"mode0_sends\":" +
          std::to_string(real_mode0) + ",\"replaced\":" + std::to_string(real_replaced) +
          ",\"longest_engaged_s\":" + num(baseline_longest) + ",\"return_jump_m\":" + stat_json(stat(return_jumps)) + "},";
     j += "\"worst_margin\":[";

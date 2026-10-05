@@ -16,12 +16,19 @@ POSITION/LOCATION → `adapter::position_enter`/`send_vehicle_data`/`position_le
 - **실제 단절**: 기록에 mode 0이 있으면 기록대로 재생한다(`--real-only`는 의사 창 없이 이것만).
 
 출력(JSON `--report`, 송신별 CSV `--csv`, BetaController 행 `--journal`): 송신별 선택·사유, 위치 오차, 휠 속도 대비 속도 오차, GPS 코스 대비 방위 오차(GPS 15 km/h 이상), 보고 정확도 적중률, 최장 ENGAGED, 이탈 사유별 수, 미치환 창의 사유.
-`--check`는 다음에서 실패한다: mode≠0 치환, 정확도 >40 m 또는 ≤0, 허용 필드(8–16, 20–23, 32, 36–40, 44–47) 밖 바이트 변경, (의사) GPS 복귀 뒤 치환, OEM send 계약(1회 호출·반환·선택) 위반, 창 크래시, 적중률 <0.95.
+`--check`는 다음에서 실패한다: 분류별 허용 밖 변경(LOST 외 위치 치환 포함), 정확도 >40 m 또는 ≤0, 허용 필드(8–16, 20–23, 32, 36–40, 44–47) 밖 바이트 변경, (의사) GPS 복귀 뒤 치환, OEM send 계약(1회 호출·반환·선택) 위반, 창 크래시, 적중률 <0.95.
 `--self-test-corrupt payload|accuracy|mode`는 판정기 자체 시험용이다.
+
+## 송신 시점 분류(shadow.5 반영)
+
+[결정 갱신](BETA_DECISIONS_2026-10-05.md) 1절의 분류를 원본 mode와 utc_s로 송신마다 매긴다: LOST(mode 0), NO_FIX(mode 1/2, utc_s 0: 부팅 후 fix 없음, 저장값), FIX(mode 1/2, utc_s>0), OTHER.
+판정기는 제품이 지금 구현한 것과 무관하게 분류별 허용 변경을 검사한다: LOST는 BETA 치환 필드, NO_FIX는 속도(32–39)만(예정된 속도 덮어쓰기; 휠 속도와 max(0.5 m/s, 5%) 이내), FIX와 OTHER는 변경 없음.
+보고서는 기록 송신의 분류별 송신·속도만 변경·치환 수, NO_FIX 속도 오차, `beta_state` 전이 목록, 주행 중 후진 래치 유효 시간(`reverse_latch`)을 낸다.
+`--position-source poll`은 AA 세션 밖(분리 뒤 첫 fix 등)도 collector poll로 재생하고, `--poll-hdop`은 HDOP가 없는 poll의 가정값(더 엄격한 앵커 게이트가 읽는다)을 명시한다. trace가 여러 boot를 담으면 기본은 trace.0의 boot이다.
 
 ## CI 증거(합성 자료만)
 
-`tests/replay/test_replay_beta.py`가 직선·가감속·90° 곡선·25초 터널(감속, mode 0)·GPS 복귀를 프로그램으로 생성한다(개인 자료 없음). 5개 시험: 의사 단절 sweep `--check` 통과(적중률 ≥0.95, p90 오차 <10 m, 휠 대비 속도 오차 <0.6 m/s, 방위 p90 <3°, 첫 치환은 단절 1초 뒤),
+`tests/replay/test_replay_beta.py`가 NO_FIX 시작(30초, 저장 fix)·직선·가감속·90° 곡선·25초 터널(감속, mode 0)·GPS 복귀를 프로그램으로 생성한다(개인 자료 없음). 5개 시험: 의사 단절 sweep `--check` 통과(적중률 ≥0.95, p90 오차 <10 m, 휠 대비 속도 오차 <0.6 m/s, 방위 p90 <3°, 첫 치환은 단절 1초 뒤),
 실제 터널에서 치환 속도가 감속을 따르고 복귀 뒤 원본만 송신, GPS 3초 이동 시 적중률 실패 검출, 손상된 페이로드·정확도·mode 검출, 유효 GPS 없는 창 건너뜀.
 
 ## 비공개 주행 재생(선택)
