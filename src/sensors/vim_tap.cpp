@@ -102,7 +102,7 @@ void initialize(VimAddClient forward) {
     mx5::runtime::Config config;
     if(sizeof(void*)!=4 || !real_add ||
        !mx5::runtime::startup_enabled("/data_persist/mx5-aa-dr/mx5dr.conf",
-           "/data_persist/mx5-aa-dr/logs/disable-next-start",&config) || config.mode!=4)return;
+           "/data_persist/mx5-aa-dr/logs/disable-next-start",&config) || (config.mode!=4 && config.mode!=5))return;
     if(!stock_function(reinterpret_cast<void*>(real_add),
         "c9a8409743e304fc096336f90f9b262a93bc996f3e56a3a0bf5012672da0256b",0x1070) ||
        !mx5_verify_file_sha256("/jci/vim/vim_app",

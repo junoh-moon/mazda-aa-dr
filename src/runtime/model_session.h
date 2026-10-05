@@ -9,15 +9,25 @@ namespace mx5 { namespace runtime {
 class ModelSession {
 public:
     enum Update { INITIAL, SAME, CHANGED };
-    ModelSession():current_(),seen_(false),since_ns_(0) {}
+    ModelSession():current_(),seen_(false),since_ns_(0),accept_declined_(false) {}
+    // BETA only (validation/ASSIST_BETA_DESIGN_2026-10-05.md decision 6): the
+    // installer KNOWINGLY skipped session observation because a third-party
+    // shim owns the session slots (InstallReport.sessions_declined). Then the
+    // constant never-prepared UNOBSERVED snapshot is the fence and the BETA
+    // runtime counts send-time session_storage changes instead. Any other
+    // non-OBSERVED result (transition, ambiguity, fault, no live session)
+    // stays unavailable. Set once before the worker's first update.
+    void accept_declined(bool value) { accept_declined_=value; }
     Update update(const session_trace::Snapshot& s,uint64_t now) {
         if(seen_ && same(current_,s))return SAME;
         const Update result=seen_?CHANGED:INITIAL;
         current_=s;seen_=true;since_ns_=now;return result;
     }
     bool available() const {
-        return seen_ && current_.result==session_trace::OBSERVED &&
-            current_.lifetime && current_.revision;
+        if(!seen_)return false;
+        if(current_.result==session_trace::OBSERVED && current_.lifetime && current_.revision)
+            return true;
+        return accept_declined_ && declined(current_);
     }
     const char* reject(const adapter::Observation& o) const {
         if(!available())return "session_unavailable";
@@ -36,6 +46,11 @@ private:
     session_trace::Snapshot current_;
     bool seen_;
     uint64_t since_ns_;
+    bool accept_declined_;
+    static bool declined(const session_trace::Snapshot& s) {
+        return s.result==session_trace::UNOBSERVED && !s.lifetime && !s.event &&
+            !s.state_known && !s.revision;
+    }
     static bool same(const session_trace::Snapshot& a,const session_trace::Snapshot& b) {
         return a.result==b.result && a.revision==b.revision && a.lifetime==b.lifetime &&
             a.event==b.event && a.state_known==b.state_known && (!a.state_known || a.state==b.state);

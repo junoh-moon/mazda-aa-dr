@@ -87,5 +87,24 @@ int main() {
     assert(gate.update(changed,500)==R::ModelSession::CHANGED && gate.available());
     assert(!gate.reject(position(changed)));
     changed.revision=0;gate.update(changed,600);assert(!gate.available());
-    puts("MODEL session fence: observed revisions, unavailable states, request identity/time, GPS/GAP independence passed");
+    {
+        // BETA declined fence (design decision 6): only the exact never-prepared
+        // UNOBSERVED snapshot is admitted, and only after an explicit opt-in.
+        R::ModelSession declined;declined.accept_declined(true);
+        const S::Snapshot unobserved=S::Snapshot();
+        assert(!declined.available());
+        assert(declined.update(unobserved,700)==R::ModelSession::INITIAL && declined.available());
+        assert(!declined.reject(position(unobserved)));
+        assert(!strcmp(declined.reject(position(s)),"session_changed_since_issue"));
+        for(unsigned i=0;i<4;++i) {
+            S::Snapshot absent=S::Snapshot();absent.result=unavailable[i];
+            assert(declined.update(absent,710+i)==R::ModelSession::CHANGED && !declined.available());
+            assert(!strcmp(declined.reject(position(unobserved)),"session_unavailable"));
+        }
+        S::Snapshot odd=S::Snapshot();odd.revision=3; // UNOBSERVED never carries a revision
+        declined.update(odd,720);assert(!declined.available());
+        R::ModelSession strict; // without the opt-in nothing changes
+        assert(strict.update(unobserved,730)==R::ModelSession::INITIAL && !strict.available());
+    }
+    puts("MODEL session fence: observed revisions, unavailable states, request identity/time, GPS/GAP independence, BETA declined opt-in passed");
 }

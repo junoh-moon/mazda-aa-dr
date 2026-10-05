@@ -3,6 +3,8 @@
 #include <stddef.h>
 namespace mx5 {
 namespace runtime {
+// mode: 0 OFF, 1 OBSERVE, 2 SCRUB, 4 SHADOW, 5 BETA (SHADOW capture plus the
+// opt-in MODEL-domain BETA replacement). 3 (qualified ASSIST) is never parsed.
 struct Config {
   unsigned mode;
   size_t max_log_bytes;

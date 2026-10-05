@@ -1,0 +1,339 @@
+#ifndef MX5_RUNTIME_BETA_CONTROLLER_H
+#define MX5_RUNTIME_BETA_CONTROLLER_H
+// v1.0 beta runtime wiring (validation/ASSIST_BETA_DESIGN_2026-10-05.md
+// decisions 5, 6 and 8). Two halves:
+//  * BetaShared + the beta_* OEM-thread helpers: lock-free atomics only. They
+//    run inside OEM POSITION/SEND calls and therefore never allocate, block,
+//    throw, trap, retain or dereference OEM pointers.
+//  * BetaController: owned by the single journal worker. It decides the state
+//    machine, publishes/withdraws the BETA DrSnapshot and writes every
+//    transition as a journal row. It never sets qualified flags or
+//    Domain::QUALIFIED and never touches allow_assist.
+#include "adapter/adapter.h"
+#include "navigation/pipeline.h"
+#include "runtime/beta_profile.h"
+#include "runtime/core_bridge.h"
+#include <atomic>
+#include <cmath>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+namespace mx5 { namespace runtime {
+
+// Process-lifetime state shared with OEM threads. Zero-initialized static
+// storage; every member is a lock-free 32-bit atomic on the ARM32 target.
+struct BetaShared {
+    std::atomic<unsigned> active;        // provenance may claim Domain::BETA
+    std::atomic<uint32_t> source_epoch;  // worker copy of the ModelBus epoch (0: none)
+    // Design S3/S6: count of distinct send-time session_storage values. It is
+    // the BETA session_epoch. 0 = no send observed yet (never publishable).
+    std::atomic<uint32_t> storage_epoch;
+    std::atomic<uintptr_t> storage;      // identity only; never dereferenced
+    std::atomic<uint32_t> hold_set, hold_cleared; // Options.beta_event counts
+};
+static_assert(ATOMIC_INT_LOCK_FREE==2 && (sizeof(uintptr_t)==sizeof(unsigned) || ATOMIC_LONG_LOCK_FREE==2),
+              "BETA OEM-thread state must be lock-free");
+
+// OEM SEND thread (session_reader wrapper). A changed storage argument bumps
+// the counter and then revokes the adapter generation, so the very send that
+// observed the change, and every candidate published before it, passes the
+// original. The counter saturates instead of wrapping (wrap could revive an
+// old epoch); the worker treats saturation as a FAULT.
+inline void beta_observe_storage(BetaShared& s,const void* storage) {
+    const uintptr_t p=reinterpret_cast<uintptr_t>(storage);
+    if(s.storage.load(std::memory_order_acquire)==p)return;
+    if(s.storage.exchange(p,std::memory_order_acq_rel)==p)return;
+    uint32_t c=s.storage_epoch.load(std::memory_order_acquire);
+    if(c!=UINT32_MAX)
+        s.storage_epoch.compare_exchange_strong(c,c+1,std::memory_order_acq_rel,
+                                                std::memory_order_acquire);
+    adapter::invalidate();
+}
+// OEM SEND thread (Options.beta_event). Counts for the worker journal. A
+// hold_set also revokes the generation (count first, then revoke), so the
+// failed candidate can never be selected again even after the adapter clears
+// its hold on the next ORIGINAL 0; any later candidate needs a worker that
+// has already seen this count and withdrawn (decision 8).
+inline void beta_count_event(BetaShared& s,const char* what) {
+    if(!what)return;
+    if(!strcmp(what,"hold_set")) {
+        s.hold_set.fetch_add(1,std::memory_order_acq_rel);adapter::invalidate();
+    } else if(!strcmp(what,"hold_cleared"))s.hold_cleared.fetch_add(1,std::memory_order_acq_rel);
+}
+// OEM POSITION thread (provenance reader). BETA provenance (design decision 5):
+//  * domain BETA: the snapshot may feed only Mode::BETA (choose_dr rejects it).
+//  * source_epoch: the worker's ModelBus epoch (LDS bus lifetime fence).
+//  * session_epoch: the send-time session_storage counter above.
+//  * exact_request / verified_lds / legacy_receiver stay FALSE. They are the
+//    qualified-domain claims (verified per-request provider, verified LDS
+//    record, verified legacy receiver). BETA does not establish any of them
+//    and choose_beta does not read them; the per-call evidence BETA relies on
+//    is the original mode 0 of this same POSITION, checked by the adapter.
+// Returns false (no BETA claim) unless the worker armed BETA and both epochs
+// are non-zero. Nothing here can produce Domain::QUALIFIED.
+inline bool beta_provenance(const BetaShared& s,adapter::Provenance* out) {
+    *out=adapter::Provenance();
+    if(!s.active.load(std::memory_order_acquire))return false;
+    const uint32_t source=s.source_epoch.load(std::memory_order_acquire);
+    const uint32_t session=s.storage_epoch.load(std::memory_order_acquire);
+    if(!source || !session || session==UINT32_MAX)return false;
+    out->source_epoch=source;out->session_epoch=session;
+    out->exact_request=false;out->verified_lds=false;out->legacy_receiver=false;
+    out->domain=adapter::Provenance::Domain::BETA;
+    return true;
+}
+
+enum BetaState { BETA_DISABLED=0, BETA_ARMED, BETA_GPS_LOST, BETA_ENGAGED,
+                 BETA_WITHDRAWN, BETA_FAULT };
+inline const char* beta_state_name(BetaState s) {
+    static const char* const names[]={"DISABLED","ARMED","GPS_LOST","ENGAGED","WITHDRAWN","FAULT"};
+    return unsigned(s)<sizeof names/sizeof names[0]?names[s]:"UNKNOWN";
+}
+// Sensor silence (design fault-injection list): no motion receipt for this long.
+static const uint64_t BETA_SENSOR_SILENCE_NS=300000000ULL;
+
+// Worker-owned. J must provide line(const char*), fail() and a bool failed.
+class BetaController {
+public:
+    struct Counters {
+        uint64_t publications, publish_skipped, withdrawals, replaced_sends,
+                 replaced_nonzero, original_mode0_sends, transitions;
+    };
+    explicit BetaController(BetaShared& shared)
+        : shared_(shared),profile_(beta_profile()),state_(BETA_DISABLED),reason_("not_enabled"),
+          counters_(),have_position_(false),position_mode_(-1),position_generation_(0),
+          seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
+          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_valid_until_(0),
+          last_frontier_(0),last_skip_("none") {}
+    BetaState state() const { return state_; }
+    const char* reason() const { return reason_; }
+    const Counters& counters() const { return counters_; }
+    // Live means BETA may still publish in this boot.
+    bool live() const { return state_!=BETA_DISABLED && state_!=BETA_FAULT; }
+
+    // After the boot row is durable. blocked != 0 keeps BETA disabled and
+    // journals why. Otherwise arms provenance, then requests Mode::BETA.
+    template<class J> bool enable(J& j,uint64_t now,const char* blocked) {
+        if(state_!=BETA_DISABLED || strcmp(reason_,"not_enabled")) return false;
+        if(blocked) { transition(j,now,BETA_DISABLED,blocked);return false; }
+        shared_.active.store(1,std::memory_order_release);
+        if(!adapter::set_mode(adapter::BETA)) {
+            shared_.active.store(0,std::memory_order_release);
+            transition(j,now,BETA_DISABLED,"adapter_refused");return false;
+        }
+        transition(j,now,BETA_ARMED,"enabled");
+        return true;
+    }
+    // Every popped POSITION observation, in queue order.
+    template<class J> void position(J& j,const adapter::Observation& o,uint64_t now) {
+        if(!live())return;
+        have_position_=true;position_mode_=o.original_mode;
+        position_generation_=o.prediction_generation;
+        if(o.original_mode==0) {
+            if(state_==BETA_ARMED)transition(j,now,BETA_GPS_LOST,"gps_lost");
+            return;
+        }
+        // GPS present (or undecodable): the adapter already passes the
+        // original for this call; withdraw so no candidate survives.
+        if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_ARMED,"gps_returned"); }
+        else if(state_==BETA_GPS_LOST || state_==BETA_WITHDRAWN)
+            transition(j,now,BETA_ARMED,"gps_returned");
+    }
+    // Every popped SEND observation (diagnostic counters only).
+    void send(const adapter::Observation& o) {
+        if(o.kind!=adapter::Observation::SEND || o.type!=1 || !o.has_payload)return;
+        if(o.choice==adapter::BETA_REPLACEMENT) {
+            ++counters_.replaced_sends;if(o.result)++counters_.replaced_nonzero;
+        } else if(o.original_mode==0)++counters_.original_mode0_sends;
+    }
+    // Permanent for this boot: capture.stop, disable-next-start.
+    template<class J> void disable(J& j,uint64_t now,const char* reason) {
+        if(!live())return;
+        stop_adapter();transition(j,now,BETA_DISABLED,reason);summary(j,now,true);
+    }
+    // Sticky; adapter back to OBSERVE.
+    template<class J> void fault(J& j,uint64_t now,const char* reason) {
+        if(!live())return;
+        stop_adapter();transition(j,now,BETA_FAULT,reason);summary(j,now,true);
+    }
+    // One worker tick. input_ready: MODEL input admitted (session+bus fences).
+    // last_motion_ns: newest motion receipt admitted into the pipeline.
+    template<class J> void tick(J& j,uint64_t now,const navigation::Pipeline& nav,
+                                bool input_ready,uint64_t last_motion_ns,
+                                uint64_t bus_epoch,const char* fault_reason) {
+        if(!live())return;
+        if(fault_reason) { fault(j,now,fault_reason);return; }
+        const uint32_t source=bus_epoch && bus_epoch<=UINT32_MAX?uint32_t(bus_epoch):0;
+        shared_.source_epoch.store(source,std::memory_order_release);
+        journal_events(j,now);
+        if(!live())return;
+        if(state_==BETA_ENGAGED && adapter::beta_held()) {
+            withdraw();transition(j,now,BETA_WITHDRAWN,"send_result_hold");
+        }
+        if(state_==BETA_GPS_LOST || state_==BETA_ENGAGED)
+            publish(j,now,nav,input_ready,last_motion_ns,source);
+        summary(j,now,false);
+    }
+private:
+    BetaShared& shared_;
+    BetaProfile profile_;
+    BetaState state_;
+    const char* reason_;
+    Counters counters_;
+    bool have_position_;
+    int32_t position_mode_;
+    uint32_t position_generation_;
+    uint32_t seen_storage_epoch_,seen_hold_set_,seen_hold_cleared_;
+    uint64_t last_summary_;
+    CoreBridgeResult last_bridge_;
+    double last_accuracy_;
+    uint64_t last_valid_until_,last_frontier_;
+    const char* last_skip_;
+
+    void stop_adapter() {
+        shared_.active.store(0,std::memory_order_release);
+        // set_mode revokes the generation even when it refuses nothing.
+        adapter::set_mode(adapter::OBSERVE);
+        withdraw();
+    }
+    // Revoke first (lock-free, immediately unselectable), then overwrite the
+    // stored candidate with an empty one so no BETA value survives in memory.
+    void withdraw() {
+        adapter::invalidate();
+        adapter::DrSnapshot empty=adapter::DrSnapshot();
+        empty.prediction_generation=adapter::generation();
+        adapter::publish_snapshot(empty);
+        ++counters_.withdrawals;
+    }
+    template<class J> void journal_events(J& j,uint64_t now) {
+        const uint32_t set=shared_.hold_set.load(std::memory_order_acquire);
+        const uint32_t cleared=shared_.hold_cleared.load(std::memory_order_acquire);
+        if(set!=seen_hold_set_) {
+            seen_hold_set_=set;event(j,now,"hold_set",set);
+            if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_WITHDRAWN,"send_result_hold"); }
+        }
+        if(cleared!=seen_hold_cleared_) { seen_hold_cleared_=cleared;event(j,now,"hold_cleared",cleared); }
+        const uint32_t storage=shared_.storage_epoch.load(std::memory_order_acquire);
+        if(storage!=seen_storage_epoch_) {
+            const uint32_t previous=seen_storage_epoch_;seen_storage_epoch_=storage;
+            char line[300];
+            const int n=snprintf(line,sizeof line,
+                "{\"kind\":\"beta_session_storage\",\"mono_ns\":%llu,\"domain\":\"beta\","
+                "\"session_epoch\":%u,\"previous\":%u,\"state\":\"%s\",\"generation\":%u}",
+                (unsigned long long)now,storage,previous,beta_state_name(state_),adapter::generation());
+            if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+            if(storage==UINT32_MAX) { fault(j,now,"session_epoch_exhausted");return; }
+            // The send-time reader already revoked the generation; also drop
+            // the stored values and keep this outage withdrawn (decision 8).
+            if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_WITHDRAWN,"session_storage_changed"); }
+        }
+    }
+    template<class J> void event(J& j,uint64_t now,const char* what,uint32_t count) {
+        char line[300];
+        const int n=snprintf(line,sizeof line,
+            "{\"kind\":\"beta_hold\",\"mono_ns\":%llu,\"domain\":\"beta\",\"event\":\"%s\","
+            "\"count\":%u,\"held\":%s,\"state\":\"%s\"}",
+            (unsigned long long)now,what,count,adapter::beta_held()?"true":"false",beta_state_name(state_));
+        if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+    }
+    static bool budget(CoreBridgeResult r,const BetaModelInput& in,const navigation::Pipeline& nav) {
+        return r==CORE_BRIDGE_LIMIT || r==CORE_BRIDGE_BEARING ||
+            in.snapshot.reason==MX5_DR_E_LIMIT || in.result==MX5_DR_E_LIMIT ||
+            nav.beta_core_result()==MX5_DR_E_LIMIT;
+    }
+    template<class J> void publish(J& j,uint64_t now,const navigation::Pipeline& nav,
+                                   bool input_ready,uint64_t last_motion_ns,uint32_t source) {
+        const char* withdrawn=0;
+        if(!input_ready)withdrawn="model_input_unavailable";
+        else if(!last_motion_ns || now<last_motion_ns || now-last_motion_ns>BETA_SENSOR_SILENCE_NS)
+            withdrawn="sensor_silence";
+        adapter::DrSnapshot s=adapter::DrSnapshot();
+        if(!withdrawn) {
+            const BetaModelInput in=nav.model_publication(now);
+            last_bridge_=map_model_publication(in,profile_,&s);
+            // The MODEL sample-age guard (250 ms of the frontier) can fire
+            // before the 300 ms receipt silence; both mean sensor silence.
+            if(last_bridge_!=CORE_BRIDGE_OK)
+                withdrawn=nav.status().result==navigation::PIPELINE_MISSING_SENSOR?"sensor_silence":
+                    budget(last_bridge_,in,nav)?"budget_limit":
+                    last_bridge_==CORE_BRIDGE_TIME?"lease_expired":"model_not_ready";
+        }
+        if(withdrawn) {
+            last_skip_=withdrawn;
+            if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_WITHDRAWN,withdrawn); }
+            return;
+        }
+        // Identity checks that only defer (no state change): the candidate
+        // carries the CURRENT adapter generation only when this worker has
+        // already seen a mode-0 POSITION of exactly that generation, so a
+        // snapshot can never cross an unprocessed GPS return/loss.
+        const uint32_t generation=adapter::generation();
+        const uint32_t session=shared_.storage_epoch.load(std::memory_order_acquire);
+        const char* skip=0;
+        if(!source)skip="source_epoch_unavailable";
+        else if(!session || session==UINT32_MAX)skip="session_storage_unobserved";
+        else if(!have_position_ || position_mode_!=0 || position_generation_!=generation)
+            skip="generation_unobserved";
+        if(!skip) {
+            s.prediction_generation=generation;s.source_epoch=source;s.session_epoch=session;
+            if(!adapter::publish_snapshot(s))skip="publish_rejected";
+        }
+        if(skip) { last_skip_=skip;++counters_.publish_skipped;return; }
+        ++counters_.publications;last_skip_="none";
+        last_accuracy_=s.accuracy_m;last_valid_until_=s.valid_until_mono_ns;
+        last_frontier_=s.frontier_mono_ns;
+        if(state_==BETA_GPS_LOST)transition(j,now,BETA_ENGAGED,"published");
+    }
+    template<class J> void transition(J& j,uint64_t now,BetaState to,const char* reason) {
+        const BetaState from=state_;
+        state_=to;reason_=reason;++counters_.transitions;
+        char accuracy[48];
+        if(std::isfinite(last_accuracy_))snprintf(accuracy,sizeof accuracy,"%.17g",last_accuracy_);
+        else strcpy(accuracy,"null");
+        char line[600];
+        const int n=snprintf(line,sizeof line,
+            "{\"kind\":\"beta_state\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
+            "\"from\":\"%s\",\"to\":\"%s\",\"reason\":\"%s\",\"adapter_mode\":%u,"
+            "\"generation\":%u,\"source_epoch\":%u,\"session_epoch\":%u,\"held\":%s,"
+            "\"bridge\":\"%s\",\"accuracy_m\":%s,\"valid_until_ns\":%llu}",
+            (unsigned long long)now,beta_state_name(from),beta_state_name(to),reason,
+            unsigned(adapter::mode()),adapter::generation(),
+            shared_.source_epoch.load(std::memory_order_acquire),
+            shared_.storage_epoch.load(std::memory_order_acquire),
+            adapter::beta_held()?"true":"false",core_bridge_result_name(last_bridge_),accuracy,
+            (unsigned long long)last_valid_until_);
+        if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+    }
+    // At most 1 Hz (forced rows bypass the limit once, e.g. at stop).
+    template<class J> void summary(J& j,uint64_t now,bool force) {
+        if(!force && last_summary_ && now>=last_summary_ && now-last_summary_<1000000000ULL)return;
+        last_summary_=now?now:1;
+        char accuracy[48];
+        if(std::isfinite(last_accuracy_))snprintf(accuracy,sizeof accuracy,"%.17g",last_accuracy_);
+        else strcpy(accuracy,"null");
+        char line[800];
+        const int n=snprintf(line,sizeof line,
+            "{\"kind\":\"beta_summary\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
+            "\"state\":\"%s\",\"reason\":\"%s\",\"adapter_mode\":%u,\"held\":%s,"
+            "\"publications\":%llu,\"publish_skipped\":%llu,\"last_skip\":\"%s\","
+            "\"withdrawals\":%llu,\"replaced_sends\":%llu,\"replaced_nonzero\":%llu,"
+            "\"original_mode0_sends\":%llu,\"transitions\":%llu,\"bridge\":\"%s\","
+            "\"accuracy_m\":%s,\"frontier_ns\":%llu,\"valid_until_ns\":%llu,"
+            "\"source_epoch\":%u,\"session_epoch\":%u,\"generation\":%u}",
+            (unsigned long long)now,beta_state_name(state_),reason_,unsigned(adapter::mode()),
+            adapter::beta_held()?"true":"false",
+            (unsigned long long)counters_.publications,(unsigned long long)counters_.publish_skipped,
+            last_skip_,(unsigned long long)counters_.withdrawals,
+            (unsigned long long)counters_.replaced_sends,(unsigned long long)counters_.replaced_nonzero,
+            (unsigned long long)counters_.original_mode0_sends,(unsigned long long)counters_.transitions,
+            core_bridge_result_name(last_bridge_),accuracy,(unsigned long long)last_frontier_,
+            (unsigned long long)last_valid_until_,
+            shared_.source_epoch.load(std::memory_order_acquire),
+            shared_.storage_epoch.load(std::memory_order_acquire),adapter::generation());
+        if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+    }
+};
+
+} }
+#endif

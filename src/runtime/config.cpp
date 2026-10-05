@@ -56,6 +56,11 @@ Config read_config(const char *path) {
         c.mode = 2;
       else if (!strcmp(v, "SHADOW"))
         c.mode = 4;
+      // Explicit opt-in: SHADOW capture plus the MODEL-domain BETA
+      // replacement (validation/ASSIST_BETA_DESIGN_2026-10-05.md decision 9).
+      // The qualified ASSIST token (internal 3) stays unsupported.
+      else if (!strcmp(v, "BETA"))
+        c.mode = 5;
       else {
         c.valid = false;
         break;

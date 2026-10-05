@@ -61,6 +61,11 @@ int main() {
   require(c.valid && c.max_log_bytes == 8388609);
   c = parse("mode=SHADOW\nsample_ms=5000\n");
   require(c.valid && c.mode == 4);
+  // BETA is an explicit opt-in token (internal 5); ASSIST stays rejected below.
+  c = parse("mode=BETA\nmax_log_bytes=41943040\n");
+  require(c.valid && c.mode == 5 && c.max_log_bytes == 41943040);
+  c = parse("mode=beta\n");
+  require(!c.valid && c.mode == 0);
   c = parse("mode=OFF\n");
   require(c.valid && c.mode == 0);
   c = parse("sample_ms=500\n # explicit mode may come last\n mode = OBSERVE");
@@ -76,7 +81,7 @@ int main() {
                 path.c_str(), (path + ".disabled").c_str(), &c) &&
             !c.valid && c.mode == 0);
   }
-  const char *bad[] = {"mode=ASSIST\n",
+  const char *bad[] = {"mode=ASSIST\n", "mode=BETA\nmode=SHADOW\n", "mode=5\n",
                        "mode=OBSERVE\nmode=SCRUB\n",
                        "mode=OBSERVE\nsample_ms=499\n",
                        "mode=OBSERVE\nsample_ms=5001\n",

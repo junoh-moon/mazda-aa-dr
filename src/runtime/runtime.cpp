@@ -19,6 +19,7 @@
 #include "assist_worker.h"
 #include "journal_queue.h"
 #include "model_session.h"
+#include "beta_controller.h"
 #include "model_bus.h"
 #include "lds_sideband.h"
 #include "lds_request_source.h"
@@ -51,6 +52,9 @@ mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
 mx5::adapter::InstallReport install_report = mx5::adapter::InstallReport();
+// BETA (config mode 5) state shared with OEM POSITION/SEND threads. Static,
+// zero-initialized, lock-free atomics only; see beta_controller.h.
+mx5::runtime::BetaShared beta_shared;
 namespace LA=mx5::runtime::lds_association;
 // Construct off the callback on the worker; retain until process exit. A later
 // DSO constructor/destructor must not reset or free state an OEM callback uses.
@@ -107,7 +111,10 @@ bool pop(A::Observation *out) { return queue.pop(out); }
 
 // No live provenance or sensor freshness is fabricated from polling. SCRUB
 // uses only the original request mode; custom DR remains a separate gate.
+// BETA (MODEL domain) provenance never sets a qualified flag or
+// Domain::QUALIFIED; see beta_provenance() for what each field means.
 bool provenance(void *, const A::PositionContext& context, A::Provenance *out, void *) {
+  if (mx5::runtime::beta_provenance(beta_shared, out)) return true;
   memset(out, 0, sizeof *out);
   if(!context.lds_association ||
      context.lds_association->result!=LA::MATCHED_LOCKED_FOR_SEND)return false;
@@ -115,6 +122,31 @@ bool provenance(void *, const A::PositionContext& context, A::Provenance *out, v
   // their independent verified source. An exact observed wire association
   // alone cannot supply epochs or physical qualification for live ASSIST.
   return false;
+}
+// OEM SEND thread, BETA only: the product session reader plus the design S3
+// storage fence. Lock-free; no allocation, I/O or dereference of storage.
+void read_send_session_beta(const void* storage, A::S::Snapshot* out, void* user) {
+  A::read_send_session(storage, out, user);
+  mx5::runtime::beta_observe_storage(beta_shared, storage);
+}
+// OEM SEND thread, BETA only: counts hold transitions for the worker journal.
+void beta_event(void*, const char* what) { mx5::runtime::beta_count_event(beta_shared, what); }
+// Product runtime options. Startup-only: configure() copies them before any
+// OEM producer runs. BETA additions are present only for config mode 5.
+A::Options product_options() {
+  A::Options o = A::Options();
+  o.sink = sink;
+  o.clock = clock_ns;
+  o.provenance = provenance;
+  o.association_reader = read_inline_association;
+  o.max_snapshot_age_ns = 500000000ULL;
+  o.allow_assist = false; // The qualified ASSIST gate stays closed.
+  o.request_reader = A::read_request_trace;
+  const bool beta = config.valid && config.mode == 5;
+  o.session_reader = beta ? read_send_session_beta : A::read_send_session;
+  o.allow_beta = beta;
+  o.beta_event = beta ? beta_event : 0;
+  return o;
 }
 void hex48(const uint8_t *p, char *out) {
   const char *h = "0123456789abcdef";
@@ -465,6 +497,13 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation,
       b.prepared?"true":"false",b.contexts,unsigned(A::BUS_CONTEXT_CAPACITY),b.faults,source_status);
   if(n<=0 || size_t(n)>=sizeof line)j.fail();else j.line(line);
 }
+// Fail closed: anything except a definitely absent marker counts as present.
+bool disable_marker_present(const char* root) {
+  char path[256];snprintf(path,sizeof path,"%s/logs/disable-next-start",root);
+  struct stat marker;
+  if(lstat(path,&marker)==0)return true;
+  return errno!=ENOENT;
+}
 bool stop_requested(const char* root) {
   char path[256];snprintf(path,sizeof path,"%s/logs/capture.stop",root);
   struct stat st;
@@ -701,6 +740,14 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
   char boot_id[37];
   mx5::runtime::read_boot_id(boot_id);
+  // BETA (config mode 5) at boot: "enabled" is the install-time adapter
+  // opt-in (allow_beta with an installed hook). The worker's own decision
+  // after this row is durable is the first beta_state row.
+  const bool beta_requested=config.mode==5;
+  const bool beta_allowed=beta_requested && hook_installed;
+  const bool beta_declined=beta_requested && hook_installed && install_report.sessions_declined;
+  const char* beta_boot_reason=!beta_requested?"not_requested":
+      !hook_installed?"hook_not_installed":"adapter_opt_in";
   snprintf(line, sizeof line,
            "{\"kind\":\"boot\",\"schema\":1,\"pid\":%ld,\"mono_ns\":%llu,"
            "\"boot_id\":\"%s\","
@@ -708,12 +755,16 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
            "block\":\"sensor_timing_quality_calibration_unverified\",\"wire_"
            "timestamp_modified\":false,"
            "\"session_hooks\":\"%s\","
+           "\"beta\":{\"mode\":\"%s\",\"enabled\":%s,\"reason\":\"%s\",\"session_fence\":\"%s\"},"
            "\"install_diag\":{\"stage\":%u,\"slot_offset\":%llu,\"expected_offset\":%llu,"
            "\"observed_offset\":%llu,\"owner\":\"%s\",\"symbol\":\"%s\"}}",
            (long)getpid(), (unsigned long long)clock_ns(0), boot_id, config.mode,
            boot_result,
            !hook_installed ? "none"
                : install_report.sessions_declined ? "declined_third_party_interposer" : "observing",
+           beta_requested ? "BETA" : "off", beta_allowed ? "true" : "false", beta_boot_reason,
+           !beta_requested ? "none" : beta_declined ? "declined_send_storage_counter"
+                                                    : "observed_session_and_send_storage_counter",
            install_report.declined_stage,
            (unsigned long long)install_report.slot_offset,
            (unsigned long long)install_report.slot_expected_offset,
@@ -737,16 +788,23 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   N::GpsHoldout holdout;
   N::MotionReceiver motion;
   mx5::runtime::ModelSession model_session;
+  // Design decision 6: only a KNOWN decline (third-party session shim)
+  // replaces the session fence with the send-time storage counter.
+  model_session.accept_declined(beta_declined);
   mx5::runtime::ModelBus model_bus;
   ModelSession source_session;
   LdsSourceBus source_bus;
   const N::ModelProfile model=N::research_model_profile();
   mx5_dr_context nav_context={1,1,1}; // local diagnostic identity, not LDS provenance
-  const bool capture=config.mode==4 && motion.open_channel(motion_channel);
+  // BETA (5) keeps SHADOW capture and adds the MODEL reverse latch and the
+  // separate BETA core (decisions 7 and 9). SHADOW (4) is unchanged.
+  const bool capture=(config.mode==4 || beta_requested) && motion.open_channel(motion_channel);
   bool shadow=capture && hook_installed &&
-      navigation.init_model(model,mx5_dr_default_config(),nav_context,true,true) &&
+      navigation.init_model(model,mx5_dr_default_config(),nav_context,true,true,beta_requested) &&
       holdout.init_model(model,mx5_dr_default_config(),nav_context);
-  if(config.mode==4) {
+  const bool beta_core=shadow && beta_requested && navigation.enable_beta(mx5::runtime::beta_profile());
+  mx5::runtime::BetaController beta(beta_shared);
+  if(config.mode==4 || beta_requested) {
     snprintf(line,sizeof line,
         "{\"kind\":\"shadow_boot\",\"active\":%s,\"capture_active\":%s,\"domain\":\"model\","
         "\"source\":\"existing_vbs_vim_callback\",\"assist_ready\":false,"
@@ -767,6 +825,21 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     A::set_mode(A::SCRUB_STALE);
     if (__sync_fetch_and_add(&audit_fault, 0))
       A::set_mode(A::OBSERVE);
+  }
+  if (beta_requested) {
+    // Same pattern as SCRUB: only after the durable boot row, with an
+    // installed hook and no audit fault. Every outcome is journaled.
+    j.flush();
+    const char* blocked=!hook_installed?"hook_not_installed":
+        j.failed?"journal_failed":
+        __sync_fetch_and_add(&audit_fault,0)?"audit_fault":
+        !capture?"motion_capture_unavailable":
+        !shadow?"model_unavailable":
+        !beta_core?"beta_core_unavailable":0;
+    beta.enable(j,clock_ns(0),blocked);
+    if (__sync_fetch_and_add(&audit_fault, 0))
+      beta.fault(j,clock_ns(0),"audit_fault");
+    j.flush();
   }
   uint64_t last_flush = 0;
   uint64_t last_shadow_log=0;
@@ -799,12 +872,19 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         if(assist)assist->stop();
         source.reset(cutoff);source_disabled=true;
         freeze_capture();
+        // capture.stop takes precedence: OBSERVE is already set; drop any
+        // stored BETA candidate and record why.
+        beta.disable(j,cutoff,"capture_stop");
         if(shadow) {
           navigation.reset(navigation.context());
           holdout.reset(navigation.context(),N::HOLDOUT_CAPTURE_STOP);
           journal_holdout(j,holdout,cutoff);
         }
         shadow=false;
+      } else if(beta.live() && disable_marker_present(root)) {
+        // A same-boot disable-next-start request also ends BETA now; raw
+        // capture continues until capture.stop.
+        beta.disable(j,cutoff,"disable_next_start");
       }
     }
     if(shadow)sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
@@ -815,6 +895,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     while (drained++ < 256 && pop(&o)) {
       if(!format_observation(line,sizeof line,o)) { j.fail();continue; }
       j.line(line);
+      if(o.kind==A::Observation::SEND)beta.send(o);
       if(o.kind==A::Observation::POSITION && o.reason==A::CONTEXT_UNAVAILABLE) {
         // A pool miss keeps the raw input but cannot establish a usable
         // POSITION context. Revoke mutation and all later MODEL/source input.
@@ -851,6 +932,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
             holdout.enqueue_position(o);
           }
         }
+        beta.position(j,o,clock_ns(0));
       }
     }
     if(!adapter_fault_reported && A::faulted()) {
@@ -890,7 +972,9 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       return 0; // Even failed finalization cannot reopen this capture.
     }
     now=clock_ns(0);
+    bool model_ticked=false;
     if(shadow && !j.failed && !__sync_fetch_and_add(&audit_fault,0) && model_tick.due(now)) {
+        model_ticked=true;
         sync_model_boundaries(j,model_session,model_bus,navigation,holdout);
         if(now>navigation.reorder_ns()) {
           const uint64_t resets=navigation.status().resets,watermark=now-navigation.reorder_ns();
@@ -948,6 +1032,18 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
               (unsigned long long)navigation.wheel_calibration().calibration_version,encoded?"true":"false",preview);
           if(formatted>0 && size_t(formatted)<sizeof line)j.line(line);else j.fail();
         }
+    }
+    if(beta.live() && (model_ticked || !shadow)) {
+      // BETA publication on the MODEL tick cadence, after the drain above.
+      // Faults are sticky and return the adapter to OBSERVE.
+      const char* fault=j.failed?"journal_failed":
+          __sync_fetch_and_add(&audit_fault,0)?"audit_fault":
+          A::faulted()?"adapter_fault":
+          A::mode()!=A::BETA?"adapter_mode_changed":
+          !shadow?"model_disabled":0;
+      now=clock_ns(0);
+      beta.tick(j,now,navigation,model_session.available() && model_bus.available(),
+                navigation.status().last_received_ns,model_bus.epoch(),fault);
     }
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;
@@ -1024,17 +1120,10 @@ void bootstrap(void *h) {
     io.verified_cold_start = true;
     io.begin_patch = mx5::runtime::loader_begin_patch;
     io.end_patch = mx5::runtime::loader_end_patch;
-    io.runtime.sink = sink;
-    io.runtime.clock = clock_ns;
-    io.runtime.provenance = provenance;
-    io.runtime.association_reader = read_inline_association;
-    io.runtime.max_snapshot_age_ns = 500000000ULL;
-    io.runtime.allow_assist = false;
+    io.runtime = product_options();
     io.observe_requests = true;
     io.blm_handle = h;
     io.report = &install_report;
-    io.runtime.request_reader = A::read_request_trace;
-    io.runtime.session_reader = A::read_send_session;
     A::InstallResult result = A::install_v74(io);
     boot_result = A::install_result_name(result);
     hook_installed = result == A::INSTALL_OK;
