@@ -602,10 +602,13 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     const Mode current = mode();
     if (data) {
         event.type = data->type; event.length = data->length;
-        // Diagnostic copy of a short payload (bounded, before next()).
-        if (data->payload && data->length && data->length <= sizeof event.small_payload) {
-            std::memcpy(event.small_payload, data->payload, data->length);
-            event.small_length = uint8_t(data->length);
+        // Decision G: the AA GEAR shape only (type 8, exactly 4 bytes), only
+        // when the journaling configuration asked for it and the observation
+        // will be emitted. Bounded copy before next(); no other type copies.
+        if (options.journal_gear_payload && current != OFF && data->type == 8 &&
+            data->length == 4 && data->payload) {
+            std::memcpy(event.small_payload, data->payload, 4);
+            event.small_length = 4;
         }
         if (data->type == 1 && ctx) {
             ++ctx->location_count;

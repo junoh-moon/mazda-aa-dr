@@ -450,6 +450,9 @@ int main(int argc,char** argv) {
     if (!std::strcmp(argv[1],"request")) {
         o.request_reader=request_reader;o.provenance=0;o.allow_assist=false;o.session_reader=session_reader;
     }
+    // Decision G is opt-in (SHADOW/BETA product options); small_payload_off
+    // keeps the default.
+    if (!std::strcmp(argv[1],"small_payload")) o.journal_gear_payload=true;
     assert(configure(fake_next,o));
     assert(!configure(fake_next,o));
     static uint32_t session_handle=0xabcdef; expected_session=&session_handle;
@@ -539,18 +542,32 @@ int main(int argc,char** argv) {
         assert(last_event.request_result==R::STALE && !last_event.request_trace.request.id);
         assert(!std::memcmp(sent,payload,48) && trace_reads==2);
     } else if (!std::strcmp(test,"small_payload")) {
-        // Decision G: payloads of 1..16 bytes are copied for the journal
-        // (e.g. AA GEAR, type 8, 4 bytes); the OEM call is unchanged.
+        // Decision G: only the AA GEAR shape (type 8, exactly 4 bytes) is
+        // copied for the journal; the OEM call, result and errno are unchanged.
         uint8_t gear[4]={0x01,0x02,0x03,0x04};VehicleData g={8,gear,4};
         run_send(g,true);assert(last_event.small_length==4 && !std::memcmp(last_event.small_payload,gear,4));
         assert(!last_event.has_payload && last_event.choice==ORIGINAL);
+        next_result=-3;run_send(g,true);next_result=0;      // non-zero OEM result passes through
+        assert(last_event.small_length==4 && last_event.result==-3);
         uint8_t big[17]={};VehicleData b={3,big,17};
         run_send(b,true);assert(!last_event.small_length);
-        uint8_t sixteen[16];for(unsigned i=0;i<16;++i)sixteen[i]=uint8_t(0xf0+i);VehicleData x={3,sixteen,16};
-        run_send(x,true);assert(last_event.small_length==16 && !std::memcmp(last_event.small_payload,sixteen,16));
+        uint8_t sixteen[16];for(unsigned i=0;i<16;++i)sixteen[i]=uint8_t(0xf0+i);
+        VehicleData x={3,sixteen,16};run_send(x,true);assert(!last_event.small_length);   // other types: none
+        VehicleData y={3,sixteen,4};run_send(y,true);assert(!last_event.small_length);
+        VehicleData z={8,sixteen,3};run_send(z,true);assert(!last_event.small_length);    // type 8, not 4 bytes
+        VehicleData w={8,sixteen,5};run_send(w,true);assert(!last_event.small_length);
         VehicleData none={8,0,4};run_send(none,true);assert(!last_event.small_length);
         position_enter(0,position);run_send(data,true);position_leave();
         assert(!last_event.small_length && last_event.has_payload);  // LOCATION keeps its own copy
+        // Mode OFF emits nothing and copies nothing.
+        assert(set_mode(OFF));const unsigned before=events;
+        run_send(g,true);assert(events==before);
+        assert(set_mode(OBSERVE));
+    } else if (!std::strcmp(test,"small_payload_off")) {
+        // Without the SHADOW/BETA opt-in (OBSERVE/SCRUB configurations) the
+        // send path copies nothing, and the OEM contract is unchanged.
+        uint8_t gear[4]={0x01,0x02,0x03,0x04};VehicleData g={8,gear,4};
+        run_send(g,true);assert(!last_event.small_length && last_event.type==8 && last_event.length==4);
     } else if (!std::strcmp(test,"backend")) {
         InstallOptions io = InstallOptions();
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__

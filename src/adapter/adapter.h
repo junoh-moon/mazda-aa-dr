@@ -93,9 +93,9 @@ struct Observation {
     runtime::session_trace::Snapshot send_session; // Actual send storage lookup.
     bool has_payload;
     uint8_t original[48], outgoing[48];
-    // Any SEND whose payload is 1..16 bytes (e.g. AA GEAR, type 8, 4 bytes):
-    // a copy of the bytes passed to next() for the journal (decision G).
-    // Observation only; never used as evidence.
+    // AA GEAR shape only (type 8, length 4) and only with
+    // Options.journal_gear_payload: a copy of the bytes passed to next() for
+    // the journal (decision G). Observation only; never used as evidence.
     uint8_t small_length;
     uint8_t small_payload[16];
 };
@@ -153,6 +153,10 @@ struct Options {
     // accept an UNOBSERVED send session. install_v74 overwrites this from its
     // own decision; a direct configure() caller asserts the same fact.
     bool sessions_declined;
+    // Decision G: copy the 4 bytes of a type-8 length-4 send (AA GEAR shape)
+    // into its observation. Only the journaling SHADOW/BETA configurations
+    // set it; otherwise (and in Mode OFF) the send path does no extra work.
+    bool journal_gear_payload;
 };
 
 // Initialization only: before installation / before OEM producers start.

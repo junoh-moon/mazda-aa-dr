@@ -150,6 +150,8 @@ A::Options product_options() {
   o.allow_beta = beta;
   o.beta_event = beta ? beta_event : 0;
   o.send_storage = beta ? observe_send_storage_beta : 0;
+  // Decision G: the AA GEAR payload is journaled only by SHADOW (4) / BETA (5).
+  o.journal_gear_payload = config.valid && (config.mode == 4 || config.mode == 5);
   return o;
 }
 void hex48(const uint8_t *p, char *out) {
@@ -233,7 +235,7 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
     char session[200];
     if(!mx5::runtime::format_session_trace(session,sizeof session,o.send_session,true))return false;
     if(o.has_payload) { hex48(o.original,a);hex48(o.outgoing,b); }
-    // Decision G: short payloads (<= 16 bytes, e.g. AA GEAR) for later study.
+    // Decision G: the AA GEAR payload (type 8, 4 bytes; SHADOW/BETA only).
     char small[64]="";
     if(o.small_length && o.small_length<=sizeof o.small_payload) {
       static const char digits[]="0123456789abcdef";
