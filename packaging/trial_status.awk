@@ -28,6 +28,23 @@ function valid_boot_id(id, compact) {
 function reset_retained(id) {
     retained_boot=id; retained_positions=0; retained_motion=0; retained_end=0
     retained_model=0; retained_valid=0; retained_attempts=0
+    # BETA rows of the last retained boot (same-boot worker restarts add up).
+    beta_requested=0; beta_boot_enabled=""; beta_boot_reason=""; beta_fence=""
+    beta_session_hooks=""; beta_install=""; beta_enable=""; beta_hold_seen=0
+    beta_engaged=0; beta_replaced=0; beta_replaced_nonzero=0; beta_hold=0
+    beta_withdrawals=0; beta_withdraw_reason="none"; beta_last_state=""; beta_last_reason=""
+}
+# Member of the boot row's flat "beta":{...} object (no nested objects).
+function beta_member(key, s, p) {
+    s=$0; p=index(s,"\"beta\":{")
+    if (!p) return ""
+    s=substr(s,p+8); sub(/}.*/,"",s)
+    p=index(s,"\"" key "\":")
+    if (!p) return ""
+    s=substr(s,p+length(key)+3)
+    if (substr(s,1,1)=="\"") {s=substr(s,2); sub(/".*/,"",s)}
+    else sub(/,.*/,"",s)
+    return s
 }
 function clear_model_snapshot() {shadow=""; solution=""; processed=""; pipeline=""; result=""; attempts=""; intervals=""}
 function reset_runtime() {
@@ -73,6 +90,14 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
         reset_runtime(); runtime=(field("boot_id")==boot); runtime_boot=field("mono_ns")
         if (!not_future(runtime_boot)) runtime=0
         mode=field("mode")
+        if (retained_boot!="") {
+            # The latest boot row of the retained boot owns these fields; a
+            # restarted worker journals its own enable decision again.
+            beta_requested=(mode=="5"); beta_install=field("install")
+            beta_boot_enabled=beta_member("enabled"); beta_boot_reason=beta_member("reason")
+            beta_fence=beta_member("session_fence"); beta_session_hooks=field("session_hooks")
+            beta_enable=""; beta_hold_seen=0
+        }
         next
     }
     if (kind=="collector_boot" && FILENAME ~ /\/collector\.[01]\.jsonl$/) {
@@ -93,6 +118,22 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
             if (field("model_valid")=="true") retained_valid++
             if (unsigned_field("drain_calls_total") && field("drain_calls_total")+0>0)
                 retained_attempts++
+        }
+        # BETA journal rows record decisions; they are not phone acceptance.
+        if (kind=="beta_state" && field("domain")=="beta" && field("to") ~ /^[A-Z_]+$/) {
+            if (field("from")=="DISABLED" && beta_enable=="")
+                beta_enable=(field("to")=="ARMED" ? "armed" : "disabled:" field("reason"))
+            if (field("to")=="ENGAGED") beta_engaged++
+            if (field("to")=="WITHDRAWN") {beta_withdrawals++; beta_withdraw_reason=field("reason")}
+            beta_last_state=field("to"); beta_last_reason=field("reason")
+        }
+        if (kind=="beta_hold" && field("domain")=="beta" && field("event")=="hold_set" &&
+            unsigned_field("count") && field("count")+0>beta_hold_seen) {
+            beta_hold+=field("count")-beta_hold_seen; beta_hold_seen=field("count")+0
+        }
+        if (kind=="send" && /"choice":3,/) {
+            beta_replaced++
+            if (field("result")!="0") beta_replaced_nonzero++
         }
     }
     if (FILENAME ~ /\/trace\.[012]\.jsonl$/ && runtime) {
@@ -176,7 +217,7 @@ END {
     report("runtime_current_boot",runtime, "mode=" mode)
     report("health_recent",runtime && health_recent(health),"window=5s")
     report("hooks",runtime && health_recent(health) && hooks=="true","")
-    report("capture_active",runtime && health_recent(health) && mode=="4" && capture=="true","")
+    report("capture_active",runtime && health_recent(health) && (mode=="4" || mode=="5") && capture=="true","")
     report("wheels_received_recently",runtime && fresh(sensor[1]),"receipt_only")
     report("yaw_received_recently",runtime && fresh(sensor[2]),"receipt_only")
     report("reverse_received_recently",runtime && fresh(sensor[3]),"receipt_only_not_direction_quality")
@@ -210,6 +251,24 @@ END {
     print "last_pipeline_reset_this_boot=" pipeline_reset " operation=" reset_operation " receive_seq=" reset_sequence " mono_ns=" reset_time " untimed_reset_seen=" (untimed_pipeline_reset ? "true" : "false")
     print "retained_runtime_last_boot=" (retained_boot=="" ? "unavailable" : (retained_boot==boot ? "current_boot" : "previous_boot")) " boot_id=" (retained_boot=="" ? "unknown" : retained_boot) " position_records=" retained_positions " motion_batches=" retained_motion " capture_end_record=" (retained_end ? "observed" : "not_observed") " records_only_not_current_readiness"
     print "retained_model_diagnostic_records=" retained_model " model_valid_records=" retained_valid " drain_attempt_records=" retained_attempts " domain=model assist_ready=false records_only_not_trial_success"
+    beta_scope=(retained_boot=="" ? "unavailable" : (retained_boot==boot ? "current_boot" : "previous_boot"))
+    print "beta_requested=" (beta_requested ? "true" : "false") " beta_scope=" beta_scope " records_only_not_phone_acceptance"
+    if (beta_requested) {
+        fence=beta_fence
+        if (fence=="declined_send_storage_counter") fence="declined"
+        else if (fence=="observed_session_and_send_storage_counter") fence="observed"
+        else if (fence=="") fence="missing"
+        enabled=beta_boot_enabled; if (enabled=="") enabled="missing"
+        reason=beta_boot_reason; if (reason=="") reason="missing"
+        hook="not_installed"; if (beta_install=="ok") hook="installed"
+        enable=beta_enable; if (enable=="") enable="none_observed"
+        last_state=beta_last_state; if (last_state=="") last_state="none"
+        last_reason=beta_last_reason; if (last_reason=="") last_reason="none"
+        printf "beta_boot_enabled=%s beta_boot_reason=%s beta_hook=%s beta_install=%s beta_session_fence=%s beta_session_hooks=%s\n", enabled, reason, hook, beta_install, fence, beta_session_hooks
+        printf "beta_enable=%s beta_last_state=%s beta_last_reason=%s\n", enable, last_state, last_reason
+        printf "beta_engaged=%d beta_replaced_sends=%d beta_replaced_nonzero=%d beta_hold_set=%d beta_withdrawals=%d beta_last_withdraw_reason=%s\n", beta_engaged, beta_replaced, beta_replaced_nonzero, beta_hold, beta_withdrawals, beta_withdraw_reason
+        printf "BETA: engaged %d times, replaced %d sends, hold %d, last state %s (%s), scope %s\n", beta_engaged, beta_replaced, beta_hold, last_state, last_reason, beta_scope
+    }
     if (bad) print "Collection evidence incomplete. Keep/export existing logs; missing/rotated boot markers cannot be reconstructed by this check."
     else print "Capture startup evidence only. Inspect MODEL status and reasons; this is not a completed navigation trial."
     exit bad

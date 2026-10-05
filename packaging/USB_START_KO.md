@@ -1,6 +1,9 @@
 # USB 설치·CMU 재부팅·회수
 
 대상은 **2019 MX-5 ND2 6MT, 1세대 Mazda Connect NA 74.00.324A**입니다.
+메뉴 첫 줄이 `This USB installs mode BETA`이면 이 안내 대신 BETA 현장 절차
+(저장소 `docs/FIELD_PROCEDURE_BETA_KO.md`)를 따르십시오. BETA는 SHADOW 기록에 더해
+순정이 GPS 없음(mode 0)을 보내는 동안에만 위치를 바꿔 보내며, 자격 ASSIST는 계속 비활성입니다.
 **이 묶음은 SHADOW 시험 후보이며 live ASSIST는 비활성입니다.** 실제 차량의
 기동·센서·물리 복구와 폰/지도 수용은 미검증입니다. 설치 파일은 해당
 [릴리즈](https://github.com/junoh-moon/mazda-aa-dr/releases)에 발행된 ZIP과

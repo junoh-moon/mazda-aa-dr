@@ -773,6 +773,73 @@ exec "$MX5DR_REAL_OD" "$@"
         (self.logs / 'trace.2.jsonl').symlink_to(target)
         self.assertNotEqual(self.run_status().returncode, 0)
 
+    def beta_trace(self, install='ok', enabled=True):
+        config = 'mode=BETA\nsample_ms=1000\n'
+        (self.base / 'mx5dr.conf').write_text(config)
+        (self.base / 'guard/consumed').write_text(
+            MANIFEST.replace(CONFIG_DIGEST, hashlib.sha256(config.encode()).hexdigest()))
+        boot = dict(kind='boot', boot_id=BOOT, mono_ns=1000000000, mode=5, install=install,
+                    assist_ready=False, session_hooks='declined_third_party_interposer',
+                    beta=dict(mode='BETA', enabled=enabled,
+                              reason='adapter_opt_in' if enabled else 'hook_not_installed',
+                              session_fence='declined_send_storage_counter'),
+                    install_diag=dict(stage=0, owner='none'))
+
+        def state(old, new, reason):
+            return dict(kind='beta_state', mono_ns=50000000000, domain='beta', assist_ready=False,
+                        **{'from': old}, to=new, reason=reason, adapter_mode=4)
+
+        def send(choice, result=0):
+            return dict(kind='send', call=1, generation=1, mono_ns=50000000000, mode=0,
+                        type=1, length=48, choice=choice, reason=0, result=result)
+        if not enabled:
+            return [boot, state('DISABLED', 'DISABLED', 'hook_not_installed')] + self.trace[1:]
+        return [boot] + self.trace[1:] + [
+            state('DISABLED', 'ARMED', 'enabled'), state('ARMED', 'GPS_LOST', 'gps_lost'),
+            state('GPS_LOST', 'ENGAGED', 'published'), send(3), send(3), send(0),
+            dict(kind='beta_hold', mono_ns=50000000000, domain='beta', event='hold_set', count=1,
+                 held=True, state='ENGAGED'),
+            send(3, result=-1),
+            state('ENGAGED', 'WITHDRAWN', 'send_result_hold'), state('WITHDRAWN', 'ARMED', 'gps_returned'),
+            state('ARMED', 'GPS_LOST', 'gps_lost'), state('GPS_LOST', 'ENGAGED', 'published'),
+            state('ENGAGED', 'ARMED', 'gps_returned')]
+
+    def test_beta_boot_reports_enable_hook_fence_and_owner_count_line(self):
+        r = self.run_status(self.beta_trace())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('config_mode=BETA', r.stdout)
+        self.assertIn('guard_config_binding=matched', r.stdout)
+        self.assertIn('capture_active=observed', r.stdout)
+        self.assertIn('beta_requested=true beta_scope=current_boot', r.stdout)
+        self.assertIn('beta_boot_enabled=true beta_boot_reason=adapter_opt_in beta_hook=installed '
+                      'beta_install=ok beta_session_fence=declined', r.stdout)
+        self.assertIn('beta_enable=armed beta_last_state=ARMED beta_last_reason=gps_returned', r.stdout)
+        self.assertIn('beta_engaged=2 beta_replaced_sends=3 beta_replaced_nonzero=1 beta_hold_set=1 '
+                      'beta_withdrawals=1 beta_last_withdraw_reason=send_result_hold', r.stdout)
+        self.assertIn('BETA: engaged 2 times, replaced 3 sends, hold 1, last state ARMED (gps_returned), '
+                      'scope current_boot', r.stdout)
+
+    def test_beta_counts_survive_the_drive_reboot_as_previous_boot(self):
+        trace = self.beta_trace()
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text(OLD + '\n')
+        (self.root / 'proc/uptime').write_text('2.00 1.00\n')
+        r = self.run_status(trace)
+        self.assertIn('beta_requested=true beta_scope=previous_boot', r.stdout)
+        self.assertIn('BETA: engaged 2 times, replaced 3 sends, hold 1, last state ARMED (gps_returned), '
+                      'scope previous_boot', r.stdout)
+
+    def test_beta_disabled_reason_and_missing_hook_are_visible(self):
+        r = self.run_status(self.beta_trace(install='symbol_missing', enabled=False))
+        self.assertIn('beta_boot_enabled=false beta_boot_reason=hook_not_installed beta_hook=not_installed', r.stdout)
+        self.assertIn('beta_enable=disabled:hook_not_installed', r.stdout)
+        self.assertIn('BETA: engaged 0 times, replaced 0 sends, hold 0, last state DISABLED', r.stdout)
+
+    def test_shadow_boot_has_no_beta_count_line(self):
+        r = self.run_status()
+        self.assertIn('beta_requested=false', r.stdout)
+        self.assertNotIn('BETA:', r.stdout)
+        self.assertNotIn('beta_engaged=', r.stdout)
+
     def test_symlink_parent_rejected(self):
         target = self.root / 'outside'
         self.logs.rename(target)

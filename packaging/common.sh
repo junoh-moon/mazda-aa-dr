@@ -269,7 +269,8 @@ trial_to() {
         cat "$2.lds.$$" > "$2"
         rm -f "$2.lds.$$"
     fi
-    if [ "$MODE" = SHADOW ]; then
+    # BETA keeps SHADOW capture, so it needs the same VBS sensor tap.
+    if [ "$MODE" = SHADOW ] || [ "$MODE" = BETA ]; then
         awk -v action=add -v target_service=jciVBS -v token="$TAP_TOKEN" -f "$HERE/edit_service.awk" "$2" > "$2.tap.$$" || fail "Unsupported VBS service configuration: $1"
         cat "$2.tap.$$" > "$2"
         rm -f "$2.tap.$$"

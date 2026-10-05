@@ -64,7 +64,7 @@ read_config_mode() (
             key=trim(substr(line,1,equal-1)); value=trim(substr(line,equal+1))
             if(seen[key]++) {bad=1; exit}
             if(key=="mode") {
-                if(value!="OFF" && value!="OBSERVE" && value!="SCRUB" && value!="SHADOW") {bad=1; exit}
+                if(value!="OFF" && value!="OBSERVE" && value!="SCRUB" && value!="SHADOW" && value!="BETA") {bad=1; exit}
                 mode=value; next
             }
             if(value !~ /^[0-9]+$/ || length(value)>12) {bad=1; exit}
@@ -161,7 +161,7 @@ config_mode=unconfirmed
 if config_mode=$(read_config_mode); then :; else config_mode=unconfirmed; fi
 case "$config_mode" in
     OFF) oneboot=unconfirmed; startup_state=trial_disabled;;
-    OBSERVE|SCRUB|SHADOW) ;;
+    OBSERVE|SCRUB|SHADOW|BETA) ;;
     *) oneboot=unconfirmed; startup_state=trial_config_unconfirmed;;
 esac
 if [ -e "$BASE/logs/capture.stop" ] || [ -L "$BASE/logs/capture.stop" ]; then

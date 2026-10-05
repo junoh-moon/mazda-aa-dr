@@ -43,7 +43,9 @@ boot_boundary() {
 # status text already contains; the full detail stays in startup-result.txt.
 # ok = satisfied, NO = not satisfied, wait = may still be starting (re-run menu 2).
 startup_verdict() {
-    awk '
+    # $1: this bundle's install mode (SHADOW/BETA are enforced; empty or
+    # OBSERVE keeps the earlier SHADOW-or-BETA acceptance).
+    awk -v want="${1:-}" '
     { line[NR]=$0 }
     function field(key,   i,p,rest,w) {
         for (i=1;i<=NR;i++) {
@@ -80,7 +82,13 @@ startup_verdict() {
         v=field("one_boot=")
         if (v=="consumed_this_boot") show("ok","ONCE","consumed"); else show("NO","ONCE",v==""?"missing":v)
         v=field("config_mode=")
-        if (v=="SHADOW") show("ok","MODE","SHADOW"); else show("NO","MODE",v==""?"missing":v)
+        # A SHADOW or BETA bundle must have installed its own mode; never
+        # let one pass for the other.
+        if ((want=="SHADOW" || want=="BETA" || want=="invalid") && v!=want)
+            show("NO","MODE",(v==""?"missing":v) " not " want)
+        else if (v=="SHADOW" || v=="BETA") show("ok","MODE",v)
+        else show("NO","MODE",v==""?"missing":v)
+        beta=(v=="BETA")
         v=field("runtime_disable_next_start=")
         if (v=="absent") show("ok","STOP","not disabled"); else show("NO","STOP",v==""?"missing":v)
         v=field("retained_bytes=")
@@ -90,6 +98,34 @@ startup_verdict() {
         v=field("collector_poll_recent=")
         if (v=="observed") show("ok","POLL","collector polling"); else show("wait","POLL",v==""?"missing":v)
         service("jciAAPA","AAPA"); service("jciLDS","LDS"); service("jciVBS","VBS")
+        if (beta) {
+            # BETA rows describe the last retained runtime boot; only the
+            # current boot can satisfy this startup check.
+            current=(field("beta_scope=")=="current_boot")
+            v=field("beta_enable=")
+            if (!current) show("wait","BETA","not started")
+            else if (v=="armed") show("ok","BETA","armed")
+            else if (v=="none_observed" || v=="") show("wait","BETA","no state yet")
+            else show("NO","BETA",v)
+            v=field("beta_hook=")
+            if (!current) show("wait","HOOK","not started")
+            else if (v=="installed") show("ok","HOOK","installed")
+            else show("NO","HOOK",v==""?"missing":v)
+            v=field("beta_session_fence=")
+            if (!current) show("wait","FENCE","not started")
+            else if (v=="declined" || v=="observed") show("ok","FENCE",v)
+            else show("NO","FENCE",v==""?"missing":v)
+        }
+        # The owner-facing BETA count line, folded to the small screen.
+        for (i=1;i<=NR;i++) if (index(line[i],"BETA: ")==1) {
+            n=split(line[i],part,", "); out=""
+            for (k=1;k<=n;k++) {
+                piece=part[k] (k<n?",":"")
+                if (out!="" && length(out)+1+length(piece)>40) { print substr(out,1,40); out=" " piece }
+                else out=(out==""?piece:out " " piece)
+            }
+            if (out!="") print substr(out,1,40)
+        }
         if (bad) print "NO-GO"
         else if (pend) print "WAIT 60 s, then run 2 again"
         else print "GO"
@@ -97,10 +133,10 @@ startup_verdict() {
 }
 
 current_status() {
-    boundary_output=$(boot_boundary)
+    boundary_output=$(boot_boundary; echo "bundle_mode=$BUNDLE_MODE (installed by menu 1; config_mode below is what this CMU uses)")
     if status_output=$(sh "$HERE/trial_status.sh" 2>&1); then last_rc=0; else last_rc=$?; fi
     printf '%s\n%s\nstatus_exit=%s\n' "$boundary_output" "$status_output" "$last_rc"
-    verdict_output=$(printf '%s\n%s\n' "$boundary_output" "$status_output" | startup_verdict)
+    verdict_output=$(printf '%s\n%s\n' "$boundary_output" "$status_output" | startup_verdict "$BUNDLE_MODE")
     # Save the parked startup check before the single USB port changes to AA.
     # A separate subshell releases its remount lock before another menu action.
     if (
@@ -169,6 +205,24 @@ finish_and_export() {
     echo 'Capture finish acknowledged and available files exported. This menu now exits. To remove the trial, reopen the same menu and choose 4; follow the USB guide for reboot and OFF checks.'
 }
 
+# Display only: install.sh validates the same marker again before any write.
+bundle_mode() {
+    marker=$HERE/bundle-default-mode
+    if [ ! -e "$marker" ] && [ ! -L "$marker" ]; then echo OBSERVE; return 0; fi
+    if [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(wc -c < "$marker")" -le 8 ]; then
+        awk 'NR==1 && ($0=="OBSERVE" || $0=="SHADOW" || $0=="BETA") {mode=$0}
+            END {if(NR!=1 || mode=="") print "invalid"; else print mode}' "$marker"
+    else
+        echo invalid
+    fi
+}
+BUNDLE_MODE=$(bundle_mode)
+case "$BUNDLE_MODE" in
+    BETA) mode_text='BETA = SHADOW capture + dead-reckoned LOCATION only while GPS is lost';;
+    SHADOW) mode_text='SHADOW = capture only; LOCATION is never replaced';;
+    OBSERVE) mode_text='OBSERVE = observation only; LOCATION is never replaced';;
+    *) mode_text='invalid bundle mode; menu 1 will refuse to install';;
+esac
 last_rc=0
 short_menu=0
 while :; do
@@ -177,7 +231,8 @@ while :; do
         printf '\n%s\n' '0 Exit (1-5 as listed before)'
     else
         printf '\n%s\n' 'Parked USB trial menu' \
-            '1 Install for the next boot' \
+            "This USB installs mode $BUNDLE_MODE: $mode_text" \
+            "1 Install $BUNDLE_MODE for the next boot" \
             '2 Check CMU reboot, current capture and retained records' \
             '3 Finish capture and save logs plus startup diagnostics to this USB' \
             '4 Uninstall (keeps collected logs)' \

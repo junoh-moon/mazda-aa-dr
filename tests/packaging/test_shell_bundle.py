@@ -25,7 +25,7 @@ HELPERS = ('trial install.sh uninstall.sh export_logs.sh common.sh edit_service.
 
 class ShellBundle(unittest.TestCase):
     def test_cli_installer_files_modes_and_no_entry(self):
-        for mode in ('OBSERVE', 'SHADOW'):
+        for mode in ('OBSERVE', 'SHADOW', 'BETA'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 base = Path(tmp)
                 for name in PRODUCTS:

@@ -665,7 +665,7 @@ def main():
         account_regressions(args.stock.resolve(), args.bundle.resolve())
         return
     default_mode = (args.bundle / 'bundle-default-mode').read_text().strip()
-    require(default_mode in ('OBSERVE', 'SHADOW'), 'Unsupported bundle default mode')
+    require(default_mode in ('OBSERVE', 'SHADOW', 'BETA'), 'Unsupported bundle default mode')
     with tempfile.TemporaryDirectory(prefix='mx5dr-cmu-') as tmp, \
             tempfile.TemporaryDirectory(prefix='mx5dr-detached-usb-') as detached:
         root = Path(tmp)
@@ -744,7 +744,7 @@ def main():
         require('/data_persist/mx5-aa-dr/libmx5dr.so' in initial_trial and
                 '/tmp/mnt/sda1' not in initial_trial,
                 'Trial preload depends on the installation USB')
-        require(('/libmx5dr-vimtap.so' in initial_trial) == (default_mode == 'SHADOW'),
+        require(('/libmx5dr-vimtap.so' in initial_trial) == (default_mode in ('SHADOW', 'BETA')),
                 'Initial trial VBS tap differs from the bundle default mode')
         require('/data_persist/mx5-aa-dr/libmx5dr-ldstap.so' in initial_trial,
                 'Initial trial lacks LDS observation preload')

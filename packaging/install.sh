@@ -3,13 +3,15 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
 MODE=OBSERVE
 # Maintainer-selected trial default, never shell-sourced and never ASSIST.
+# BETA (SHADOW capture plus the MODEL-domain replacement) is accepted only as
+# an explicit bundle default or option; it is never the unmarked default.
 # Validate even when an explicit CLI mode overrides it; reject before writes.
 if [ -e "$HERE/bundle-default-mode" ] || [ -L "$HERE/bundle-default-mode" ]; then
     regular "$HERE/bundle-default-mode"
     [ "$(wc -c < "$HERE/bundle-default-mode")" -le 8 ] || fail 'Invalid bundle default mode'
-    MODE=$(awk 'NR==1 && ($0=="OBSERVE" || $0=="SHADOW") {mode=$0}
+    MODE=$(awk 'NR==1 && ($0=="OBSERVE" || $0=="SHADOW" || $0=="BETA") {mode=$0}
         END {if(NR!=1 || mode=="") exit 1; print mode}' "$HERE/bundle-default-mode") || fail 'Invalid bundle default mode'
-    case "$MODE" in OBSERVE|SHADOW) ;; *) fail 'Invalid bundle default mode';; esac
+    case "$MODE" in OBSERVE|SHADOW|BETA) ;; *) fail 'Invalid bundle default mode';; esac
 fi
 WITH_WCP=0
 # Running the installer authorizes the temporary writes it needs. Restore every
@@ -21,7 +23,7 @@ for arg in "$@"; do
       --with-wcp) WITH_WCP=1;;
       --remount) ALLOW_REMOUNT=1;;
       --no-remount) ALLOW_REMOUNT=0;;
-      --mode=OBSERVE|--mode=SCRUB|--mode=SHADOW|--mode=OFF) MODE=${arg#--mode=};;
+      --mode=OBSERVE|--mode=SCRUB|--mode=SHADOW|--mode=BETA|--mode=OFF) MODE=${arg#--mode=};;
       *) fail "Unknown option $arg (ASSIST is not deployable)";;
     esac
 done
@@ -188,5 +190,8 @@ if [ -z "$ROOT" ] && [ "$MODE" != OFF ]; then
     echo 'Remain parked with the engine actually running and this USB connected. Choose trial menu 5 to request CMU reboot; do not press the engine start/stop button.'
     echo "The next guarded CMU startup requests automatic $MODE capture; no driving-time commands are needed."
     echo "After CMU restart reopen trial menu 2: check reboot_check=new_boot_observed, startup_state=guard_committed_after_new_boot, one_boot=consumed_this_boot, config_mode=$MODE, runtime_disable_next_start=absent, retained_bytes>0 and collector_poll_recent=observed."
+    if [ "$MODE" = BETA ]; then
+        echo 'BETA: SHADOW capture plus a dead-reckoned LOCATION only while the original reports no GPS fix. Menu 2 must also show ok BETA armed, ok HOOK and ok FENCE.'
+    fi
     echo 'Then exit the menu and replace the USB with the AA dongle while parked, keeping the same engine/CMU boot.'
 fi

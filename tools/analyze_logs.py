@@ -20,10 +20,17 @@ MAX_LINE_BYTES = 8192
 MAX_MEMBERS = 4096
 STORAGE_FILES = ('trace.storage.json', 'collector.storage.json')
 CLEAR_BYTES = (32, 36, 37, 38, 39, 40, 44, 45, 46, 47)
-CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT"}
+CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT", 3: "BETA_REPLACEMENT"}
 REASONS = ("PASS", "NO_CONTEXT", "NESTED_CALL", "EXTRA_LOCATION", "BAD_LENGTH",
            "DISABLED", "LOCK_BUSY", "NOT_UNKNOWN", "NOT_READY", "EPOCH_MISMATCH",
-           "EXPIRED", "BAD_ENCODING", "BAD_PROVENANCE", "CONTEXT_UNAVAILABLE")
+           "EXPIRED", "BAD_ENCODING", "BAD_PROVENANCE", "CONTEXT_UNAVAILABLE", "HELD")
+# BETA (config mode 5): MODEL-domain LOCATION replacement while the original
+# reports mode 0; validation/ASSIST_BETA_DESIGN_2026-10-05.md.
+BETA_STATES = ("DISABLED", "ARMED", "GPS_LOST", "ENGAGED", "WITHDRAWN", "FAULT")
+BETA_LIVE_STATES = ("GPS_LOST", "ENGAGED")
+BETA_MAX_ACCURACY_E3 = 40000
+BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage")
+EARTH_RADIUS_M = 6371008.8
 # get_snapshot/Pipeline::diagnostic return these query results, not step()
 # results such as DUPLICATE. Pipeline status is a separate last-operation value.
 SHADOW_RESULTS = ("OK", "E_CONFIG", "E_NO_SEED", "E_CONTEXT", "E_QUALITY",
@@ -47,6 +54,7 @@ LIMITATIONS = [
     "LDS assignment patterns cover only matched wire/payload rows and count retained known field origins, not all cache writes or physical fixes.",
     "A recorded LDS match may change with later rows; file end does not certify a complete source or receiver session.",
     "Collector stops carry no boot ID; matching uses ordered boot boundaries, PID, and monotonic receipt time.",
+    "BETA GPS-return distances compare the last replaced LOCATION with the first later original fix; GPS is a reference, not ground truth, and a zero send result is not phone adoption.",
 ]
 
 
@@ -135,6 +143,37 @@ def add_difference(stats, value):
     stats['min'] = value if stats['min'] is None else min(stats['min'], value)
     stats['max'] = value if stats['max'] is None else max(stats['max'], value)
     stats['mean'] = value if stats['mean'] is None else stats['mean'] + (value - stats['mean']) / stats['count']
+
+
+def distance_m(lat1, lon1, lat2, lon2):
+    """Great-circle (haversine) distance on a mean-radius sphere."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
+
+
+def advance(lat, lon, bearing_deg, metres):
+    """Destination after a constant-bearing great-circle step."""
+    d = metres / EARTH_RADIUS_M
+    p1, l1, b = math.radians(lat), math.radians(lon), math.radians(bearing_deg)
+    p2 = math.asin(max(-1.0, min(1.0, math.sin(p1) * math.cos(d) +
+                                 math.cos(p1) * math.sin(d) * math.cos(b))))
+    l2 = l1 + math.atan2(math.sin(b) * math.sin(d) * math.cos(p1),
+                         math.cos(d) - math.sin(p1) * math.sin(p2))
+    return math.degrees(p2), (math.degrees(l2) + 540.0) % 360.0 - 180.0
+
+
+def beta_location(payload):
+    """Fields the BETA encoder writes into the 48-byte LOCATION payload."""
+    def signed(lo):
+        return int.from_bytes(payload[lo:lo + 4], 'little', signed=True)
+
+    def unsigned(lo):
+        return int.from_bytes(payload[lo:lo + 4], 'little')
+    return dict(lat=signed(8) / 1e7, lon=signed(12) / 1e7, has_accuracy=payload[16],
+                accuracy_e3=unsigned(20), speed_mps=unsigned(36) / 1000.0,
+                moving=payload[40] == 1, bearing_deg=unsigned(44) / 1e6)
 
 
 def decode_motion_records(row):
@@ -571,6 +610,23 @@ class Auditor:
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
+        self.beta_boots = []
+        self.beta_states = Counter()
+        self.beta_transition_reasons = Counter()
+        self.beta_engaged_periods = 0
+        self.beta_engaged_seconds = dict(count=0, min=None, max=None, mean=None)
+        self.beta_exit_reasons = Counter()
+        self.beta_withdraw_reasons = Counter()
+        self.beta_open_periods = 0
+        self.beta_replacements = 0
+        self.beta_replaced_nonzero = 0
+        self.beta_accuracy_m = dict(count=0, min=None, max=None, mean=None)
+        self.beta_hold_events = Counter()
+        self.beta_storage_changes = 0
+        self.beta_last_state = None
+        self.beta_last_summary = None
+        self.beta_returns = []
+        self.beta_returns_total = 0
 
     def issue(self, code, source, detail, violation=False):
         severity = "violation" if violation else "inconclusive"
@@ -579,12 +635,18 @@ class Auditor:
             self.issues.append(dict(severity=severity, code=code, source=source, detail=detail))
 
     def new_session(self, boot=None):
+        self.close_beta_session()
         self.lds.begin()
         self.session = dict(boot=boot, last_send_ns=-1, health_ns=-1, sends=0,
                             dropped_max=0, health_records=0, motion_epoch=None,
                             motion_seq=0, motion_ns=0, last_diagnostic_ns=-1,
                             shadow_resets=0, shadow_rejected=0, shadow_pipeline=None,
-                            holdout_window=None, capture_end_ns=None, model_session=None, model_bus=None)
+                            holdout_window=None, capture_end_ns=None, model_session=None, model_bus=None,
+                            # state: last beta_state "to"; left_ns: when it last left a
+                            # live state; pending: last replaced LOCATION awaiting a GPS fix.
+                            beta=dict(state=None, live_seen=False, left_ns=None,
+                                      gps_returned=False, engaged_ns=None, engaged_source=None,
+                                      pending=None, hold_seen=0, closed=False))
         self.sessions.append(self.session)
         self.positions = {}
         self.invalid_positions = set()
@@ -738,12 +800,14 @@ class Auditor:
             self.installs[row["install"]] += 1
             if row["schema"] != 1:
                 self.issue("unsupported_schema", source, str(row["schema"]))
-            if row["mode"] not in (1, 2, 4):
-                self.issue("unexpected_boot_mode", source, "Live worker requires OBSERVE=1, SCRUB=2, or SHADOW=4", True)
+            if row["mode"] not in (1, 2, 4, 5):
+                self.issue("unexpected_boot_mode", source,
+                           "Live worker requires OBSERVE=1, SCRUB=2, SHADOW=4, or BETA=5", True)
             if row["install"] != "ok":
                 self.issue("install_not_ok", source, row["install"])
             if row["assist_ready"] or row["wire_timestamp_modified"]:
                 self.issue("impossible_live_capability", source, "Boot claims unsupported live capability", True)
+            self.beta_boot(row, source)
             return
         if self.session is None and not collector:
             self.new_session()
@@ -781,6 +845,9 @@ class Auditor:
                            "POSITION context unavailable; pool capacity or nesting depth exceeded")
             else:
                 self.lds.position(row, request_valid, source)
+            self.beta_position(row, source)
+        elif kind in BETA_KINDS:
+            self.beta(row, source)
         elif kind == 'lds_sideband':
             self.lds.record(row, source)
         elif kind == 'lds_sideband_status':
@@ -1109,9 +1176,18 @@ class Auditor:
             return
         previous = self.session["model_session"]
         observed = row.get("session")
+        # BETA design decision 6: only a boot that journaled the KNOWN session
+        # hook decline admits an unobserved session as MODEL input; the
+        # send-time storage counter then replaces the session fence.
+        boot = self.session["boot"] or {}
+        declined = (isinstance(boot.get("beta"), dict) and boot.get("mode") == 5 and
+                    boot["beta"].get("session_fence") == "declined_send_storage_counter")
+        admitted = (isinstance(observed, dict) and
+                    (observed.get("result") == "observed" or
+                     (declined and observed.get("result") == "unobserved")))
         if (not session_snapshot(observed, "unique_live_context") or "revision" not in observed or
                 type(row.get("reset")) is not bool or type(row.get("input_available")) is not bool or
-                row["input_available"] != (observed["result"] == "observed") or
+                row["input_available"] != admitted or
                 not bounded_int(row.get("model_session_epoch"), 1, 2**64-1) or
                 not bounded_int(row.get("raw_since_ns"), 1, row["mono_ns"]) or
                 row['raw_since_ns'] != row['mono_ns'] or
@@ -1849,6 +1925,183 @@ class Auditor:
                 self.issue("scrub_nonpass_reason", source, "SCRUBBED must have reason PASS", True)
             if outgoing != bytes(expected):
                 self.issue("scrub_payload_mismatch", source, "Only bytes32,36..39,40,44..47 must be zeroed", True)
+        if choice == 3:
+            self.beta_send(row, original, outgoing, source)
+
+    def beta_boot(self, row, source):
+        beta = row.get("beta")
+        if beta is None:
+            if row["mode"] == 5:
+                self.issue("partial_record", source, "BETA boot lacks its beta object")
+            return
+        if (not isinstance(beta, dict) or beta.get("mode") not in ("off", "BETA") or
+                type(beta.get("enabled")) is not bool or
+                any(not isinstance(beta.get(k), str) for k in ("reason", "session_fence"))):
+            self.issue("partial_record", source, "Invalid boot BETA object")
+            return
+        self.beta_boots.append(dict(beta, boot_mode=row["mode"], install=row["install"],
+                                    session_hooks=row.get("session_hooks")))
+        if (beta["mode"] == "BETA") != (row["mode"] == 5):
+            self.issue("beta_boot_mode_mismatch", source, "BETA object disagrees with boot mode", True)
+        elif beta["enabled"] and row["install"] != "ok":
+            self.issue("beta_enabled_without_hook", source, "BETA opt-in claims an uninstalled hook", True)
+        elif row["mode"] == 5 and not beta["enabled"]:
+            self.issue("beta_not_enabled", source, beta["reason"])
+
+    def beta_live_ok(self, beta, mono_ns):
+        """A replacement needs a journaled GPS_LOST/ENGAGED state. The worker
+        writes a withdrawal row after revoking; a send decided before that row
+        (by its own monotonic time) can still be drained after it."""
+        if beta["state"] in BETA_LIVE_STATES:
+            return True
+        return beta["live_seen"] and beta["left_ns"] is not None and mono_ns <= beta["left_ns"]
+
+    def beta(self, row, source):
+        kind = row["kind"]
+        if not self.validate(row, source, ("mono_ns",)):
+            return
+        if row.get("domain") != "beta":
+            self.issue("unexpected_beta_domain", source, "BETA rows must stay in the beta domain", True)
+        if ("assist_ready" in row or kind in ("beta_state", "beta_summary")) and row.get("assist_ready") is not False:
+            self.issue("impossible_live_capability", source, "BETA cannot authorize qualified ASSIST", True)
+        boot = self.session["boot"]
+        if boot is not None and boot.get("mode") != 5:
+            self.issue("beta_row_without_beta_config", source, kind + " in a boot without mode BETA=5", True)
+        for key in ("accuracy_m",):
+            if key in row and row[key] is not None and not bounded_number(row[key], 0, 40):
+                self.issue("beta_accuracy_out_of_range", source, "%s=%r outside 0..40 m" % (key, row[key]), True)
+        beta = self.session["beta"]
+        if kind == "beta_state":
+            if not self.validate(row, source, strings=("from", "to", "reason")):
+                return
+            old, new, reason, now = row["from"], row["to"], row["reason"], row["mono_ns"]
+            if old not in BETA_STATES or new not in BETA_STATES:
+                self.issue("partial_record", source, "Unknown BETA state")
+                return
+            if beta["state"] is not None and beta["state"] != old:
+                self.issue("beta_state_discontinuity", source,
+                           "Transition from %s follows state %s" % (old, beta["state"]))
+            if old == "FAULT":
+                self.issue("beta_fault_not_sticky", source, "FAULT must not be left in one boot", True)
+            self.beta_states[new] += 1
+            self.beta_transition_reasons[new + ":" + reason] += 1
+            self.beta_last_state = dict(state=new, reason=reason, source=source)
+            if new == "WITHDRAWN":
+                self.beta_withdraw_reasons[reason] += 1
+            if old == "ENGAGED" and new != "ENGAGED" and beta["engaged_ns"] is not None:
+                if now >= beta["engaged_ns"]:
+                    add_difference(self.beta_engaged_seconds, (now - beta["engaged_ns"]) / 1e9)
+                else:
+                    self.issue("beta_clock_regressed", source, "ENGAGED exit precedes its entry")
+                self.beta_exit_reasons[reason] += 1
+                beta["engaged_ns"] = None
+            if new == "ENGAGED" and old != "ENGAGED":
+                self.beta_engaged_periods += 1
+                beta["engaged_ns"], beta["engaged_source"] = now, source
+            if new == "GPS_LOST":
+                beta["gps_returned"] = False
+            if new in BETA_LIVE_STATES:
+                beta["live_seen"], beta["left_ns"] = True, None
+            elif old in BETA_LIVE_STATES:
+                beta["left_ns"] = now
+            beta["state"] = new
+        elif kind == "beta_summary":
+            if self.validate(row, source, ("replaced_sends", "replaced_nonzero", "publications", "withdrawals"),
+                             ("state", "reason")):
+                self.beta_last_summary = {k: row[k] for k in (
+                    "mono_ns", "state", "reason", "publications", "publish_skipped", "last_skip",
+                    "withdrawals", "replaced_sends", "replaced_nonzero", "original_mode0_sends",
+                    "transitions", "bridge", "accuracy_m") if k in row}
+        elif kind == "beta_hold":
+            if not self.validate(row, source, ("count",), ("event",)):
+                return
+            if row["event"] not in ("hold_set", "hold_cleared"):
+                self.issue("partial_record", source, "Unknown BETA hold event")
+                return
+            self.beta_hold_events[row["event"] + "_rows"] += 1
+            if row["event"] == "hold_set" and row["count"] > beta["hold_seen"]:
+                self.beta_hold_events["hold_set"] += row["count"] - beta["hold_seen"]
+                beta["hold_seen"] = row["count"]
+        else:  # beta_session_storage
+            if self.validate(row, source, ("session_epoch", "previous")):
+                self.beta_storage_changes += 1
+
+    def beta_send(self, row, original, outgoing, source):
+        s = self.session
+        beta = s["beta"]
+        self.beta_replacements += 1
+        if row["result"] != 0:
+            self.beta_replaced_nonzero += 1
+        if s["boot"] is not None and s["boot"].get("mode") != 5:
+            self.issue("beta_without_beta_config", source, "BETA_REPLACEMENT requires boot configuration BETA=5", True)
+        if row["mode"] != 0:
+            self.issue("beta_wrong_mode", source, "BETA_REPLACEMENT requires original mode0", True)
+        if row["reason"] != 0:
+            self.issue("beta_nonpass_reason", source, "BETA_REPLACEMENT must have reason PASS", True)
+        if not self.beta_live_ok(beta, row["mono_ns"]):
+            self.issue("beta_replacement_without_engagement", source,
+                       "No preceding beta_state ENGAGED/GPS_LOST covers this replacement", True)
+        if beta["gps_returned"]:
+            self.issue("beta_replacement_after_gps_return", source,
+                       "Replacement after a GPS fix (mode!=0 POSITION) without a new GPS_LOST", True)
+        fields = beta_location(outgoing)
+        if outgoing[0:8] != original[0:8] or outgoing[24:32] != original[24:32]:
+            self.issue("beta_payload_mismatch", source, "Bytes 0..7 and 24..31 must equal the original", True)
+        if fields["has_accuracy"] != 1:
+            self.issue("beta_payload_mismatch", source, "hasAccuracy (byte16) must be 1", True)
+        if not 0 < fields["accuracy_e3"] <= BETA_MAX_ACCURACY_E3:
+            self.issue("beta_accuracy_out_of_range", source,
+                       "accuracy_e3=%d outside 1..%d" % (fields["accuracy_e3"], BETA_MAX_ACCURACY_E3), True)
+            return
+        if not (-90 <= fields["lat"] <= 90 and -180 <= fields["lon"] <= 180):
+            self.issue("beta_payload_mismatch", source, "Replaced latitude/longitude out of range", True)
+            return
+        add_difference(self.beta_accuracy_m, fields["accuracy_e3"] / 1000.0)
+        beta["pending"] = dict(fields, mono_ns=row["mono_ns"], source=source)
+
+    def beta_position(self, row, source):
+        """Owner validation: last BETA LOCATION sent versus the first original
+        GPS fix after it. GPS is a reference, not ground truth."""
+        if row["mode"] == 0:
+            return
+        beta = self.session["beta"]
+        beta["gps_returned"] = True
+        last = beta["pending"]
+        lat, lon = row.get("lat"), row.get("lon")
+        if last is None or not finite_number(lat) or not finite_number(lon):
+            return
+        beta["pending"] = None
+        gap = (row["mono_ns"] - last["mono_ns"]) / 1e9
+        raw = distance_m(last["lat"], last["lon"], lat, lon)
+        aligned = raw
+        if last["moving"] and gap > 0:
+            # Constant speed/bearing from the send time to the fix time.
+            alat, alon = advance(last["lat"], last["lon"], last["bearing_deg"], last["speed_mps"] * gap)
+            aligned = distance_m(alat, alon, lat, lon)
+        accuracy = last["accuracy_e3"] / 1000.0
+        check = dict(dr_send=last["source"], gps_position=source, gap_s=round(gap, 3),
+                     distance_m=round(raw, 2), time_aligned_distance_m=round(aligned, 2),
+                     reported_accuracy_m=accuracy, within_reported_accuracy=aligned <= accuracy,
+                     dr_speed_mps=last["speed_mps"], gps_mode=row["mode"], gps_horizontal=row.get("horizontal"))
+        self.beta_returns_total += 1
+        if len(self.beta_returns) < 100:
+            self.beta_returns.append(check)
+        if gap < 0:
+            self.issue("beta_clock_regressed", source, "GPS fix precedes the last replaced send")
+        elif aligned > accuracy:
+            self.issue("beta_return_exceeds_accuracy", source,
+                       "First GPS fix %.1f m from the time-aligned last BETA LOCATION; reported %.1f m"
+                       % (aligned, accuracy))
+
+    def close_beta_session(self, s=None):
+        s = self.session if s is None else s
+        if s is None or s["beta"]["closed"]:
+            return
+        s["beta"]["closed"] = True
+        if s["beta"]["engaged_ns"] is not None:
+            self.beta_open_periods += 1
+            self.issue("beta_engaged_unfinished", s["beta"]["engaged_source"],
+                       "ENGAGED period has no recorded exit in this session")
 
     def read_stream(self, stream, name, size, group=None):
         if size > MAX_FILE_BYTES or self.total_bytes + size > MAX_TOTAL_BYTES:
@@ -1933,6 +2186,8 @@ class Auditor:
                                      ("tar", str(path.resolve()), *trace_group(member.name)))
 
     def report(self):
+        for session in self.sessions:
+            self.close_beta_session(session)
         for index, session in enumerate(self.sessions):
             source = "session:%d" % (index + 1)
             if session["boot"] is None:
@@ -1993,6 +2248,25 @@ class Auditor:
                                         reference_exclusion="not_provable_from_journal",
                                         comparison_scope="recorded_compared_events_including_later_aborted_windows",
                                         scope="model_to_gps_differences_not_physical_accuracy"),
+                    beta=dict(boots=self.beta_boots, states=dict(self.beta_states),
+                              transition_reasons=dict(self.beta_transition_reasons),
+                              engaged_periods=self.beta_engaged_periods,
+                              engaged_seconds=dict(self.beta_engaged_seconds),
+                              engaged_exit_reasons=dict(self.beta_exit_reasons),
+                              withdraw_reasons=dict(self.beta_withdraw_reasons),
+                              open_engaged_periods=self.beta_open_periods,
+                              replaced_sends=self.beta_replacements,
+                              replaced_nonzero_results=self.beta_replaced_nonzero,
+                              replaced_accuracy_m=dict(self.beta_accuracy_m),
+                              hold_events=dict(self.beta_hold_events),
+                              session_storage_changes=self.beta_storage_changes,
+                              last_state=self.beta_last_state, last_summary=self.beta_last_summary,
+                              gps_return_checks=self.beta_returns,
+                              gps_return_checks_total=self.beta_returns_total,
+                              gps_return_scope="last_replaced_location_vs_first_original_fix_after_it;"
+                                               "time_aligned_by_constant_speed_and_bearing",
+                              gps_is_ground_truth=False, phone_acceptance="not_established",
+                              assist_ready=False, domain="beta"),
                     storage_stops=self.storage_stops,
                     position_poll_modes=dict(self.poll_modes), send_choices=dict(self.choices),
                     send_reasons=dict(self.reasons), lower_send_results=dict(self.results),
@@ -2052,6 +2326,26 @@ def main(argv=None):
             holdout = report["shadow_holdout"]
             print("Receipt-time MODEL holdout events: %s; GPS position differences (m): %s" %
                   (holdout["events"], holdout["position_difference_m"]))
+        beta = report["beta"]
+        if beta["boots"] or beta["states"] or beta["replaced_sends"]:
+            seconds = beta["engaged_seconds"]
+            print("BETA: engaged %d times (seconds min/mean/max: %s/%s/%s), replaced %d sends "
+                  "(non-zero results %d), hold %d, last state %s" %
+                  (beta["engaged_periods"], seconds["min"], seconds["mean"], seconds["max"],
+                   beta["replaced_sends"], beta["replaced_nonzero_results"],
+                   beta["hold_events"].get("hold_set", 0),
+                   "%s (%s)" % (beta["last_state"]["state"], beta["last_state"]["reason"])
+                   if beta["last_state"] else "none"))
+            print("BETA exits from ENGAGED: %s; withdrawals: %s; reported accuracy (m): %s" %
+                  (beta["engaged_exit_reasons"], beta["withdraw_reasons"], beta["replaced_accuracy_m"]))
+            for check in beta["gps_return_checks"][:20]:
+                print("BETA GPS return: last DR vs first GPS fix %.1f m (time-aligned %.1f m, gap %.1f s), "
+                      "reported accuracy %.1f m -> %s" %
+                      (check["distance_m"], check["time_aligned_distance_m"], check["gap_s"],
+                       check["reported_accuracy_m"],
+                       "within" if check["within_reported_accuracy"] else "EXCEEDS"))
+            if not beta["gps_return_checks_total"]:
+                print("BETA GPS return: no original GPS fix after a replaced LOCATION in these logs")
         if report['motion_rejected']['reasons']:
             print("Rejected sensor diagnostics (not accepted input): %s" %
                   report['motion_rejected']['reasons'])
