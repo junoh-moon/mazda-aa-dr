@@ -6,6 +6,7 @@ Exit 0: local checks passed for the recorded window; 1: invariant violation;
 DR accuracy, or a complete vehicle session. Run --help for input syntax.
 """
 import argparse
+import bisect
 from collections import Counter
 import json
 import math
@@ -20,16 +21,33 @@ MAX_LINE_BYTES = 8192
 MAX_MEMBERS = 4096
 STORAGE_FILES = ('trace.storage.json', 'collector.storage.json')
 CLEAR_BYTES = (32, 36, 37, 38, 39, 40, 44, 45, 46, 47)
-CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT", 3: "BETA_REPLACEMENT"}
+# src/adapter/adapter.h Choice/Reason (exact enum order).
+CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT", 3: "BETA_REPLACEMENT",
+           4: "BETA_SPEED_OVERLAY"}
 REASONS = ("PASS", "NO_CONTEXT", "NESTED_CALL", "EXTRA_LOCATION", "BAD_LENGTH",
            "DISABLED", "LOCK_BUSY", "NOT_UNKNOWN", "NOT_READY", "EPOCH_MISMATCH",
-           "EXPIRED", "BAD_ENCODING", "BAD_PROVENANCE", "CONTEXT_UNAVAILABLE", "HELD")
+           "EXPIRED", "BAD_ENCODING", "BAD_PROVENANCE", "CONTEXT_UNAVAILABLE", "HELD",
+           "OVERLAY_MISMATCH", "OVERLAY_NOT_NEEDED")
 # BETA (config mode 5): MODEL-domain LOCATION replacement while the original
-# reports mode 0; validation/ASSIST_BETA_DESIGN_2026-10-05.md.
-BETA_STATES = ("DISABLED", "ARMED", "GPS_LOST", "ENGAGED", "WITHDRAWN", "FAULT")
+# reports mode 0 (class LOST), and the wheel speed overlay while it reports
+# the stored no-fix position (class NO_FIX: mode 1/2, utc_s 0);
+# validation/ASSIST_BETA_DESIGN_2026-10-05.md, BETA_DECISIONS_2026-10-05.md.
+BETA_STATES = ("DISABLED", "ARMED", "GPS_LOST", "ENGAGED", "WITHDRAWN", "FAULT",
+               "NO_FIX", "SPEED_ENGAGED")
 BETA_LIVE_STATES = ("GPS_LOST", "ENGAGED")
+BETA_SPEED_STATES = ("NO_FIX", "SPEED_ENGAGED")
 BETA_MAX_ACCURACY_E3 = 40000
-BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage")
+# encode_speed_overlay: only hasSpeed (32) and speed_e3 (36..39) may change.
+BETA_OVERLAY_BYTES = (32, 36, 37, 38, 39)
+BETA_MAX_SPEED_E3 = 100000
+# BetaProfile.lease_ns / Options.max_snapshot_age_ns: an overlay speed comes
+# from a wheel event received at most this long before the send.
+BETA_LEASE_NS = 500000000
+# Adapter PositionClass numbers carried as the send/position "class" field.
+POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
+BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor")
+# beta_reverse_latch is a MODEL-domain row (also written in SHADOW mode 4).
+WHEEL_PROFILE = (0.01, -100.0)  # research_model_profile(): km/h per count, zero
 EARTH_RADIUS_M = 6371008.8
 # get_snapshot/Pipeline::diagnostic return these query results, not step()
 # results such as DUPLICATE. Pipeline status is a separate last-operation value.
@@ -174,6 +192,21 @@ def beta_location(payload):
     return dict(lat=signed(8) / 1e7, lon=signed(12) / 1e7, has_accuracy=payload[16],
                 accuracy_e3=unsigned(20), speed_mps=unsigned(36) / 1000.0,
                 moving=payload[40] == 1, bearing_deg=unsigned(44) / 1e6)
+
+
+def wheel_speed_e3(raw, profile):
+    """Overlay speed (mm/s) the BETA pipeline derives from one WHEELS event:
+    mean of four wheels (count*k + zero km/h), 0 while every wheel reads at
+    most 0.05 m/s, rounded like the adapter encoder. None: not a speed event."""
+    k, zero = profile
+    if len(raw) != 4 or any(r > 40000 for r in raw):
+        return None
+    wheels = [r * k + zero for r in raw]
+    if any(w < 0 for w in wheels):
+        return None
+    if max(wheels) / 3.6 <= 0.05:
+        return 0
+    return int(math.floor(sum(w * 0.25 for w in wheels) / 3.6 * 1000 + 0.5))
 
 
 def decode_motion_records(row):
@@ -628,6 +661,18 @@ class Auditor:
         self.beta_returns = []
         self.beta_returns_total = 0
         self.beta_position_classes = Counter()
+        self.beta_state_seconds = Counter()
+        self.beta_no_fix_seconds = dict(count=0, min=None, max=None, mean=None)
+        self.beta_speed_engaged_periods = 0
+        self.beta_speed_engaged_seconds = dict(count=0, min=None, max=None, mean=None)
+        self.beta_speed_overlays = 0
+        self.beta_speed_overlay_nonzero = 0
+        self.beta_speed_overlay_mps = dict(count=0, min=None, max=None, mean=None)
+        self.beta_speed_overlay_wheel = Counter()  # checked / unverified (no wheel row in the lease)
+        self.beta_speed_overlay_error_mps = dict(count=0, min=None, max=None, mean=None)
+        self.beta_anchor_gates = Counter()
+        self.beta_anchor_dropped = 0
+        self.beta_reverse_latch = Counter()
 
     def issue(self, code, source, detail, violation=False):
         severity = "violation" if violation else "inconclusive"
@@ -647,7 +692,13 @@ class Auditor:
                             # live state; pending: last replaced LOCATION awaiting a GPS fix.
                             beta=dict(state=None, live_seen=False, left_ns=None,
                                       gps_returned=False, engaged_ns=None, engaged_source=None,
-                                      pending=None, hold_seen=0, closed=False))
+                                      pending=None, hold_seen=0, closed=False,
+                                      # NO_FIX overlay family (NO_FIX/SPEED_ENGAGED).
+                                      speed_live_seen=False, speed_left_ns=None,
+                                      state_ns=None, no_fix_ns=None, speed_engaged_ns=None,
+                                      # Overlay sends and wheel receipts, checked at close
+                                      # (motion batches can be journaled after the send).
+                                      overlays=[], wheels=[], wheel_profile=WHEEL_PROFILE))
         self.sessions.append(self.session)
         self.positions = {}
         self.invalid_positions = set()
@@ -961,7 +1012,12 @@ class Auditor:
                 self.motion(event, source)
         elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled",
                       "shadow_pipeline_reset"):
+            if (kind == "shadow_boot" and bounded_number(row.get("wheel_kmh_per_count"), 0.0001, 1) and
+                    bounded_number(row.get("wheel_zero_kmh"), -1000, 1000)):
+                self.session["beta"]["wheel_profile"] = (row["wheel_kmh_per_count"], row["wheel_zero_kmh"])
             self.shadow(row, source)
+        elif kind == "beta_reverse_latch":
+            self.reverse_latch(row, source)
         elif kind == "shadow_bus":
             self.model_bus(row, source)
         elif kind in ("shadow_session", "shadow_position_rejected", "shadow_motion_excluded"):
@@ -1031,6 +1087,10 @@ class Auditor:
         self.motion_samples += 1
         self.motion_sensors[str(row["sensor"])] += 1
         s = self.session
+        if row["sensor"] == 1 and len(s["beta"]["wheels"]) < 1000000:
+            speed = wheel_speed_e3(row["raw"], s["beta"]["wheel_profile"])
+            if speed is not None:
+                s["beta"]["wheels"].append((row["received_ns"], speed))
         s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["received_ns"])
         if s["motion_epoch"] != row["epoch"]:
             if s["motion_epoch"] is not None:
@@ -1910,7 +1970,8 @@ class Auditor:
             payloads.append(bytes.fromhex(value))
         original, outgoing = payloads
         self.checked += 1
-        if row["mode"] in (1, 2, 3) and (original != outgoing or choice != 0):
+        # A choice-4 overlay is checked (and rejected outside NO_FIX) below.
+        if row["mode"] in (1, 2, 3) and choice != 4 and (original != outgoing or choice != 0):
             self.issue("native_mode_mutation", source, "Native mode1/2/3 must remain ORIGINAL and identical", True)
         if choice == 0 and original != outgoing:
             self.issue("original_payload_changed", source, "ORIGINAL payload differs", True)
@@ -1928,6 +1989,8 @@ class Auditor:
                 self.issue("scrub_payload_mismatch", source, "Only bytes32,36..39,40,44..47 must be zeroed", True)
         if choice == 3:
             self.beta_send(row, original, outgoing, source)
+        elif choice == 4:
+            self.beta_overlay(row, original, outgoing, source)
 
     def beta_boot(self, row, source):
         beta = row.get("beta")
@@ -2008,6 +2071,27 @@ class Auditor:
                 beta["live_seen"], beta["left_ns"] = True, None
             elif old in BETA_LIVE_STATES:
                 beta["left_ns"] = now
+            if new in BETA_SPEED_STATES:
+                beta["speed_live_seen"], beta["speed_left_ns"] = True, None
+            elif old in BETA_SPEED_STATES:
+                beta["speed_left_ns"] = now
+            # Time per state, NO_FIX-family periods and SPEED_ENGAGED periods.
+            if beta["state_ns"] is not None and beta["state"] == old and now >= beta["state_ns"]:
+                self.beta_state_seconds[old] += (now - beta["state_ns"]) / 1e9
+            beta["state_ns"] = now
+            if new in BETA_SPEED_STATES and old not in BETA_SPEED_STATES:
+                beta["no_fix_ns"] = now
+            elif old in BETA_SPEED_STATES and new not in BETA_SPEED_STATES and beta["no_fix_ns"] is not None:
+                if now >= beta["no_fix_ns"]:
+                    add_difference(self.beta_no_fix_seconds, (now - beta["no_fix_ns"]) / 1e9)
+                beta["no_fix_ns"] = None
+            if new == "SPEED_ENGAGED" and old != "SPEED_ENGAGED":
+                self.beta_speed_engaged_periods += 1
+                beta["speed_engaged_ns"] = now
+            elif old == "SPEED_ENGAGED" and new != "SPEED_ENGAGED" and beta["speed_engaged_ns"] is not None:
+                if now >= beta["speed_engaged_ns"]:
+                    add_difference(self.beta_speed_engaged_seconds, (now - beta["speed_engaged_ns"]) / 1e9)
+                beta["speed_engaged_ns"] = None
             beta["state"] = new
         elif kind == "beta_summary":
             if self.validate(row, source, ("replaced_sends", "replaced_nonzero", "publications", "withdrawals"),
@@ -2015,7 +2099,9 @@ class Auditor:
                 self.beta_last_summary = {k: row[k] for k in (
                     "mono_ns", "state", "reason", "publications", "publish_skipped", "last_skip",
                     "withdrawals", "replaced_sends", "replaced_nonzero", "original_mode0_sends",
-                    "transitions", "bridge", "accuracy_m") if k in row}
+                    "transitions", "bridge", "accuracy_m", "position_class", "payload",
+                    "speed_publications", "speed_overlay_sends", "speed_overlay_nonzero",
+                    "original_nofix_sends") if k in row}
         elif kind == "beta_hold":
             if not self.validate(row, source, ("count",), ("event",)):
                 return
@@ -2026,9 +2112,95 @@ class Auditor:
             if row["event"] == "hold_set" and row["count"] > beta["hold_seen"]:
                 self.beta_hold_events["hold_set"] += row["count"] - beta["hold_seen"]
                 beta["hold_seen"] = row["count"]
+        elif kind == "beta_anchor":
+            # One anchor gate evaluation (BETA_DECISIONS 3.2); diagnostic only.
+            if self.validate(row, source, ("seq", "mode", "utc_s", "dropped"), ("gate",)):
+                self.beta_anchor_gates[row["gate"]] += 1
+                self.beta_anchor_dropped = max(self.beta_anchor_dropped, row["dropped"])
         else:  # beta_session_storage
             if self.validate(row, source, ("session_epoch", "previous")):
                 self.beta_storage_changes += 1
+
+    def reverse_latch(self, row, source):
+        """MODEL reverse latch kept across / cleared after an input gap, or
+        cleared by the worker (with per-reason totals). Never BETA evidence."""
+        if not self.validate(row, source, ("mono_ns",), ("event", "reason")):
+            return
+        if row.get("domain") != "model" or row.get("assist_ready", False) is not False:
+            self.issue("unexpected_reverse_latch_domain", source, "Reverse latch rows are MODEL diagnostics", True)
+            return
+        self.beta_reverse_latch[row["event"] + ":" + row["reason"]] += 1
+
+    def beta_overlay(self, row, original, outgoing, source):
+        """BETA_SPEED_OVERLAY (choice 4): only on a NO_FIX send (original mode
+        1/2 with GetPosition utc_s 0), only bytes 32 and 36..39 changed,
+        hasSpeed 1 and a plausible speed. The wheel comparison runs at session
+        close because motion batches may be journaled after the send."""
+        s = self.session
+        beta = s["beta"]
+        self.beta_speed_overlays += 1
+        if row["result"] != 0:
+            self.beta_speed_overlay_nonzero += 1
+        if s["boot"] is not None and s["boot"].get("mode") != 5:
+            self.issue("beta_without_beta_config", source, "BETA_SPEED_OVERLAY requires boot configuration BETA=5", True)
+        if row["reason"] != 0:
+            self.issue("beta_nonpass_reason", source, "BETA_SPEED_OVERLAY must have reason PASS", True)
+        position = self.positions.get((row["call"], row["generation"]))
+        if row["mode"] not in (1, 2):
+            self.issue("beta_overlay_wrong_class", source,
+                       "BETA_SPEED_OVERLAY requires original mode 1/2 (NO_FIX), got mode %d" % row["mode"], True)
+        elif "class" in row and row["class"] != POSITION_CLASS_NO_FIX:
+            self.issue("beta_overlay_wrong_class", source,
+                       "BETA_SPEED_OVERLAY on adapter class %r, not NO_FIX" % row["class"], True)
+        elif position is None or not integer(position.get("utc_s")):
+            self.issue("beta_overlay_class_unverified", source, "No POSITION utc_s to confirm class NO_FIX")
+        elif position["utc_s"] != 0:
+            self.issue("beta_overlay_wrong_class", source,
+                       "BETA_SPEED_OVERLAY on a fix (utc_s %d), only NO_FIX (utc_s 0) may be overlaid"
+                       % position["utc_s"], True)
+        if not (beta["state"] in BETA_SPEED_STATES or (
+                beta["speed_live_seen"] and beta["speed_left_ns"] is not None and
+                row["mono_ns"] <= beta["speed_left_ns"])):
+            self.issue("beta_overlay_without_no_fix_state", source,
+                       "No preceding beta_state NO_FIX/SPEED_ENGAGED covers this overlay", True)
+        changed = [i for i in range(48) if original[i] != outgoing[i]]
+        if any(i not in BETA_OVERLAY_BYTES for i in changed):
+            self.issue("beta_overlay_payload_mismatch", source,
+                       "Only bytes 32 and 36..39 may differ from the original (changed %s)" % changed, True)
+            return
+        if outgoing[32] != 1:
+            self.issue("beta_overlay_payload_mismatch", source, "hasSpeed (byte32) must be 1", True)
+        speed_e3 = int.from_bytes(outgoing[36:40], 'little', signed=True)
+        if not 0 <= speed_e3 <= BETA_MAX_SPEED_E3:
+            self.issue("beta_overlay_speed_out_of_range", source,
+                       "speed_e3=%d outside 0..%d" % (speed_e3, BETA_MAX_SPEED_E3), True)
+            return
+        add_difference(self.beta_speed_overlay_mps, speed_e3 / 1000.0)
+        if len(beta["overlays"]) < 1000000:
+            beta["overlays"].append((row["mono_ns"], speed_e3, source))
+
+    def check_overlay_speeds(self, beta):
+        """Each overlay speed must equal (+-1 mm/s rounding) the speed of a
+        WHEELS event received within the lease before the send; the band of
+        those journaled wheel speeds is the tolerance. Without any journaled
+        wheel event in that window only the 0..100 m/s plausibility applies."""
+        wheels = sorted(beta["wheels"])
+        times = [w[0] for w in wheels]
+        for mono_ns, speed_e3, source in beta["overlays"]:
+            lo = bisect.bisect_left(times, mono_ns - BETA_LEASE_NS - 1000000)
+            hi = bisect.bisect_right(times, mono_ns)
+            window = [w[1] for w in wheels[lo:hi]]
+            if not window:
+                self.beta_speed_overlay_wheel["unverified_no_wheel_row"] += 1
+                continue
+            self.beta_speed_overlay_wheel["checked"] += 1
+            error = min(abs(speed_e3 - w) for w in window)
+            add_difference(self.beta_speed_overlay_error_mps, error / 1000.0)
+            if error > 1:
+                self.issue("beta_overlay_speed_mismatch", source,
+                           "Overlay speed %.3f m/s differs from every wheel speed received in the "
+                           "0.5 s lease (%.3f..%.3f m/s)" % (speed_e3 / 1000.0, min(window) / 1000.0,
+                                                            max(window) / 1000.0), True)
 
     def beta_send(self, row, original, outgoing, source):
         s = self.session
@@ -2040,6 +2212,9 @@ class Auditor:
             self.issue("beta_without_beta_config", source, "BETA_REPLACEMENT requires boot configuration BETA=5", True)
         if row["mode"] != 0:
             self.issue("beta_wrong_mode", source, "BETA_REPLACEMENT requires original mode0", True)
+        elif "class" in row and row["class"] != POSITION_CLASS_LOST:
+            self.issue("beta_wrong_mode", source,
+                       "BETA_REPLACEMENT on adapter class %r, only LOST may be replaced" % row["class"], True)
         if row["reason"] != 0:
             self.issue("beta_nonpass_reason", source, "BETA_REPLACEMENT must have reason PASS", True)
         if not self.beta_live_ok(beta, row["mono_ns"]):
@@ -2070,6 +2245,8 @@ class Auditor:
             return
         beta = self.session["beta"]
         beta["gps_returned"] = True
+        if row["mode"] in (1, 2) and row.get("utc_s") == 0:
+            return  # stored no-fix position (class NO_FIX): not a GPS reference
         last = beta["pending"]
         lat, lon = row.get("lat"), row.get("lon")
         if last is None or not finite_number(lat) or not finite_number(lon):
@@ -2102,6 +2279,8 @@ class Auditor:
         if s is None or s["beta"]["closed"]:
             return
         s["beta"]["closed"] = True
+        self.check_overlay_speeds(s["beta"])
+        s["beta"]["overlays"], s["beta"]["wheels"] = [], []
         if s["beta"]["engaged_ns"] is not None:
             self.beta_open_periods += 1
             self.issue("beta_engaged_unfinished", s["beta"]["engaged_source"],
@@ -2265,6 +2444,18 @@ class Auditor:
                               hold_events=dict(self.beta_hold_events),
                               session_storage_changes=self.beta_storage_changes,
                               position_classes=dict(self.beta_position_classes),
+                              state_seconds={k: round(v, 3) for k, v in self.beta_state_seconds.items()},
+                              no_fix_seconds=dict(self.beta_no_fix_seconds),
+                              speed_engaged_periods=self.beta_speed_engaged_periods,
+                              speed_engaged_seconds=dict(self.beta_speed_engaged_seconds),
+                              speed_overlay_sends=self.beta_speed_overlays,
+                              speed_overlay_nonzero_results=self.beta_speed_overlay_nonzero,
+                              speed_overlay_mps=dict(self.beta_speed_overlay_mps),
+                              speed_overlay_wheel_checks=dict(self.beta_speed_overlay_wheel),
+                              speed_overlay_error_vs_wheel_mps=dict(self.beta_speed_overlay_error_mps),
+                              anchor_gates=dict(self.beta_anchor_gates),
+                              anchor_rows_dropped=self.beta_anchor_dropped,
+                              reverse_latch_events=dict(self.beta_reverse_latch),
                               last_state=self.beta_last_state, last_summary=self.beta_last_summary,
                               gps_return_checks=self.beta_returns,
                               gps_return_checks_total=self.beta_returns_total,
@@ -2332,7 +2523,7 @@ def main(argv=None):
             print("Receipt-time MODEL holdout events: %s; GPS position differences (m): %s" %
                   (holdout["events"], holdout["position_difference_m"]))
         beta = report["beta"]
-        if beta["boots"] or beta["states"] or beta["replaced_sends"]:
+        if beta["boots"] or beta["states"] or beta["replaced_sends"] or beta["speed_overlay_sends"]:
             seconds = beta["engaged_seconds"]
             print("BETA: engaged %d times (seconds min/mean/max: %s/%s/%s), replaced %d sends "
                   "(non-zero results %d), hold %d, last state %s" %
@@ -2346,6 +2537,13 @@ def main(argv=None):
             if beta["position_classes"]:
                 print("BETA NO_FIX: %d state rows; position classes: %s" %
                       (beta["position_classes"].get("NO_FIX", 0), beta["position_classes"]))
+            if beta["speed_overlay_sends"] or beta["speed_engaged_periods"]:
+                nofix = beta["no_fix_seconds"]
+                print("BETA speed overlay: %d sends (non-zero results %d), SPEED_ENGAGED %d times "
+                      "(%.1f s), NO_FIX periods %d (max %s s); wheel checks: %s" %
+                      (beta["speed_overlay_sends"], beta["speed_overlay_nonzero_results"],
+                       beta["speed_engaged_periods"], beta["state_seconds"].get("SPEED_ENGAGED", 0.0),
+                       nofix["count"], nofix["max"], beta["speed_overlay_wheel_checks"]))
             for check in beta["gps_return_checks"][:20]:
                 print("BETA GPS return: last DR vs first GPS fix %.1f m (time-aligned %.1f m, gap %.1f s), "
                       "reported accuracy %.1f m -> %s" %

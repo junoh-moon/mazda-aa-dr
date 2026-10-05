@@ -858,8 +858,8 @@ exec "$MX5DR_REAL_OD" "$@"
         self.assertIn('beta_enable=armed beta_last_state=ARMED beta_last_reason=gps_returned', r.stdout)
         self.assertIn('beta_engaged=2 beta_replaced_sends=3 beta_replaced_nonzero=1 beta_hold_set=1 '
                       'beta_withdrawals=1 beta_last_withdraw_reason=send_result_hold', r.stdout)
-        self.assertIn('BETA: engaged 2 times, replaced 3 sends, hold 1, last state ARMED (gps_returned), '
-                      'scope current_boot', r.stdout)
+        self.assertIn('BETA: engaged 2 times, replaced 3 sends, speed overlay sends 0, nonzero 0, hold 1, '
+                      'last state ARMED (gps_returned), scope current_boot', r.stdout)
 
     def test_beta_counts_survive_the_drive_reboot_as_previous_boot(self):
         trace = self.beta_trace()
@@ -867,14 +867,15 @@ exec "$MX5DR_REAL_OD" "$@"
         (self.root / 'proc/uptime').write_text('2.00 1.00\n')
         r = self.run_status(trace)
         self.assertIn('beta_requested=true beta_scope=previous_boot', r.stdout)
-        self.assertIn('BETA: engaged 2 times, replaced 3 sends, hold 1, last state ARMED (gps_returned), '
-                      'scope previous_boot', r.stdout)
+        self.assertIn('BETA: engaged 2 times, replaced 3 sends, speed overlay sends 0, nonzero 0, hold 1, '
+                      'last state ARMED (gps_returned), scope previous_boot', r.stdout)
 
     def test_beta_disabled_reason_and_missing_hook_are_visible(self):
         r = self.run_status(self.beta_trace(install='symbol_missing', enabled=False))
         self.assertIn('beta_boot_enabled=false beta_boot_reason=hook_not_installed beta_hook=not_installed', r.stdout)
         self.assertIn('beta_enable=disabled:hook_not_installed', r.stdout)
-        self.assertIn('BETA: engaged 0 times, replaced 0 sends, hold 0, last state DISABLED', r.stdout)
+        self.assertIn('BETA: engaged 0 times, replaced 0 sends, speed overlay sends 0, nonzero 0, hold 0, '
+                      'last state DISABLED', r.stdout)
 
     def test_beta_mode5_boot_counts_as_shadow_capture_and_computation(self):
         r = self.run_status(self.beta_trace())
@@ -884,6 +885,25 @@ exec "$MX5DR_REAL_OD" "$@"
                      'collector_poll_recent=observed'):
             self.assertIn(line, r.stdout)
         self.assertNotIn('BETA NO_FIX', r.stdout)  # absent field: no line
+
+    def test_no_fix_speed_overlay_sends_are_counted_apart_from_replacements(self):
+        trace = self.beta_trace()
+
+        def row(kind, **fields):
+            return dict(kind=kind, mono_ns=50000000000, **fields)
+        trace += [
+            row('beta_state', domain='beta', assist_ready=False, to='NO_FIX', reason='no_fix',
+                adapter_mode=4, position_class='NO_FIX', **{'from': 'ARMED'}),
+            row('beta_state', domain='beta', assist_ready=False, to='SPEED_ENGAGED', reason='speed_published',
+                adapter_mode=4, position_class='NO_FIX', **{'from': 'NO_FIX'})]
+        for result in (0, 0, -1):
+            trace.append(dict(kind='send', call=9, generation=1, mono_ns=50000000000, mode=1, type=1,
+                              length=48, choice=4, reason=0, result=result))
+        r = self.run_status(trace)
+        self.assertIn('beta_speed_engaged=1 beta_speed_overlay_sends=3 beta_speed_overlay_nonzero=1', r.stdout)
+        self.assertIn('beta_engaged=2 beta_replaced_sends=3 beta_replaced_nonzero=1', r.stdout)
+        self.assertIn('BETA: engaged 2 times, replaced 3 sends, speed overlay sends 3, nonzero 1, hold 1, '
+                      'last state SPEED_ENGAGED (speed_published), scope current_boot', r.stdout)
 
     def test_optional_position_class_prints_the_no_fix_line(self):
         trace = self.beta_trace()

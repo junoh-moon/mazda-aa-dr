@@ -179,16 +179,25 @@ class TrialMenuTests(unittest.TestCase):
             self.assertIn(expect, go)
         self.assertEqual(sum(l.startswith('ok   ') for l in go), 13)
         self.assertIn('BETA: engaged 0 times, replaced 0 sends,', go)
+        self.assertIn(' speed overlay sends 0, nonzero 0,', go)
         for line in go:
             self.assertLessEqual(len(line), 40, line)
         after = self.BETA_GO.replace('beta_engaged=0', 'beta_engaged=12').replace(
-            'BETA: engaged 0 times, replaced 0 sends, hold 0, last state ARMED (enabled), scope current_boot',
-            'BETA: engaged 12 times, replaced 3456 sends, hold 1, last state WITHDRAWN (budget_limit), '
-            'scope previous_boot').replace('beta_scope=current_boot', 'beta_scope=previous_boot')
+            'BETA: engaged 0 times, replaced 0 sends, speed overlay sends 0, nonzero 0, hold 0, '
+            'last state ARMED (enabled), scope current_boot',
+            'BETA: engaged 12 times, replaced 3456 sends, speed overlay sends 52345, nonzero 1, hold 1, '
+            'last state WITHDRAWN (budget_limit), scope previous_boot').replace(
+            'beta_scope=current_boot', 'beta_scope=previous_boot')
         lines = self.verdict(after, 'BETA').splitlines()
         text = ' '.join(l.strip() for l in lines)
-        self.assertIn('BETA: engaged 12 times, replaced 3456 sends, hold 1, last state WITHDRAWN '
-                      '(budget_limit), scope previous_boot', text)
+        self.assertIn('BETA: engaged 12 times, replaced 3456 sends, speed overlay sends 52345, nonzero 1, '
+                      'hold 1, last state WITHDRAWN (budget_limit), scope previous_boot', text)
+        # The speed overlay count is its own folded line; nothing is cut.
+        self.assertIn(' speed overlay sends 52345, nonzero 1,', lines)
+        long_state = after.replace('WITHDRAWN (budget_limit)', 'SPEED_ENGAGED (speed_published)')
+        lines = self.verdict(long_state, 'BETA').splitlines()
+        self.assertIn(' last state SPEED_ENGAGED', ' '.join(lines))
+        self.assertIn('(speed_published)', ' '.join(lines))
         self.assertIn('wait BETA  not started', lines)
         for line in lines:
             self.assertLessEqual(len(line), 40, line)
@@ -268,7 +277,9 @@ class TrialMenuTests(unittest.TestCase):
                'beta_enable=armed beta_last_state=ARMED beta_last_reason=enabled\n'
                'beta_engaged=0 beta_replaced_sends=0 beta_replaced_nonzero=0 beta_hold_set=0 '
                'beta_withdrawals=0 beta_last_withdraw_reason=none\n'
-               'BETA: engaged 0 times, replaced 0 sends, hold 0, last state ARMED (enabled), scope current_boot\n')
+               'beta_speed_engaged=0 beta_speed_overlay_sends=0 beta_speed_overlay_nonzero=0\n'
+               'BETA: engaged 0 times, replaced 0 sends, speed overlay sends 0, nonzero 0, hold 0, '
+               'last state ARMED (enabled), scope current_boot\n')
 
     def test_verdict_go_wait_and_no_go(self):
         go = self.verdict(self.GO).splitlines()

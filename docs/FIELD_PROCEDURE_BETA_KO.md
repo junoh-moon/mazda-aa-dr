@@ -7,12 +7,17 @@
 ## 이 시험이 하는 일
 
 [문제 정의](PROBLEM_DEFINITION_KO.md)의 G1(터널에서 속도), G2(지하주차장에서 방위)를 실제로 확인하는 첫 시험입니다.
-BETA는 SHADOW 기록을 그대로 하면서, **순정이 GPS 없음(mode 0)을 보내는 동안에만** 그 LOCATION의 위경도·정확도·속도·방위를 차량 센서로 계산한 값으로 바꿔 보냅니다([설계](../validation/ASSIST_BETA_DESIGN_2026-10-05.md)).
-보고하는 정확도는 40 m를 넘지 않으며, 넘으면 순정으로 돌아갑니다. GPS가 돌아오면 즉시 순정을 그대로 보냅니다. 의심이 있으면(센서 침묵, 송신 실패, 세션 변화) 스스로 순정으로 물러납니다.
+BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 세 가지로 나눠 다룹니다([설계](../validation/ASSIST_BETA_DESIGN_2026-10-05.md), [결정 갱신](../validation/BETA_DECISIONS_2026-10-05.md)).
+
+- **GPS 끊김(LOST, 순정 mode 0)**: 그 LOCATION의 위경도·정확도·속도·방위를 차량 센서로 계산한 값으로 바꿔 보냅니다(상태 `GPS_LOST` → `ENGAGED`). 보고하는 정확도는 40 m를 넘지 않으며, 넘으면 순정으로 돌아갑니다.
+- **부팅 후 fix 없음(NO_FIX, 순정 mode 1/2이고 시각 utc 0)**: 순정이 저장해 둔 옛 위치를 보내는 구간입니다. 위치·방위·정확도는 순정 그대로 두고 **속도만** 바퀴 속도로 덮어씁니다(상태 `NO_FIX` → `SPEED_ENGAGED`). 이 구간에서 방위(G2)는 고칠 수 없습니다.
+- **GPS 정상(FIX)과 그 밖**: 순정을 그대로 보냅니다. GPS가 돌아오면 즉시 순정입니다.
+
+의심이 있으면(센서 침묵, 송신 실패, 세션 변화) 스스로 순정으로 물러납니다.
 
 한 번의 주행으로 얻을 것:
 
-1. 단절 구간에서 BETA가 실제로 켜지고(`ENGAGED`) 바꾼 송신이 있는지, 그리고 왜 물러났는지.
+1. 단절 구간에서 BETA가 실제로 켜지고(`ENGAGED`) 바꾼 송신이 있는지, 그리고 왜 물러났는지. 시동 직후 fix가 없는 동안 속도 덮어쓰기(`SPEED_ENGAGED`)가 있었는지.
 2. 네이버가 단절 구간에서 속도·방위를 따르는지(관찰은 동승자가 있을 때만; 없으면 기록으로 판단합니다).
 3. GPS 복귀 때 마지막으로 보낸 DR 위치와 첫 GPS 위치의 거리(회수 후 분석 도구가 계산합니다).
 
@@ -72,6 +77,7 @@ BETA는 SHADOW 기록을 그대로 하면서, **순정이 GPS 없음(mode 0)을 
    ok   HOOK  installed
    ok   FENCE declined
    BETA: engaged 0 times, replaced 0 sends,
+    speed overlay sends 0, nonzero 0,
     hold 0, last state ARMED (enabled),
     scope current_boot
    GO
@@ -110,16 +116,19 @@ BETA는 SHADOW 기록을 그대로 하면서, **순정이 GPS 없음(mode 0)을 
 2. **먼저 `2`와 Enter.** 판정 블록 아래쪽의 BETA 줄이 이번 주행의 요약입니다. 사진을 남기십시오. 예(합성 기록의 호스트 출력):
 
    ```
-   BETA: engaged 2 times, replaced 3 sends,
-    hold 1,
+   BETA: engaged 2 times,
+    replaced 31 sends,
+    speed overlay sends 523, nonzero 0,
+    hold 0,
     last state ARMED (gps_returned),
     scope current_boot
    ```
 
-   - `engaged N times`: BETA가 켜진 단절 구간 수. 지하·터널 진입 횟수와 비슷해야 합니다. 0이면 단절 중에도 켜지지 않은 것입니다(원인은 기록에 남습니다).
-   - `replaced M sends`: 실제로 바꿔 보낸 LOCATION 수. 단절 1초마다 대략 1건입니다.
-   - `hold K`: 바꾼 송신이 실패해 BETA가 물러난 횟수. 0이 기대값입니다.
-   - `last state`: 마지막 상태와 이유. 지상에서 회수하면 보통 `ARMED (gps_returned)`입니다.
+   - `engaged N times`: BETA가 켜진 GPS 끊김(mode 0) 구간 수. 지하·터널 진입 횟수와 비슷해야 합니다. 0이면 단절 중에도 켜지지 않은 것입니다(원인은 기록에 남습니다). 예산은 끊긴 시점이 아니라 마지막으로 **받아들인 앵커**부터 흐르므로, 느린 주차장 진입에서는 0이 나올 수 있습니다.
+   - `replaced M sends`: 위치까지 바꿔 보낸 LOCATION 수(choice 3, GPS 끊김 구간만). 단절 1초마다 대략 1건입니다.
+   - `speed overlay sends S, nonzero Z`: 시동 직후 fix가 없는(NO_FIX) 동안 속도만 바꿔 보낸 LOCATION 수(choice 4)와 그중 하위 송신 결과가 0이 아닌 수. fix 없이 달린 1초마다 대략 1건이고, 서 있거나 이미 같은 속도면 덮어쓰지 않습니다. Z는 0이 기대값입니다.
+   - `hold K`: 바꾼 송신(위치 또는 속도)이 실패해 BETA가 물러난 횟수. 0이 기대값입니다.
+   - `last state`: 마지막 상태와 이유. 지상에서 회수하면 보통 `ARMED (gps_returned)`입니다. `NO_FIX`나 `SPEED_ENGAGED`이면 회수 때까지 첫 fix가 없었던 것입니다(2026-10-05 주행에서는 첫 fix가 주차 뒤 727초에 나왔습니다).
    - `scope previous_boot`가 나오면 시험 부팅이 이미 끝난 뒤(시동을 껐거나 CMU가 재부팅됨)라는 뜻입니다. 숫자는 그 부팅의 기록입니다.
 
    이 단계의 `NO-GO`는 출발 판정용이라 회수 때는 무시합니다. 같은 내용이 USB의 `startup-result.txt`에 저장됩니다.
@@ -129,7 +138,9 @@ BETA는 SHADOW 기록을 그대로 하면서, **순정이 GPS 없음(mode 0)을 
 
 ## 회수 뒤 분석 (PC)
 
-`python3 analyze_logs.py mx5dr-logs-….tar`가 BETA 행을 검사합니다. 바꾼 송신마다 원본 mode 0, 정확도 0 초과 40 m 이하, 0~7·24~31바이트 원본 유지, `hasAccuracy=1`, 앞선 `ENGAGED`/`GPS_LOST` 상태, GPS 복귀 뒤 치환 없음을 확인하고 위반은 `violation`으로 보고합니다.
+`python3 analyze_logs.py mx5dr-logs-….tar`가 BETA 행을 검사합니다. 위치를 바꾼 송신(choice 3)마다 원본 mode 0, 정확도 0 초과 40 m 이하, 0~7·24~31바이트 원본 유지, `hasAccuracy=1`, 앞선 `ENGAGED`/`GPS_LOST` 상태, GPS 복귀 뒤 치환 없음을 확인합니다.
+속도만 바꾼 송신(choice 4)마다 원본 mode 1/2이고 위치 시각 utc 0(NO_FIX), 바뀐 바이트가 32와 36~39뿐, `hasSpeed=1`, 앞선 `NO_FIX`/`SPEED_ENGAGED` 상태, 속도가 송신 전 0.5초 안에 기록된 바퀴 속도 중 하나와 1 mm/s 안에서 같은지(바퀴 기록이 없으면 0~100 m/s 범위만)를 확인합니다. 다른 위치 상태에서 바꾼 송신은 모두 `violation`입니다.
+요약에는 `speed_overlay_sends`, 그중 결과가 0이 아닌 수, `NO_FIX`/`SPEED_ENGAGED` 상태별 시간이 나옵니다.
 핵심 측정은 다음 줄입니다. GPS 복귀 때 마지막으로 보낸 DR 위치와 첫 GPS 위치의 거리(시간 차를 속도·방위로 맞춘 값 포함)를 그때 보고한 정확도와 비교합니다.
 
 ```

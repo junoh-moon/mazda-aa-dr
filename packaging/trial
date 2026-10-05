@@ -132,6 +132,14 @@ startup_verdict() {
                 piece=part[k] (k<n?",":"")
                 if (out!="" && length(out)+1+length(piece)>40) { print substr(out,1,40); out=" " piece }
                 else out=(out==""?piece:out " " piece)
+                # A single piece wider than the screen (e.g. "last state
+                # SPEED_ENGAGED (speed_published)") breaks at its last space.
+                while (length(out)>40) {
+                    cut=0
+                    for (c=40;c>1;c--) if (substr(out,c,1)==" ") { cut=c; break }
+                    if (!cut) break
+                    print substr(out,1,cut-1); out=" " substr(out,cut+1)
+                }
             }
             if (out!="") print substr(out,1,40)
         }

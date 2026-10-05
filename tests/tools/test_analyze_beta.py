@@ -113,6 +113,90 @@ def drive(gps_offset_m=5.0, accuracy_e3=12000):
     ]
 
 
+def nofix_original(lat=LAT, lon=LON):
+    # The stored no-fix LOCATION as the stock sends it (shape of the
+    # 2026-10-05 rows, synthetic coordinates): utc 0, hasAccuracy 8.8 m,
+    # hasSpeed 1.111 m/s, hasBearing 335 deg.
+    buf = bytearray(48)
+    put32(buf, 8, round(lat * 1e7), True)
+    put32(buf, 12, round(lon * 1e7), True)
+    buf[16] = 1
+    put32(buf, 20, 8800)
+    buf[24] = 1
+    put32(buf, 28, 47)
+    buf[32] = 1
+    put32(buf, 36, 1111)
+    buf[40] = 1
+    put32(buf, 44, 335000000)
+    return bytes(buf)
+
+
+def overlay_payload(original, speed_e3):
+    buf = bytearray(original)
+    buf[32] = 1
+    put32(buf, 36, speed_e3)
+    return bytes(buf)
+
+
+def nofix_position(call, mono_ns, utc_s=0):
+    return dict(kind="position", call=call, generation=5, mono_ns=mono_ns, mode=1, utc_s=utc_s,
+                lat=LAT, lon=LON, heading=335.0, kmh=4.0, altitude_m=47, horizontal=4.4,
+                vertical=9.7, reason=0, **{"class": 1 if utc_s == 0 else 2})
+
+
+def nofix_send(call, mono_ns, outgoing=None, choice=0, reason=0, result=0, original=None, cls=1):
+    original = nofix_original() if original is None else original
+    outgoing = original if outgoing is None else outgoing
+    return dict(kind="send", call=call, generation=5, mono_ns=mono_ns, mode=1, type=1, length=48,
+                choice=choice, reason=reason, result=result, original_hex=original.hex(),
+                outgoing_hex=outgoing.hex(), **{"class": cls})
+
+
+def nofix_state(mono_ns, old, new, reason, speed=None, payload="none"):
+    # Field set of the runtime beta_state row (src/runtime/beta_controller.h).
+    return dict(kind="beta_state", mono_ns=mono_ns, domain="beta", assist_ready=False,
+                **{"from": old}, to=new, reason=reason, adapter_mode=4, generation=5,
+                source_epoch=1, session_epoch=1, held=False, bridge="NO_OUTPUT", accuracy_m=0,
+                valid_until_ns=0, position_class="NO_FIX", payload=payload, original_utc_s=0,
+                original_accuracy_m=8.8, speed_mps=speed, core_result="OK")
+
+
+def wheel_batch(first_seq, times_ns, raw=13600):
+    # 13600 counts = 36 km/h per wheel = 10.000 m/s (research_model_profile).
+    events = [[1, first_seq + i, t, 0, raw, raw, raw, raw, 0, 0] for i, t in enumerate(times_ns)]
+    return dict(kind="motion_batch", schema=1, epoch=7, producer_time_status="unknown", events=events)
+
+
+def nofix_drive(overlay_speed_e3=10000, wheel_after_send=True):
+    """Boot in NO_FIX (stored position, utc 0), wheel speed 10 m/s, one
+    overlaid send, then the first real fix returns BETA to ARMED."""
+    original = nofix_original()
+    wheels = wheel_batch(1, [1_900_000_000, 2_000_000_000, 2_100_000_000])
+    rows = [
+        boot(),
+        state(20, "DISABLED", "ARMED", "enabled"),
+        nofix_position(1, 1_000_000_000), nofix_send(1, 1_000_000_100, reason=8),
+        nofix_state(1_050_000_000, "ARMED", "NO_FIX", "no_fix"),
+        nofix_state(2_150_000_000, "NO_FIX", "SPEED_ENGAGED", "speed_published", 10.0, "speed_only"),
+        nofix_position(2, 2_200_000_000),
+        nofix_send(2, 2_200_000_100, overlay_payload(original, overlay_speed_e3), choice=4),
+        dict(kind="beta_anchor", mono_ns=2_200_000_000, domain="beta", seq=2, mode=1, utc_s=0,
+             gate="BAD_FIX", hdop=4.4, kmh=4, displacement_ratio=None, streak_s=None,
+             reverse_exit_seen=False, dropped=0),
+    ]
+    if wheel_after_send:
+        rows.append(wheels)  # batches are journaled after the send they fed
+    else:
+        rows.insert(4, wheels)
+    rows += [
+        nofix_position(3, 3_000_000_000, utc_s=1_790_000_000),
+        nofix_state(3_050_000_000, "SPEED_ENGAGED", "ARMED", "gps_returned", 10.0, "speed_only"),
+        nofix_send(3, 3_000_000_100, original=original_payload(), cls=2),
+        health(4_000_000_000),
+    ]
+    return rows
+
+
 class BetaAnalyzeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -279,8 +363,15 @@ class BetaAnalyzeTests(unittest.TestCase):
         rows = drive()
         rows[0]["mode"] = 3
         self.assertIn("unexpected_boot_mode", self.codes(self.audit(rows), "violation"))
+        # Choice 4 is the known NO_FIX speed overlay (adapter.h Choice); on a
+        # mode-0 (LOST) send it is a class violation, not an unknown choice.
         rows = drive()
         self.replace_send(rows, 3, choice=4)
+        codes = self.codes(self.audit(rows), "violation")
+        self.assertIn("beta_overlay_wrong_class", codes)
+        self.assertNotIn("unknown_send_choice", codes)
+        rows = drive()
+        self.replace_send(rows, 3, choice=5)
         self.assertIn("unknown_send_choice", self.codes(self.audit(rows), "violation"))
         rows = drive()
         self.replace_send(rows, 3, choice=2)
@@ -321,6 +412,113 @@ class BetaAnalyzeTests(unittest.TestCase):
         rows[-1:-1] = [state(5_100_000_000, "ARMED", "FAULT", "audit_fault"),
                        state(5_200_000_000, "FAULT", "ARMED", "enabled")]
         self.assertIn("beta_fault_not_sticky", self.codes(self.audit(rows), "violation"))
+
+    def test_normal_no_fix_speed_overlay_is_not_a_violation(self):
+        for after in (True, False):
+            report = self.audit(nofix_drive(wheel_after_send=after))
+            self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+            beta = report["beta"]
+            self.assertEqual(beta["speed_overlay_sends"], 1)
+            self.assertEqual(beta["speed_overlay_nonzero_results"], 0)
+            self.assertEqual(beta["replaced_sends"], 0)
+            self.assertEqual(beta["speed_overlay_wheel_checks"], {"checked": 1})
+            self.assertEqual(beta["speed_engaged_periods"], 1)
+            self.assertAlmostEqual(beta["state_seconds"]["SPEED_ENGAGED"], 0.9, places=6)
+            self.assertAlmostEqual(beta["state_seconds"]["NO_FIX"], 1.1, places=6)
+            self.assertAlmostEqual(beta["no_fix_seconds"]["max"], 2.0, places=6)
+            self.assertEqual(report["send_choices"]["BETA_SPEED_OVERLAY"], 1)
+            self.assertEqual(beta["anchor_gates"], {"BAD_FIX": 1})
+            # The stored NO_FIX position is not a GPS-return reference.
+            self.assertEqual(beta["gps_return_checks_total"], 0)
+
+    def test_overlay_text_report(self):
+        self.path.write_text("".join(json.dumps(row) + "\n" for row in nofix_drive()))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(module.main([str(self.path)]), 0)
+        self.assertIn("BETA speed overlay: 1 sends (non-zero results 0), SPEED_ENGAGED 1 times", out.getvalue())
+
+    def test_overlay_reasons_are_known(self):
+        self.assertEqual(module.REASONS[15], "OVERLAY_MISMATCH")
+        self.assertEqual(module.REASONS[16], "OVERLAY_NOT_NEEDED")
+        rows = nofix_drive()
+        for row in rows:
+            if row["kind"] == "send" and row["call"] == 1:
+                row["reason"] = 16
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["send_reasons"].get("OVERLAY_NOT_NEEDED"), 1)
+
+    def overlay_rows(self, **changes):
+        rows = nofix_drive()
+        for row in rows:
+            if row["kind"] == "send" and row.get("choice") == 4:
+                row.update(changes)
+        return rows
+
+    def test_overlay_on_a_fix_or_lost_send_is_a_violation(self):
+        rows = nofix_drive()
+        for row in rows:
+            if row["kind"] == "position" and row["call"] == 2:
+                row["utc_s"] = 1_790_000_000
+        self.assertIn("beta_overlay_wrong_class", self.codes(self.audit(rows), "violation"))
+        self.assertIn("beta_overlay_wrong_class", self.codes(self.audit(self.overlay_rows(mode=0)), "violation"))
+        self.assertIn("beta_overlay_wrong_class",
+                      self.codes(self.audit(self.overlay_rows(**{"class": 3})), "violation"))
+
+    def test_overlay_may_change_only_the_speed_bytes(self):
+        original = nofix_original()
+        bad = bytearray(overlay_payload(original, 10000))
+        bad[40] = 0  # hasBearing
+        rows = self.overlay_rows(outgoing_hex=bytes(bad).hex())
+        self.assertIn("beta_overlay_payload_mismatch", self.codes(self.audit(rows), "violation"))
+        bad = bytearray(overlay_payload(original, 10000))
+        bad[32] = 0
+        rows = self.overlay_rows(outgoing_hex=bytes(bad).hex())
+        self.assertIn("beta_overlay_payload_mismatch", self.codes(self.audit(rows), "violation"))
+
+    def test_overlay_speed_must_follow_the_wheels(self):
+        report = self.audit(nofix_drive(overlay_speed_e3=12000))
+        self.assertIn("beta_overlay_speed_mismatch", self.codes(report, "violation"))
+        # One unit of rounding is tolerated.
+        report = self.audit(nofix_drive(overlay_speed_e3=10001))
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+
+    def test_overlay_without_wheel_rows_checks_plausibility_only(self):
+        rows = [r for r in nofix_drive() if r["kind"] != "motion_batch"]
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["beta"]["speed_overlay_wheel_checks"], {"unverified_no_wheel_row": 1})
+        rows = [r for r in nofix_drive(overlay_speed_e3=100001) if r["kind"] != "motion_batch"]
+        self.assertIn("beta_overlay_speed_out_of_range", self.codes(self.audit(rows), "violation"))
+
+    def test_overlay_needs_a_no_fix_state_and_beta_config(self):
+        rows = [r for r in nofix_drive() if r["kind"] != "beta_state" or r["to"] == "ARMED"]
+        self.assertIn("beta_overlay_without_no_fix_state", self.codes(self.audit(rows), "violation"))
+        rows = nofix_drive()
+        rows[0] = boot(mode=4)
+        self.assertIn("beta_without_beta_config", self.codes(self.audit(rows), "violation"))
+
+    def test_dr_replacement_of_a_no_fix_send_is_a_violation(self):
+        original = nofix_original()
+        rows = self.overlay_rows(choice=3, outgoing_hex=beta_payload(original, LAT, LON).hex())
+        self.assertIn("beta_wrong_mode", self.codes(self.audit(rows), "violation"))
+        rows = drive()
+        self.replace_send(rows, 3, **{"class": 0})
+        self.assertIn("beta_wrong_mode", self.codes(self.audit(rows), "violation"))
+
+    def test_anchor_and_reverse_latch_rows_are_known(self):
+        rows = nofix_drive()
+        latch = dict(kind="beta_reverse_latch", mono_ns=2_300_000_000, domain="model", event="kept_across_gap",
+                     reason="sequence_discontinuity", missing_events=3, gap_ms=400, latched=True, value=1,
+                     keep_limit_events=16, keep_limit_ms=2000)
+        rows.insert(-1, latch)
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["beta"]["reverse_latch_events"], {"kept_across_gap:sequence_discontinuity": 1})
+        rows = nofix_drive()
+        rows.insert(-1, dict(latch, domain="beta"))
+        self.assertIn("unexpected_reverse_latch_domain", self.codes(self.audit(rows), "violation"))
 
 
 if __name__ == "__main__":

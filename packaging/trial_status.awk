@@ -41,6 +41,7 @@ function reset_retained(id) {
     beta_engaged=0; beta_replaced=0; beta_replaced_nonzero=0; beta_hold=0
     beta_withdrawals=0; beta_withdraw_reason="none"; beta_last_state=""; beta_last_reason=""
     beta_class_seen=0; beta_no_fix=0
+    beta_overlay=0; beta_overlay_nonzero=0; beta_speed_engaged=0
 }
 # Member of the boot row's flat "beta":{...} object (no nested objects).
 function beta_member(key, s, p) {
@@ -141,6 +142,7 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
             if (field("from")=="DISABLED" && beta_enable=="")
                 beta_enable=(field("to")=="ARMED" ? "armed" : "disabled:" field("reason"))
             if (field("to")=="ENGAGED") beta_engaged++
+            if (field("to")=="SPEED_ENGAGED") beta_speed_engaged++
             if (field("to")=="WITHDRAWN") {beta_withdrawals++; beta_withdraw_reason=field("reason")}
             beta_last_state=field("to"); beta_last_reason=field("reason")
             # Optional newer field; tolerated, never required.
@@ -156,6 +158,11 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
         if (kind=="send" && /"choice":3,/) {
             beta_replaced++
             if (field("result")!="0") beta_replaced_nonzero++
+        }
+        # NO_FIX wheel speed overlay (choice 4): only bytes 32, 36..39 change.
+        if (kind=="send" && /"choice":4,/) {
+            beta_overlay++
+            if (field("result")!="0") beta_overlay_nonzero++
         }
     }
     if (FILENAME ~ /\/trace\.[012]\.jsonl$/ && runtime) {
@@ -295,8 +302,9 @@ END {
         printf "beta_boot_enabled=%s beta_boot_reason=%s beta_hook=%s beta_install=%s beta_session_fence=%s beta_session_hooks=%s\n", enabled, reason, hook, beta_install, fence, beta_session_hooks
         printf "beta_enable=%s beta_last_state=%s beta_last_reason=%s\n", enable, last_state, last_reason
         printf "beta_engaged=%d beta_replaced_sends=%d beta_replaced_nonzero=%d beta_hold_set=%d beta_withdrawals=%d beta_last_withdraw_reason=%s\n", beta_engaged, beta_replaced, beta_replaced_nonzero, beta_hold, beta_withdrawals, beta_withdraw_reason
+        printf "beta_speed_engaged=%d beta_speed_overlay_sends=%d beta_speed_overlay_nonzero=%d\n", beta_speed_engaged, beta_overlay, beta_overlay_nonzero
         if (beta_class_seen) printf "BETA NO_FIX: %d state rows\n", beta_no_fix
-        printf "BETA: engaged %d times, replaced %d sends, hold %d, last state %s (%s), scope %s\n", beta_engaged, beta_replaced, beta_hold, last_state, last_reason, beta_scope
+        printf "BETA: engaged %d times, replaced %d sends, speed overlay sends %d, nonzero %d, hold %d, last state %s (%s), scope %s\n", beta_engaged, beta_replaced, beta_overlay, beta_overlay_nonzero, beta_hold, last_state, last_reason, beta_scope
     }
     if (bad) print "Collection evidence incomplete. Keep/export existing logs; missing/rotated boot markers cannot be reconstructed by this check."
     else print "Capture startup evidence only. Inspect MODEL status and reasons; this is not a completed navigation trial."
