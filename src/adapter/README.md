@@ -174,6 +174,22 @@ The worker publication API may block and must not be called on an OEM thread.
 No new sends occur. Failed replacement sends return their real status/errno
 without retrying the original payload.
 
+`Mode::BETA` is a separate, explicit opt-in (`Options.allow_beta`, false by
+default) for MODEL-domain snapshots described in
+[the beta design](../../validation/ASSIST_BETA_DESIGN_2026-10-05.md). It never
+opens the qualified ASSIST gate: ASSIST still requires `allow_assist`, and
+rejects a `Provenance::Domain::BETA` request or a snapshot with `beta` set.
+BETA replaces only an original mode-0 LOCATION whose request provenance is
+`Domain::BETA`, whose send-storage observation is OBSERVED or UNOBSERVED, whose
+snapshot matches generation/epochs, is `ready` and `beta`, lies inside its
+lease and age, and reports `accuracy_m` at most 40 m (never clamped). The
+replacement copies the original 48 bytes and overwrites only latitude/longitude,
+`hasAccuracy=1` with `ceil(accuracy_m*1000)`, speed and bearing; timestamp,
+altitude and padding stay original. A replaced send that returns non-zero sets
+a hold (`HELD`) that only an ORIGINAL LOCATION send returning 0 clears; both
+transitions call the optional `beta_event` hook. This is host/QEMU-tested logic,
+not vehicle or phone validation.
+
 ## Exact backend evidence and restrictions
 
 * BLM SHA-256: `10e7235bfce075b44c1a8ffc99bbc9b63af85d9262df868ca1874ec36d8d3b71`.

@@ -82,6 +82,11 @@ static bool configured = false; // Written before producers start, then immutabl
 static std::atomic<unsigned> run_mode(OBSERVE), prediction_generation(1), sequence(0);
 static std::atomic<int> previous_mode(-1);
 static std::atomic<unsigned> fault(0);
+// BETA send-result hold (design S4). Not a fault: only the BETA path reads it.
+static std::atomic<unsigned> beta_hold(0);
+// Upper bound for a plausible road vehicle speed in a BETA replacement.
+static const double BETA_MAX_SPEED_MPS = 100.0;
+static const double BETA_MAX_ACCURACY_M = 40.0;
 static pthread_mutex_t snapshot_mutex = PTHREAD_MUTEX_INITIALIZER;
 static DrSnapshot candidate = DrSnapshot();
 
@@ -169,7 +174,8 @@ bool association_matches(const PositionContext& c,const runtime::lds_association
 Reason choose_dr(Context& ctx, uint64_t time,
                  const runtime::session_trace::Snapshot& session, uint8_t bytes[48]) {
     if (!options.allow_assist || !options.clock || !ctx.provenance.exact_request ||
-        !ctx.provenance.verified_lds || !ctx.provenance.legacy_receiver)
+        !ctx.provenance.verified_lds || !ctx.provenance.legacy_receiver ||
+        ctx.provenance.domain == Provenance::Domain::BETA)
         return BAD_PROVENANCE;
     // Negative lifecycle guard only: an observed handle grants no provenance.
     // A candidate published inside a lifecycle call must not become selectable
@@ -183,7 +189,8 @@ Reason choose_dr(Context& ctx, uint64_t time,
     if (ctx.generation != live_generation || s.prediction_generation != live_generation ||
         s.source_epoch != ctx.provenance.source_epoch ||
         s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
-    if (!s.ready || !s.profile_verified || !s.input_quality_verified || !s.limits_ok)
+    // A BETA (MODEL-domain) snapshot never satisfies the qualified gate.
+    if (!s.ready || !s.profile_verified || !s.input_quality_verified || !s.limits_ok || s.beta)
         return NOT_READY;
     if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
         time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
@@ -193,12 +200,48 @@ Reason choose_dr(Context& ctx, uint64_t time,
         return EPOCH_MISMATCH;
     return PASS;
 }
+// Mode::BETA send-time decision (validation/ASSIST_BETA_DESIGN_2026-10-05.md
+// decision 5). The caller has already required original mode 0, a single
+// non-nested LOCATION and no fault. Anything not matching passes the original.
+Reason choose_beta(Context& ctx, uint64_t time,
+                   const runtime::session_trace::Snapshot& session,
+                   const uint8_t original[48], uint8_t bytes[48]) {
+    if (beta_hold.load(std::memory_order_acquire)) return HELD;
+    if (!options.allow_beta || !options.clock ||
+        ctx.provenance.domain != Provenance::Domain::BETA) return BAD_PROVENANCE;
+    // Session observation is diagnostic for BETA (it may be explicitly
+    // declined next to a third-party shim), but a lifecycle transition,
+    // ambiguity, fault or a closed handle still passes the original.
+    if (session.result != runtime::session_trace::OBSERVED &&
+        session.result != runtime::session_trace::UNOBSERVED) return EPOCH_MISMATCH;
+    if (pthread_mutex_trylock(&snapshot_mutex) != 0) return LOCK_BUSY;
+    const DrSnapshot s = candidate;
+    pthread_mutex_unlock(&snapshot_mutex);
+    const uint32_t live_generation = prediction_generation.load(std::memory_order_acquire);
+    if (ctx.generation != live_generation || s.prediction_generation != live_generation ||
+        s.source_epoch != ctx.provenance.source_epoch ||
+        s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
+    if (!s.ready || !s.beta) return NOT_READY;
+    if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
+        time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
+    // Never clamp or under-report: above the limit the original passes.
+    if (!(s.accuracy_m <= BETA_MAX_ACCURACY_M)) return NOT_READY;
+    if (!encode_beta_location(s, original, bytes)) return BAD_ENCODING;
+    if (prediction_generation.load(std::memory_order_acquire) != live_generation)
+        return EPOCH_MISMATCH;
+    return PASS;
+}
+void beta_signal(const char* what) {
+    if (options.beta_event) options.beta_event(options.user, what);
+}
 }
 
 bool configure(SendFunction next, const Options& opt) {
     if (configured || !next || next == &send_vehicle_data ||
         next == &mx5_send_vehicle_data) return false;
     if (opt.allow_assist && (!opt.clock || !opt.provenance || !opt.max_snapshot_age_ns))
+        return false;
+    if (opt.allow_beta && (!opt.clock || !opt.provenance || !opt.max_snapshot_age_ns))
         return false;
     const int saved_errno=errno;
     // Best effort at initialization, outside OEM hooks. If libc cannot
@@ -212,8 +255,9 @@ bool prepare_bus_hooks(const BusBindings& bindings) {
     return prepare_bus_hooks(bindings,&invalidate);
 }
 bool set_mode(Mode requested) {
-    if (requested < OFF || requested > ASSIST ||
-        (requested == ASSIST && !options.allow_assist)) return false;
+    if (requested < OFF || requested > BETA ||
+        (requested == ASSIST && !options.allow_assist) ||
+        (requested == BETA && !options.allow_beta)) return false;
     invalidate();
     run_mode.store(static_cast<unsigned>(requested), std::memory_order_release);
     return true;
@@ -239,6 +283,7 @@ uint32_t invalidate_if_generation(uint32_t owned) {
 }
 uint32_t generation() { return prediction_generation.load(std::memory_order_acquire); }
 bool faulted() { return fault.load(std::memory_order_acquire)!=0; }
+bool beta_held() { return beta_hold.load(std::memory_order_acquire)!=0; }
 bool publish_snapshot(const DrSnapshot& snapshot) {
     if (!configured || snapshot.prediction_generation != generation() ||
         fault.load(std::memory_order_acquire)) return false;
@@ -283,6 +328,33 @@ bool encode_location(const DrSnapshot& in, uint8_t out[48]) {
     put32(out + 12, uint32_t(lon_e7)); out[32] = 1;
     put32(out + 36, uint32_t(speed_e3)); out[40] = in.stopped ? 0 : 1;
     put32(out + 44, uint32_t(bearing_e6));
+    return true;
+}
+bool encode_beta_location(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]) {
+    if (!out || !original || !std::isfinite(in.latitude_deg) || in.latitude_deg < -90 ||
+        in.latitude_deg > 90 || !std::isfinite(in.longitude_deg) ||
+        in.longitude_deg < -180 || in.longitude_deg > 180 ||
+        !std::isfinite(in.accuracy_m) || !(in.accuracy_m > 0) ||
+        in.accuracy_m > BETA_MAX_ACCURACY_M || !std::isfinite(in.speed_mps) ||
+        in.speed_mps < 0 || in.speed_mps > BETA_MAX_SPEED_MPS) return false;
+    int32_t lat_e7, lon_e7, speed_e3, bearing_e6 = 0;
+    if (!scaled(in.latitude_deg, 1e7, &lat_e7) || !scaled(in.longitude_deg, 1e7, &lon_e7) ||
+        !scaled(in.stopped ? 0.0 : in.speed_mps, 1000, &speed_e3)) return false;
+    if (!in.stopped) {
+        const double b = in.travel_bearing_deg;
+        if (!std::isfinite(b) || b < 0 || b >= 360) return false;
+        if (!scaled(b, 1e6, &bearing_e6)) return false;
+        if (bearing_e6 == 360000000) bearing_e6 = 0;
+    }
+    if (lon_e7 == 1800000000) lon_e7 = -1800000000;
+    // ceil keeps the reported radius at or above the calibrated budget.
+    const double accuracy_e3 = std::ceil(in.accuracy_m * 1000.0);
+    if (!(accuracy_e3 >= 1) || accuracy_e3 > BETA_MAX_ACCURACY_M * 1000.0) return false;
+    std::memcpy(out, original, 48);
+    put32(out + 8, uint32_t(lat_e7)); put32(out + 12, uint32_t(lon_e7));
+    out[16] = 1; put32(out + 20, uint32_t(accuracy_e3));
+    out[32] = 1; put32(out + 36, uint32_t(speed_e3));
+    out[40] = in.stopped ? 0 : 1; put32(out + 44, uint32_t(bearing_e6));
     return true;
 }
 void position_enter(void* manager, const void* input) {
@@ -433,6 +505,12 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
             else if (ctx->original_mode != 0) event.reason = NOT_UNKNOWN;
             else if (fault.load(std::memory_order_acquire) || current < SCRUB_STALE)
                 event.reason = DISABLED;
+            else if (current == BETA) {
+                event.mono_ns = now();
+                event.reason = choose_beta(*ctx, event.mono_ns, event.send_session,
+                                           event.original, replacement);
+                if (event.reason == PASS) event.choice = BETA_REPLACEMENT;
+            }
             else if (current == SCRUB_STALE) {
                 std::memcpy(replacement, data->payload, 48);
                 replacement[32] = 0; replacement[40] = 0;
@@ -457,6 +535,14 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     event.result = result;
     if (!event.mono_ns) event.mono_ns = now();
     if (current != OFF && !reentrant) emit(event);
+    // BETA hold (design S4): a failed replaced send withdraws BETA until the
+    // OEM path itself is seen succeeding again with its own payload.
+    if (event.choice == BETA_REPLACEMENT && result != 0) {
+        if (!beta_hold.exchange(1, std::memory_order_acq_rel)) beta_signal("hold_set");
+    } else if (event.choice == ORIGINAL && result == 0 && !reentrant && event.has_payload &&
+               beta_hold.load(std::memory_order_acquire)) {
+        if (beta_hold.exchange(0, std::memory_order_acq_rel)) beta_signal("hold_cleared");
+    }
     completion_guard.complete=true;
     errno = result_errno;
     return result;

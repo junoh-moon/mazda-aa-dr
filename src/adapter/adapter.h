@@ -8,12 +8,15 @@
 
 namespace mx5 { namespace adapter {
 
-enum Mode { OFF = 0, OBSERVE = 1, SCRUB_STALE = 2, ASSIST = 3 };
-enum Choice { ORIGINAL = 0, SCRUBBED = 1, DR_REPLACEMENT = 2 };
+// BETA is the explicit opt-in MODEL-domain replacement. It is never the
+// qualified ASSIST gate and ASSIST stays unreachable without allow_assist.
+enum Mode { OFF = 0, OBSERVE = 1, SCRUB_STALE = 2, ASSIST = 3, BETA = 4 };
+enum Choice { ORIGINAL = 0, SCRUBBED = 1, DR_REPLACEMENT = 2, BETA_REPLACEMENT = 3 };
 enum Reason { PASS = 0, NO_CONTEXT, NESTED_CALL, EXTRA_LOCATION,
               BAD_LENGTH, DISABLED, LOCK_BUSY, NOT_UNKNOWN, NOT_READY,
               EPOCH_MISMATCH, EXPIRED, BAD_ENCODING, BAD_PROVENANCE,
-              CONTEXT_UNAVAILABLE };
+              CONTEXT_UNAVAILABLE,
+              HELD }; // BETA: a replaced send returned non-zero; awaiting an ORIGINAL 0.
 
 // Native OEM wrapper. Exactly 12 bytes only on the ARM32 target.
 struct VehicleData { uint32_t type; void* payload; uint32_t length; };
@@ -33,6 +36,11 @@ struct Provenance {
     // Must describe THIS request before the OEM callback/worker boundary.
     // A freshly polled global owner is not sufficient.
     bool exact_request, verified_lds, legacy_receiver;
+    // Which evidence domain a snapshot for this request may come from. Zero
+    // (value-initialized) is NONE. QUALIFIED/NONE may only feed ASSIST and BETA
+    // may only feed Mode::BETA. No member initializer: C++11 aggregate
+    // initialization and the trivially constructed context pool rely on it.
+    enum class Domain { NONE, QUALIFIED, BETA } domain;
 };
 
 struct DrSnapshot {
@@ -40,6 +48,8 @@ struct DrSnapshot {
     uint64_t frontier_mono_ns, valid_until_mono_ns, derived_utc_ns;
     double latitude_deg, longitude_deg, speed_mps, travel_bearing_deg;
     bool ready, profile_verified, input_quality_verified, limits_ok, stopped;
+    double accuracy_m = 0;
+    bool beta = false;
 };
 
 struct Observation {
@@ -96,6 +106,11 @@ struct Options {
     RequestReader request_reader; // Optional live raw-pointer association.
     SessionReader session_reader; // Optional actual send argument observation.
     AssociationReader association_reader; // Optional memory-only before-reply lookup.
+    bool allow_beta; // Explicit MODEL-domain BETA opt-in, false by default.
+    // Optional BETA hold transition hook ("hold_set"/"hold_cleared", static
+    // strings). Runs inside the OEM send after next() returned; it MUST be
+    // bounded, nonblocking, allocation-free and noexcept. errno is restored.
+    void (*beta_event)(void* user, const char* what);
 };
 
 // Initialization only: before installation / before OEM producers start.
@@ -108,6 +123,9 @@ uint32_t invalidate(); // Bounded atomic revocation; no waits.
 uint32_t invalidate_if_generation(uint32_t owned);
 uint32_t generation();
 bool faulted(); // Sticky observation/contract failure; never qualifies input.
+// BETA send-result hold: set when a BETA-replaced send returned non-zero,
+// cleared only after an ORIGINAL LOCATION send returned 0.
+bool beta_held();
 // Worker-side only; copies values, never borrowed OEM pointers.
 bool publish_snapshot(const DrSnapshot& snapshot);
 
@@ -118,6 +136,11 @@ void position_leave();
 int32_t send_vehicle_data(void* session_storage, VehicleData* data);
 bool decode_position(const void* oem_position, PositionInput* out);
 bool encode_location(const DrSnapshot& in, uint8_t out[48]);
+// BETA: copy the original 48 bytes, then overwrite only lat/lon (8..15),
+// accuracy (16, 20..23), speed (32, 36..39) and bearing (40, 44..47). The
+// timestamp (0..7), altitude (24..31) and padding stay original. Rejects
+// rather than clamps out-of-range values (accuracy must be in (0, 40] m).
+bool encode_beta_location(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]);
 
 enum InstallResult {
     INSTALL_OK = 0, ALREADY_INSTALLED, UNSUPPORTED_ARCH,
