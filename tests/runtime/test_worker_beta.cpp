@@ -184,7 +184,8 @@ static bool wait_rows(const std::string& logs,const char* const* needles,unsigne
 int main(int argc,char** argv) {
     assert(argc==2);const std::string scenario=argv[1];
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
-           scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class");
+           scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
+           scenario=="nofix_rearm");
     alarm(scenario=="budget"?80:scenario=="main"?80:60);
     if(scenario=="budget")kmh=59;
     char root[]="/tmp/mx5dr-worker-beta-XXXXXX";assert(mkdtemp(root));
@@ -240,8 +241,10 @@ int main(int argc,char** argv) {
     // PRELUDE ms inserted before t=0 and, for main, a second one after the
     // GPS return at t=7500 (the former 3 s / 2.5 s fix phases are too short).
     const unsigned PRELUDE=8000,PRELUDE2=10000; // >= 1 s margin over the 10 s rule
-    const bool shifted=scenario!="nofix" && scenario!="no_anchor";
-    const unsigned scenario_end=scenario=="budget"?20000:scenario=="main"?9600:6400;
+    const bool nofix=scenario=="nofix" || scenario=="nofix_rearm";
+    const bool shifted=!nofix && scenario!="no_anchor";
+    const unsigned scenario_end=scenario=="budget"?20000:scenario=="main"?9600:
+                                scenario=="nofix_rearm"?17000:6400;
     const unsigned end_ms=scenario_end+(shifted?PRELUDE:0)+(scenario=="main"?PRELUDE2:0);
     const uint64_t start=clock_ns(0);
     bool motion=true;
@@ -250,6 +253,9 @@ int main(int argc,char** argv) {
     bool failed_once=false,storage_changed=false;
     unsigned double_send_replaced=0;
     unsigned last_replaced_ms=0;
+    // nofix_rearm: overlays per phase (before the hold, held/cooldown,
+    // re-armed, storage settle, re-armed after the storage change).
+    unsigned rearm_phase[5]={0,0,0,0,0};unsigned overlay_failed=0;
     for(unsigned ms=0;ms<=end_ms;ms+=20) {
         until(start+uint64_t(ms)*1000000ULL);
         const uint64_t now=clock_ns(0);
@@ -291,6 +297,24 @@ int main(int argc,char** argv) {
         }
         // GPS mode per scenario.
         int mode=-1;
+        if(scenario=="nofix_rearm") {
+            // BETA_DECISIONS F2: NO_FIX withdrawals re-arm. A failed overlay
+            // at 2 s (hold: the next ORIGINAL 0 clears it, + 2 s), a session
+            // storage change at 7 s (phone/dongle reconnect, 5 s settle),
+            // a real fix at 16 s. The car keeps moving throughout.
+            if(ms%200==0) {
+                if(ms==2000)fail_next_replaced=-7;
+                if(ms==7000)storage=&storage_b_object;
+                const bool replaced=oem_call(ms,1,ms<16000);
+                if(replaced && calls.back().result==-7)++overlay_failed;
+                else if(replaced) {
+                    last_replaced_ms=ms;
+                    ++rearm_phase[ms<2000?0:ms<4200?1:ms<7000?2:ms<12000?3:4];
+                }
+                if(ms>=16000)assert(!replaced);
+            }
+            continue;
+        }
         if(scenario=="nofix") {
             // Stored no-fix value until 4 s, then a real fix.
             if(ms%200==0) {
@@ -405,10 +429,10 @@ int main(int argc,char** argv) {
         if(rows.lines[i].find("\"gate\":\"BAD_FIX\"")!=std::string::npos)++anchor_bad_fix;
     }
     printf("anchor rows: accepted=%u settling=%u bad_fix=%u\n",anchor_accepted,anchor_settling,anchor_bad_fix);
-    if(scenario=="nofix")assert(anchor_bad_fix>=5 && !anchor_accepted);
+    if(nofix)assert(anchor_bad_fix>=5 && !anchor_accepted);
     else if(scenario=="no_anchor")assert(!anchor_accepted);
     else assert(anchor_accepted>=1 && anchor_settling>=5);
-    if(scenario!="nofix")assert(!overlay_total);
+    if(!nofix)assert(!overlay_total);
     assert(!replaced_after_stop);
     assert(rows.storage_rows>=1 && rows.summaries>=2);
     if(scenario=="main") {
@@ -458,6 +482,45 @@ int main(int argc,char** argv) {
                rows.lines[i].find("\"position_class\":\"NO_FIX\",\"payload\":\"speed_only\",\"original_utc_s\":0,"
                                   "\"original_accuracy_m\":8.8")!=std::string::npos)position_class=true;
         assert(position_class);
+    } else if(scenario=="nofix_rearm") {
+        // A NO_FIX withdrawal is not whole-episode: overlays resume after the
+        // hold cleared + 2 s and after the 5 s storage settle; the hold and
+        // settle windows carry none. A real fix still ends the episode.
+        printf("rearm phases: %u %u %u %u %u failed=%u\n",rearm_phase[0],rearm_phase[1],rearm_phase[2],
+               rearm_phase[3],rearm_phase[4],overlay_failed);
+        assert(!replaced_total && overlay_failed==1);
+        assert(rearm_phase[0]>=3 && !rearm_phase[1] && rearm_phase[2]>=3 && !rearm_phase[3] && rearm_phase[4]>=3);
+        assert(rows.hold_set==1 && rows.hold_cleared==1 && rows.storage_rows>=2);
+        std::vector<std::string> expected;
+        expected.push_back("DISABLED>ARMED:enabled");
+        expected.push_back("ARMED>NO_FIX:no_fix");
+        expected.push_back("NO_FIX>SPEED_ENGAGED:speed_published");
+        expected.push_back("SPEED_ENGAGED>WITHDRAWN:send_result_hold");
+        expected.push_back("WITHDRAWN>ARMED:rearm_after_hold");
+        expected.push_back("ARMED>NO_FIX:no_fix");
+        expected.push_back("NO_FIX>SPEED_ENGAGED:speed_published");
+        expected.push_back("SPEED_ENGAGED>WITHDRAWN:session_storage_changed");
+        expected.push_back("WITHDRAWN>ARMED:rearm_after_storage");
+        expected.push_back("ARMED>NO_FIX:no_fix");
+        expected.push_back("NO_FIX>SPEED_ENGAGED:speed_published");
+        expected.push_back("SPEED_ENGAGED>ARMED:gps_returned");
+        expected.push_back("ARMED>DISABLED:capture_stop");
+        assert(ordered(rows,expected) && rows.transitions.size()==expected.size());
+        // The re-arm rows are journaled with their time: hold clear + 2 s and
+        // storage change + 5 s at the earliest.
+        uint64_t cleared_ns=0,rearm_hold_ns=0,storage_ns=0,rearm_storage_ns=0;
+        for(size_t i=0;i<rows.lines.size();++i) {
+            const std::string& l=rows.lines[i];
+            const size_t at=l.find("\"mono_ns\":");if(at==std::string::npos)continue;
+            const uint64_t t=strtoull(l.c_str()+at+10,0,10);
+            if(l.find("\"event\":\"hold_cleared\"")!=std::string::npos)cleared_ns=t;
+            if(l.find("\"kind\":\"beta_state\"")==std::string::npos)continue; // not the 1 Hz summaries
+            if(l.find("\"reason\":\"rearm_after_hold\"")!=std::string::npos)rearm_hold_ns=t;
+            if(l.find("\"reason\":\"session_storage_changed\"")!=std::string::npos)storage_ns=t;
+            if(l.find("\"reason\":\"rearm_after_storage\"")!=std::string::npos)rearm_storage_ns=t;
+        }
+        assert(cleared_ns && rearm_hold_ns>=cleared_ns+2000000000ULL);
+        assert(storage_ns && rearm_storage_ns>=storage_ns+5000000000ULL);
     } else if(scenario=="withdrawn_class") {
         // BETA_DECISIONS F2: WITHDRAWN ends only with FIX or NATIVE_DR. The
         // UNDECODED callback (its ORIGINAL 0 also clears the adapter hold)

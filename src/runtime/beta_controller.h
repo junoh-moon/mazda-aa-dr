@@ -96,6 +96,13 @@ inline const char* beta_state_name(BetaState s) {
 }
 // Sensor silence (design fault-injection list): no motion receipt for this long.
 static const uint64_t BETA_SENSOR_SILENCE_NS=300000000ULL;
+// NO_FIX withdrawals are not whole-episode (BETA_DECISIONS F2): a send-result
+// hold re-arms this long after the adapter cleared it (an ORIGINAL LOCATION
+// send returned 0); a session storage change (phone/dongle reconnect) re-arms
+// after this settle time without a further change. LOST withdrawals keep the
+// whole episode (design 3.8).
+static const uint64_t BETA_NO_FIX_HOLD_REARM_NS=2000000000ULL;
+static const uint64_t BETA_NO_FIX_STORAGE_SETTLE_NS=5000000000ULL;
 
 // Worker-owned. J must provide line(const char*), fail() and a bool failed.
 class BetaController {
@@ -114,7 +121,8 @@ public:
           last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
           last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
-          seen_latch_clears_(0),last_core_(MX5_DR_OK) {}
+          seen_latch_clears_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
+          rearm_needs_hold_clear_(false),rearm_not_before_(0),rearm_reason_("none") {}
     BetaState state() const { return state_; }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
@@ -149,8 +157,8 @@ public:
         // or NO_FIX callback does not, so a transient class cannot re-arm an
         // exhausted budget or a failed session.
         if(state_==BETA_WITHDRAWN) {
-            if(cls==adapter::POSITION_FIX)transition(j,now,BETA_ARMED,"gps_returned");
-            else if(cls==adapter::POSITION_NATIVE_DR)transition(j,now,BETA_ARMED,"native_dr");
+            if(cls==adapter::POSITION_FIX) { rearm_pending_=false;transition(j,now,BETA_ARMED,"gps_returned"); }
+            else if(cls==adapter::POSITION_NATIVE_DR) { rearm_pending_=false;transition(j,now,BETA_ARMED,"native_dr"); }
             return;
         }
         if(cls==adapter::POSITION_LOST) {
@@ -211,6 +219,7 @@ public:
         if(!live())return;
         if((state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) && adapter::beta_held())
             withdraw_episode(j,now,"send_result_hold");
+        rearm(j,now);
         if(state_==BETA_GPS_LOST || state_==BETA_ENGAGED)
             publish(j,now,nav,input_ready,last_motion_ns,source);
         else if(state_==BETA_NO_FIX || state_==BETA_SPEED_ENGAGED)
@@ -239,6 +248,24 @@ private:
     double last_speed_;            // last published overlay speed (m/s), -1 none
     uint64_t seen_anchor_seq_,anchor_rows_dropped_,seen_latch_clears_;
     mx5_dr_result last_core_;      // BETA core failure behind the last publish attempt
+    // NO_FIX withdrawal re-arm: pending, waiting for the adapter hold clear,
+    // earliest worker time, and the reason journaled with the re-arm.
+    bool rearm_pending_,rearm_needs_hold_clear_;
+    uint64_t rearm_not_before_;
+    const char* rearm_reason_;
+
+    // A withdrawn NO_FIX episode returns to ARMED (the next POSITION picks
+    // its class again) once no hold is set or pending and the settle time
+    // has passed. The hold clear must have been observed as a count (an
+    // ORIGINAL LOCATION send returned 0); set and clear strictly alternate.
+    template<class J> void rearm(J& j,uint64_t now) {
+        if(state_!=BETA_WITHDRAWN || !rearm_pending_ || rearm_needs_hold_clear_ ||
+           adapter::beta_held() || seen_hold_cleared_!=seen_hold_set_ || now<rearm_not_before_)return;
+        rearm_pending_=false;
+        transition(j,now,BETA_ARMED,rearm_reason_);
+    }
+    static uint64_t later(uint64_t a,uint64_t b) { return a>b?a:b; }
+    static uint64_t after(uint64_t now,uint64_t d) { return now>UINT64_MAX-d?UINT64_MAX:now+d; }
 
     // Task E: every drop of a valid MODEL reverse latch, with its (latest)
     // reason and the per-reason totals since start.
@@ -291,8 +318,22 @@ private:
     }
 
     // Engaged -> WITHDRAWN until a FIX or NATIVE_DR position (see position()).
+    // A NO_FIX (speed overlay) withdrawal for a send-result hold or a session
+    // storage change also re-arms after its cooldown (rearm()); every other
+    // withdrawal, and every LOST withdrawal, keeps the whole episode.
     template<class J> void withdraw_episode(J& j,uint64_t now,const char* reason) {
-        withdraw();transition(j,now,BETA_WITHDRAWN,reason);
+        const bool speed=state_==BETA_SPEED_ENGAGED;
+        withdraw();
+        rearm_pending_=false;
+        if(speed && !strcmp(reason,"send_result_hold")) {
+            rearm_pending_=true;rearm_needs_hold_clear_=true;rearm_not_before_=0;
+            rearm_reason_="rearm_after_hold";
+        } else if(speed && !strcmp(reason,"session_storage_changed")) {
+            rearm_pending_=true;rearm_needs_hold_clear_=false;
+            rearm_not_before_=after(now,BETA_NO_FIX_STORAGE_SETTLE_NS);
+            rearm_reason_="rearm_after_storage";
+        }
+        transition(j,now,BETA_WITHDRAWN,reason);
     }
     void stop_adapter() {
         shared_.active.store(0,std::memory_order_release);
@@ -315,8 +356,20 @@ private:
         if(set!=seen_hold_set_) {
             seen_hold_set_=set;event(j,now,"hold_set",set);
             if(state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) withdraw_episode(j,now,"send_result_hold");
+            // A late failed overlay (decided before the withdrawal) also
+            // needs its own clear before a pending NO_FIX re-arm.
+            else if(state_==BETA_WITHDRAWN && rearm_pending_) {
+                rearm_needs_hold_clear_=true;rearm_reason_="rearm_after_hold";
+            }
         }
-        if(cleared!=seen_hold_cleared_) { seen_hold_cleared_=cleared;event(j,now,"hold_cleared",cleared); }
+        if(cleared!=seen_hold_cleared_) {
+            seen_hold_cleared_=cleared;event(j,now,"hold_cleared",cleared);
+            if(state_==BETA_WITHDRAWN && rearm_pending_ && rearm_needs_hold_clear_ &&
+               seen_hold_cleared_==seen_hold_set_) {
+                rearm_needs_hold_clear_=false;
+                rearm_not_before_=later(rearm_not_before_,after(now,BETA_NO_FIX_HOLD_REARM_NS));
+            }
+        }
         const uint32_t storage=shared_.storage_epoch.load(std::memory_order_acquire);
         if(storage!=seen_storage_epoch_) {
             const uint32_t previous=seen_storage_epoch_;seen_storage_epoch_=storage;
@@ -331,6 +384,9 @@ private:
             // the stored values and keep this outage withdrawn (decision 8).
             if(state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED)
                 withdraw_episode(j,now,"session_storage_changed");
+            // Another reconnect while a NO_FIX re-arm waits restarts the settle.
+            else if(state_==BETA_WITHDRAWN && rearm_pending_)
+                rearm_not_before_=later(rearm_not_before_,after(now,BETA_NO_FIX_STORAGE_SETTLE_NS));
         }
     }
     template<class J> void event(J& j,uint64_t now,const char* what,uint32_t count) {
@@ -396,7 +452,8 @@ private:
     // NO_FIX (BETA_DECISIONS 2): a speed-only candidate from the last wheel
     // SPEED event. No anchor, no core, no accuracy claim. A transient input
     // gap returns SPEED_ENGAGED to NO_FIX (the next fresh speed re-engages);
-    // hold and storage changes withdraw the whole NO_FIX episode instead.
+    // hold and storage changes withdraw (WITHDRAWN), then re-arm after their
+    // cooldown (rearm(): hold clear + 2 s, storage settle 5 s).
     template<class J> void publish_speed(J& j,uint64_t now,const navigation::Pipeline& nav,
                                          bool input_ready,uint64_t last_motion_ns,uint32_t source) {
         const char* gap=0;
