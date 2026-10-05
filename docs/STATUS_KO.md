@@ -1092,3 +1092,10 @@ NNG의 순정 DR이 실제로 충분하면 자체 ASSIST보다 기존 경로 확
 과거 검토에는 Astra 하위 에이전트가 참여했다. 당시에는 Claude 실행 경로가
 없었다. 이후 USB 수정에서는 실제 Claude Code 실행과 독립 Codex 리뷰를
 수행했다. 각 후속 검증 기록의 실행 범위를 따르며 차량 시험을 의미하지 않는다.
+
+## BETA(v1.0 사전 릴리즈) 상태 — 2026-10-05
+
+소유자와 합의한 문제 정의([PROBLEM_DEFINITION_KO.md](PROBLEM_DEFINITION_KO.md))에 따라 BETA 모드를 구현했다(SHADOW 기록 유지 + 부팅 후 fix 없음 구간의 속도 덮어쓰기 + fix 뒤 GPS 끊김 구간의 오차 예산 40 m 이하 DR 치환).
+**오프라인 검증만 마쳤다**: 호스트 전체, 고정 도구체인 exact-ARM 전체, 실제 BLM+`libpatch`(0.9.1, 0.10.0) 설치 probe, 순정 BusyBox 메뉴 에뮬레이션, 실차 두 주행 재생, DHU 시험 5. 실차 실행은 한 번도 없다.
+근거와 한계: [결정](../validation/BETA_DECISIONS_2026-10-05.md), [shadow.5 주행 분석](../validation/TRIP_SHADOW5_2026-10-05.md), [재생](../validation/REPLAY_BETA_2026-10-05.md), [DHU 5](../validation/DHU_NAVER_EXP5_2026-10-05/README.md), [절차](FIELD_PROCEDURE_BETA_KO.md).
+지하주차장 방위(G2)는 달성되지 않으며 달성 가능한 것은 부팅 후 fix 없는 구간의 속도 표시와 속도를 유지한 채 터널에 들어갈 때의 10~15초 DR이다. 자격(qualified) ASSIST와 v1.0 완료 선언은 여전히 하지 않는다.
