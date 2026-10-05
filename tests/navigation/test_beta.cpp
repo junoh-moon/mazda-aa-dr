@@ -617,7 +617,39 @@ static void motion_gap_rule() {
         RawEvent late=raw(YAW,2500,30,7);                             // the gap grew: clear on accept
         CHECK(g.accept(late,&missing,&span)==G::TOO_LARGE); }
 }
+static void creeping_turn_is_not_a_frame_fault() {
+    // Decision F: after the outage the car stops (all wheels zero, quiet yaw)
+    // and then creeps at 1 km/h while turning at 0.2 rad/s. The BETA core
+    // leaves its stopped state on the first wheel movement and keeps going;
+    // the MODEL core (default config, SHADOW unchanged) fails E_FRAME.
+    Pipeline p; init(p);
+    Plan plan=straight(ANCHOR_MS+6000);
+    plan.wheel=[](unsigned ms){return ms<LOST_MS+400?36.0:ms<LOST_MS+2900?0.0:1.0;};
+    plan.yaw=[](unsigned ms){return ms<LOST_MS+3000?STRAIGHT:yaw_raw(0.2);};
+    unsigned published_after_creep=0;
+    plan.each=[&](Pipeline& q,unsigned ms) {
+        adapter::DrSnapshot out;
+        if(ms>=LOST_MS+3300&&publish(q,ms,&out)==runtime::CORE_BRIDGE_OK) ++published_after_creep;
+    };
+    run(p,plan);
+    CHECK(published_after_creep>20);
+    CHECK(p.beta_core_failure()==MX5_DR_OK);
+    CHECK(p.status().core_result==MX5_DR_E_FRAME && !p.diagnostic(T(plan.end_ms)).snapshot.model_valid);
+    // All four wheels zero while the yaw turns: the strict freeze still applies.
+    Pipeline q; init(q);
+    Plan still=straight(ANCHOR_MS+6000);
+    still.wheel=[](unsigned ms){return ms<LOST_MS+400?36.0:0.0;};
+    still.yaw=[](unsigned ms){return ms<LOST_MS+3000?STRAIGHT:yaw_raw(0.2);};
+    run(q,still);
+    CHECK(q.beta_core_failure()==MX5_DR_E_FRAME);
+    adapter::DrSnapshot out;
+    CHECK(publish(q,still.end_ms,&out)!=runtime::CORE_BRIDGE_OK);
+    const mx5_dr_config c=runtime::beta_core_config(runtime::beta_profile());
+    const mx5_dr_config d=mx5_dr_default_config();
+    CHECK(c.stop_enter_mps==0.0 && c.stop_exit_mps==0.0005 && d.stop_enter_mps==0.2 && d.stop_exit_mps==0.5);
+}
 int main() {
+    creeping_turn_is_not_a_frame_fault();
     motion_gap_rule();
     speed_publication_without_anchor();
     latch_seeds_from_change_only_stream();

@@ -30,7 +30,7 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     reverse_latch_(false), latch_valid_(false), latch_value_(0), latch_time_(0),
     latch_received_(0), latch_epoch_(0), latch_seq_(0),
     beta_enabled_(false), beta_have_prev_(false), beta_gate_(BETA_GATE_DISABLED),
-    beta_core_result_(MX5_DR_E_CONFIG), beta_mode_(-1), beta_position_seq_(0),
+    beta_core_result_(MX5_DR_E_CONFIG), beta_core_failure_(MX5_DR_OK), beta_mode_(-1), beta_position_seq_(0),
     beta_conflict_since_(0), beta_rotation_rad_(0), beta_rotation_budget_m_(0),
     beta_streak_(false), beta_streak_mono_(0), beta_streak_utc_(0),
     reverse_exit_seen_(false), beta_reverse_suspect_(false), reverse_any_seen_(false),
@@ -858,7 +858,7 @@ bool Pipeline::enable_beta(const runtime::BetaProfile& p) {
     return beta_core_.configured!=0;
 }
 void Pipeline::reset_beta(mx5_dr_context x) {
-    beta_have_prev_=false; beta_prev_=adapter::Observation(); beta_mode_=-1;
+    beta_have_prev_=false; beta_prev_=adapter::Observation(); beta_mode_=-1; beta_core_failure_=MX5_DR_OK;
     beta_position_seq_=0; beta_conflict_since_=0; beta_rotation_rad_=0; beta_rotation_budget_m_=0;
     beta_streak_=false; beta_streak_mono_=beta_streak_utc_=0;
     beta_reverse_suspect_=false; beta_reverse_fast_since_=0;
@@ -898,6 +898,7 @@ void Pipeline::beta_step(const mx5_dr_interval& base,double rate) {
     if (beta_core_.have_interval)
         b.received_ns=max64(b.received_ns,beta_core_.last_interval.received_ns);
     beta_core_result_=mx5_dr_step(&beta_core_,&b);
+    if (beta_core_result_!=MX5_DR_OK) beta_core_failure_=beta_core_result_;
     if (beta_core_result_==MX5_DR_OK) {
         const double dt=double(b.end_ns-b.start_ns)/1e9;
         beta_rotation_rad_+=std::fabs(rate)*dt;
@@ -1058,6 +1059,7 @@ void Pipeline::beta_position(const adapter::Observation& o) {
     a.quality=MX5_DR_MODEL;
     beta_core_result_=mx5_dr_seed(&beta_core_,&a);
     if (beta_core_result_==MX5_DR_OK) {
+        beta_core_failure_=MX5_DR_OK;
         beta_rotation_rad_=0; beta_rotation_budget_m_=0; beta_conflict_since_=0;
         beta_reverse_suspect_=false; beta_reverse_fast_since_=0;
     }

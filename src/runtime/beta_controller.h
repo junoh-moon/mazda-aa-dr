@@ -114,7 +114,7 @@ public:
           last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
           last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
-          seen_latch_clears_(0) {}
+          seen_latch_clears_(0),last_core_(MX5_DR_OK) {}
     BetaState state() const { return state_; }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
@@ -230,6 +230,7 @@ private:
     double last_original_accuracy_; // original LOCATION accuracy (m), -1 when absent
     double last_speed_;            // last published overlay speed (m/s), -1 none
     uint64_t seen_anchor_seq_,anchor_rows_dropped_,seen_latch_clears_;
+    mx5_dr_result last_core_;      // BETA core failure behind the last publish attempt
 
     // Task E: every drop of a valid MODEL reverse latch, with its (latest)
     // reason and the per-reason totals since start.
@@ -353,7 +354,9 @@ private:
                 withdrawn=nav.status().result==navigation::PIPELINE_MISSING_SENSOR?"sensor_silence":
                     nav.beta_reverse_suspect()?"reverse_latch_suspect":
                     budget(last_bridge_,in,nav)?"budget_limit":
-                    last_bridge_==CORE_BRIDGE_TIME?"lease_expired":"model_not_ready";
+                    last_bridge_==CORE_BRIDGE_TIME?"lease_expired":
+                    nav.beta_core_failure()!=MX5_DR_OK?"core_rejected":"model_not_ready";
+            last_core_=nav.beta_core_failure();
         }
         if(withdrawn) {
             last_skip_=withdrawn;
@@ -443,14 +446,15 @@ private:
             "\"generation\":%u,\"source_epoch\":%u,\"session_epoch\":%u,\"held\":%s,"
             "\"bridge\":\"%s\",\"accuracy_m\":%s,\"valid_until_ns\":%llu,"
             "\"position_class\":\"%s\",\"payload\":\"%s\",\"original_utc_s\":%llu,"
-            "\"original_accuracy_m\":%s,\"speed_mps\":%s}",
+            "\"original_accuracy_m\":%s,\"speed_mps\":%s,\"core_result\":\"%s\"}",
             (unsigned long long)now,beta_state_name(from),beta_state_name(to),reason,
             unsigned(adapter::mode()),adapter::generation(),
             shared_.source_epoch.load(std::memory_order_acquire),
             shared_.storage_epoch.load(std::memory_order_acquire),
             adapter::beta_held()?"true":"false",core_bridge_result_name(last_bridge_),accuracy,
             (unsigned long long)last_valid_until_,adapter::position_class_name(position_class_),
-            payload_,(unsigned long long)last_original_utc_,original_accuracy,speed);
+            payload_,(unsigned long long)last_original_utc_,original_accuracy,speed,
+            mx5_dr_result_name(last_core_));
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
     // At most 1 Hz (forced rows bypass the limit once, e.g. at stop).

@@ -203,6 +203,9 @@ public:
     bool beta_enabled() const { return beta_enabled_; }
     BetaAnchorGate beta_gate() const { return beta_gate_; }
     mx5_dr_result beta_core_result() const { return beta_core_result_; }
+    // The last BETA core step/seed failure since the last accepted anchor
+    // (MX5_DR_OK when none): the real reason behind an unseeded BETA core.
+    mx5_dr_result beta_core_failure() const { return beta_core_failure_; }
     double beta_rotation_rad() const { return beta_rotation_rad_; }
     double beta_rotation_budget_m() const { return beta_rotation_budget_m_; }
     // 3.4: the latched reverse contradicted the wheels (> 15 km/h for > 2 s)
@@ -287,7 +290,7 @@ private:
     runtime::BetaProfile beta_;
     mx5_dr_core beta_core_;
     BetaAnchorGate beta_gate_;
-    mx5_dr_result beta_core_result_;
+    mx5_dr_result beta_core_result_, beta_core_failure_;
     int beta_mode_;
     uint64_t beta_position_seq_, beta_conflict_since_;
     double beta_rotation_rad_, beta_rotation_budget_m_;

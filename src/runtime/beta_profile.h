@@ -80,6 +80,13 @@ inline mx5_dr_config beta_core_config(const BetaProfile& p) {
     c.speed_error_mps=p.speed_error_mps; c.yaw_error_rad_s=p.yaw_error_rad_s;
     c.error_max_m=p.error_max_m; c.duration_max_s=p.duration_max_s;
     c.distance_max_m=p.distance_max_m;
+    // Coordinator decision F (2026-10-05): the strict stationary freeze (a
+    // stopped estimate fails E_FRAME on |yaw| > stop_yaw_max) applies only
+    // while all four wheels read zero. Any wheel movement (one count of one
+    // wheel is 0.0007 m/s mean) leaves the stopped state first, so a slow
+    // creep while turning in a garage is integrated instead of being a frame
+    // fault (2026-10-04, t=1360 s). The MODEL/SHADOW cores keep the defaults.
+    c.stop_enter_mps=0.0; c.stop_exit_mps=0.0005;
     return c;
 }
 
