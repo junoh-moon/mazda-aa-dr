@@ -164,7 +164,7 @@ def main():
             'PIPELINE_CONSTRUCT': '_ZN3mx510navigation8PipelineC1Ev',
             'PIPELINE_DESTRUCT': '_ZN3mx510navigation8PipelineD1Ev',
             'PIPELINE_INIT': '_ZN3mx510navigation8Pipeline14init_qualifiedERK13mx5_dr_config14mx5_dr_context',
-            'PIPELINE_MODEL_INIT': '_ZN3mx510navigation8Pipeline10init_modelERKNS0_12ModelProfileERK13mx5_dr_config14mx5_dr_contextbb',
+            'PIPELINE_MODEL_INIT': '_ZN3mx510navigation8Pipeline10init_modelERKNS0_12ModelProfileERK13mx5_dr_config14mx5_dr_contextbbb',
             'PIPELINE_BIND': '_ZN3mx510navigation8Pipeline22bind_qualified_revokerEPFyPvES2_',
             'PIPELINE_ANCHOR': '_ZN3mx510navigation8Pipeline14enqueue_anchorERK13mx5_dr_anchoryy',
             'PIPELINE_POSITION': '_ZN3mx510navigation8Pipeline16enqueue_positionERKNS_7adapter11ObservationE',

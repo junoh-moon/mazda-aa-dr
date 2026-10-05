@@ -27,8 +27,8 @@ public:
     bool init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
         return assist_function<bool(*)(N::Pipeline*,const mx5_dr_config&,mx5_dr_context)>(TEST_PIPELINE_INIT)(self(),c,x);
     }
-    bool init_model(const N::ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias=false,bool gps_wheel=false) {
-        return assist_function<bool(*)(N::Pipeline*,const N::ModelProfile&,const mx5_dr_config&,mx5_dr_context,bool,bool)>(TEST_PIPELINE_MODEL_INIT)(self(),p,c,x,auto_bias,gps_wheel);
+    bool init_model(const N::ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias=false,bool gps_wheel=false,bool reverse_latch=false) {
+        return assist_function<bool(*)(N::Pipeline*,const N::ModelProfile&,const mx5_dr_config&,mx5_dr_context,bool,bool,bool)>(TEST_PIPELINE_MODEL_INIT)(self(),p,c,x,auto_bias,gps_wheel,reverse_latch);
     }
     bool bind_qualified_revoker(N::Pipeline::QualifiedRevoker revoke,void* user) {
         return assist_function<bool(*)(N::Pipeline*,N::Pipeline::QualifiedRevoker,void*)>(TEST_PIPELINE_BIND)(self(),revoke,user);
