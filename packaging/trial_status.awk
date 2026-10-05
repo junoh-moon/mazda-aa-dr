@@ -40,6 +40,7 @@ function reset_retained(id) {
     beta_session_hooks=""; beta_install=""; beta_enable=""; beta_hold_seen=0
     beta_engaged=0; beta_replaced=0; beta_replaced_nonzero=0; beta_hold=0
     beta_withdrawals=0; beta_withdraw_reason="none"; beta_last_state=""; beta_last_reason=""
+    beta_class_seen=0; beta_no_fix=0
 }
 # Member of the boot row's flat "beta":{...} object (no nested objects).
 function beta_member(key, s, p) {
@@ -142,6 +143,11 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
             if (field("to")=="ENGAGED") beta_engaged++
             if (field("to")=="WITHDRAWN") {beta_withdrawals++; beta_withdraw_reason=field("reason")}
             beta_last_state=field("to"); beta_last_reason=field("reason")
+            # Optional newer field; tolerated, never required.
+            if (field("position_class") ~ /^[A-Z_]+$/) {
+                beta_class_seen=1
+                if (field("position_class")=="NO_FIX") beta_no_fix++
+            }
         }
         if (kind=="beta_hold" && field("domain")=="beta" && field("event")=="hold_set" &&
             unsigned_field("count") && field("count")+0>beta_hold_seen) {
@@ -289,6 +295,7 @@ END {
         printf "beta_boot_enabled=%s beta_boot_reason=%s beta_hook=%s beta_install=%s beta_session_fence=%s beta_session_hooks=%s\n", enabled, reason, hook, beta_install, fence, beta_session_hooks
         printf "beta_enable=%s beta_last_state=%s beta_last_reason=%s\n", enable, last_state, last_reason
         printf "beta_engaged=%d beta_replaced_sends=%d beta_replaced_nonzero=%d beta_hold_set=%d beta_withdrawals=%d beta_last_withdraw_reason=%s\n", beta_engaged, beta_replaced, beta_replaced_nonzero, beta_hold, beta_withdrawals, beta_withdraw_reason
+        if (beta_class_seen) printf "BETA NO_FIX: %d state rows\n", beta_no_fix
         printf "BETA: engaged %d times, replaced %d sends, hold %d, last state %s (%s), scope %s\n", beta_engaged, beta_replaced, beta_hold, last_state, last_reason, beta_scope
     }
     if (bad) print "Collection evidence incomplete. Keep/export existing logs; missing/rotated boot markers cannot be reconstructed by this check."

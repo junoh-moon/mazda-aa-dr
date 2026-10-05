@@ -627,6 +627,7 @@ class Auditor:
         self.beta_last_summary = None
         self.beta_returns = []
         self.beta_returns_total = 0
+        self.beta_position_classes = Counter()
 
     def issue(self, code, source, detail, violation=False):
         severity = "violation" if violation else "inconclusive"
@@ -1984,6 +1985,9 @@ class Auditor:
             if old == "FAULT":
                 self.issue("beta_fault_not_sticky", source, "FAULT must not be left in one boot", True)
             self.beta_states[new] += 1
+            # Optional newer field (LOST/NO_FIX/FIX); tolerated, never required.
+            if isinstance(row.get("position_class"), str):
+                self.beta_position_classes[row["position_class"]] += 1
             self.beta_transition_reasons[new + ":" + reason] += 1
             self.beta_last_state = dict(state=new, reason=reason, source=source)
             if new == "WITHDRAWN":
@@ -2260,6 +2264,7 @@ class Auditor:
                               replaced_accuracy_m=dict(self.beta_accuracy_m),
                               hold_events=dict(self.beta_hold_events),
                               session_storage_changes=self.beta_storage_changes,
+                              position_classes=dict(self.beta_position_classes),
                               last_state=self.beta_last_state, last_summary=self.beta_last_summary,
                               gps_return_checks=self.beta_returns,
                               gps_return_checks_total=self.beta_returns_total,
@@ -2338,6 +2343,9 @@ def main(argv=None):
                    if beta["last_state"] else "none"))
             print("BETA exits from ENGAGED: %s; withdrawals: %s; reported accuracy (m): %s" %
                   (beta["engaged_exit_reasons"], beta["withdraw_reasons"], beta["replaced_accuracy_m"]))
+            if beta["position_classes"]:
+                print("BETA NO_FIX: %d state rows; position classes: %s" %
+                      (beta["position_classes"].get("NO_FIX", 0), beta["position_classes"]))
             for check in beta["gps_return_checks"][:20]:
                 print("BETA GPS return: last DR vs first GPS fix %.1f m (time-aligned %.1f m, gap %.1f s), "
                       "reported accuracy %.1f m -> %s" %

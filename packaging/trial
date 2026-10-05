@@ -124,6 +124,7 @@ startup_verdict() {
             else if (v=="declined" || v=="observed") show("ok","FENCE",v)
             else show("NO","FENCE",v==""?"missing":v)
         }
+        for (i=1;i<=NR;i++) if (index(line[i],"BETA NO_FIX: ")==1) print substr(line[i],1,40)
         # The owner-facing BETA count line, folded to the small screen.
         for (i=1;i<=NR;i++) if (index(line[i],"BETA: ")==1) {
             n=split(line[i],part,", "); out=""

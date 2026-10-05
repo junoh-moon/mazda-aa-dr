@@ -300,6 +300,22 @@ class BetaAnalyzeTests(unittest.TestCase):
                                              and r.get("choice", 0) != 3]
             self.assertIn("model_session_malformed", self.codes(self.audit(rows)))
 
+    def test_optional_position_class_and_payload_fields_are_tolerated(self):
+        rows = drive()
+        for row in rows:
+            if row["kind"] == "beta_state":
+                row["position_class"] = "NO_FIX" if row["to"] == "GPS_LOST" else "FIX"
+                row["payload"] = "future_field"
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["beta"]["position_classes"], {"FIX": 3, "NO_FIX": 1})
+        self.path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            module.main([str(self.path)])
+        self.assertIn("BETA NO_FIX: 1 state rows", out.getvalue())
+        self.assertEqual(self.audit(drive())["beta"]["position_classes"], {})
+
     def test_fault_is_sticky(self):
         rows = drive()
         rows[-1:-1] = [state(5_100_000_000, "ARMED", "FAULT", "audit_fault"),

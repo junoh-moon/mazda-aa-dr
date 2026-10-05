@@ -876,6 +876,23 @@ exec "$MX5DR_REAL_OD" "$@"
         self.assertIn('beta_enable=disabled:hook_not_installed', r.stdout)
         self.assertIn('BETA: engaged 0 times, replaced 0 sends, hold 0, last state DISABLED', r.stdout)
 
+    def test_beta_mode5_boot_counts_as_shadow_capture_and_computation(self):
+        r = self.run_status(self.beta_trace())
+        self.assertIn('runtime_current_boot=observed mode=5', r.stdout)
+        for line in ('capture_active=observed', 'computation_active=observed',
+                     'model_diagnostic_recent=observed', 'wheels_received_recently=observed',
+                     'collector_poll_recent=observed'):
+            self.assertIn(line, r.stdout)
+        self.assertNotIn('BETA NO_FIX', r.stdout)  # absent field: no line
+
+    def test_optional_position_class_prints_the_no_fix_line(self):
+        trace = self.beta_trace()
+        for row in trace:
+            if row['kind'] == 'beta_state':
+                row['position_class'] = 'NO_FIX' if row['to'] == 'GPS_LOST' else 'FIX'
+        r = self.run_status(trace)
+        self.assertIn('BETA NO_FIX: 2 state rows', r.stdout)
+
     def test_shadow_boot_has_no_beta_count_line(self):
         r = self.run_status()
         self.assertIn('beta_requested=false', r.stdout)

@@ -209,6 +209,12 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('wait HLTH  no health yet', lines)
         self.assertEqual(lines[-1], 'WAIT 60 s, then run 2 again')
 
+    def test_beta_verdict_prints_the_optional_no_fix_line(self):
+        lines = self.verdict(self.BETA_GO + 'BETA NO_FIX: 3 state rows\n', 'BETA').splitlines()
+        self.assertIn('BETA NO_FIX: 3 state rows', lines)
+        self.assertEqual(lines[-1], 'GO')
+        self.assertNotIn('BETA NO_FIX', self.verdict(self.BETA_GO, 'BETA'))
+
     def test_beta_verdict_failures_and_mode_mismatch(self):
         for old, new, expect in (
                 ('beta_enable=armed', 'beta_enable=disabled:hook_not_installed', 'NO   BETA  disabled:hook_not_instal'),
