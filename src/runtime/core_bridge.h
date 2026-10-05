@@ -2,6 +2,7 @@
 #define MX5_AA_DR_CORE_BRIDGE_H
 #include "core/dr_core.h"
 #include "adapter/adapter.h"
+#include "runtime/beta_profile.h"
 
 namespace mx5 { namespace runtime {
 
@@ -46,6 +47,26 @@ const char* core_bridge_result_name(CoreBridgeResult);
 // Diagnostic serialization only: never returns a ready DrSnapshot. Model
 // values cannot pass map_core_snapshot, even with externally forged q flags.
 bool encode_model_location_preview(const mx5_dr_snapshot&, uint8_t out[48]);
+
+// BETA domain input produced by navigation::Pipeline::model_publication. It is
+// a MODEL calculation from the BETA core, never a qualified snapshot.
+struct BetaModelInput {
+    mx5_dr_snapshot snapshot;     // BETA core, queried at query_mono_ns
+    mx5_dr_result result;         // mx5_dr_get_model_snapshot result (or gate)
+    uint64_t now_mono_ns;         // caller's current time
+    uint64_t query_mono_ns;       // earliest admissible query time >= frontier
+    uint64_t lease_cap_mono_ns;   // queued GPS/anchor revocation - 1, else max
+    double heading_budget_rad;    // rule 5 heading budget at query time
+};
+// BETA mapping (design decision 4, accuracy rule 2 and 5). accuracy_m =
+// error budget + (speed + sv) * lease, valid_until = frontier + lease (capped).
+// accuracy_m > accuracy_max_m, heading budget > heading_budget_max_rad, an
+// expired lease or any non-ACTIVE/non-MODEL input returns non-OK with *out
+// zeroed (ready=false). Never clamps or lowers the accuracy. beta=true marks
+// the result; profile/input verification claims stay false.
+CoreBridgeResult map_model_publication(const BetaModelInput& input,
+                                      const BetaProfile& profile,
+                                      adapter::DrSnapshot* out);
 
 } }
 #endif

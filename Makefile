@@ -10,7 +10,7 @@ CORE = src/core/dr_core.c
 REQUEST = src/adapter/request_hooks.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp
 ADAPTER = src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $(REQUEST)
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
-NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h
+NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h src/runtime/beta_profile.h src/runtime/core_bridge.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
 SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
@@ -176,12 +176,13 @@ test-loader:
 test-recovery:
 	$(PYTHON) tests/recovery/test_guard.py
 
-test-navigation: $(BUILD)/test_navigation $(BUILD)/test_channel $(BUILD)/test_live_pipeline $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout
+test-navigation: $(BUILD)/test_navigation $(BUILD)/test_channel $(BUILD)/test_live_pipeline $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_beta
 	$(BUILD)/test_navigation
 	$(BUILD)/test_live_pipeline
 	$(BUILD)/test_gyro_bias
 	$(BUILD)/test_gps_wheel
 	$(BUILD)/test_holdout
+	$(BUILD)/test_beta
 	@$(BUILD)/test_channel; result=$$?; test $$result -eq 0 -o $$result -eq 77
 $(BUILD)/test_navigation: tests/navigation/test_navigation.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
@@ -276,10 +277,12 @@ $(BUILD)/test_gyro_bias: tests/navigation/test_gyro_bias.cpp $(NAVIGATION) src/r
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 $(BUILD)/test_holdout: tests/navigation/test_holdout.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
+$(BUILD)/test_beta: tests/navigation/test_beta.cpp $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 $(BUILD)/test_shadow_log: tests/runtime/test_shadow_log.cpp src/runtime/shadow_log.h $(NAVIGATION) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 
-$(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: $(NAV_HEADERS)
+$(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_beta $(BUILD)/test_shadow_log: $(NAV_HEADERS)
 $(BUILD)/test_journal $(BUILD)/arm/src/runtime/runtime.o: src/runtime/shadow_log.h
 $(BUILD)/test_holdout $(BUILD)/test_worker_session: src/runtime/shadow_log.h
 $(BUILD)/test_journal $(BUILD)/test_collector_journal: tests/runtime/storage_fixture.h
@@ -374,7 +377,7 @@ HOST_ADAPTER_TESTS = \
     test_session_request test_bus_endpoint test_bus_hooks \
     test_bus_early_init test_assist_publication test_pipeline \
     test_navigation test_live_pipeline test_gyro_bias \
-    test_holdout test_shadow_log test_gps_wheel \
+    test_holdout test_beta test_shadow_log test_gps_wheel \
     test_assist_worker test_runtime_assist test_worker_lds \
     test_worker_lds_source test_association_context test_context_pool_association \
     test_context_pool_atfork_failure test_runtime_lds_association

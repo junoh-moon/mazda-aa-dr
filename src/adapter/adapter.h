@@ -40,6 +40,8 @@ struct DrSnapshot {
     uint64_t frontier_mono_ns, valid_until_mono_ns, derived_utc_ns;
     double latitude_deg, longitude_deg, speed_mps, travel_bearing_deg;
     bool ready, profile_verified, input_quality_verified, limits_ok, stopped;
+    double accuracy_m = 0;
+    bool beta = false;
 };
 
 struct Observation {

@@ -21,7 +21,7 @@ CoreBridgeResult map_core_snapshot(const mx5_dr_snapshot& s,
                                   const CoreBridgeQualification& q,
                                   adapter::DrSnapshot* out) {
     if (!out) return CORE_BRIDGE_NO_OUTPUT;
-    std::memset(out,0,sizeof(*out));
+    *out=adapter::DrSnapshot();
     if (s.domain!=MX5_DR_QUALIFIED_DOMAIN || s.model_valid || s.valid!=1 || s.state!=MX5_DR_ACTIVE || s.reason!=MX5_DR_OK ||
         !q.profile_verified || !q.input_quality_verified)
         return CORE_BRIDGE_UNQUALIFIED;
@@ -84,7 +84,7 @@ CoreBridgeResult map_core_snapshot(const mx5_dr_snapshot& s,
 CoreBridgeResult prepare_core_publication(const mx5_dr_core& core,
         const CoreBridgeQualification& q,uint64_t requested_until,adapter::DrSnapshot* out) {
     if (!out) return CORE_BRIDGE_NO_OUTPUT;
-    std::memset(out,0,sizeof(*out));
+    *out=adapter::DrSnapshot();
     mx5_dr_snapshot current=mx5_dr_snapshot();
     if (mx5_dr_get_snapshot(&core,q.now_mono_ns,q.expected_context,&current)!=MX5_DR_OK)
         return CORE_BRIDGE_UNQUALIFIED;
@@ -116,6 +116,71 @@ CoreBridgeResult prepare_core_publication(const mx5_dr_core& core,
     // Retain the prediction and its measurement/UTC stamps. Only its numeric
     // publication lease is extended; final-send provenance is still mandatory.
     mapped.valid_until_mono_ns=begin;
+    *out=mapped;
+    return CORE_BRIDGE_OK;
+}
+CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfile& p,
+                                      adapter::DrSnapshot* out) {
+    if (!out) return CORE_BRIDGE_NO_OUTPUT;
+    *out=adapter::DrSnapshot();
+    const mx5_dr_snapshot& s=in.snapshot;
+    if (in.result!=MX5_DR_OK || s.domain!=MX5_DR_MODEL_DOMAIN || !s.model_valid || s.valid ||
+        s.state!=MX5_DR_ACTIVE || s.reason!=MX5_DR_OK)
+        return CORE_BRIDGE_UNQUALIFIED;
+    if (!s.context.source_epoch || !s.context.session_epoch || !s.context.generation)
+        return CORE_BRIDGE_CONTEXT;
+    if (!representable(s.context.source_epoch) || !representable(s.context.session_epoch) ||
+        !representable(s.context.generation)) return CORE_BRIDGE_OVERFLOW;
+    if (!s.anchor_id || !s.solution_seq || !s.processed_position_seq)
+        return CORE_BRIDGE_UNQUALIFIED;
+    if (!p.lease_ns || p.lease_ns>1000000000ULL || !(p.accuracy_max_m>0.0) ||
+        !std::isfinite(p.accuracy_max_m) || !nonnegative(p.speed_error_mps) ||
+        !nonnegative(p.yaw_error_rad_s) || !(p.heading_budget_max_rad>0.0) ||
+        !std::isfinite(p.heading_budget_max_rad) || !bounded(p.duration_max_s,60.0) ||
+        p.duration_max_s==0.0 || !bounded(p.distance_max_m,1500.0) || p.distance_max_m==0.0)
+        return CORE_BRIDGE_LIMIT;
+    if (!s.frontier_ns || !s.derived_utc_ns || in.query_mono_ns<s.frontier_ns ||
+        in.now_mono_ns<s.frontier_ns) return CORE_BRIDGE_TIME;
+    // Decision 4: the lease starts at the frontier; queued revocations cap it.
+    const uint64_t valid_until=minimum(saturating_add(s.frontier_ns,p.lease_ns),in.lease_cap_mono_ns);
+    if (valid_until<in.query_mono_ns || valid_until<in.now_mono_ns) return CORE_BRIDGE_TIME;
+    const double lease_s=double(valid_until-s.frontier_ns)/1e9;
+    if (!bounded(s.elapsed_s,p.duration_max_s) || s.elapsed_s+lease_s>p.duration_max_s ||
+        !bounded(s.distance_m,p.distance_max_m) || !nonnegative(s.error_budget_m) ||
+        !nonnegative(s.heading_budget_rad))
+        return CORE_BRIDGE_LIMIT;
+    if (!std::isfinite(s.latitude_deg) || std::fabs(s.latitude_deg)>=85.0 ||
+        !std::isfinite(s.longitude_deg) || s.longitude_deg < -180.0 || s.longitude_deg>=180.0 ||
+        !bounded(s.speed_mps,100.0) || !bounded(s.body_heading_rad,2.0*PI) || s.body_heading_rad==2.0*PI)
+        return CORE_BRIDGE_NUMERIC;
+    // The reported radius is the budget at lease end; no clamp, no rounding down.
+    const double accuracy=s.error_budget_m+(s.speed_mps+p.speed_error_mps)*lease_s;
+    if (!std::isfinite(accuracy)) return CORE_BRIDGE_NUMERIC;
+    if (accuracy>p.accuracy_max_m) return CORE_BRIDGE_LIMIT;
+    // Rule 5: a withdrawn bearing withdraws the whole first-beta snapshot.
+    const double heading=in.heading_budget_rad+p.yaw_error_rad_s*lease_s;
+    if (!std::isfinite(heading) || heading<0.0) return CORE_BRIDGE_NUMERIC;
+    if (heading>p.heading_budget_max_rad) return CORE_BRIDGE_BEARING;
+    if ((s.stopped!=0 && s.stopped!=1) || (s.has_bearing!=0 && s.has_bearing!=1))
+        return CORE_BRIDGE_BEARING;
+    if (s.stopped) {
+        if (s.speed_mps!=0.0 || s.has_bearing) return CORE_BRIDGE_BEARING;
+    } else if (!s.has_bearing || s.speed_mps==0.0 || !bounded(s.travel_bearing_rad,2.0*PI) ||
+               s.travel_bearing_rad==2.0*PI) return CORE_BRIDGE_BEARING;
+    adapter::DrSnapshot mapped=adapter::DrSnapshot();
+    mapped.source_epoch=static_cast<uint32_t>(s.context.source_epoch);
+    mapped.session_epoch=static_cast<uint32_t>(s.context.session_epoch);
+    mapped.prediction_generation=static_cast<uint32_t>(s.context.generation);
+    mapped.frontier_mono_ns=s.frontier_ns; mapped.valid_until_mono_ns=valid_until;
+    mapped.derived_utc_ns=s.derived_utc_ns;
+    mapped.latitude_deg=s.latitude_deg; mapped.longitude_deg=s.longitude_deg;
+    mapped.speed_mps=s.speed_mps; mapped.travel_bearing_deg=s.stopped ? 0.0 : s.travel_bearing_rad*180.0/PI;
+    mapped.ready=true; mapped.limits_ok=true; mapped.stopped=s.stopped!=0;
+    // BETA is not a qualification: these external claims stay false.
+    mapped.profile_verified=false; mapped.input_quality_verified=false;
+    mapped.accuracy_m=accuracy; mapped.beta=true;
+    uint8_t bytes[48];
+    if (!adapter::encode_location(mapped,bytes)) return CORE_BRIDGE_NUMERIC;
     *out=mapped;
     return CORE_BRIDGE_OK;
 }

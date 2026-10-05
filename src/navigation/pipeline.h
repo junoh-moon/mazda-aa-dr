@@ -54,6 +54,13 @@ struct Diagnostic {
     Status status;
     mx5_dr_result result;
 };
+// Why the last GPS fix did (not) become a BETA anchor (accuracy rule 3).
+enum BetaAnchorGate {
+    BETA_GATE_DISABLED=0, BETA_GATE_WAITING, BETA_GATE_ACCEPTED, BETA_GATE_BAD_FIX,
+    BETA_GATE_SPEED, BETA_GATE_PREVIOUS, BETA_GATE_COURSE, BETA_GATE_YAW,
+    BETA_GATE_WHEEL, BETA_GATE_REVERSE, BETA_GATE_CORE
+};
+const char* beta_anchor_gate_name(BetaAnchorGate);
 struct FaultCalibration {
     bool valid;
     GyroBiasStatus gyro;
@@ -78,8 +85,19 @@ public:
     Pipeline& operator=(const Pipeline&) = delete;
     // Opt-in MODEL bias/scale learning changes math only at a new GPS seed.
     // gps_wheel also enables fresh-wheel and GPS travel-course anchor gates.
+    // reverse_latch (design decision 7, MODEL only): a change-only REVERSE
+    // message stays valid (lease UINT64_MAX, REVERSE_LATCH_MODEL) until a
+    // source epoch change, a rejected REVERSE message, or a reset that drops
+    // a queued REVERSE message. Wheel speed 0 does not release it. Before the
+    // first REVERSE message the state is unknown and nothing seeds.
     bool init_model(const ModelProfile&, const mx5_dr_config&, mx5_dr_context,
-                    bool auto_bias=false, bool gps_wheel=false);
+                    bool auto_bias=false, bool gps_wheel=false, bool reverse_latch=false);
+    // Adds the separate BETA core after init_model(..., reverse_latch=true).
+    // It sees the same sensor intervals as the MODEL core but uses the BETA
+    // configuration, the fixed profile yaw zero, unscaled wheel speed and only
+    // GPS fixes that pass the BETA anchor gate. It never changes the MODEL
+    // core, diagnostic() or any qualified state. Cleared by init_*().
+    bool enable_beta(const runtime::BetaProfile&);
     bool init_qualified(const mx5_dr_config&, mx5_dr_context);
     // Required before qualified_snapshot()/qualified_publication(). Unbound
     // qualified instances cannot publish; the bound object owns revocation
@@ -139,6 +157,15 @@ public:
     runtime::CoreBridgeResult qualified_publication(uint64_t now_ns,
         const runtime::CoreBridgeQualification&, uint64_t requested_until_ns,
         adapter::DrSnapshot*) const;
+    // BETA core result for the BETA bridge: queried at its frontier (or the
+    // earliest admissible later time), suppressed by any due GPS/anchor event,
+    // and lease-capped before any queued one. Never extrapolates coordinates.
+    runtime::BetaModelInput model_publication(uint64_t now_ns) const;
+    bool beta_enabled() const { return beta_enabled_; }
+    BetaAnchorGate beta_gate() const { return beta_gate_; }
+    mx5_dr_result beta_core_result() const { return beta_core_result_; }
+    double beta_rotation_rad() const { return beta_rotation_rad_; }
+    bool reverse_latched() const { return reverse_latch_&&latch_valid_; }
     const Status& status() const { return status_; }
     const GyroBiasStatus& calibration() const { return gyro_bias_.status(); }
     const WheelScaleStatus& wheel_calibration() const { return gps_wheel_.status(); }
@@ -190,6 +217,33 @@ private:
     void* qualified_revoker_user_;
     const Pipeline* qualified_owner_;
     adapter::Observation previous_fix_;
+    // Reverse latch (MODEL only).
+    bool reverse_latch_, latch_valid_;
+    int latch_value_;
+    uint64_t latch_time_, latch_received_, latch_epoch_, latch_seq_;
+    // BETA core and its anchor gate state.
+    struct YawRecord { uint64_t begin,end; double rate; };
+    bool beta_enabled_, beta_have_prev_;
+    runtime::BetaProfile beta_;
+    mx5_dr_core beta_core_;
+    BetaAnchorGate beta_gate_;
+    mx5_dr_result beta_core_result_;
+    int beta_mode_;
+    uint64_t beta_position_seq_, beta_conflict_since_;
+    double beta_rotation_rad_;
+    adapter::Observation beta_prev_;
+    YawRecord beta_yaw_[HISTORY_CAPACITY];
+    size_t beta_yaw_size_, beta_yaw_next_;
+    PipelineResult enqueue_raw_event(const RawEvent&);
+    void clear_latch();
+    bool reverse_known() const;
+    const SensorRecord* reverse_at(uint64_t,SensorRecord*) const;
+    bool latch_evidence(uint64_t start,mx5_dr_evidence*);
+    void reset_beta(mx5_dr_context);
+    mx5_dr_result beta_control(mx5_dr_control_kind);
+    void beta_position(const adapter::Observation&);
+    BetaAnchorGate evaluate_beta_gate(const adapter::Observation&) const;
+    void beta_step(const mx5_dr_interval&,double rate);
     PipelineResult insert(const Event&);
     PipelineResult fault(PipelineResult);
     PipelineResult reject_core(PipelineResult);

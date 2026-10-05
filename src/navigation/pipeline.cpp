@@ -26,8 +26,15 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     qualified_anchor_paired_(false), position_mode_(-1),
     configured_(false), model_(false), have_fix_(false),
     qualified_retired_(false), retired_from_generation_(0),
-    qualified_revoker_(0), qualified_revoker_user_(0), qualified_owner_(0) {
+    qualified_revoker_(0), qualified_revoker_user_(0), qualified_owner_(0),
+    reverse_latch_(false), latch_valid_(false), latch_value_(0), latch_time_(0),
+    latch_received_(0), latch_epoch_(0), latch_seq_(0),
+    beta_enabled_(false), beta_have_prev_(false), beta_gate_(BETA_GATE_DISABLED),
+    beta_core_result_(MX5_DR_E_CONFIG), beta_mode_(-1), beta_position_seq_(0),
+    beta_conflict_since_(0), beta_rotation_rad_(0), beta_yaw_size_(0), beta_yaw_next_(0) {
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
+    std::memset(&beta_core_,0,sizeof beta_core_);
+    beta_=runtime::beta_profile(); beta_prev_=adapter::Observation();
     fault_calibration_=FaultCalibration();
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
@@ -40,7 +47,8 @@ Pipeline::~Pipeline() {
     if(configured_&&!model_&&owns_qualified_revoker()&&!qualified_retired_)
         qualified_revoker_(qualified_revoker_user_);
 }
-bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias,bool gps_wheel) {
+bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_context x,bool auto_bias,bool gps_wheel,
+                          bool reverse_latch) {
     const bool valid_profile=finite(p.yaw_zero)&&finite(p.yaw_rad_per_count)&&p.yaw_rad_per_count!=0 &&
         finite(p.wheel_kmh_per_count)&&p.wheel_kmh_per_count>0 &&
         finite(p.wheel_zero_kmh)&&p.reorder_ns<=c.sample_age_max_ns &&
@@ -66,6 +74,7 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
     }
     if(!valid_profile)return false;
     model_=true; profile_=p; qualified_retired_=false;retired_from_generation_=0;
+    reverse_latch_=reverse_latch; clear_latch(); beta_enabled_=false; beta_gate_=BETA_GATE_DISABLED;
     qualified_stale_position_cutoff_ns_=0;
     qualified_stale_position_call_sequence_=0;
     qualified_revoker_=0; qualified_revoker_user_=0;
@@ -96,6 +105,7 @@ bool Pipeline::init_qualified(const mx5_dr_config& c,mx5_dr_context x) {
     }
     model_=false; qualified_retired_=false;retired_from_generation_=0;
     qualified_revoker_=0; qualified_revoker_user_=0;qualified_owner_=0;
+    reverse_latch_=false; clear_latch(); beta_enabled_=false; beta_gate_=BETA_GATE_DISABLED;
     // MODEL assumptions cannot remain attached to a new qualified domain.
     status_.uncertainties=0;
     gyro_bias_.configure(false,profile_.yaw_zero,c.sample_age_max_ns);
@@ -171,7 +181,15 @@ void Pipeline::reset_state(mx5_dr_context x) {
             qualified_stale_position_call_sequence_=0;
         }
     }
+    // A reset discards queued events. The latch survives only if no REVERSE
+    // message is among them and the source epoch is unchanged.
+    if(reverse_latch_) {
+        bool drop=x.source_epoch!=context().source_epoch;
+        for(size_t j=0;j<size_;++j)if(queue_[j].kind==REVERSE_EVENT)drop=true;
+        if(drop)clear_latch();
+    }
     mx5_dr_reset(&core_,x); gyro_bias_.reset(); gps_wheel_.reset(); size_=0; watermark_=0; raw_epoch_=0;
+    reset_beta(x);
     fault_calibration_.valid=false;
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
@@ -255,6 +273,14 @@ PipelineResult Pipeline::insert(const Event& e) {
     status_.result=PIPELINE_OK; return PIPELINE_OK;
 }
 PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
+    // Any source epoch change ends the latch; so does a REVERSE message the
+    // pipeline could not accept (its change would otherwise be lost).
+    if(reverse_latch_&&latch_valid_&&r.epoch!=latch_epoch_)clear_latch();
+    const PipelineResult result=enqueue_raw_event(r);
+    if(reverse_latch_&&r.kind==REVERSE&&result!=PIPELINE_OK)clear_latch();
+    return result;
+}
+PipelineResult Pipeline::enqueue_raw_event(const RawEvent& r) {
     if (!configured_||!model_||r.kind<WHEELS||r.kind>REVERSE||!r.epoch||
         !r.receive_seq||!r.received_ns) return fault(PIPELINE_BAD_INPUT);
     if (raw_epoch_ && raw_epoch_!=r.epoch) return fault(PIPELINE_SOURCE_RESET);
@@ -319,6 +345,8 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
         else if (r.reverse==profile_.reverse_reverse_value) e.value=1;
         else return fault(PIPELINE_BAD_INPUT);
         status_.uncertainties|=REVERSE_ENUM_MODEL|REVERSE_LATCH_MODEL;
+        // Change-only producer: the state holds until the next message.
+        if(reverse_latch_)e.evidence.lease_until_ns=UINT64_MAX;
     } else {
         // VIP adds 12-bit samples into a wrapping u16 sum and a u8 count.
         // If adding one modulus still fits that many samples, this payload
@@ -506,14 +534,15 @@ bool Pipeline::can_keep_stationary_heading(const adapter::Observation& o) const 
     if(!model_||!valid_gps_position(o)||o.position.velocity_kmh>=1.8 ||
        !core_.seeded||!core_.have_interval||core_.estimate.state!=MX5_DR_READY ||
        core_.estimate.frontier_ns!=o.mono_ns ||
-       !status_.have_speed||!status_.have_yaw||!status_.have_reverse ||
+       !status_.have_speed||!status_.have_yaw||!reverse_known() ||
        std::fabs(core_.last_interval.yaw_rad_s)>core_.config.stop_yaw_max_rad_s)
         return false;
     // The worker can already have consumed newer transport samples received
     // after GPS. Use retained causal evidence, including a causal braking
     // endpoint at GPS time; never refresh its original measurement or lease.
+    SensorRecord latched;
     const SensorRecord* speed=causal(wheel_history_,o.mono_ns);
-    const SensorRecord* reverse=causal(reverse_history_,o.mono_ns);
+    const SensorRecord* reverse=reverse_at(o.mono_ns,&latched);
     if(!speed||!reverse||speed->wheel_max>0.05)return false;
     const uint64_t anchor_utc=core_.anchor.utc_ns/1000000000ULL;
     if(o.position.utc_seconds<anchor_utc ||
@@ -589,8 +618,9 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     // no sample time/lease is rewritten or copied into the next history.
     GpsAnchorSupport support=GpsAnchorSupport();
     if(model_&&good_fix(o)) {
+        SensorRecord latched;
         const SensorRecord* wheel=causal(wheel_history_,o.mono_ns);
-        const SensorRecord* reverse=causal(reverse_history_,o.mono_ns);
+        const SensorRecord* reverse=reverse_at(o.mono_ns,&latched);
         if(wheel) {
             support.wheel_time_ns=wheel->time;support.wheel_received_ns=wheel->received;
             support.wheel_lease_ns=wheel->lease;support.wheel_speed_mps=wheel->value;
@@ -629,7 +659,7 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     // GPS travel bearing can be converted to body heading only with reverse
     // evidence already received by this fix and still within its original
     // bounded lease. A later reverse callback cannot repair a prior anchor.
-    if (!status_.have_reverse || !support.reverse_time_ns) {
+    if (!reverse_known() || !support.reverse_time_ns) {
         gps_wheel_.unavailable(GPS_GATE_REVERSE);
         have_fix_=false; control(MX5_DR_DISABLE); return PIPELINE_NO_ANCHOR;
     }
@@ -684,47 +714,227 @@ PipelineResult Pipeline::apply_position(const adapter::Observation& o) {
     return status_.core_result==MX5_DR_OK?PIPELINE_OK:PIPELINE_CORE_REJECTED;
 }
 PipelineResult Pipeline::advance(uint64_t end) {
-    if (!core_.seeded) { wheel_conflict_since_=0; return PIPELINE_OK; }
-    if(end<=core_.estimate.frontier_ns)return PIPELINE_OK;
-    uint64_t begin=core_.estimate.frontier_ns;
-    if (!status_.have_speed||!status_.have_yaw||!status_.have_reverse||
-        yaw_.time>begin || yaw_.window_end<end) return PIPELINE_WAITING;
+    // The BETA core never changes the MODEL result: when only BETA is seeded,
+    // every obstacle disables BETA and returns the MODEL's original OK.
+    const bool beta_only=!core_.seeded&&beta_enabled_&&beta_core_.seeded;
+    if (!core_.seeded) wheel_conflict_since_=0;
+    if (!core_.seeded&&!beta_only) return PIPELINE_OK;
+    if (core_.seeded&&beta_enabled_&&beta_core_.seeded&&
+        beta_core_.estimate.frontier_ns!=core_.estimate.frontier_ns) beta_control(MX5_DR_DISABLE);
+    const uint64_t frontier=core_.seeded?core_.estimate.frontier_ns:beta_core_.estimate.frontier_ns;
+    if(end<=frontier)return PIPELINE_OK;
+    uint64_t begin=frontier;
+    if (!status_.have_speed||!status_.have_yaw||!reverse_known()||
+        yaw_.time>begin || yaw_.window_end<end) {
+        if (beta_only) { beta_control(MX5_DR_DISABLE); return PIPELINE_OK; }
+        return PIPELINE_WAITING;
+    }
     const double yaw_rate=model_?(double(yaw_.raw)-gyro_bias_.status().active_zero)*
         profile_.yaw_rad_per_count:yaw_.value;
+    // BETA rule 4: the fixed profile zero, never the stationary auto-bias.
+    const double beta_rate=(double(yaw_.raw)-beta_.yaw_zero)*profile_.yaw_rad_per_count;
     // Do not apply the straight GPS-training wheel-spread gate to cornering.
     // This narrower MODEL contradiction needs exactly one stopped wheel, three
     // agreeing moving wheels, and the yaw window for this integration interval.
     // Require fresh conflicting wheel events across a full allowed sensor-age
     // interval, so a brief staggered update while braking does not revoke DR.
-    if(model_&&speed_.wheel_zero_conflict&&std::fabs(yaw_rate)<=0.03) {
-        if(!wheel_conflict_since_)wheel_conflict_since_=begin;
-        if(speed_.time>wheel_conflict_since_&&
-           speed_.time-wheel_conflict_since_>core_.config.sample_age_max_ns)
-            return fault(PIPELINE_BAD_INPUT);
-    } else wheel_conflict_since_=0;
+    if (beta_only) {
+        if(speed_.wheel_zero_conflict&&std::fabs(beta_rate)<=0.03) {
+            if(!beta_conflict_since_)beta_conflict_since_=begin;
+            if(speed_.time>beta_conflict_since_&&
+               speed_.time-beta_conflict_since_>beta_core_.config.sample_age_max_ns) {
+                beta_control(MX5_DR_DISABLE); return PIPELINE_OK;
+            }
+        } else beta_conflict_since_=0;
+    } else {
+        beta_conflict_since_=0;
+        if(model_&&speed_.wheel_zero_conflict&&std::fabs(yaw_rate)<=0.03) {
+            if(!wheel_conflict_since_)wheel_conflict_since_=begin;
+            if(speed_.time>wheel_conflict_since_&&
+               speed_.time-wheel_conflict_since_>core_.config.sample_age_max_ns)
+                return fault(PIPELINE_BAD_INPUT);
+        } else wheel_conflict_since_=0;
+    }
     while (begin<end) {
         if (interval_seq_==UINT64_MAX) {
+            if (beta_only) { beta_control(MX5_DR_DISABLE); return PIPELINE_OK; }
             status_.core_result=MX5_DR_E_SEQUENCE;
             return reject_core(PIPELINE_CORE_REJECTED);
         }
         mx5_dr_interval i=mx5_dr_interval(); i.context=context(); i.interval_seq=++interval_seq_;
-        i.start_ns=begin; i.end_ns=min64(end,add(begin,core_.config.interval_max_ns));
-        i.received_ns=max64(i.end_ns,max64(speed_.received,max64(yaw_.received,reverse_.received)));
+        const uint64_t step_max=core_.seeded?core_.config.interval_max_ns:beta_core_.config.interval_max_ns;
+        i.start_ns=begin; i.end_ns=min64(end,add(begin,step_max));
+        mx5_dr_evidence reverse=reverse_.evidence;
+        if (reverse_latch_&&!latch_evidence(i.start_ns,&reverse)) {
+            if (beta_only) { beta_control(MX5_DR_DISABLE); return PIPELINE_OK; }
+            return PIPELINE_WAITING;
+        }
+        i.received_ns=max64(i.end_ns,max64(speed_.received,max64(yaw_.received,
+            reverse_latch_?reverse.received_ns:reverse_.received)));
         if (core_.have_interval) i.received_ns=max64(i.received_ns,core_.last_interval.received_ns);
-        i.speed=speed_.evidence; i.yaw=yaw_.evidence; i.reverse=reverse_.evidence;
-        // Reverse is held only within the original event's bounded lease.
-        // Successful wheel/yaw traffic never refreshes reverse evidence.
+        i.speed=speed_.evidence; i.yaw=yaw_.evidence; i.reverse=reverse;
+        // Without the latch, reverse is held only within the original event's
+        // bounded lease. Successful wheel/yaw traffic never refreshes reverse
+        // evidence. The MODEL latch restates its unchanged state per interval.
         // Convert at consumption: a fresh anchor may switch zero while this
         // window (or a future queued window) was received with the old zero.
         i.speed_mps=speed_.value*(model_?gps_wheel_.status().active_scale:1.0);
         i.yaw_rad_s=yaw_rate;
-        i.reverse_active=int(reverse_.value); i.raw_yaw=yaw_.raw; i.yaw_count=yaw_.count;
+        i.reverse_active=reverse_latch_?latch_value_:int(reverse_.value);
+        i.raw_yaw=yaw_.raw; i.yaw_count=yaw_.count;
         i.yaw_is_mean=1; i.yaw_window_start_ns=yaw_.time; i.yaw_window_end_ns=yaw_.window_end;
-        status_.core_result=mx5_dr_step(&core_,&i);
-        if (status_.core_result!=MX5_DR_OK) return reject_core(PIPELINE_CORE_REJECTED);
-        ++status_.intervals; begin=i.end_ns;
+        beta_step(i,beta_rate);
+        if (core_.seeded) {
+            status_.core_result=mx5_dr_step(&core_,&i);
+            if (status_.core_result!=MX5_DR_OK) return reject_core(PIPELINE_CORE_REJECTED);
+            ++status_.intervals;
+        } else if (!(beta_enabled_&&beta_core_.seeded)) return PIPELINE_OK;
+        begin=i.end_ns;
     }
     return PIPELINE_OK;
+}
+void Pipeline::clear_latch() {
+    latch_valid_=false; latch_value_=0;
+    latch_time_=latch_received_=latch_epoch_=0;
+}
+bool Pipeline::reverse_known() const {
+    return reverse_latch_?latch_valid_:status_.have_reverse;
+}
+const Pipeline::SensorRecord* Pipeline::reverse_at(uint64_t time,SensorRecord* latched) const {
+    if (!reverse_latch_) return causal(reverse_history_,time);
+    if (!latch_valid_||latch_time_>time||latch_received_>time) return 0;
+    latched->time=latch_time_; latched->received=latch_received_;
+    latched->lease=UINT64_MAX; latched->value=latch_value_;
+    latched->spread=0; latched->wheel_max=0;
+    return latched;
+}
+bool Pipeline::latch_evidence(uint64_t start,mx5_dr_evidence* out) {
+    // MODEL claim (REVERSE_LATCH_MODEL): the change-only producer's last state
+    // still holds at this interval start. A fresh local sequence per interval
+    // keeps the core's ordering, age and lease checks unchanged.
+    if (!latch_valid_||latch_time_>start||latch_seq_==UINT64_MAX) return false;
+    const uint64_t received=max64(start,latch_received_);
+    if (received-start>core_.config.sample_age_max_ns) return false;
+    mx5_dr_evidence e=mx5_dr_evidence();
+    e.source_id=uint64_t(REVERSE); e.source_epoch=latch_epoch_; e.producer_seq=++latch_seq_;
+    e.measured_ns=start; e.received_ns=received; e.lease_until_ns=UINT64_MAX;
+    e.quality=MX5_DR_MODEL; e.freshness=MX5_DR_MODEL_TIME;
+    *out=e; return true;
+}
+bool Pipeline::enable_beta(const runtime::BetaProfile& p) {
+    if (!configured_||!model_||!reverse_latch_) return false;
+    const double values[]={p.anchor_error_m,p.heading_error_rad,p.yaw_error_rad_s,p.speed_error_mps,
+        p.anchor_speed_min_kmh,p.anchor_speed_max_kmh,p.previous_speed_min_kmh,p.course_step_max_deg,
+        p.yaw_quiet_max_rad_s,p.wheel_gps_speed_max_diff_kmh,p.yaw_zero,p.rotation_budget_per_rad,
+        p.heading_budget_max_rad,p.accuracy_max_m};
+    for (size_t j=0;j<sizeof values/sizeof values[0];++j)
+        if (!finite(values[j])||values[j]<0) return false;
+    if (p.anchor_speed_min_kmh<1.8||p.anchor_speed_max_kmh<p.anchor_speed_min_kmh||
+        !p.yaw_quiet_window_ns||!p.fix_pair_max_ns||!p.lease_ns) return false;
+    const mx5_dr_config c=runtime::beta_core_config(p);
+    mx5_dr_core probe;
+    if (mx5_dr_init_model(&probe,&c,context())!=MX5_DR_OK) return false;
+    beta_=p; beta_enabled_=true; reset_beta(context());
+    return beta_core_.configured!=0;
+}
+void Pipeline::reset_beta(mx5_dr_context x) {
+    beta_have_prev_=false; beta_prev_=adapter::Observation(); beta_mode_=-1;
+    beta_position_seq_=0; beta_conflict_since_=0; beta_rotation_rad_=0;
+    beta_yaw_size_=beta_yaw_next_=0;
+    if (!beta_enabled_) return;
+    const mx5_dr_config c=runtime::beta_core_config(beta_);
+    beta_core_result_=mx5_dr_init_model(&beta_core_,&c,x);
+    beta_gate_=beta_core_result_==MX5_DR_OK?BETA_GATE_WAITING:BETA_GATE_CORE;
+}
+mx5_dr_result Pipeline::beta_control(mx5_dr_control_kind kind) {
+    if (!beta_enabled_||!beta_core_.configured) return MX5_DR_E_CONFIG;
+    mx5_dr_context x=beta_core_.estimate.context;
+    if (x.generation==UINT64_MAX||beta_position_seq_==UINT64_MAX) {
+        // Exhausted local identity: keep the core configured but unseeded.
+        beta_core_.seeded=0; beta_core_.estimate.state=MX5_DR_INVALID;
+        beta_core_result_=MX5_DR_E_SEQUENCE; return beta_core_result_;
+    }
+    ++x.generation; ++beta_position_seq_;
+    beta_core_result_=mx5_dr_control(&beta_core_,kind,x,beta_position_seq_);
+    return beta_core_result_;
+}
+void Pipeline::beta_step(const mx5_dr_interval& base,double rate) {
+    if (!beta_enabled_||!beta_core_.seeded) return;
+    mx5_dr_interval b=base; b.context=beta_core_.estimate.context;
+    // Rule 4 zero and unscaled wheel speed: no learned calibration in BETA.
+    b.speed_mps=speed_.value; b.yaw_rad_s=rate;
+    if (beta_core_.have_interval)
+        b.received_ns=max64(b.received_ns,beta_core_.last_interval.received_ns);
+    beta_core_result_=mx5_dr_step(&beta_core_,&b);
+    if (beta_core_result_==MX5_DR_OK)
+        beta_rotation_rad_+=std::fabs(rate)*double(b.end_ns-b.start_ns)/1e9;
+}
+BetaAnchorGate Pipeline::evaluate_beta_gate(const adapter::Observation& o) const {
+    const adapter::PositionInput& p=o.position;
+    if (!good_fix(o)) return BETA_GATE_BAD_FIX;
+    if (p.velocity_kmh<beta_.anchor_speed_min_kmh||p.velocity_kmh>beta_.anchor_speed_max_kmh)
+        return BETA_GATE_SPEED;
+    const adapter::PositionInput& q=beta_prev_.position;
+    if (!beta_have_prev_||o.mono_ns<=beta_prev_.mono_ns||
+        o.mono_ns-beta_prev_.mono_ns>beta_.fix_pair_max_ns||p.utc_seconds<q.utc_seconds||
+        !finite(q.heading_deg)||q.heading_deg<0||q.heading_deg>=360||
+        q.velocity_kmh<beta_.previous_speed_min_kmh) return BETA_GATE_PREVIOUS;
+    double course=std::fabs(p.heading_deg-q.heading_deg);
+    if (course>180) course=360-course;
+    if (!(course<=beta_.course_step_max_deg)) return BETA_GATE_COURSE;
+    // Contiguous closed yaw windows must cover [fix-window, fix], all quiet.
+    if (!beta_yaw_size_||o.mono_ns<beta_.yaw_quiet_window_ns) return BETA_GATE_YAW;
+    const uint64_t from=o.mono_ns-beta_.yaw_quiet_window_ns;
+    uint64_t covered=0; bool reached=false;
+    for (size_t j=0;j<beta_yaw_size_;++j) {
+        const YawRecord& y=beta_yaw_[(beta_yaw_next_+HISTORY_CAPACITY-1-j)%HISTORY_CAPACITY];
+        if (j==0) { if (y.end<o.mono_ns||y.begin>o.mono_ns) return BETA_GATE_YAW; }
+        else if (y.end!=covered) return BETA_GATE_YAW;
+        if (!finite(y.rate)||std::fabs(y.rate)>beta_.yaw_quiet_max_rad_s) return BETA_GATE_YAW;
+        covered=y.begin;
+        if (covered<=from) { reached=true; break; }
+    }
+    if (!reached) return BETA_GATE_YAW;
+    const SensorRecord* wheel=causal(wheel_history_,o.mono_ns);
+    if (!wheel||!finite(wheel->value)||
+        std::fabs(p.velocity_kmh-wheel->value*3.6)>beta_.wheel_gps_speed_max_diff_kmh)
+        return BETA_GATE_WHEEL;
+    // Forward only: the GPS course is the body heading. Unknown never seeds.
+    SensorRecord latched;
+    const SensorRecord* reverse=reverse_at(o.mono_ns,&latched);
+    if (!reverse||reverse->value!=0) return BETA_GATE_REVERSE;
+    return BETA_GATE_ACCEPTED;
+}
+void Pipeline::beta_position(const adapter::Observation& o) {
+    if (!beta_enabled_||!beta_core_.configured) return;
+    const int mode=o.position.mode;
+    if (mode==0||mode==3) {
+        if (beta_mode_!=mode) beta_control(mode==0?MX5_DR_GAP:MX5_DR_NATIVE_POSITION);
+        beta_mode_=mode; beta_have_prev_=false; return;
+    }
+    if (mode!=1&&mode!=2) {
+        beta_control(MX5_DR_DISABLE); beta_gate_=BETA_GATE_BAD_FIX;
+        beta_mode_=mode; beta_have_prev_=false; return;
+    }
+    if (beta_mode_==0||beta_mode_==3) beta_control(MX5_DR_GPS_RETURN);
+    beta_mode_=mode;
+    // Rule 3: only a gated fix anchors. A failing fix leaves the previous
+    // anchor and its clock untouched; it never re-anchors or disables it.
+    beta_gate_=evaluate_beta_gate(o);
+    if (valid_gps_position(o)) { beta_prev_=o; beta_have_prev_=true; }
+    else beta_have_prev_=false;
+    if (beta_gate_!=BETA_GATE_ACCEPTED) return;
+    if (beta_position_seq_==UINT64_MAX) { beta_gate_=BETA_GATE_CORE; return; }
+    mx5_dr_anchor a=mx5_dr_anchor(); a.context=beta_core_.estimate.context;
+    a.anchor_id=a.position_seq=++beta_position_seq_; a.measured_ns=o.mono_ns;
+    a.utc_ns=o.position.utc_seconds*1000000000ULL;
+    a.latitude_deg=o.position.latitude_deg; a.longitude_deg=o.position.longitude_deg;
+    a.body_heading_rad=o.position.heading_deg*PI/180;
+    a.position_error_m=beta_.anchor_error_m; a.heading_error_rad=beta_.heading_error_rad;
+    a.quality=MX5_DR_MODEL;
+    beta_core_result_=mx5_dr_seed(&beta_core_,&a);
+    if (beta_core_result_==MX5_DR_OK) { beta_rotation_rad_=0; beta_conflict_since_=0; }
+    else beta_gate_=BETA_GATE_CORE;
 }
 PipelineResult Pipeline::drain(uint64_t watermark) {
     if (!configured_) return PIPELINE_BAD_INPUT;
@@ -798,9 +1008,20 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
         case REVERSE_EVENT:
             reverse_=e; status_.have_reverse=true;
             if(model_)remember(reverse_history_,e);
+            if(reverse_latch_) {
+                latch_valid_=true; latch_value_=int(e.value); latch_time_=e.time;
+                latch_received_=e.received; latch_epoch_=e.evidence.source_epoch;
+            }
             gps_wheel_.reverse(e.time,e.received,int(e.value)); break;
         case YAW_EVENT:
             yaw_=e; status_.have_yaw=true;
+            if(beta_enabled_) {
+                YawRecord& y=beta_yaw_[beta_yaw_next_];
+                y.begin=e.time; y.end=e.window_end;
+                y.rate=(double(e.raw)-beta_.yaw_zero)*profile_.yaw_rad_per_count;
+                beta_yaw_next_=(beta_yaw_next_+1)%HISTORY_CAPACITY;
+                if(beta_yaw_size_<HISTORY_CAPACITY)++beta_yaw_size_;
+            }
             gps_wheel_.yaw(e.time,e.window_end,e.received,
                 (double(e.raw)-gyro_bias_.status().active_zero)*profile_.yaw_rad_per_count); break;
         case ANCHOR_EVENT:
@@ -835,6 +1056,8 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
             }
             break;
         case POSITION_EVENT:
+            // BETA first: MODEL controls below clear the causal wheel history.
+            beta_position(e.observation);
             r=apply_position(e.observation);
             if (status_.resets!=faults) return status_.result;
             if(!model_&&owns_qualified_revoker()&&r!=PIPELINE_OK)return r;
@@ -895,7 +1118,7 @@ runtime::CoreBridgeResult Pipeline::qualified_publication(uint64_t now,
         const runtime::CoreBridgeQualification& q,uint64_t requested_until,
         adapter::DrSnapshot* out) const {
     if (!out) return runtime::CORE_BRIDGE_NO_OUTPUT;
-    std::memset(out,0,sizeof *out);
+    *out=adapter::DrSnapshot();
     if (model_||!owns_qualified_revoker()||!qualified_anchor_paired_||
         q.now_mono_ns!=now||diagnostic(now).result!=MX5_DR_OK)
         return runtime::CORE_BRIDGE_UNQUALIFIED;
@@ -908,6 +1131,37 @@ runtime::CoreBridgeResult Pipeline::qualified_publication(uint64_t now,
         }
     }
     return runtime::prepare_core_publication(core_,q,requested_until,out);
+}
+runtime::BetaModelInput Pipeline::model_publication(uint64_t now) const {
+    runtime::BetaModelInput in;
+    std::memset(&in,0,sizeof in);
+    in.now_mono_ns=now; in.lease_cap_mono_ns=UINT64_MAX; in.result=MX5_DR_E_CONFIG;
+    if (!configured_||!model_||!beta_enabled_||!beta_core_.configured) return in;
+    // Decision 4: query at the frontier (age 0). The core admits a query only
+    // after the last interval's receipt, so use that earliest admissible time;
+    // the core then adds (v+sv)*age to the budget itself.
+    uint64_t query=beta_core_.estimate.frontier_ns;
+    if (beta_core_.have_interval) query=max64(query,beta_core_.last_interval.received_ns);
+    in.query_mono_ns=query;
+    in.result=mx5_dr_get_model_snapshot(&beta_core_,query,beta_core_.estimate.context,&in.snapshot);
+    if (in.result==MX5_DR_OK&&now<query) in.result=MX5_DR_E_TIME;
+    for (size_t i=0;i<size_;++i) {
+        if ((queue_[i].kind==POSITION_EVENT&&queue_[i].observation.position.mode!=0)||
+             queue_[i].kind==ANCHOR_EVENT) {
+            // A due GPS decision hides the output (as diagnostic() does); a
+            // queued one caps the lease before it can apply.
+            if (queue_[i].time<=now||queue_[i].time<=query) { in.result=MX5_DR_E_NO_SEED; break; }
+            in.lease_cap_mono_ns=min64(in.lease_cap_mono_ns,queue_[i].time-1);
+        }
+    }
+    if (in.result!=MX5_DR_OK) { in.snapshot.valid=0; in.snapshot.model_valid=0; }
+    in.heading_budget_rad=in.snapshot.heading_budget_rad+beta_.rotation_budget_per_rad*beta_rotation_rad_;
+    return in;
+}
+const char* beta_anchor_gate_name(BetaAnchorGate gate) {
+    static const char* const names[]={"DISABLED","WAITING","ACCEPTED","BAD_FIX","SPEED",
+        "PREVIOUS","COURSE","YAW","WHEEL","REVERSE","CORE"};
+    return unsigned(gate)<sizeof names/sizeof names[0]?names[gate]:"UNKNOWN";
 }
 const char* pipeline_result_name(PipelineResult r) {
     static const char* const names[]={"OK","WAITING","BAD_INPUT","LATE","CLOCK_RESET",
