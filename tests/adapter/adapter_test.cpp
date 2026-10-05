@@ -4,8 +4,22 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <dlfcn.h>
 #include <limits>
+#include <pthread.h>
 using namespace mx5::adapter;
+
+// Test-only interposition: the adapter's hook path uses trylock, so a forced
+// EBUSY exercises its LOCK_BUSY branch without racing a worker thread.
+static bool force_lock_busy;
+extern "C" int pthread_mutex_trylock(pthread_mutex_t* m) {
+    if (force_lock_busy) return EBUSY;
+    typedef int (*Real)(pthread_mutex_t*);
+    static Real real = 0;
+    if (!real) real = reinterpret_cast<Real>(dlsym(RTLD_NEXT, "pthread_mutex_trylock"));
+    assert(real);
+    return real(m);
+}
 
 static unsigned calls, events;
 static uint8_t sent[48];
@@ -20,6 +34,23 @@ static const void* expected_position;
 static R::Result trace_result=R::OK;
 static unsigned trace_reads;
 static unsigned session_reads;
+// BETA-case knobs. Defaults leave every pre-existing case unchanged.
+static bool beta_fixture;
+static void (*mutate_snapshot)(DrSnapshot&);
+static Provenance::Domain provenance_domain = Provenance::Domain::NONE;
+static mx5::runtime::session_trace::Result beta_session_result = mx5::runtime::session_trace::OBSERVED;
+static int32_t next_result = -123;
+static unsigned hold_set_events, hold_cleared_events;
+static void beta_session_reader(const void* storage,mx5::runtime::session_trace::Snapshot* out,void*) {
+    assert(storage==expected_session);++session_reads;errno=EIO;
+    *out=mx5::runtime::session_trace::Snapshot();out->result=beta_session_result;
+}
+static void beta_event(void* user,const char* what) {
+    assert(user==&hold_set_events);errno=ENOSPC;
+    if(!std::strcmp(what,"hold_set"))++hold_set_events;
+    else if(!std::strcmp(what,"hold_cleared"))++hold_cleared_events;
+    else assert(!"unexpected beta event");
+}
 static void session_reader(const void* storage,mx5::runtime::session_trace::Snapshot* out,void*) {
     assert(storage==expected_session);++session_reads;errno=EIO;
     const mx5::runtime::session_trace::Snapshot s={mx5::runtime::session_trace::OBSERVED,77,9,-2,true,100};*out=s;
@@ -40,6 +71,11 @@ static DrSnapshot fixture() {
     s.latitude_deg = -37.12345675; s.longitude_deg = 127.1;
     s.speed_mps = 12.3455; s.travel_bearing_deg = 359.9999996;
     s.ready = s.profile_verified = s.input_quality_verified = s.limits_ok = true;
+    if (beta_fixture) {
+        s.profile_verified = s.input_quality_verified = s.limits_ok = false;
+        s.travel_bearing_deg = 123.456789; s.accuracy_m = 24.0001; s.beta = true;
+    }
+    if (mutate_snapshot) mutate_snapshot(s);
     return s;
 }
 static int32_t fake_next(void* session, VehicleData* data) {
@@ -48,7 +84,7 @@ static int32_t fake_next(void* session, VehicleData* data) {
     if (expect_original) assert(data == original_wrapper);
     else assert(data != original_wrapper);
     if (data && data->payload && data->length == 48) std::memcpy(sent, data->payload, 48);
-    errno = EDOM; return -123;
+    errno = EDOM; return next_result;
 }
 static void sink(const Observation* e, void*) {
     ++events; last_event = *e;
@@ -59,7 +95,12 @@ static void sink(const Observation* e, void*) {
 static uint64_t clock_fn(void*) { errno = EAGAIN; return clock_ns; }
 static bool provenance(void*, const PositionContext&, Provenance* out, void*) {
     out->source_epoch = 11; out->session_epoch = 12;
-    out->exact_request = out->verified_lds = out->legacy_receiver = true; return true;
+    out->exact_request = out->verified_lds = out->legacy_receiver = true;
+    out->domain = provenance_domain; return true;
+}
+static bool beta_provenance(void*, const PositionContext&, Provenance* out, void*) {
+    *out = Provenance(); out->source_epoch = 11; out->session_epoch = 12;
+    out->domain = provenance_domain; return true;
 }
 static void put32(uint8_t* p, uint32_t v) {
     for (unsigned i=0;i<4;++i) p[i] = uint8_t(v >> (8*i));
@@ -70,11 +111,166 @@ static uint32_t get32(const uint8_t* p) {
 static void run_send(VehicleData& data, bool original) {
     original_wrapper=&data; expect_original=original; errno=17;
     const unsigned before=calls;
-    assert(send_vehicle_data(expected_session,&data)==-123);
+    assert(send_vehicle_data(expected_session,&data)==next_result);
     assert(calls==before+1); assert(errno==EDOM);
+}
+// One BETA send with original mode 0; checks the recorded reason.
+static uint8_t beta_payload[48];
+static void beta_send(void (*mutate)(DrSnapshot&), Reason expected) {
+    mutate_snapshot=mutate;
+    uint8_t position[72]={};VehicleData data={1,beta_payload,48};
+    position_enter(0,position);
+    run_send(data,expected!=PASS);
+    position_leave();mutate_snapshot=0;
+    if (last_event.reason!=expected) {
+        std::fprintf(stderr,"reason %d expected %d\n",int(last_event.reason),int(expected));assert(false);
+    }
+    if (expected==PASS) assert(last_event.choice==BETA_REPLACEMENT);
+    else {assert(last_event.choice==ORIGINAL);assert(!std::memcmp(sent,beta_payload,48));}
+    for(unsigned i=0;i<48;++i)assert(beta_payload[i]==uint8_t(0xa0+i)); // OEM memory untouched
+}
+static void m_not_ready(DrSnapshot& s){s.ready=false;}
+static void m_not_beta(DrSnapshot& s){s.beta=false;s.profile_verified=s.input_quality_verified=s.limits_ok=true;}
+static void m_source_epoch(DrSnapshot& s){s.source_epoch=99;}
+static void m_session_epoch(DrSnapshot& s){s.session_epoch=99;}
+static void m_future(DrSnapshot& s){s.frontier_mono_ns=clock_ns+1;}
+static void m_lease_over(DrSnapshot& s){s.valid_until_mono_ns=clock_ns-1;}
+static void m_too_old(DrSnapshot& s){s.frontier_mono_ns=clock_ns-150000001;}
+static void m_age_edge(DrSnapshot& s){s.frontier_mono_ns=clock_ns-150000000;s.valid_until_mono_ns=clock_ns;}
+static void m_acc_399(DrSnapshot& s){s.accuracy_m=39.9;}
+static void m_acc_400(DrSnapshot& s){s.accuracy_m=40.0;}
+static void m_acc_401(DrSnapshot& s){s.accuracy_m=40.1;}
+static void m_acc_nan(DrSnapshot& s){s.accuracy_m=std::numeric_limits<double>::quiet_NaN();}
+static void m_acc_zero(DrSnapshot& s){s.accuracy_m=0;}
+static void m_acc_neg(DrSnapshot& s){s.accuracy_m=-1;}
+static void m_lat(DrSnapshot& s){s.latitude_deg=90.5;}
+static void m_lon(DrSnapshot& s){s.longitude_deg=180.5;}
+static void m_lon_nan(DrSnapshot& s){s.longitude_deg=std::numeric_limits<double>::quiet_NaN();}
+static void m_speed_neg(DrSnapshot& s){s.speed_mps=-0.1;}
+static void m_speed_absurd(DrSnapshot& s){s.speed_mps=100.5;}
+static void m_speed_inf(DrSnapshot& s){s.speed_mps=std::numeric_limits<double>::infinity();}
+static void m_bearing_360(DrSnapshot& s){s.travel_bearing_deg=360.0;}
+static void m_bearing_neg(DrSnapshot& s){s.travel_bearing_deg=-0.5;}
+static void m_bearing_nan(DrSnapshot& s){s.travel_bearing_deg=std::numeric_limits<double>::quiet_NaN();}
+static void m_stopped(DrSnapshot& s){s.stopped=true;s.travel_bearing_deg=std::numeric_limits<double>::quiet_NaN();}
+static void m_beta_qualified(DrSnapshot& s){s.beta=true;s.accuracy_m=10;}
+static void check_beta_bytes(uint32_t accuracy_e3) {
+    for(unsigned i=0;i<8;++i)assert(sent[i]==beta_payload[i]);            // timestamp original
+    assert(int32_t(get32(sent+8))==int32_t(::round(-37.12345675*1e7)) && int32_t(get32(sent+12))==1271000000);
+    assert(sent[16]==1);
+    for(unsigned i=17;i<20;++i)assert(sent[i]==beta_payload[i]);           // padding original
+    assert(get32(sent+20)==accuracy_e3);
+    for(unsigned i=24;i<32;++i)assert(sent[i]==beta_payload[i]);           // altitude original
+    assert(sent[32]==1);
+    for(unsigned i=33;i<36;++i)assert(sent[i]==beta_payload[i]);
+    assert(get32(sent+36)==12346);
+    assert(sent[40]==1);
+    for(unsigned i=41;i<44;++i)assert(sent[i]==beta_payload[i]);
+    assert(get32(sent+44)==123456789);
+}
+static int beta_main(const char* test) {
+    Options o = Options();o.sink=sink;o.clock=clock_fn;o.provenance=beta_provenance;
+    o.max_snapshot_age_ns=150000000;o.allow_beta=true;o.user=&hold_set_events;
+    o.beta_event=beta_event;o.session_reader=beta_session_reader;
+    for(unsigned i=0;i<48;++i)beta_payload[i]=uint8_t(0xa0+i);
+    next_result=0; // OEM success unless a case injects a failure
+    static uint32_t session_handle=0xabcdef; expected_session=&session_handle;
+    if (!std::strcmp(test,"beta_disallowed")) {
+        o.allow_beta=false;assert(configure(fake_next,o));
+        assert(!set_mode(BETA));assert(!set_mode(ASSIST));assert(mode()==OBSERVE);
+        std::printf("PASS %s\n",test);return 0;
+    }
+    { Options bad=o;bad.clock=0;assert(!configure(fake_next,bad));
+      bad=o;bad.provenance=0;assert(!configure(fake_next,bad));
+      bad=o;bad.max_snapshot_age_ns=0;assert(!configure(fake_next,bad)); }
+    assert(configure(fake_next,o));
+    assert(!set_mode(ASSIST)); // BETA opt-in never opens the qualified gate.
+    assert(set_mode(BETA)&&mode()==BETA);
+    beta_fixture=true;publish_on_position=true;
+    provenance_domain=Provenance::Domain::BETA;
+    if (!std::strcmp(test,"beta_replace")) {
+        beta_send(0,PASS);check_beta_bytes(24001);
+        assert(last_event.has_payload && !std::memcmp(last_event.original,beta_payload,48));
+        assert(!std::memcmp(last_event.outgoing,sent,48));
+        assert(!hold_set_events && !hold_cleared_events && !beta_held());
+        // UNOBSERVED (session observation declined) is accepted as well.
+        beta_session_result=mx5::runtime::session_trace::UNOBSERVED;beta_send(0,PASS);
+        beta_send(m_age_edge,PASS);
+        beta_send(m_stopped,PASS);
+        assert(sent[32]==1 && get32(sent+36)==0 && sent[40]==0 && get32(sent+44)==0 && sent[16]==1);
+        for(unsigned i=0;i<8;++i)assert(sent[i]==beta_payload[i]);
+        for(unsigned i=24;i<32;++i)assert(sent[i]==beta_payload[i]);
+        // The qualified encoder is unchanged: it still builds a fresh buffer
+        // without accuracy for QUALIFIED snapshots.
+        DrSnapshot q=fixture();q.beta=false;uint8_t b[48];assert(encode_location(q,b));
+        assert(b[16]==0 && get32(b+20)==0 && b[24]==0);
+    } else if (!std::strcmp(test,"beta_accuracy")) {
+        beta_send(m_acc_399,PASS);
+        assert(get32(sent+20)==uint32_t(std::ceil(39.9*1000.0)) && get32(sent+20)>=39900);
+        beta_send(m_acc_400,PASS);check_beta_bytes(40000);
+        beta_send(m_acc_401,NOT_READY);
+        beta_send(m_acc_nan,NOT_READY);
+        beta_send(m_acc_zero,BAD_ENCODING);
+        beta_send(m_acc_neg,BAD_ENCODING);
+    } else if (!std::strcmp(test,"beta_branches")) {
+        namespace S=mx5::runtime::session_trace;
+        provenance_domain=Provenance::Domain::NONE;beta_send(0,BAD_PROVENANCE);
+        provenance_domain=Provenance::Domain::QUALIFIED;beta_send(0,BAD_PROVENANCE);
+        provenance_domain=Provenance::Domain::BETA;
+        const S::Result rejected[]={S::NONE,S::TRANSITION,S::AMBIGUOUS,S::FAULT};
+        for(unsigned i=0;i<4;++i){beta_session_result=rejected[i];beta_send(0,EPOCH_MISMATCH);}
+        beta_session_result=S::OBSERVED;
+        force_lock_busy=true;beta_send(0,LOCK_BUSY);force_lock_busy=false;
+        beta_send(m_source_epoch,EPOCH_MISMATCH);beta_send(m_session_epoch,EPOCH_MISMATCH);
+        { uint8_t position[72]={};VehicleData data={1,beta_payload,48};
+          position_enter(0,position);invalidate();run_send(data,true);position_leave();
+          assert(last_event.reason==EPOCH_MISMATCH && last_event.choice==ORIGINAL); }
+        beta_send(m_not_ready,NOT_READY);beta_send(m_not_beta,NOT_READY);
+        beta_send(m_future,EXPIRED);beta_send(m_lease_over,EXPIRED);beta_send(m_too_old,EXPIRED);
+        beta_send(m_lat,BAD_ENCODING);beta_send(m_lon,BAD_ENCODING);beta_send(m_lon_nan,BAD_ENCODING);
+        beta_send(m_speed_neg,BAD_ENCODING);beta_send(m_speed_absurd,BAD_ENCODING);
+        beta_send(m_speed_inf,BAD_ENCODING);
+        beta_send(m_bearing_360,BAD_ENCODING);beta_send(m_bearing_neg,BAD_ENCODING);
+        beta_send(m_bearing_nan,BAD_ENCODING);
+        beta_send(0,PASS);
+        // Native modes 1..3 always pass the original.
+        for(int32_t m=1;m<=3;++m) {
+            uint8_t position[72]={};put32(position,uint32_t(m));VehicleData data={1,beta_payload,48};
+            position_enter(0,position);run_send(data,true);position_leave();
+            assert(last_event.reason==NOT_UNKNOWN && !std::memcmp(sent,beta_payload,48));
+        }
+        // Back to mode 0: the mode change revoked the old generation; the sink
+        // republishes for the new one, so replacement resumes.
+        beta_send(0,PASS);
+        // No call context at all.
+        { VehicleData data={1,beta_payload,48};run_send(data,true);assert(last_event.reason==NO_CONTEXT); }
+        // A sticky fault (extra LOCATION) disables BETA.
+        { uint8_t position[72]={};VehicleData data={1,beta_payload,48};
+          position_enter(0,position);run_send(data,false);run_send(data,true);
+          assert(last_event.reason==EXTRA_LOCATION);position_leave(); }
+        publish_on_position=false; // publication is refused once faulted
+        beta_send(0,DISABLED);assert(faulted());
+    } else if (!std::strcmp(test,"beta_hold")) {
+        next_result=-5;beta_send(0,PASS);                 // replaced send failed
+        assert(beta_held() && hold_set_events==1 && !hold_cleared_events);
+        beta_send(0,HELD);assert(hold_set_events==1);      // original fails too: still held
+        next_result=0;
+        { VehicleData other={3,beta_payload,48};original_wrapper=&other;expect_original=true;errno=17;
+          assert(send_vehicle_data(expected_session,&other)==0 && errno==EDOM); }
+        assert(beta_held());                               // non-LOCATION success does not clear
+        { uint8_t position[72]={};put32(position,1);VehicleData data={1,beta_payload,48};
+          position_enter(0,position);run_send(data,true);position_leave(); }
+        assert(!beta_held() && hold_cleared_events==1);    // ORIGINAL LOCATION returned 0
+        beta_send(0,PASS);assert(!beta_held());            // replaced success keeps it clear
+        next_result=7;beta_send(0,PASS);assert(beta_held() && hold_set_events==2);
+        next_result=0;beta_send(0,HELD);assert(!beta_held() && hold_cleared_events==2);
+        beta_send(0,PASS);
+    } else return 2;
+    std::printf("PASS %s\n",test);return 0;
 }
 int main(int argc,char** argv) {
     assert(argc==2);
+    if (!std::strncmp(argv[1],"beta_",5)) return beta_main(argv[1]);
     Options o = Options();o.sink=sink;o.clock=clock_fn;o.provenance=provenance;
     o.allow_assist=true;o.max_snapshot_age_ns=150000000;
     if (!std::strcmp(argv[1],"request")) {
@@ -115,6 +311,17 @@ int main(int argc,char** argv) {
         run_send(data,false);position_leave();
         assert(last_event.choice==DR_REPLACEMENT);assert(sent[16]==0 && sent[24]==0 && sent[32]==1);
         assert(get32(sent+36)==12346);assert(get32(sent+44)==0);
+    } else if (!std::strcmp(test,"assist_beta")) {
+        // BETA is never reachable through the qualified ASSIST gate.
+        assert(!set_mode(BETA));assert(set_mode(ASSIST));publish_on_position=true;
+        provenance_domain=Provenance::Domain::BETA;position_enter(0,position);
+        run_send(data,true);position_leave();assert(last_event.reason==BAD_PROVENANCE);
+        provenance_domain=Provenance::Domain::QUALIFIED;mutate_snapshot=m_beta_qualified;position_enter(0,position);
+        run_send(data,true);position_leave();assert(last_event.reason==NOT_READY);
+        mutate_snapshot=0;position_enter(0,position);run_send(data,false);position_leave();
+        assert(last_event.choice==DR_REPLACEMENT && sent[16]==0);
+        next_result=-1;position_enter(0,position);run_send(data,false);position_leave();
+        assert(!beta_held()); // the BETA hold is not a qualified-path mechanism
     } else if (!std::strcmp(test,"epoch")) {
         assert(set_mode(ASSIST));publish_on_position=true;position_enter(0,position);
         invalidate();run_send(data,true);assert(last_event.reason==EPOCH_MISMATCH);position_leave();
