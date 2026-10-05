@@ -118,7 +118,8 @@ class TrialBundleTests(unittest.TestCase):
             build.mkdir()
             for name in ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so', 'mx5dr-guard', 'mx5dr-collector', 'mx5dr-sha256'):
                 (build / name).write_bytes(b'never executed fixture')
-            for args, expected in (([], 'OBSERVE'), (['--default-mode=SHADOW'], 'SHADOW')):
+            for args, expected in (([], 'OBSERVE'), (['--default-mode=SHADOW'], 'SHADOW'),
+                                   (['--default-mode=BETA'], 'BETA')):
                 dest = root / expected
                 r = subprocess.run(['sh', str(PACK / 'make_bundle.sh'), *args,
                                     str(build / 'libmx5dr.so'), str(dest)], capture_output=True, text=True)

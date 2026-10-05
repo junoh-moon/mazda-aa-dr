@@ -6,12 +6,12 @@ SHELL_ONLY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --shell-only) SHELL_ONLY=1; shift;;
-    --default-mode=OBSERVE|--default-mode=SHADOW) DEFAULT_MODE=${1#--default-mode=}; shift;;
+    --default-mode=OBSERVE|--default-mode=SHADOW|--default-mode=BETA) DEFAULT_MODE=${1#--default-mode=}; shift;;
     --*) echo 'Unknown bundle option' >&2; exit 2;;
     *) break;;
   esac
 done
-[ "$#" = 2 ] || { echo 'Usage: sh make_bundle.sh [--shell-only] [--default-mode=OBSERVE|SHADOW] built/libmx5dr.so new-output-directory' >&2; exit 2; }
+[ "$#" = 2 ] || { echo 'Usage: sh make_bundle.sh [--shell-only] [--default-mode=OBSERVE|SHADOW|BETA] built/libmx5dr.so new-output-directory' >&2; exit 2; }
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 lib=$1; dest=$2
 build_dir=$(dirname -- "$lib")

@@ -72,6 +72,21 @@ verify_firmware() { echo "mode=$MODE remount=$ALLOW_REMOUNT"; exit 0; }
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('mode=' + expected, result.stdout)
 
+    def test_beta_only_by_explicit_option_or_bundle_marker(self):
+        # BETA is never the unmarked default; ASSIST stays undeployable.
+        self.assertIn('mode=OBSERVE', self.parse_options().stdout)
+        for args, marker in ((('--mode=BETA',), None), ((), 'BETA\n'), (('--mode=BETA',), 'SHADOW\n')):
+            result = self.parse_options(*args, marker=marker)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), 'mode=BETA remount=1')
+        result = self.parse_options('--mode=SHADOW', marker='BETA\n')
+        self.assertIn('mode=SHADOW', result.stdout)
+        for args, marker in ((('--mode=ASSIST',), 'BETA\n'), ((), 'ASSIST\n'), (('--mode=beta',), None),
+                             ((), 'beta\n'), ((), 'BETA\nBETA\n')):
+            result = self.parse_options(*args, marker=marker)
+            self.assertNotEqual(result.returncode, 0, (args, marker))
+            self.assertNotIn('remount=', result.stdout)
+
     def test_invalid_default_rejected_even_with_override(self):
         for marker in ('ASSIST\n', '', 'SHADOW\nOFF', 'SHADOW\n\n', 'SHADOW\n\n\n', '$(touch bad)'):
             result = self.parse_options('--mode=OBSERVE', marker=marker)

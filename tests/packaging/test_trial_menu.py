@@ -165,12 +165,91 @@ class TrialMenuTests(unittest.TestCase):
         for line in out[out.index('---- GO / NO-GO ----'):].splitlines():
             self.assertLessEqual(len(line), 40, line)
 
-    def verdict(self, text):
+    def verdict(self, text, want=''):
         script = (self.usb / 'trial').read_text()
         start = script.index('startup_verdict() {')
         function = script[start:script.index('\n}\n', start) + 3]
-        return subprocess.run(['sh', '-c', function + '\nstartup_verdict'], input=text,
+        return subprocess.run(['sh', '-c', function + '\nstartup_verdict "$1"', 'sh', want], input=text,
                               text=True, capture_output=True, check=True).stdout
+
+    def test_beta_verdict_shows_mode_enable_hook_fence_and_counts(self):
+        go = self.verdict(self.BETA_GO, 'BETA').splitlines()
+        self.assertEqual(go[-1], 'GO')
+        for expect in ('ok   MODE  BETA', 'ok   BETA  armed', 'ok   HOOK  installed', 'ok   FENCE declined'):
+            self.assertIn(expect, go)
+        self.assertEqual(sum(l.startswith('ok   ') for l in go), 13)
+        self.assertIn('BETA: engaged 0 times, replaced 0 sends,', go)
+        for line in go:
+            self.assertLessEqual(len(line), 40, line)
+        after = self.BETA_GO.replace('beta_engaged=0', 'beta_engaged=12').replace(
+            'BETA: engaged 0 times, replaced 0 sends, hold 0, last state ARMED (enabled), scope current_boot',
+            'BETA: engaged 12 times, replaced 3456 sends, hold 1, last state WITHDRAWN (budget_limit), '
+            'scope previous_boot').replace('beta_scope=current_boot', 'beta_scope=previous_boot')
+        lines = self.verdict(after, 'BETA').splitlines()
+        text = ' '.join(l.strip() for l in lines)
+        self.assertIn('BETA: engaged 12 times, replaced 3456 sends, hold 1, last state WITHDRAWN '
+                      '(budget_limit), scope previous_boot', text)
+        self.assertIn('wait BETA  not started', lines)
+        for line in lines:
+            self.assertLessEqual(len(line), 40, line)
+
+    def test_verdict_shows_poll_and_health_age(self):
+        text = self.GO.replace('collector_poll_recent=observed window=8s',
+                               'collector_poll_recent=observed window=8s poll_age_s=1') + \
+            'health_recent=observed window=5s health_age_s=0\n'
+        lines = self.verdict(text).splitlines()
+        self.assertIn('ok   POLL  polling 1s ago', lines)
+        self.assertIn('ok   HLTH  runtime 0s ago', lines)
+        self.assertEqual(lines[-1], 'GO')
+        stale = text.replace('collector_poll_recent=observed window=8s poll_age_s=1',
+                             'collector_poll_recent=unavailable window=8s poll_age_s=12').replace(
+            'health_recent=observed window=5s health_age_s=0', 'health_recent=unavailable window=5s health_age_s=none')
+        lines = self.verdict(stale).splitlines()
+        self.assertIn('wait POLL  last poll 12s ago', lines)
+        self.assertIn('wait HLTH  no health yet', lines)
+        self.assertEqual(lines[-1], 'WAIT 60 s, then run 2 again')
+
+    def test_beta_verdict_prints_the_optional_no_fix_line(self):
+        lines = self.verdict(self.BETA_GO + 'BETA NO_FIX: 3 state rows\n', 'BETA').splitlines()
+        self.assertIn('BETA NO_FIX: 3 state rows', lines)
+        self.assertEqual(lines[-1], 'GO')
+        self.assertNotIn('BETA NO_FIX', self.verdict(self.BETA_GO, 'BETA'))
+
+    def test_beta_verdict_failures_and_mode_mismatch(self):
+        for old, new, expect in (
+                ('beta_enable=armed', 'beta_enable=disabled:hook_not_installed', 'NO   BETA  disabled:hook_not_instal'),
+                ('beta_enable=armed', 'beta_enable=none_observed', 'wait BETA  no state yet'),
+                ('beta_hook=installed', 'beta_hook=not_installed', 'NO   HOOK  not_installed'),
+                ('beta_session_fence=declined', 'beta_session_fence=missing', 'NO   FENCE missing')):
+            lines = self.verdict(self.BETA_GO.replace(old, new), 'BETA').splitlines()
+            self.assertIn(expect, lines)
+        # A BETA USB must not pass a SHADOW installation, nor the reverse.
+        lines = self.verdict(self.GO, 'BETA').splitlines()
+        self.assertIn('NO   MODE  SHADOW not BETA', lines)
+        self.assertEqual(lines[-1], 'NO-GO')
+        lines = self.verdict(self.BETA_GO, 'SHADOW').splitlines()
+        self.assertIn('NO   MODE  BETA not SHADOW', lines)
+        self.assertEqual(self.verdict(self.GO, 'SHADOW').splitlines()[-1], 'GO')
+
+    def test_beta_bundle_menu_names_the_mode_and_installs_it_with_one_key(self):
+        (self.usb / 'bundle-default-mode').write_text('BETA\n')
+        result = self.menu('1\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('This USB installs mode BETA: BETA = SHADOW capture', result.stdout)
+        self.assertIn('1 Install BETA for the next boot', result.stdout)
+        self.assertIn('mode=BETA', (self.base / 'mx5dr.conf').read_text())
+        for name in ('normal.trial', 'wcp.trial'):
+            self.assertIn('libmx5dr-vimtap.so', (self.base / 'guard' / name).read_text())
+        status = self.menu('2\n0\n')
+        self.assertIn('bundle_mode=BETA', status.stdout)
+        self.assertIn('bundle_mode=BETA', (self.usb / 'startup-result.txt').read_text())
+
+    def test_shadow_bundle_menu_says_location_is_never_replaced(self):
+        (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
+        result = self.menu('0\n')
+        self.assertIn('This USB installs mode SHADOW: SHADOW = capture only; LOCATION is never replaced',
+                      result.stdout)
+        self.assertIn('1 Install SHADOW for the next boot', result.stdout)
 
     GO = ('reboot_check=new_boot_observed (boot ID comparison)\n'
           'runtime_disable_next_start=absent\n'
@@ -181,6 +260,15 @@ class TrialMenuTests(unittest.TestCase):
           'service_jciLDS=running pid=813 uid=0 stack_soft_bytes=131072 package_preload=yes\n'
           'service_jciVBS=running pid=814 uid=0 stack_soft_bytes=131072 package_preload=yes\n'
           'collector_poll_recent=observed window=8s\n')
+
+    BETA_GO = (GO.replace('config_mode=SHADOW', 'config_mode=BETA') +
+               'beta_requested=true beta_scope=current_boot records_only_not_phone_acceptance\n'
+               'beta_boot_enabled=true beta_boot_reason=adapter_opt_in beta_hook=installed beta_install=ok '
+               'beta_session_fence=declined beta_session_hooks=declined_third_party_interposer\n'
+               'beta_enable=armed beta_last_state=ARMED beta_last_reason=enabled\n'
+               'beta_engaged=0 beta_replaced_sends=0 beta_replaced_nonzero=0 beta_hold_set=0 '
+               'beta_withdrawals=0 beta_last_withdraw_reason=none\n'
+               'BETA: engaged 0 times, replaced 0 sends, hold 0, last state ARMED (enabled), scope current_boot\n')
 
     def test_verdict_go_wait_and_no_go(self):
         go = self.verdict(self.GO).splitlines()

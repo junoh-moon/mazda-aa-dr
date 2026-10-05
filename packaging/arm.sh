@@ -5,7 +5,7 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ALLOW_REMOUNT=1
 [ -z "$ROOT" ] || ALLOW_REMOUNT=0
 MODE=OBSERVE
-for arg in "$@"; do case "$arg" in --remount) ALLOW_REMOUNT=1;; --mode=OBSERVE|--mode=SCRUB|--mode=SHADOW) MODE=${arg#--mode=};; *) fail "Unknown option $arg";; esac; done
+for arg in "$@"; do case "$arg" in --remount) ALLOW_REMOUNT=1;; --mode=OBSERVE|--mode=SCRUB|--mode=SHADOW|--mode=BETA) MODE=${arg#--mode=};; *) fail "Unknown option $arg";; esac; done
 [ -z "$ROOT" ] || [ "$ALLOW_REMOUNT" = 0 ] || fail 'No remounts permitted for fixtures'
 prepare_arm_boot
 verify_firmware

@@ -494,12 +494,12 @@ class PackagingTests(unittest.TestCase):
             path.write_text(value[:end] + '<environ_var env_name="LD_PRELOAD" env_value="' +
                             other + '"/>' + value[end:])
         baseline = [path.read_bytes() for path in (self.sm, self.wcp)]
-        for index, mode in enumerate(('OBSERVE', 'SCRUB', 'SHADOW')):
+        for index, mode in enumerate(('OBSERVE', 'SCRUB', 'SHADOW', 'BETA')):
             self.run_script('install.sh' if index == 0 else 'arm.sh', '--mode=' + mode)
             for path in (self.trial, self.trial.with_name('wcp.trial')):
                 self.assertEqual(self.preload(path, 'jciLDS'), [LDS_TOKEN + ':' + other])
                 self.assertEqual(self.preload(path), [TOKEN])
-                self.assertEqual(self.preload(path, 'jciVBS'), [TAP_TOKEN] if mode == 'SHADOW' else [])
+                self.assertEqual(self.preload(path, 'jciVBS'), [TAP_TOKEN] if mode in ('SHADOW', 'BETA') else [])
         installed = self.root / LDS_TOKEN.lstrip('/')
         self.assertEqual(installed.read_bytes(), (self.bundle / installed.name).read_bytes())
         self.run_script('uninstall.sh')

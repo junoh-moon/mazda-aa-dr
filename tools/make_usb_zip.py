@@ -117,7 +117,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, default=REPO / 'build')
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--default-mode', choices=('OBSERVE', 'SHADOW'), default='OBSERVE')
+    parser.add_argument('--default-mode', choices=('OBSERVE', 'SHADOW', 'BETA'), default='OBSERVE',
+                        help='Bundle install mode; BETA must be requested explicitly (never the default)')
     parser.add_argument('--shell-only', action='store_true',
                         help='Package for an already authorized shell, without entry assets')
     args = parser.parse_args()
