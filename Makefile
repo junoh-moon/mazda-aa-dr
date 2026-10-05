@@ -38,7 +38,7 @@ GUARD_OBJECTS = $(BUILD)/arm/src/guard/guard.o $(BUILD)/arm/src/runtime/sha256.o
 HASH_OBJECTS = $(BUILD)/arm/src/tools/sha256_main.o $(BUILD)/arm/src/runtime/sha256.o
 ALL_ARM_OBJECTS = $(sort $(ARM_OBJECTS) $(SENSOR_OBJECTS) $(COLLECTOR_OBJECTS) $(GUARD_OBJECTS) $(HASH_OBJECTS) $(LDS_OBJECTS))
 
-.PHONY: all test test-build-deps test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-lds test-request-publication test-journal-boundaries test-collector test-packaging test-tools test-integration test-navigation test-sensors arm clean
+.PHONY: all test test-build-deps test-motion-journal test-recovery test-loader test-core test-adapter test-runtime test-lds test-request-publication test-journal-boundaries test-collector test-packaging test-tools test-integration test-navigation test-sensors test-replay-beta arm clean
 all: test
 $(BUILD):
 	mkdir -p $@
@@ -173,6 +173,19 @@ $(BUILD)/core_host.o: $(CORE) src/core/dr_core.h | $(BUILD)
 	$(CC) $(C_WARN) -c $(CORE) -o $@
 $(BUILD)/test_pipeline: $(BUILD)/core_host.o src/runtime/core_bridge.cpp tests/integration/test_pipeline.cpp $(ADAPTER)
 	$(CXX) $(CXX_WARN) src/runtime/core_bridge.cpp tests/integration/test_pipeline.cpp $(ADAPTER) $(BUILD)/core_host.o -lm -ldl -pthread -o $@
+# BETA replay harness (task T6): the real Pipeline, BetaController/bridge and
+# adapter driven from vehicle-style journals with a fake OEM send. CI uses a
+# synthetic fixture only. MX5DR_TRIP_DIR optionally replays a private local
+# journal directory; its report stays under $(BUILD) and is never committed.
+$(BUILD)/replay_beta: tools/replay_beta.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp src/runtime/worker_tick.h $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h $(BUILD)/core_host.o
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
+test-replay-beta: $(BUILD)/replay_beta
+	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/replay -v
+	@if [ -n "$$MX5DR_TRIP_DIR" ]; then \
+	  echo "replay_beta: private trip $$MX5DR_TRIP_DIR (report: $(BUILD)/replay_beta_trip.json)"; \
+	  $(BUILD)/replay_beta --trip "$$MX5DR_TRIP_DIR" --sweep $${MX5DR_TRIP_SWEEP:-0:100000:2} \
+	    --report $(BUILD)/replay_beta_trip.json --csv $(BUILD)/replay_beta_trip.csv --check; \
+	else echo "replay_beta: MX5DR_TRIP_DIR unset; private trip replay skipped"; fi
 test-loader:
 	$(PYTHON) tests/runtime/test_loader_interposer.py
 
@@ -210,7 +223,7 @@ $(BUILD)/test_lds_course_lineage: tests/sensors/test_lds_course_lineage.cpp src/
 $(BUILD)/test_vim_source: tests/sensors/test_vim_source.cpp src/sensors/vim_source.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $^ -o $@
 
-test: test-build-deps test-motion-journal test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-lds test-collector test-packaging test-tools test-integration
+test: test-build-deps test-motion-journal test-sensors test-navigation test-recovery test-loader test-core test-adapter test-runtime test-lds test-collector test-packaging test-tools test-integration test-replay-beta
 
 $(BUILD)/test_motion_batch: tests/runtime/test_motion_batch.cpp src/runtime/motion_batch.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
@@ -383,5 +396,5 @@ HOST_ADAPTER_TESTS = \
     test_holdout test_beta test_shadow_log test_gps_wheel \
     test_assist_worker test_runtime_assist test_worker_lds \
     test_worker_lds_source test_association_context test_context_pool_association \
-    test_context_pool_atfork_failure test_runtime_lds_association
+    test_context_pool_atfork_failure test_runtime_lds_association replay_beta
 $(addprefix $(BUILD)/,$(HOST_ADAPTER_TESTS)): src/runtime/lds_association_protocol.h
