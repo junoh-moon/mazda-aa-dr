@@ -13,6 +13,7 @@
 // reverse 1 then 0 at boot, and the straight-line yaw raw 2048.
 #include "navigation/pipeline.h"
 #include "runtime/core_bridge.h"
+#include "runtime/motion_gap.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -150,12 +151,24 @@ static void unknown_reverse_never_seeds() {
     CHECK(!p.diagnostic(T(plan.end_ms)).snapshot.model_valid);
     adapter::DrSnapshot s;
     CHECK(publish(p,plan.end_ms,&s)!=runtime::CORE_BRIDGE_OK && !s.ready);
-    // 3.4: a forward latch from a producer never seen leaving reverse does
-    // not seed BETA (the MODEL core is unchanged and still seeds).
+    // 3.4 (as clarified by the coordinator on 2026-10-05): a forward FIRST
+    // message of the source epoch counts like a 1->0 transition (the
+    // 2026-10-04 drive has only forward messages).
+    Pipeline f; init(f);
+    Plan first_forward=straight(); first_forward.reverse.clear();
+    first_forward.reverse.push_back(std::make_pair(0u,0));
+    run(f,first_forward);
+    CHECK(f.reverse_latched() && f.reverse_exit_seen() && f.beta_gate()==BETA_GATE_ACCEPTED);
+    // A forward latch after a first REVERSE message, without a 1->0
+    // transition (the latch was cleared by a reset in between), does not
+    // seed BETA; the MODEL core is unchanged and still seeds.
     Pipeline q; init(q);
-    Plan forward=straight(); forward.reverse.clear(); forward.reverse.push_back(std::make_pair(0u,0));
+    Plan forward=straight(); forward.reverse.clear();
+    forward.reverse.push_back(std::make_pair(0u,1)); forward.reverse.push_back(std::make_pair(300u,0));
+    forward.each=[](Pipeline& x,unsigned ms){ if(ms==200) x.reset(x.context()); };
     run(q,forward);
     CHECK(q.reverse_latched() && !q.reverse_exit_seen());
+    CHECK(q.latch_clears(LATCH_CLEAR_RESET)==1 && q.last_latch_clear()==LATCH_CLEAR_RESET);
     CHECK(q.beta_gate()==BETA_GATE_REVERSE_UNPROVEN);
     CHECK(publish(q,forward.end_ms,&s)!=runtime::CORE_BRIDGE_OK && !s.ready);
     CHECK(q.diagnostic(T(forward.end_ms)).snapshot.model_valid);
@@ -201,7 +214,30 @@ static void epoch_change_and_lost_reverse_unseed() {
     Pipeline y; init(y);
     run(y,first);
     y.reset(y.context());
-    CHECK(!y.reverse_latched());
+    CHECK(!y.reverse_latched() && y.latch_clears(LATCH_CLEAR_RESET)==1);
+    // Task E: the runtime's small-gap rejection reset keeps the latch (and
+    // the producer history) even with a source epoch bump...
+    Pipeline k; init(k);
+    run(k,first);
+    mx5_dr_context bumped=k.context(); ++bumped.source_epoch; ++bumped.generation;
+    k.reset_keep_reverse(bumped);
+    CHECK(k.reverse_latched() && k.reverse_exit_seen() && !k.latch_clears_total());
+    CHECK(k.status().resets==0 && !k.diagnostic(T(1100)).snapshot.model_valid);
+    // ...unless the reset discards a queued REVERSE message.
+    Pipeline l; init(l);
+    run(l,first);
+    RawEvent queued=raw(REVERSE,1100,200000,1); queued.reverse=1;
+    CHECK(l.enqueue_raw(queued)==PIPELINE_OK);
+    l.reset_keep_reverse(bumped);
+    CHECK(!l.reverse_latched() && l.latch_clears(LATCH_CLEAR_RESET)==1);
+    // A genuine source reset (plain reset with a new epoch) clears both.
+    Pipeline m; init(m);
+    run(m,first);
+    m.reset(bumped);
+    CHECK(!m.reverse_latched() && !m.reverse_exit_seen() && m.latch_clears(LATCH_CLEAR_SOURCE_EPOCH)==1);
+    m.exclude_reverse(LATCH_CLEAR_INPUT_GAP);
+    CHECK(m.latch_clears(LATCH_CLEAR_INPUT_GAP)==0); // nothing valid to clear
+    CHECK(std::strcmp(latch_clear_name(LATCH_CLEAR_INPUT_GAP),"input_gap")==0);
 }
 struct GateCase {
     double gps_kmh, wheel_kmh, prev_kmh, prev_heading, heading;
@@ -279,8 +315,8 @@ static void anchor_gate() {
     { GateCase c=G(36,36,36,0,0); c.displacement_scale=1.49; CHECK(gate_case(c)==BETA_GATE_ACCEPTED); }
     { GateCase c=G(36,36,36,0,0); c.displacement_scale=0.49; CHECK(gate_case(c)==BETA_GATE_DISPLACEMENT); }
     { GateCase c=G(36,36,36,0,0); c.displacement_scale=1.51; CHECK(gate_case(c)==BETA_GATE_DISPLACEMENT); }
-    // 3.4: no reverse 1->0 seen.
-    { GateCase c=G(36,36,36,0,0); c.reverse_exit=false; CHECK(gate_case(c)==BETA_GATE_REVERSE_UNPROVEN); }
+    // A single forward message (first of the epoch) is enough (3.4).
+    { GateCase c=G(36,36,36,0,0); c.reverse_exit=false; CHECK(gate_case(c)==BETA_GATE_ACCEPTED); }
     // Every evaluation is recorded for the journal, rejections included.
     { Pipeline p; GateCase c=G(36,36,36,0,0); c.hdop=3.1; CHECK(gate_case(c,&p)==BETA_GATE_HDOP);
       const uint64_t last=p.beta_anchor_sequence();
@@ -547,7 +583,42 @@ static void speed_publication_without_anchor() {
     const SpeedPublication c=q.speed_publication(T(1700));
     CHECK(!c.ok);
 }
+static void motion_gap_rule() {
+    // Task E (2026-10-05): which input-rejection resets may keep the latch.
+    typedef runtime::MotionGapTracker G;
+    RawEvent e=raw(WHEELS,0,10,7); uint64_t missing,span;
+    {   G g; CHECK(!g.reject(true,RECEIVE_STALE,e,&missing,&span));   // nothing accepted yet
+        CHECK(g.accept(e,&missing,&span)==G::NO_GAP);
+        RawEvent r=raw(YAW,100,11,7);
+        CHECK(g.reject(true,RECEIVE_STALE,r,&missing,&span) && missing==1);
+        r=raw(WHEELS,1900,26,7);                                      // 16 missing, 1.9 s
+        CHECK(g.reject(true,RECEIVE_SEQUENCE,r,&missing,&span) && missing==16 && span==1900000000ULL);
+        RawEvent next=raw(YAW,1950,27,7);
+        CHECK(g.accept(next,&missing,&span)==G::KEPT && missing==16); }
+    {   G g; CHECK(g.accept(e,&missing,&span)==G::NO_GAP);
+        RawEvent r=raw(WHEELS,500,28,7);                              // 18 missing
+        CHECK(!g.reject(true,RECEIVE_SEQUENCE,r,&missing,&span) && missing==18); }
+    {   G g; CHECK(g.accept(e,&missing,&span)==G::NO_GAP);
+        RawEvent r=raw(WHEELS,2100,12,7);                             // > 2 s of data
+        CHECK(!g.reject(true,RECEIVE_STALE,r,&missing,&span)); }
+    {   G g; CHECK(g.accept(e,&missing,&span)==G::NO_GAP);
+        RawEvent r=raw(REVERSE,50,11,7);                              // the change itself is lost
+        CHECK(!g.reject(true,RECEIVE_STALE,r,&missing,&span));
+        r=raw(WHEELS,50,10,7);
+        CHECK(!g.reject(true,RECEIVE_SEQUENCE,r,&missing,&span)); } // rewind/replay
+    {   G g; CHECK(g.accept(e,&missing,&span)==G::NO_GAP);
+        RawEvent r=raw(WHEELS,50,11,8);                               // another producer epoch
+        CHECK(!g.reject(true,RECEIVE_SOURCE_CHANGED,r,&missing,&span));
+        CHECK(!g.reject(true,RECEIVE_STALE,r,&missing,&span));
+        CHECK(!g.reject(false,RECEIVE_STALE,e,&missing,&span)); }
+    {   G g; CHECK(g.accept(e,&missing,&span)==G::NO_GAP);
+        RawEvent r=raw(WHEELS,100,11,7);
+        CHECK(g.reject(true,RECEIVE_STALE,r,&missing,&span));
+        RawEvent late=raw(YAW,2500,30,7);                             // the gap grew: clear on accept
+        CHECK(g.accept(late,&missing,&span)==G::TOO_LARGE); }
+}
 int main() {
+    motion_gap_rule();
     speed_publication_without_anchor();
     latch_seeds_from_change_only_stream();
     unknown_reverse_never_seeds();

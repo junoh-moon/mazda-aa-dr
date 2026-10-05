@@ -72,19 +72,22 @@ def write_fixture(directory):
         events, seq = [], 0
         for k in range(100, int(END * 10) + 1):  # 10 Hz from 10.0 s
             t = k / 10.0 + 0.003
-            if k == 120:
-                # One change-only REVERSE (forward) message while the yaw stream
-                # runs. A REVERSE queued before the first yaw window would be
+            if k in (120, 121):
+                # Change-only REVERSE messages while the yaw stream runs: reverse
+                # then forward, so the producer has been seen leaving reverse
+                # (BETA_DECISIONS 3.4; a single forward message no longer seeds
+                # BETA). A REVERSE queued before the first yaw window would be
                 # dropped by the MISSING_SENSOR reset and never latch.
                 seq += 1
-                events.append([3, seq, ns(t - 0.05), 0, 0, 0, 0, 0, 0, 0])
+                events.append([3, seq, ns(t - 0.05), 0, 0, 0, 0, 0, 0, 1 if k == 120 else 0])
             kmh = speed_kmh(t)
             seq += 1
             raw = int(round(kmh * 100 + 10000))
             events.append([1, seq, ns(t), 0, raw, raw, raw, raw, 0, 0])
             seq += 1
             # The yaw callback at t closes the mean window that began 100 ms earlier.
-            mean = 2047 + yaw_rate(t - 0.05) / YAW_RAD_PER_COUNT
+            # Straight is the fixed BETA yaw zero 2048 (BETA_DECISIONS 3.5).
+            mean = 2048 + yaw_rate(t - 0.05) / YAW_RAD_PER_COUNT
             events.append([2, seq, ns(t + 0.001), 0, int(round(5 * mean)), 0, 0, 0, 5, 0])
         for i in range(0, len(events), 20):
             f.write(json.dumps({"kind": "motion_batch", "schema": 1, "epoch": 77,
@@ -161,15 +164,19 @@ class ReplayBetaSynthetic(unittest.TestCase):
     def test_real_tunnel_follows_wheel_speed_and_stops_at_gps_return(self):
         r, sends, _ = self.run_tool("--real-only", "--check")
         self.assertEqual(r["check"], "pass")
-        # Send-time classes: the current code changes nothing outside LOST
-        # (mode 0); NO_FIX (mode 1, utc_s 0) passes the original.
+        # Send-time classes (BETA_DECISIONS 1-2): NO_FIX (mode 1, utc_s 0)
+        # gets only the wheel speed once wheel data exists (from 10 s); the
+        # stored position is never replaced; FIX is untouched.
         classes = r["recorded_classes"]
         self.assertEqual(classes["NO_FIX"]["sends"], 28)
-        self.assertEqual(classes["NO_FIX"]["speed_only"] + classes["NO_FIX"]["replaced"], 0)
+        self.assertEqual(classes["NO_FIX"]["replaced"], 0)
+        self.assertGreaterEqual(classes["NO_FIX"]["speed_only"], 15)
         self.assertEqual(classes["FIX"]["replaced"] + classes["FIX"]["speed_only"], 0)
         self.assertEqual(classes["LOST"]["sends"], 25)
-        self.assertEqual([(t["from"], t["to"]) for t in r["beta_transitions"]][:2],
-                         [("DISABLED", "ARMED"), ("ARMED", "GPS_LOST")])
+        transitions = [(t["from"], t["to"]) for t in r["beta_transitions"]]
+        self.assertEqual(transitions[:3], [("DISABLED", "ARMED"), ("ARMED", "NO_FIX"),
+                                           ("NO_FIX", "SPEED_ENGAGED")])
+        self.assertIn(("ARMED", "GPS_LOST"), transitions)
         self.assertGreater(r["reverse_latch"]["moving_latched_s"], 200)
         real = r["real_outages"]
         self.assertEqual(real["runs"], 1)
@@ -196,9 +203,12 @@ class ReplayBetaSynthetic(unittest.TestCase):
         self.assertIn("coverage of reported accuracy", err)
 
     def test_check_detects_corrupted_payload_accuracy_and_mode(self):
-        for case, text in (("payload", "LOST send: bytes outside the fields allowed for this class differ"),
+        # Since the NO_FIX speed overlay the first changed sends are NO_FIX
+        # ones, so a corrupted byte 0 is first reported there.
+        for case, text in (("payload", "position replaced on a NO_FIX send (original mode 1)"),
                            ("accuracy", "outside (0,40]"),
-                           ("mode", "position replaced on a FIX send (original mode 1)")):
+                           # a relabelled speed overlay is a FIX send with changed bytes
+                           ("mode", "FIX send: bytes outside the fields allowed for this class differ")):
             r, _, err = self.run_tool("--t0", "60", "--durations", "10", "--check",
                                       "--self-test-corrupt", case, expect=1)
             self.assertEqual(r["check"], "fail", case)

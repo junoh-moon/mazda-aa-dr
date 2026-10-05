@@ -29,6 +29,7 @@
 #include "runtime/beta_controller.h"
 #include "runtime/beta_profile.h"
 #include "runtime/core_bridge.h"
+#include "runtime/motion_gap.h"
 #include "runtime/worker_tick.h"
 #include <algorithm>
 #include <cerrno>
@@ -59,6 +60,10 @@ struct Raw {
     uint64_t t;          // ordering time (received_ns, or reset time)
     bool reset;          // shadow_input_reset: runtime resets the pipeline
     N::RawEvent event;
+    // The motion_rejected row before the reset (task E gap rule), if any.
+    bool rejected_decoded;
+    N::ReceiveFault rejected_reason;
+    N::RawEvent rejected;
 };
 struct Fix {
     uint64_t t;
@@ -233,6 +238,7 @@ bool load(const std::string& dir, const std::string& want_boot, double poll_hdop
     }
     in->boot_id = boot;
     std::map<uint64_t, Fix> positions;     // adapter POSITION rows by call
+    Raw pending_rejected = Raw();          // last motion_rejected row
     std::map<uint64_t, std::string> sends; // LOCATION original_hex by call
     for (size_t i = 0; i < rows.size(); ++i) {
         if (!same_boot(rows[i].boot, boot, trace_boots.size())) continue;
@@ -279,9 +285,30 @@ bool load(const std::string& dir, const std::string& want_boot, double poll_hdop
                 p = close + 1;
                 if (p < l.size() && l[p] == ',') ++p;
             }
+        } else if (k == "motion_rejected") {
+            // Kept for the following shadow_input_reset (runtime order).
+            std::string why;
+            uint64_t sensor = 0, seq = 0, rec = 0, ep = 0;
+            pending_rejected = Raw();
+            if (str_field(l, "reason", &why) && u64_field(l, "sensor", &sensor) &&
+                u64_field(l, "epoch", &ep) && u64_field(l, "receive_seq", &seq) &&
+                u64_field(l, "received_ns", &rec) && l.find("\"authenticated_decoded\":true") != std::string::npos) {
+                pending_rejected.rejected_decoded = true;
+                pending_rejected.rejected_reason = why == "stale" ? N::RECEIVE_STALE :
+                    why == "sequence_discontinuity" ? N::RECEIVE_SEQUENCE : N::RECEIVE_DECODE;
+                pending_rejected.rejected.kind = N::SensorKind(sensor);
+                pending_rejected.rejected.epoch = ep;
+                pending_rejected.rejected.receive_seq = seq;
+                pending_rejected.rejected.received_ns = rec;
+            }
         } else if (k == "shadow_input_reset") {
-            Raw r = Raw();
+            Raw r = pending_rejected;
+            pending_rejected = Raw();
             if (!u64_field(l, "mono_ns", &r.t)) continue;
+            // The runtime reads the rejected datagram in stream order, before
+            // the events received after it: order the reset at its receipt.
+            if (r.rejected_decoded && r.rejected.received_ns && r.rejected.received_ns < r.t)
+                r.t = r.rejected.received_ns;
             r.reset = true;
             in->raws.push_back(r);
             ++in->input_resets;
@@ -388,10 +415,9 @@ bool provenance_fn(void*, const A::PositionContext&, A::Provenance* out, void*) 
     memset(out, 0, sizeof *out);
     return false;
 }
-void session_fn(const void* storage, A::S::Snapshot* out, void* user) {
-    A::read_send_session(storage, out, user);
-    R::beta_observe_storage(shared, storage);
-}
+// runtime.cpp observe_send_storage_beta(): the stock session reader stays
+// configured (BETA_DECISIONS 3.7); the storage fence is Options.send_storage.
+void send_storage_fn(void*, const void* storage) { R::beta_observe_storage(shared, storage); }
 void beta_event_fn(void*, const char* what) { R::beta_count_event(shared, what); }
 int32_t fake_send(void*, A::VehicleData* d) {
     ++fake_calls;
@@ -459,6 +485,7 @@ void oem_call(const Fix& f, bool synthetic, uint64_t t, const uint8_t* original_
 }
 
 size_t raw_index;
+R::MotionGapTracker motion_gap;
 // Recorded-replay exposure of the MODEL reverse latch (design decision 7):
 // BETA cannot seed or keep a DR anchor while it is unknown.
 struct LatchExposure { uint64_t moving_ticks, moving_latched_ticks; };
@@ -483,8 +510,18 @@ void worker_turn(uint64_t now) {
         if (r.reset) {
             mx5_dr_context c = nav.context();
             ++c.source_epoch; ++c.generation;
-            nav.reset(c);
-        } else nav.enqueue_raw(r.event);
+            // runtime.cpp drain_motion: a short same-producer gap keeps the
+            // reverse latch (runtime/motion_gap.h), anything else clears it.
+            uint64_t missing = 0, span = 0;
+            if (motion_gap.reject(r.rejected_decoded, r.rejected_reason, r.rejected, &missing, &span))
+                nav.reset_keep_reverse(c);
+            else nav.reset(c);
+        } else {
+            uint64_t missing = 0, span = 0;
+            if (motion_gap.accept(r.event, &missing, &span) == R::MotionGapTracker::TOO_LARGE)
+                nav.exclude_reverse(N::LATCH_CLEAR_INPUT_GAP);
+            nav.enqueue_raw(r.event);
+        }
     }
     if (model_tick.due(now)) {
         if (now > nav.reorder_ns()) nav.drain(now - nav.reorder_ns());
@@ -504,7 +541,11 @@ bool start_product(uint64_t t) {
     A::Options o = A::Options();
     o.sink = sink_fn; o.clock = clock_fn; o.provenance = provenance_fn;
     o.max_snapshot_age_ns = 500000000ULL; o.allow_assist = false;
-    o.session_reader = session_fn; o.allow_beta = true; o.beta_event = beta_event_fn;
+    o.session_reader = A::read_send_session; o.send_storage = send_storage_fn;
+    o.allow_beta = true; o.beta_event = beta_event_fn;
+    // The vehicle case: libpatch owns the session slots and install_v74
+    // declined session observation, so every send session is UNOBSERVED.
+    o.sessions_declined = true;
     if (!A::configure(fake_send, o) || !A::set_mode(A::OBSERVE)) return false;
     const mx5_dr_context x = {1, 1, 1};
     if (!nav.init_model(N::research_model_profile(), mx5_dr_default_config(), x, true, true, true) ||
@@ -617,9 +658,9 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
     for (unsigned i = 0; i < 48; ++i)
         if (out[i] != r.original[i] && (i < 32 || i > 39)) speed_only = false;
     s.change = !s.replaced ? CHANGE_NONE : speed_only ? CHANGE_SPEED : CHANGE_REPLACED;
-    // Today only the BETA replacement changes bytes; a future overlay must
-    // report its own choice, so the contract check names choices per change.
+    // Each change must report its own choice (BETA replacement / overlay).
     s.contract_ok = r.one_call && (s.change != CHANGE_REPLACED || r.choice == int32_t(A::BETA_REPLACEMENT)) &&
+                    (s.change != CHANGE_SPEED || r.choice == int32_t(A::BETA_SPEED_OVERLAY)) &&
                     (s.change != CHANGE_NONE || r.choice == int32_t(A::ORIGINAL));
     s.payload_ok = 1;
     for (unsigned i = 0; i < 48; ++i) {

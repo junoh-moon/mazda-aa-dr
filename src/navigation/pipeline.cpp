@@ -33,9 +33,11 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     beta_core_result_(MX5_DR_E_CONFIG), beta_mode_(-1), beta_position_seq_(0),
     beta_conflict_since_(0), beta_rotation_rad_(0), beta_rotation_budget_m_(0),
     beta_streak_(false), beta_streak_mono_(0), beta_streak_utc_(0),
-    reverse_exit_seen_(false), beta_reverse_suspect_(false), beta_reverse_fast_since_(0),
+    reverse_exit_seen_(false), beta_reverse_suspect_(false), reverse_any_seen_(false),
+    keep_latch_on_reset_(false), last_latch_clear_(LATCH_CLEAR_RESET), beta_reverse_fast_since_(0),
     beta_record_seq_(0), beta_yaw_size_(0), beta_yaw_next_(0) {
     std::memset(beta_records_,0,sizeof beta_records_);
+    std::memset(latch_clears_,0,sizeof latch_clears_);
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
     std::memset(&beta_core_,0,sizeof beta_core_);
     beta_=runtime::beta_profile(); beta_prev_=adapter::Observation();
@@ -78,7 +80,7 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
     }
     if(!valid_profile)return false;
     model_=true; profile_=p; qualified_retired_=false;retired_from_generation_=0;
-    reverse_latch_=reverse_latch; clear_latch(); reverse_exit_seen_=false;
+    reverse_latch_=reverse_latch; clear_latch(); reverse_exit_seen_=reverse_any_seen_=false;
     beta_enabled_=false; beta_gate_=BETA_GATE_DISABLED;
     qualified_stale_position_cutoff_ns_=0;
     qualified_stale_position_call_sequence_=0;
@@ -186,12 +188,20 @@ void Pipeline::reset_state(mx5_dr_context x) {
             qualified_stale_position_call_sequence_=0;
         }
     }
-    // BETA_DECISIONS 3.4: every reset ends the latch (a reset may discard a
-    // queued or in-flight REVERSE change). A source epoch change also forgets
-    // that this producer was ever seen leaving reverse.
+    // BETA_DECISIONS 3.4: a reset ends the latch (it may discard a queued or
+    // in-flight REVERSE change) and a source epoch change also forgets the
+    // producer's history. Exception (task E): the runtime's small-gap input
+    // rejection keeps the latch unless a queued REVERSE message is discarded.
     if(reverse_latch_) {
-        if(x.source_epoch!=context().source_epoch)reverse_exit_seen_=false;
-        clear_latch();
+        bool queued_reverse=false;
+        for(size_t j=0;j<size_;++j)if(queue_[j].kind==REVERSE_EVENT)queued_reverse=true;
+        if(keep_latch_on_reset_) {
+            if(queued_reverse)drop_latch(LATCH_CLEAR_RESET);
+        } else {
+            const bool epoch=x.source_epoch!=context().source_epoch;
+            if(epoch)reverse_exit_seen_=reverse_any_seen_=false;
+            drop_latch(epoch?LATCH_CLEAR_SOURCE_EPOCH:LATCH_CLEAR_RESET);
+        }
     }
     mx5_dr_reset(&core_,x); gyro_bias_.reset(); gps_wheel_.reset(); size_=0; watermark_=0; raw_epoch_=0;
     reset_beta(x);
@@ -280,9 +290,11 @@ PipelineResult Pipeline::insert(const Event& e) {
 PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
     // Any source epoch change ends the latch; so does a REVERSE message the
     // pipeline could not accept (its change would otherwise be lost).
-    if(reverse_latch_&&latch_valid_&&r.epoch!=latch_epoch_) { clear_latch();reverse_exit_seen_=false; }
+    if(reverse_latch_&&latch_valid_&&r.epoch!=latch_epoch_) {
+        drop_latch(LATCH_CLEAR_SOURCE_EPOCH);reverse_exit_seen_=reverse_any_seen_=false;
+    }
     const PipelineResult result=enqueue_raw_event(r);
-    if(reverse_latch_&&r.kind==REVERSE&&result!=PIPELINE_OK)clear_latch();
+    if(reverse_latch_&&r.kind==REVERSE&&result!=PIPELINE_OK)drop_latch(LATCH_CLEAR_REJECTED_REVERSE);
     return result;
 }
 PipelineResult Pipeline::enqueue_raw_event(const RawEvent& r) {
@@ -918,8 +930,24 @@ bool Pipeline::beta_anchor_record(uint64_t seq,BetaAnchorRecord* out) const {
     if (r.seq!=seq) return false;
     *out=r; return true;
 }
-void Pipeline::exclude_reverse() {
-    if (reverse_latch_) clear_latch();
+void Pipeline::exclude_reverse(LatchClear why) {
+    if (reverse_latch_) drop_latch(why);
+}
+void Pipeline::reset_keep_reverse(mx5_dr_context x) {
+    keep_latch_on_reset_=true; reset(x); keep_latch_on_reset_=false;
+}
+void Pipeline::drop_latch(LatchClear why) {
+    if (latch_valid_&&why<LATCH_CLEAR_COUNT) { ++latch_clears_[why]; last_latch_clear_=why; }
+    clear_latch();
+}
+uint64_t Pipeline::latch_clears_total() const {
+    uint64_t n=0;
+    for (unsigned i=0;i<LATCH_CLEAR_COUNT;++i) n+=latch_clears_[i];
+    return n;
+}
+const char* latch_clear_name(LatchClear why) {
+    static const char* const names[]={"reset","source_epoch","rejected_reverse","excluded_reverse","input_gap"};
+    return unsigned(why)<sizeof names/sizeof names[0]?names[why]:"unknown";
 }
 BetaAnchorGate Pipeline::evaluate_beta_gate(const adapter::Observation& o,double* ratio) const {
     const adapter::PositionInput& p=o.position;
@@ -985,7 +1013,8 @@ BetaAnchorGate Pipeline::evaluate_beta_gate(const adapter::Observation& o,double
     SensorRecord latched;
     const SensorRecord* reverse=reverse_at(o.mono_ns,&latched);
     if (!reverse||reverse->value!=0) return BETA_GATE_REVERSE;
-    // 3.4: never trust a forward latch before this producer was seen leaving reverse.
+    // 3.4: never trust a forward latch before this producer was seen leaving
+    // reverse (a 1->0 transition, or a forward first message in this epoch).
     if (!reverse_exit_seen_) return BETA_GATE_REVERSE_UNPROVEN;
     return BETA_GATE_ACCEPTED;
 }
@@ -1108,7 +1137,10 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
             if(model_)remember(reverse_history_,e);
             if(reverse_latch_) {
                 // 3.4: proof that this change-only producer reports leaving reverse.
+                // Or the first message of this source epoch says forward.
                 if(latch_valid_&&latch_value_==1&&int(e.value)==0)reverse_exit_seen_=true;
+                if(!reverse_any_seen_&&int(e.value)==0)reverse_exit_seen_=true;
+                reverse_any_seen_=true;
                 latch_valid_=true; latch_value_=int(e.value); latch_time_=e.time;
                 latch_received_=e.received; latch_epoch_=e.evidence.source_epoch;
             }

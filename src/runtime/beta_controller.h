@@ -113,7 +113,8 @@ public:
           seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
           last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
-          last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0) {}
+          last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
+          seen_latch_clears_(0) {}
     BetaState state() const { return state_; }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
@@ -198,6 +199,7 @@ public:
         shared_.source_epoch.store(source,std::memory_order_release);
         journal_events(j,now);
         journal_anchors(j,nav);
+        journal_latch(j,now,nav);
         if(!live())return;
         if((state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) && adapter::beta_held())
             withdraw_episode(j,now,"send_result_hold");
@@ -227,7 +229,29 @@ private:
     uint64_t last_original_utc_;   // utc_s of the newest POSITION
     double last_original_accuracy_; // original LOCATION accuracy (m), -1 when absent
     double last_speed_;            // last published overlay speed (m/s), -1 none
-    uint64_t seen_anchor_seq_,anchor_rows_dropped_;
+    uint64_t seen_anchor_seq_,anchor_rows_dropped_,seen_latch_clears_;
+
+    // Task E: every drop of a valid MODEL reverse latch, with its (latest)
+    // reason and the per-reason totals since start.
+    template<class J> void journal_latch(J& j,uint64_t now,const navigation::Pipeline& nav) {
+        const uint64_t total=nav.latch_clears_total();
+        if(total==seen_latch_clears_)return;
+        const uint64_t delta=total>seen_latch_clears_?total-seen_latch_clears_:total;
+        seen_latch_clears_=total;
+        char line[500];
+        const int n=snprintf(line,sizeof line,
+            "{\"kind\":\"beta_reverse_latch\",\"mono_ns\":%llu,\"domain\":\"model\",\"event\":\"cleared\","
+            "\"reason\":\"%s\",\"cleared\":%llu,\"reset\":%llu,\"source_epoch\":%llu,"
+            "\"rejected_reverse\":%llu,\"excluded_reverse\":%llu,\"input_gap\":%llu,\"state\":\"%s\"}",
+            (unsigned long long)now,navigation::latch_clear_name(nav.last_latch_clear()),
+            (unsigned long long)delta,
+            (unsigned long long)nav.latch_clears(navigation::LATCH_CLEAR_RESET),
+            (unsigned long long)nav.latch_clears(navigation::LATCH_CLEAR_SOURCE_EPOCH),
+            (unsigned long long)nav.latch_clears(navigation::LATCH_CLEAR_REJECTED_REVERSE),
+            (unsigned long long)nav.latch_clears(navigation::LATCH_CLEAR_EXCLUDED_REVERSE),
+            (unsigned long long)nav.latch_clears(navigation::LATCH_CLEAR_INPUT_GAP),beta_state_name(state_));
+        if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+    }
 
     // BETA_DECISIONS 3.2: every anchor gate evaluation, including each
     // rejection reason, becomes one beta_anchor row (ring overrun is counted).

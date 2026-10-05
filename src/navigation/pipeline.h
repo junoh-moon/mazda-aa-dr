@@ -59,7 +59,8 @@ struct Diagnostic {
 // new pair, the baseline is kept), UTC_MONO (utc and receipt steps disagree),
 // HDOP, SETTLING (fewer than 10 s of consecutive increasing fixes since the
 // first fix or GPS return), DISPLACEMENT (pair distance outside
-// [0.5,1.5] x v*dt) and REVERSE_UNPROVEN (no reverse 1->0 seen yet).
+// [0.5,1.5] x v*dt) and REVERSE_UNPROVEN (in this source epoch neither a
+// reverse 1->0 transition nor a forward first REVERSE message was seen).
 enum BetaAnchorGate {
     BETA_GATE_DISABLED=0, BETA_GATE_WAITING, BETA_GATE_ACCEPTED, BETA_GATE_BAD_FIX,
     BETA_GATE_SPEED, BETA_GATE_PREVIOUS, BETA_GATE_COURSE, BETA_GATE_YAW,
@@ -76,6 +77,16 @@ struct BetaAnchorRecord {
     double hdop, kmh, displacement_ratio, streak_s; // NaN when not evaluated
 };
 const char* beta_anchor_gate_name(BetaAnchorGate);
+// Why a valid MODEL reverse latch was dropped (journaled by the BETA worker).
+enum LatchClear {
+    LATCH_CLEAR_RESET=0,            // pipeline reset/fault (queued REVERSE possibly lost)
+    LATCH_CLEAR_SOURCE_EPOCH,       // producer or model source epoch changed
+    LATCH_CLEAR_REJECTED_REVERSE,   // the pipeline rejected a REVERSE message
+    LATCH_CLEAR_EXCLUDED_REVERSE,   // the runtime did not hand a REVERSE message over
+    LATCH_CLEAR_INPUT_GAP,          // an input gap larger than the keep limit
+    LATCH_CLEAR_COUNT
+};
+const char* latch_clear_name(LatchClear);
 // BETA speed overlay input (BETA_DECISIONS_2026-10-05.md 2): the last drained
 // wheel SPEED event only. No anchor, core or GPS is involved. stopped means
 // all four wheels <= 0.05 m/s and then speed_mps is 0. MODEL evidence.
@@ -204,7 +215,16 @@ public:
     bool beta_anchor_record(uint64_t seq,BetaAnchorRecord* out) const;
     // A REVERSE message the runtime did not hand to this pipeline (excluded
     // or not computed): its change is lost, so the latch is cleared.
-    void exclude_reverse();
+    void exclude_reverse(LatchClear why=LATCH_CLEAR_EXCLUDED_REVERSE);
+    // A reset that must not drop the reverse latch (task E, 2026-10-05): the
+    // runtime's input-rejection epoch bump for a stale/sequence gap of at most
+    // 2 s and 16 missing events. The latch is still dropped if a queued
+    // REVERSE message is discarded by this reset. Everything else as reset().
+    void reset_keep_reverse(mx5_dr_context);
+    uint64_t latch_clears(LatchClear why) const { return why<LATCH_CLEAR_COUNT?latch_clears_[why]:0; }
+    uint64_t latch_clears_total() const;
+    LatchClear last_latch_clear() const { return last_latch_clear_; }
+    int latch_value() const { return latch_value_; }
     bool reverse_latched() const { return reverse_latch_&&latch_valid_; }
     const Status& status() const { return status_; }
     const GyroBiasStatus& calibration() const { return gyro_bias_.status(); }
@@ -276,7 +296,10 @@ private:
     bool beta_streak_;
     uint64_t beta_streak_mono_, beta_streak_utc_;
     // 3.4 reverse latch safety.
-    bool reverse_exit_seen_, beta_reverse_suspect_;
+    bool reverse_exit_seen_, beta_reverse_suspect_, reverse_any_seen_;
+    bool keep_latch_on_reset_;
+    uint64_t latch_clears_[LATCH_CLEAR_COUNT];
+    LatchClear last_latch_clear_;
     uint64_t beta_reverse_fast_since_;
     static const size_t BETA_RECORD_CAPACITY=32;
     BetaAnchorRecord beta_records_[BETA_RECORD_CAPACITY];
@@ -285,6 +308,7 @@ private:
     size_t beta_yaw_size_, beta_yaw_next_;
     PipelineResult enqueue_raw_event(const RawEvent&);
     void clear_latch();
+    void drop_latch(LatchClear);
     bool reverse_known() const;
     const SensorRecord* reverse_at(uint64_t,SensorRecord*) const;
     bool latch_evidence(uint64_t start,mx5_dr_evidence*);

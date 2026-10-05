@@ -20,6 +20,7 @@
 #include "journal_queue.h"
 #include "model_session.h"
 #include "beta_controller.h"
+#include "motion_gap.h"
 #include "model_bus.h"
 #include "lds_sideband.h"
 #include "lds_request_source.h"
@@ -403,6 +404,34 @@ void journal_pipeline_reset(Journal& j,const N::Pipeline& navigation,uint64_t be
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
 }
 
+// Task E (2026-10-05): see runtime/motion_gap.h. Worker thread only.
+mx5::runtime::MotionGapTracker motion_gap;
+void journal_latch_gap(Journal& j,const char* event,N::ReceiveFault reason,uint64_t missing,
+                       uint64_t span_ns,const N::Pipeline& navigation) {
+  char line[400];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"beta_reverse_latch\",\"mono_ns\":%llu,\"domain\":\"model\",\"event\":\"%s\","
+      "\"reason\":\"%s\",\"missing_events\":%llu,\"gap_ms\":%llu,\"latched\":%s,\"value\":%d,"
+      "\"keep_limit_events\":%llu,\"keep_limit_ms\":%llu}",
+      (unsigned long long)clock_ns(0),event,N::receive_fault_name(reason),(unsigned long long)missing,
+      (unsigned long long)(span_ns/1000000ULL),navigation.reverse_latched()?"true":"false",
+      navigation.latch_value(),(unsigned long long)mx5::runtime::MotionGapTracker::KEEP_EVENTS,
+      (unsigned long long)(mx5::runtime::MotionGapTracker::KEEP_NS/1000000ULL));
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+// An accepted motion event closes an open gap (clearing the latch if it grew
+// beyond the keep limit after all) and advances the high-water mark.
+void motion_gap_accept(Journal& j,const N::RawEvent& raw,N::Pipeline& navigation,bool enabled) {
+  const N::ReceiveFault reason=motion_gap.reason;
+  uint64_t missing=0,span=0;
+  const mx5::runtime::MotionGapTracker::Close closed=motion_gap.accept(raw,&missing,&span);
+  if(!enabled || closed==mx5::runtime::MotionGapTracker::NO_GAP)return;
+  if(closed==mx5::runtime::MotionGapTracker::TOO_LARGE) {
+    if(navigation.reverse_latched())journal_latch_gap(j,"cleared_after_gap",reason,missing,span,navigation);
+    navigation.exclude_reverse(N::LATCH_CLEAR_INPUT_GAP);
+  } else if(navigation.reverse_latched())
+    journal_latch_gap(j,"kept_across_gap",reason,missing,span,navigation);
+}
 // One bounded worker receive turn. Capture survives model/AA audit failure;
 // rejected input is separate evidence and can never enter either estimator.
 template<class Receiver>
@@ -427,7 +456,15 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
         if(c.source_epoch==UINT64_MAX || c.generation==UINT64_MAX) {
           disable_mutation();break;
         }
-        ++c.source_epoch;++c.generation;navigation.reset(c);
+        ++c.source_epoch;++c.generation;
+        uint64_t missing=0,span=0;
+        if(motion_gap.reject(d.authenticated_decoded,d.reason,d.rejected,&missing,&span))
+          navigation.reset_keep_reverse(c);
+        else {
+          if(navigation.reverse_latched())
+            journal_latch_gap(j,"cleared_by_rejection",d.reason,missing,span,navigation);
+          navigation.reset(c);
+        }
         holdout.reset(c,N::HOLDOUT_SOURCE_FAULT);
       }
       snprintf(line,sizeof line,
@@ -448,6 +485,7 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
       if(enabled && (raw.received_ns<model_since_ns || old_transport)) {
         // BETA_DECISIONS 3.4: an excluded REVERSE change ends the latch.
         if(raw.kind==N::REVERSE)navigation.exclude_reverse();
+        motion_gap_accept(j,raw,navigation,enabled);
         journal_motion(j,batch,raw);flush_motion(j,batch);
         journal_model_motion_excluded(j,raw,model_since_ns,
             raw.received_ns<model_since_ns?
@@ -456,6 +494,7 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
         continue;
       }
       const uint64_t resets=navigation.status().resets;
+      motion_gap_accept(j,raw,navigation,enabled);
       if(enabled) {navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);}
       else if(raw.kind==N::REVERSE)navigation.exclude_reverse(); // change not computed
       journal_motion(j,batch,raw);
