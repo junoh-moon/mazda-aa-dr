@@ -93,6 +93,11 @@ struct Observation {
     runtime::session_trace::Snapshot send_session; // Actual send storage lookup.
     bool has_payload;
     uint8_t original[48], outgoing[48];
+    // Any SEND whose payload is 1..16 bytes (e.g. AA GEAR, type 8, 4 bytes):
+    // a copy of the bytes passed to next() for the journal (decision G).
+    // Observation only; never used as evidence.
+    uint8_t small_length;
+    uint8_t small_payload[16];
 };
 
 // All callbacks run in an OEM call. They MUST be bounded, nonblocking,

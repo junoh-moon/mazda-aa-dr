@@ -598,6 +598,11 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     const Mode current = mode();
     if (data) {
         event.type = data->type; event.length = data->length;
+        // Diagnostic copy of a short payload (bounded, before next()).
+        if (data->payload && data->length && data->length <= sizeof event.small_payload) {
+            std::memcpy(event.small_payload, data->payload, data->length);
+            event.small_length = uint8_t(data->length);
+        }
         if (data->type == 1 && ctx) {
             ++ctx->location_count;
             if (ctx->location_count > 1) {

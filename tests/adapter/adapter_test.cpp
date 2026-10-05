@@ -538,6 +538,19 @@ int main(int argc,char** argv) {
         position_enter(0,position);run_send(data,true);position_leave();
         assert(last_event.request_result==R::STALE && !last_event.request_trace.request.id);
         assert(!std::memcmp(sent,payload,48) && trace_reads==2);
+    } else if (!std::strcmp(test,"small_payload")) {
+        // Decision G: payloads of 1..16 bytes are copied for the journal
+        // (e.g. AA GEAR, type 8, 4 bytes); the OEM call is unchanged.
+        uint8_t gear[4]={0x01,0x02,0x03,0x04};VehicleData g={8,gear,4};
+        run_send(g,true);assert(last_event.small_length==4 && !std::memcmp(last_event.small_payload,gear,4));
+        assert(!last_event.has_payload && last_event.choice==ORIGINAL);
+        uint8_t big[17]={};VehicleData b={3,big,17};
+        run_send(b,true);assert(!last_event.small_length);
+        uint8_t sixteen[16];for(unsigned i=0;i<16;++i)sixteen[i]=uint8_t(0xf0+i);VehicleData x={3,sixteen,16};
+        run_send(x,true);assert(last_event.small_length==16 && !std::memcmp(last_event.small_payload,sixteen,16));
+        VehicleData none={8,0,4};run_send(none,true);assert(!last_event.small_length);
+        position_enter(0,position);run_send(data,true);position_leave();
+        assert(!last_event.small_length && last_event.has_payload);  // LOCATION keeps its own copy
     } else if (!std::strcmp(test,"backend")) {
         InstallOptions io = InstallOptions();
 #if defined(__arm__) && !defined(__ARM_PCS_VFP) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__

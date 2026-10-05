@@ -233,14 +233,25 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
     char session[200];
     if(!mx5::runtime::format_session_trace(session,sizeof session,o.send_session,true))return false;
     if(o.has_payload) { hex48(o.original,a);hex48(o.outgoing,b); }
+    // Decision G: short payloads (<= 16 bytes, e.g. AA GEAR) for later study.
+    char small[64]="";
+    if(o.small_length && o.small_length<=sizeof o.small_payload) {
+      static const char digits[]="0123456789abcdef";
+      char hex[33];
+      for(unsigned i=0;i<o.small_length;++i) {
+        hex[2*i]=digits[o.small_payload[i]>>4];hex[2*i+1]=digits[o.small_payload[i]&15];
+      }
+      hex[2*o.small_length]=0;
+      snprintf(small,sizeof small,",\"payload_hex\":\"%s\"",hex);
+    }
     n=snprintf(line,capacity,
       "{\"kind\":\"send\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,\"mode\":%d,"
       "\"type\":%u,\"length\":%u,\"choice\":%u,\"reason\":%u,\"result\":%d,"
       "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s,\"send_session\":%s,\"lds_association\":%s,"
-      "\"class\":%u}",
+      "\"class\":%u%s}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
       o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request,session,association,
-      unsigned(o.position_class));
+      unsigned(o.position_class),small);
   }
   return n>0 && size_t(n)<capacity;
 }

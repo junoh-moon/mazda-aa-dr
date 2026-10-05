@@ -280,6 +280,11 @@ int main(int argc,char** argv) {
             }
             continue;
         }
+        if(scenario=="main" && t==1000) {
+            // Decision G: a short non-LOCATION send (AA GEAR shape) is journaled with its bytes.
+            uint8_t gear[4]={0x0a,0x00,0x00,0x07};A::VehicleData g={8,gear,4};
+            assert(A::send_vehicle_data(storage,&g)==0 && sent_type==8);
+        }
         if(scenario=="disable" && t==4000) {
             const std::string marker=logs+"/disable-next-start";
             const int fd=open(marker.c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);assert(fd>=0);close(fd);
@@ -372,6 +377,14 @@ int main(int argc,char** argv) {
     assert(rows.boot_beta_ok==1);
     assert(rows.replaced_rows==replaced_total+double_send_replaced && !rows.replaced_bad_mode);
     assert(rows.overlay_rows==overlay_total);
+    if(scenario=="main") {
+        bool gear=false;
+        for(size_t i=0;i<rows.lines.size();++i)
+            if(rows.lines[i].find("\"kind\":\"send\"")!=std::string::npos &&
+               rows.lines[i].find("\"type\":8,\"length\":4,")!=std::string::npos &&
+               rows.lines[i].find("\"payload_hex\":\"0a000007\"}")!=std::string::npos)gear=true;
+        assert(gear);
+    }
     // BETA_DECISIONS 3.2: every gate evaluation is journaled.
     unsigned anchor_accepted=0,anchor_settling=0,anchor_bad_fix=0;
     for(size_t i=0;i<rows.lines.size();++i) if(rows.lines[i].find("\"kind\":\"beta_anchor\"")!=std::string::npos) {
