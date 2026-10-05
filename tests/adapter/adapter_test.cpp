@@ -180,6 +180,9 @@ static int beta_main(const char* test) {
     o.max_snapshot_age_ns=150000000;o.allow_beta=true;o.user=&hold_set_events;
     o.beta_event=beta_event;o.session_reader=beta_session_reader;
     if(!std::strcmp(test,"beta_send_storage"))o.send_storage=send_storage;
+    // The libpatch case: the installer declined session observation. Only
+    // beta_undeclined leaves it false (installer observed sessions).
+    o.sessions_declined=std::strcmp(test,"beta_undeclined")!=0;
     for(unsigned i=0;i<48;++i)beta_payload[i]=uint8_t(0xa0+i);
     next_result=0; // OEM success unless a case injects a failure
     static uint32_t session_handle=0xabcdef; expected_session=&session_handle;
@@ -190,7 +193,9 @@ static int beta_main(const char* test) {
     }
     { Options bad=o;bad.clock=0;assert(!configure(fake_next,bad));
       bad=o;bad.provenance=0;assert(!configure(fake_next,bad));
-      bad=o;bad.max_snapshot_age_ns=0;assert(!configure(fake_next,bad)); }
+      bad=o;bad.max_snapshot_age_ns=0;assert(!configure(fake_next,bad));
+      // BETA_DECISIONS 3.6: allow_beta requires the hold event hook.
+      bad=o;bad.beta_event=0;assert(!configure(fake_next,bad)); }
     assert(configure(fake_next,o));
     assert(!set_mode(ASSIST)); // BETA opt-in never opens the qualified gate.
     assert(set_mode(BETA)&&mode()==BETA);
@@ -258,6 +263,12 @@ static int beta_main(const char* test) {
           assert(last_event.reason==EXTRA_LOCATION);position_leave(); }
         publish_on_position=false; // publication is refused once faulted
         beta_send(0,DISABLED);assert(faulted());
+    } else if (!std::strcmp(test,"beta_undeclined")) {
+        // Sessions were not declined by the installer: an UNOBSERVED send
+        // session means the fence is missing, so the original passes.
+        beta_send(0,PASS);
+        beta_session_result=mx5::runtime::session_trace::UNOBSERVED;beta_send(0,EPOCH_MISMATCH);
+        beta_session_result=mx5::runtime::session_trace::OBSERVED;beta_send(0,PASS);
     } else if (!std::strcmp(test,"beta_send_storage")) {
         // BETA_DECISIONS 3.7: the storage fence is its own hook; the session
         // reader stays whatever the installer accepted.
@@ -270,8 +281,13 @@ static int beta_main(const char* test) {
         assert(storage_calls==3); // every send, LOCATION or not
         beta_send(0,PASS);assert(storage_calls==4);
     } else if (!std::strcmp(test,"beta_hold")) {
+        const uint32_t before_fail=generation();
         next_result=-5;beta_send(0,PASS);                 // replaced send failed
         assert(beta_held() && hold_set_events==1 && !hold_cleared_events);
+        // The adapter itself revoked the failed candidate's generation.
+        assert(generation()>before_fail);
+        { DrSnapshot stale=fixture();stale.prediction_generation=before_fail;
+          assert(!publish_snapshot(stale)); }
         beta_send(0,HELD);assert(hold_set_events==1);      // original fails too: still held
         next_result=0;
         { VehicleData other={3,beta_payload,48};original_wrapper=&other;expect_original=true;errno=17;

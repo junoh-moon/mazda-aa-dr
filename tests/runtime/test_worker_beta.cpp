@@ -191,6 +191,8 @@ int main(int argc,char** argv) {
     config.mode=5;
     options.request_reader=authored_request;
     assert(!A::install_readers_supported(options));
+    // install_v74 sets this from its own decline decision (stage 3, known shim).
+    assert(!options.sessions_declined);options.sessions_declined=true;
     assert(A::configure(next_send,options));
     assert(A::set_mode(A::OBSERVE));
     // Declined case: session hooks are never prepared, the reader is UNOBSERVED.

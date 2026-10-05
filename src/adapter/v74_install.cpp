@@ -343,7 +343,10 @@ void flush(uintptr_t p,size_t n,void*) {
 }
 bool prepare(void* tramp,void* user) {
     Setup& setup=*static_cast<Setup*>(user);const A::InstallOptions& in=*setup.options;
-    if(!A::configure(reinterpret_cast<A::SendFunction>(setup.send),in.runtime))return false;
+    // Only this installer knows whether session observation was declined.
+    A::Options runtime=in.runtime;
+    runtime.sessions_declined=in.observe_requests&&!setup.sessions_enabled;
+    if(!A::configure(reinterpret_cast<A::SendFunction>(setup.send),runtime))return false;
     if(in.observe_requests) {
         setup.bindings.post_trampoline=static_cast<char*>(tramp)+16;
         setup.bindings.work_trampoline=static_cast<char*>(tramp)+32;

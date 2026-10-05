@@ -17,6 +17,10 @@ static_assert(offsetof(VehicleData, payload) == 4, "OEM payload offset");
 static_assert(offsetof(VehicleData, length) == 8, "OEM length offset");
 #endif
 static_assert(sizeof(double) == 8, "OEM double width");
+// Copied by value under a trylock and value-initialized everywhere; never a
+// constructor call in or near the OEM path.
+static_assert(__has_trivial_constructor(DrSnapshot) && __has_trivial_copy(DrSnapshot),
+              "DrSnapshot must stay trivially constructible");
 
 struct Context {
     uint32_t sequence, generation, location_count;
@@ -212,8 +216,12 @@ Reason choose_beta(Context& ctx, uint64_t time,
     // Session observation is diagnostic for BETA (it may be explicitly
     // declined next to a third-party shim), but a lifecycle transition,
     // ambiguity, fault or a closed handle still passes the original.
+    // UNOBSERVED is acceptable only when the installation explicitly declined
+    // session observation (known third-party shim); otherwise it means the
+    // fence is missing and the original passes.
     if (session.result != runtime::session_trace::OBSERVED &&
-        session.result != runtime::session_trace::UNOBSERVED) return EPOCH_MISMATCH;
+        !(session.result == runtime::session_trace::UNOBSERVED && options.sessions_declined))
+        return EPOCH_MISMATCH;
     if (pthread_mutex_trylock(&snapshot_mutex) != 0) return LOCK_BUSY;
     const DrSnapshot s = candidate;
     pthread_mutex_unlock(&snapshot_mutex);
@@ -241,7 +249,8 @@ bool configure(SendFunction next, const Options& opt) {
         next == &mx5_send_vehicle_data) return false;
     if (opt.allow_assist && (!opt.clock || !opt.provenance || !opt.max_snapshot_age_ns))
         return false;
-    if (opt.allow_beta && (!opt.clock || !opt.provenance || !opt.max_snapshot_age_ns))
+    if (opt.allow_beta && (!opt.clock || !opt.provenance || !opt.max_snapshot_age_ns ||
+                           !opt.beta_event))
         return false;
     const int saved_errno=errno;
     // Best effort at initialization, outside OEM hooks. If libc cannot
@@ -540,6 +549,9 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     // BETA hold (design S4): a failed replaced send withdraws BETA until the
     // OEM path itself is seen succeeding again with its own payload.
     if (event.choice == BETA_REPLACEMENT && result != 0) {
+        // Revoke first: the failed candidate is unselectable even after a
+        // later ORIGINAL 0 clears the hold (BETA_DECISIONS 3.6).
+        invalidate();
         if (!beta_hold.exchange(1, std::memory_order_acq_rel)) beta_signal("hold_set");
     } else if (event.choice == ORIGINAL && result == 0 && !reentrant && event.has_payload &&
                beta_hold.load(std::memory_order_acquire)) {

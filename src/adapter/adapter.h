@@ -48,8 +48,11 @@ struct DrSnapshot {
     uint64_t frontier_mono_ns, valid_until_mono_ns, derived_utc_ns;
     double latitude_deg, longitude_deg, speed_mps, travel_bearing_deg;
     bool ready, profile_verified, input_quality_verified, limits_ok, stopped;
-    double accuracy_m = 0;
-    bool beta = false;
+    // BETA only (Mode::BETA): reported radius and the MODEL-domain marker. No
+    // member initializers: value-initialize (DrSnapshot()) like the rest; the
+    // adapter static_asserts trivial default construction.
+    double accuracy_m;
+    bool beta;
 };
 
 struct Observation {
@@ -107,7 +110,7 @@ struct Options {
     SessionReader session_reader; // Optional actual send argument observation.
     AssociationReader association_reader; // Optional memory-only before-reply lookup.
     bool allow_beta; // Explicit MODEL-domain BETA opt-in, false by default.
-    // Optional BETA hold transition hook ("hold_set"/"hold_cleared", static
+    // BETA hold transition hook (required when allow_beta) ("hold_set"/"hold_cleared", static
     // strings). Runs inside the OEM send after next() returned; it MUST be
     // bounded, nonblocking, allocation-free and noexcept. errno is restored.
     void (*beta_event)(void* user, const char* what);
@@ -118,6 +121,11 @@ struct Options {
     // production installer accepts only the product session reader
     // (validation/BETA_DECISIONS_2026-10-05.md 3.7).
     void (*send_storage)(void* user, const void* session_storage);
+    // BETA: the installation explicitly declined session observation because a
+    // known third-party shim owns the session slots. Only then may choose_beta
+    // accept an UNOBSERVED send session. install_v74 overwrites this from its
+    // own decision; a direct configure() caller asserts the same fact.
+    bool sessions_declined;
 };
 
 // Initialization only: before installation / before OEM producers start.
