@@ -109,7 +109,7 @@ public:
     explicit BetaController(BetaShared& shared)
         : shared_(shared),profile_(beta_profile()),state_(BETA_DISABLED),reason_("not_enabled"),
           counters_(),have_position_(false),position_mode_(-1),position_generation_(0),
-          position_class_(adapter::POSITION_UNDECODED),withdrawn_class_(adapter::POSITION_UNDECODED),
+          position_class_(adapter::POSITION_UNDECODED),
           seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
           last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
@@ -143,17 +143,25 @@ public:
         position_generation_=o.prediction_generation;
         const adapter::PositionClass cls=o.position_class;
         position_class_=cls;last_original_utc_=o.position.utc_seconds;
-        // A withdrawal holds for the rest of the class episode it happened in.
-        if(state_==BETA_WITHDRAWN && cls==withdrawn_class_)return;
+        // A withdrawal holds for the rest of its episode. Only a real fix
+        // (FIX) or the stock dead reckoning (NATIVE_DR) ends the episode; an
+        // UNDECODED (including a concurrent classification), UTC_STALL, LOST
+        // or NO_FIX callback does not, so a transient class cannot re-arm an
+        // exhausted budget or a failed session.
+        if(state_==BETA_WITHDRAWN) {
+            if(cls==adapter::POSITION_FIX)transition(j,now,BETA_ARMED,"gps_returned");
+            else if(cls==adapter::POSITION_NATIVE_DR)transition(j,now,BETA_ARMED,"native_dr");
+            return;
+        }
         if(cls==adapter::POSITION_LOST) {
             if(state_==BETA_SPEED_ENGAGED) { withdraw();transition(j,now,BETA_GPS_LOST,"gps_lost"); }
-            else if(state_==BETA_ARMED || state_==BETA_NO_FIX || state_==BETA_WITHDRAWN)
+            else if(state_==BETA_ARMED || state_==BETA_NO_FIX)
                 transition(j,now,BETA_GPS_LOST,"gps_lost");
             return;
         }
         if(cls==adapter::POSITION_NO_FIX_STALE) {
             if(state_==BETA_ENGAGED) { withdraw();transition(j,now,BETA_NO_FIX,"no_fix"); }
-            else if(state_==BETA_ARMED || state_==BETA_GPS_LOST || state_==BETA_WITHDRAWN)
+            else if(state_==BETA_ARMED || state_==BETA_GPS_LOST)
                 transition(j,now,BETA_NO_FIX,"no_fix");
             return;
         }
@@ -163,7 +171,7 @@ public:
             cls==adapter::POSITION_NATIVE_DR?"native_dr":
             cls==adapter::POSITION_UTC_STALL?"utc_stall":"position_undecoded";
         if(state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) { withdraw();transition(j,now,BETA_ARMED,reason); }
-        else if(state_==BETA_GPS_LOST || state_==BETA_NO_FIX || state_==BETA_WITHDRAWN)
+        else if(state_==BETA_GPS_LOST || state_==BETA_NO_FIX)
             transition(j,now,BETA_ARMED,reason);
     }
     // Every popped SEND observation (diagnostic counters only).
@@ -218,7 +226,7 @@ private:
     bool have_position_;
     int32_t position_mode_;
     uint32_t position_generation_;
-    adapter::PositionClass position_class_,withdrawn_class_;
+    adapter::PositionClass position_class_;
     uint32_t seen_storage_epoch_,seen_hold_set_,seen_hold_cleared_;
     uint64_t last_summary_;
     CoreBridgeResult last_bridge_;
@@ -282,9 +290,9 @@ private:
         if(std::isfinite(v))snprintf(out,48,"%.9g",v);else strcpy(out,"null");
     }
 
-    // Engaged -> WITHDRAWN for the rest of this class episode.
+    // Engaged -> WITHDRAWN until a FIX or NATIVE_DR position (see position()).
     template<class J> void withdraw_episode(J& j,uint64_t now,const char* reason) {
-        withdraw();withdrawn_class_=position_class_;transition(j,now,BETA_WITHDRAWN,reason);
+        withdraw();transition(j,now,BETA_WITHDRAWN,reason);
     }
     void stop_adapter() {
         shared_.active.store(0,std::memory_order_release);

@@ -256,6 +256,10 @@ Reason choose_dr(Context& ctx, uint64_t time,
 Reason choose_beta(Context& ctx, uint64_t time,
                    const runtime::session_trace::Snapshot& session,
                    const uint8_t original[48], uint8_t bytes[48]) {
+    // Only class LOST may receive a DR position. classify() maps every
+    // decoded mode 0 to LOST today; this keeps the replacement bound to the
+    // class even if classification ever changes (BETA_DECISIONS 1).
+    if (ctx.position_class != POSITION_LOST) return NOT_UNKNOWN;
     if (beta_hold.load(std::memory_order_acquire)) return HELD;
     if (!options.allow_beta || !options.clock ||
         ctx.provenance.domain != Provenance::Domain::BETA) return BAD_PROVENANCE;
@@ -631,7 +635,7 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
             else if (fault.load(std::memory_order_acquire) || current < SCRUB_STALE)
                 event.reason = DISABLED;
             else if (current == BETA) {
-                // Mode 0 is always class LOST: the DR path is unchanged.
+                // Mode 0: choose_beta also requires class LOST.
                 event.mono_ns = now();
                 event.reason = choose_beta(*ctx, event.mono_ns, event.send_session,
                                            event.original, replacement);

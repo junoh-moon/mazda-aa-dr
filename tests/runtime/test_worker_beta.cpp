@@ -184,7 +184,7 @@ static bool wait_rows(const std::string& logs,const char* const* needles,unsigne
 int main(int argc,char** argv) {
     assert(argc==2);const std::string scenario=argv[1];
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
-           scenario=="fault"||scenario=="no_anchor"||scenario=="nofix");
+           scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class");
     alarm(scenario=="budget"?80:scenario=="main"?80:60);
     if(scenario=="budget")kmh=59;
     char root[]="/tmp/mx5dr-worker-beta-XXXXXX";assert(mkdtemp(root));
@@ -305,6 +305,13 @@ int main(int argc,char** argv) {
             if(t<1000) { if(t%500==0)mode=1; } else if(t%200==0)mode=0;
         }
         else if(t<=3000) { if(t%500==0)mode=1; }
+        else if(scenario=="withdrawn_class") {
+            // LOST outage, a failed replaced send (hold -> WITHDRAWN), then an
+            // UNDECODED callback (mode 5; the class a concurrent
+            // classification also gets) inside the same outage, then a fix.
+            if(t>=3200 && t<6000 && t%200==0)mode=t==4800?5:0;
+            else if(t>=6000 && t%200==0)mode=1;
+        }
         else if(scenario=="main") {
             if(t>=3200 && t<5000 && t%200==0)mode=0;
             else if(t>=5000 && t<=7500 && t%500==0)mode=1;
@@ -312,7 +319,7 @@ int main(int argc,char** argv) {
             else if(t>=9000 && t%500==0)mode=1;
         } else if(t>=3200 && t%200==0)mode=0;
         if(mode<0)continue;
-        if(scenario=="main" && t==4400)fail_next_replaced=-7;
+        if((scenario=="main" || scenario=="withdrawn_class") && t==4400)fail_next_replaced=-7;
         if(scenario=="main" && t==8600 && !storage_changed) { storage=&storage_b_object;storage_changed=true; }
         if(scenario=="fault" && t==4600) {
             // A second LOCATION inside one POSITION is an adapter contract
@@ -347,6 +354,11 @@ int main(int argc,char** argv) {
             if(t>=9000)assert(!replaced);
         }
         if(scenario=="silence" && replaced && t>=4400)++replaced_after_silence;
+        if(scenario=="withdrawn_class" && t>=3200 && t<6000 && replaced) {
+            if(failed_once)++after_hold_replaced;else ++first_outage_replaced;
+            if(calls.back().result==-7)failed_once=true;
+        }
+        if(scenario=="withdrawn_class" && t>=6000)assert(!replaced);
         if(scenario=="disable" && replaced && t>=5200)++replaced_after_disable;
     }
     // capture.stop takes precedence: the adapter returns to OBSERVE.
@@ -446,6 +458,21 @@ int main(int argc,char** argv) {
                rows.lines[i].find("\"position_class\":\"NO_FIX\",\"payload\":\"speed_only\",\"original_utc_s\":0,"
                                   "\"original_accuracy_m\":8.8")!=std::string::npos)position_class=true;
         assert(position_class);
+    } else if(scenario=="withdrawn_class") {
+        // BETA_DECISIONS F2: WITHDRAWN ends only with FIX or NATIVE_DR. The
+        // UNDECODED callback (its ORIGINAL 0 also clears the adapter hold)
+        // must not re-arm the outage, so the following mode-0 sends of the
+        // same outage stay original.
+        assert(first_outage_replaced>=2 && failed_once && !after_hold_replaced);
+        assert(rows.hold_set==1 && rows.hold_cleared==1);
+        std::vector<std::string> expected;
+        expected.push_back("DISABLED>ARMED:enabled");
+        expected.push_back("ARMED>GPS_LOST:gps_lost");
+        expected.push_back("GPS_LOST>ENGAGED:published");
+        expected.push_back("ENGAGED>WITHDRAWN:send_result_hold");
+        expected.push_back("WITHDRAWN>ARMED:gps_returned");
+        expected.push_back("ARMED>DISABLED:capture_stop");
+        assert(ordered(rows,expected) && rows.transitions.size()==expected.size());
     } else if(scenario=="no_anchor") {
         assert(!replaced_total && has(rows,"ARMED>GPS_LOST:gps_lost") && !has(rows,"GPS_LOST>ENGAGED:published"));
         assert(has(rows,"GPS_LOST>DISABLED:capture_stop"));
