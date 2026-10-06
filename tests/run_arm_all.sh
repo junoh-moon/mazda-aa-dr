@@ -123,7 +123,7 @@ MX5DR_JOURNAL_BOUNDARY_BUILD="$build/journal-boundaries" sh tests/runtime/run_jo
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_journal_queue.cpp -pthread -o "$build/journal-queue-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-queue-test"
 # Journal writer ring and the persistent log profile (2026-10-06).
-"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_journal_ring.cpp -pthread -o "$build/journal-ring-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_journal_ring.cpp -pthread -lrt -o "$build/journal-ring-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-ring-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_log_profile.cpp -o "$build/log-profile-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/log-profile-test"
