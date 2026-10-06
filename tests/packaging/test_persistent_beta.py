@@ -67,9 +67,21 @@ class PersistentBetaTests(unittest.TestCase):
         self.assertEqual(enabled.returncode, 0, enabled.stderr)
         return result
 
-    def autostart_select(self):
+    def autostart_select(self, confirm=True):
+        """The owned autostart block: select, then (90 s later) confirm while
+        the SM runs with the trial (authored /proc entry, vehicle ps form)."""
         result = self.guard('select', '/jci/sm/sm.conf')
-        return result.stdout.strip() if result.returncode == 0 else None
+        if result.returncode != 0:
+            return None
+        trial = result.stdout.strip()
+        if confirm:
+            proc = self.root / 'proc/266'
+            proc.mkdir(parents=True, exist_ok=True)
+            (proc / 'cmdline').write_bytes(b'\0'.join([b'/jci/sm/sm', b'-f', trial[len(str(self.root)):].encode(),
+                                                       b'-e', b'/tmp/smevents.txt']) + b'\0')
+            confirmed = self.guard('confirm')
+            self.assertEqual(confirmed.returncode, 0, confirmed.stderr)
+        return trial
 
     def status(self):
         result = self.menu('2\n0\n')
@@ -183,7 +195,7 @@ class PersistentBetaTests(unittest.TestCase):
         exported = self.menu('3\n')
         self.assertIn('export_exit=0', exported.stdout)
         report = self.menu_fixture.assert_export()
-        self.assertIn('guard.persist_state.line_9=tripped=reset_reports', report)
+        self.assertIn('guard.persist_state.line_14=tripped=reset_reports', report)
         self.assertIn('guard.persist.line_3=healthy_rule=off', report)
         self.assertIn('guard.inventory.status=known_entries_only', report)
         # Owner re-enables with menu 1 in boot 7; boot 8 is product again and

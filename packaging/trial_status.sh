@@ -187,8 +187,8 @@ read_persist_state() (
                 substr(s,19,1)=="-" && substr(s,24,1)=="-" && s !~ /[^0-9a-f-]/
         }
         function count(s) {return s ~ /^[0-9]+$/ && length(s)<=6 && (s=="0" || s !~ /^0/)}
-        BEGIN {n=split("enabled_boot fail_count attempts_since_healthy attempt_boot attempt_reports previous healthy_previous tripped",key," ")}
-        NR==1 {if($0!="mx5dr-persist-state-v1") bad=1; next}
+        BEGIN {n=split("enabled_boot probation fail_count unconfirmed_count recent attempts_since_healthy attempt_boot attempt_reports attempt_trial confirmed_boot previous healthy_previous tripped",key," ")}
+        NR==1 {if($0!="mx5dr-persist-state-v2") bad=1; next}
         NR>=2 && NR<=n+1 {
             p=index($0,"=")
             if(!p || substr($0,1,p-1)!=key[NR-1]) bad=1
@@ -197,12 +197,12 @@ read_persist_state() (
         {bad=1}
         END {
             if(bad || NR!=n+1) exit 1
-            if(!uuid(v[1]) || !count(v[2]) || !count(v[3]) || v[2]+0>2) exit 1
-            if(v[4]!="none" && !uuid(v[4])) exit 1
-            if(v[6] !~ /^(none|ok|healthy|failed_reset|failed_bootloop)$/) exit 1
-            if(v[7] !~ /^(none|yes|no)$/) exit 1
-            if(v[8] !~ /^(no|reset_reports|boot_loop|runtime_disabled)$/) exit 1
-            print v[1], v[2], v[3], v[4], v[6], v[7], v[8]
+            if(!uuid(v[1]) || !count(v[3]) || !count(v[6]) || v[3]+0>2) exit 1
+            if(v[7]!="none" && !uuid(v[7])) exit 1
+            if(v[11] !~ /^(none|confirmed|healthy|unconfirmed|failed_reset|failed_bootloop)$/) exit 1
+            if(v[12] !~ /^(none|yes|no)$/) exit 1
+            if(v[13] !~ /^(no|probation|reset_reports|reset_reports_repeated|unconfirmed|boot_loop|runtime_disabled)$/) exit 1
+            print v[1], v[3], v[6], v[7], v[11], v[12], v[13]
         }' "$1"
 )
 guard_policy=one-boot

@@ -338,4 +338,23 @@ class Editor(unittest.TestCase):
        self.assertEqual(launches.read_text().splitlines(),[('/tmp/mx5dr-trial-ABC123/sm.conf' if state=='success' else base)])
        self.assertEqual(calls.read_text().splitlines() if calls.exists() else [],[] if state=='missing' else [base])
        self.assertEqual(tcalls.exists(),with_timeout and state!='missing')
+ def test_persistent_confirm_is_backgrounded_after_selection(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=pathlib.Path(d);helper=root/'guard';calls=root/'calls';launches=root/'launches';persist=root/'persist'
+   sleeper=root/'sleep';sleeper.write_text('#!/bin/sh\necho "sleep $1" >> "$CALLS"\nexec sleep 1\n');sleeper.chmod(0o700)
+   edited=self.edit(STOCK,'add').stdout.replace('/data_persist/mx5-aa-dr/guard/mx5dr-guard',str(helper)).replace('/data_persist/mx5-aa-dr/tools/start_collector.sh',str(root/'no-collector')).replace('/usr/bin/timeout',str(root/'no-timeout')).replace('/data_persist/mx5-aa-dr/guard/persist',str(persist)).replace('/bin/sleep',str(sleeper))
+   self.assertIn("( trap '' HUP; "+str(sleeper)+" 90; exec "+str(helper)+" confirm ) </dev/null >/dev/null 2>&1 &",edited)
+   script='taskset() { printf "%s\\n" "$4" >> "$LAUNCHES"; }\n'+edited+'\nwait\n'
+   helper.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$CALLS"\n[ "$1" = confirm ] || printf "%s\\n" "$OUT"\n');helper.chmod(0o700)
+   for has_persist,out in [(True,'/tmp/mx5dr-trial-ABC123/sm.conf'),(False,'/tmp/mx5dr-trial-ABC123/sm.conf'),(True,'')]:
+    with self.subTest(has_persist=has_persist,out=out):
+     calls.unlink(missing_ok=True);launches.unlink(missing_ok=True);persist.unlink(missing_ok=True)
+     if has_persist:persist.write_text('x')
+     started=time.monotonic()
+     r=subprocess.run(['sh'],input=script,text=True,capture_output=True,timeout=30,env=dict(os.environ,BOARD='0',CALLS=str(calls),LAUNCHES=str(launches),OUT=out))
+     self.assertEqual(r.returncode,0,r.stderr)
+     # The SM launch line ran; the confirm only follows the stubbed delay.
+     self.assertEqual(launches.read_text().splitlines(),[out or '/jci/sm/sm.conf'])
+     expected=['select']+(['sleep 90','confirm'] if has_persist and out else [])
+     self.assertEqual(calls.read_text().splitlines(),expected)
 if __name__=='__main__':unittest.main()

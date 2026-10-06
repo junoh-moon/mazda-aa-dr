@@ -19,6 +19,11 @@ function block(v){
  print "        if [ -r /data_persist/mx5-aa-dr/tools/start_collector.sh ]; then"
  print "            /bin/sh /data_persist/mx5-aa-dr/tools/start_collector.sh 28800 || :"
  print "        fi"
+ # Persistent BETA: the guard confirms this boot 90 s later, in the
+ # background, if the SM still runs with this trial. Never delays the SM.
+ print "        if [ -f /data_persist/mx5-aa-dr/guard/persist ]; then"
+ print "            ( trap '' HUP; /bin/sleep 90; exec /data_persist/mx5-aa-dr/guard/mx5dr-guard confirm ) </dev/null >/dev/null 2>&1 &"
+ print "        fi"
  print "        ;;"
  print "esac"
  print "# MX5DR ONE-BOOT END " v

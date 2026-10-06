@@ -90,7 +90,7 @@ class Fixture(unittest.TestCase):
     def state(self):
         text = (self.root / BASE / 'guard/persist-state').read_text()
         lines = text.splitlines()
-        self.assertEqual(lines[0], 'mx5dr-persist-state-v1')
+        self.assertEqual(lines[0], 'mx5dr-persist-state-v2')
         return dict(line.split('=', 1) for line in lines[1:])
 
     def healthy(self, boot, uptime='130', raw=None):
@@ -99,8 +99,10 @@ class Fixture(unittest.TestCase):
             path.unlink()
         path.write_bytes(raw if raw is not None else ('boot_id=%s\nuptime_s=%s\n' % (BOOTS[boot], uptime)).encode())
 
-    def product_boot(self, n, expect=True, name='sm.conf'):
-        """New Linux boot n; returns the selection result."""
+    def product_boot(self, n, expect=True, name='sm.conf', confirm=True):
+        """New Linux boot n; returns the selection result. A selected boot is
+        confirmed as the autostart block does 90 s later, unless confirm=False
+        (a boot shorter than the confirmation delay)."""
         self.boot(n)
         r = self.select(name)
         if expect:
@@ -108,10 +110,23 @@ class Fixture(unittest.TestCase):
             path = pathlib.Path(r.stdout.strip())
             self.assertRegex(r.stdout, r'/tmp/mx5dr-trial-[A-Za-z0-9]{6}/sm\.conf\n$')
             self.assertEqual(path.read_bytes(), (self.root / BASE / 'guard/normal.trial').read_bytes())
+            if confirm:
+                self.sm_process(r.stdout.strip())
+                c = self.call('confirm')
+                self.assertEqual(c.returncode, 0, c.stderr)
+                self.assertEqual(self.state()['confirmed_boot'], BOOTS[n])
         else:
             self.assertNotEqual(r.returncode, 0)
             self.assertEqual(r.stdout, '')
         return r
+
+    def sm_process(self, trial, pid='266'):
+        """Authored /proc entry in the vehicle ps form; never an OEM process."""
+        proc = self.root / 'proc' / pid
+        proc.mkdir(parents=True, exist_ok=True)
+        sm_path = trial[len(str(self.root)):] if trial.startswith(str(self.root)) else trial
+        (proc / 'cmdline').write_bytes(b'\0'.join([b'/jci/sm/sm', b'-f', sm_path.encode(), b'-e',
+                                                   b'/tmp/smevents.txt']) + b'\0')
 
     def reset_during(self, tag):
         # The SM rewrites its reports just before it stops the watchdog.
@@ -137,7 +152,7 @@ class PersistentRuleOff(Fixture):
             self.product_boot(n)
             st = self.state()
             self.assertEqual((st['attempt_boot'], st['fail_count'], st['tripped']), (BOOTS[n], '0', 'no'))
-            self.assertEqual(st['previous'], 'none' if n == 1 else 'ok')
+            self.assertEqual(st['previous'], 'none' if n == 1 else 'confirmed')
             self.assertEqual(st['attempts_since_healthy'], str(n))
             self.assertEqual((self.root / BASE / 'guard/last-boot').read_text(), BOOTS[n] + '\n')
         self.assertFalse((self.root / BASE / 'guard/consumed').exists())
@@ -171,7 +186,7 @@ class PersistentRuleOff(Fixture):
         self.assertEqual((st['previous'], st['fail_count'], st['tripped']), ('failed_reset', '1', 'no'))
         self.product_boot(3)  # boot 2 ended without a new report
         st = self.state()
-        self.assertEqual((st['previous'], st['fail_count']), ('ok', '0'))
+        self.assertEqual((st['previous'], st['fail_count']), ('confirmed', '0'))
         self.reset_during('boot3')
         self.product_boot(4)
         self.assertEqual(self.state()['fail_count'], '1')
@@ -215,19 +230,22 @@ class PersistentRuleOff(Fixture):
         self.assertEqual(self.state()['previous'], 'failed_reset')
         # A touched mtime with identical content still differs (opaque equality).
         self.product_boot(3)
-        self.assertEqual(self.state()['previous'], 'ok')
+        self.assertEqual(self.state()['previous'], 'confirmed')
         os.utime(path, ns=(0, 5_000_000_000))
         self.product_boot(4)
         self.assertEqual(self.state()['previous'], 'failed_reset')
         self.assertEqual(self.state()['fail_count'], '1')
         self.product_boot(5)
         self.assertEqual(self.state()['fail_count'], '0')
-        # A new report name, and a removed report, both count.
-        self.report('extra_info.out', b'x')
+        # Fresh counters (menu 1 in boot 5); a new report name and a removed
+        # report both count.
+        self.enable()
         self.product_boot(6)
+        self.report('extra_info.out', b'x')
+        self.product_boot(7)
         self.assertEqual(self.state()['previous'], 'failed_reset')
         (self.root / 'data/extra_info.out').unlink()
-        self.product_boot(7, expect=False)
+        self.product_boot(8, expect=False)
         self.assertEqual(self.state()['tripped'], 'reset_reports')
 
     def test_report_names_other_than_out_and_unchanged_reports_are_ignored(self):
@@ -236,7 +254,7 @@ class PersistentRuleOff(Fixture):
         (self.root / 'data/natp').mkdir()
         self.report('notes.txt', b'unrelated')
         self.product_boot(2)
-        self.assertEqual(self.state()['previous'], 'ok')
+        self.assertEqual(self.state()['previous'], 'confirmed')
 
     def test_report_alias_chain_and_unusable_report_directory(self):
         (self.root / 'tmp/mnt').mkdir()
@@ -275,7 +293,7 @@ class PersistentRuleOff(Fixture):
         self.product_boot(1)
         target.write_bytes(b'changed')  # not followed: no failure
         self.product_boot(2)
-        self.assertEqual(self.state()['previous'], 'ok')
+        self.assertEqual(self.state()['previous'], 'confirmed')
 
     def test_runtime_disable_marker_trips(self):
         self.enable()
@@ -283,7 +301,7 @@ class PersistentRuleOff(Fixture):
         (self.root / BASE / 'logs/disable-next-start').write_text('x')
         self.product_boot(2, expect=False)
         st = self.state()
-        self.assertEqual((st['tripped'], st['previous'], st['fail_count']), ('runtime_disabled', 'ok', '0'))
+        self.assertEqual((st['tripped'], st['previous'], st['fail_count']), ('runtime_disabled', 'confirmed', '0'))
         self.product_boot(3, expect=False)
 
     def test_stale_capture_freeze_is_cleared_only_when_selected(self):
@@ -420,7 +438,7 @@ class PersistentRuleOff(Fixture):
             good.replace(b'previous=none', b'previous=none\nextra=1'),
             good + b'\n',
             good.rstrip(b'\n'),
-            good.replace(b'mx5dr-persist-state-v1', b'mx5dr-persist-state-v2'),
+            good.replace(b'mx5dr-persist-state-v2', b'mx5dr-persist-state-v1'),
         ]
         n = 2
         for raw in bad_states:
@@ -485,9 +503,13 @@ class PersistentRuleOff(Fixture):
         self.assertEqual(r.returncode, 3)
         self.assertIn('unable to confirm durable rollback', r.stderr)
         self.assertFalse((self.root / BASE / 'guard/last-boot').exists())
-        # The undelivered attempts were not product boots, but counted conservatively: no reset, so ok.
-        self.product_boot(n + 1)
-        self.assertEqual(self.state()['previous'], 'ok')
+        # The undelivered attempts never ran the product, but each one counts
+        # as unconfirmed (it can never be confirmed): the third trips to stock.
+        st = self.state()
+        self.assertEqual((st['unconfirmed_count'], st['recent']), ('2', 'CUU'))
+        self.product_boot(n + 1, expect=False)
+        st = self.state()
+        self.assertEqual((st['tripped'], st['unconfirmed_count'], st['recent']), ('unconfirmed', '3', 'CUUU'))
 
     def test_stale_temporaries_are_removed_under_the_lock(self):
         self.enable()
@@ -549,6 +571,132 @@ class PersistentRuleOff(Fixture):
         # The next boot still works (a hung fsync may have left a temporary).
         self.product_boot(6)
 
+    # ---- guard-owned confirmation, probation and caps (2026-10-06 G2) ----
+    def test_probation_first_attempt_unconfirmed_trips_immediately(self):
+        """A deterministic fault without an SM report (SM rejects the trial,
+        panic, power cut) is bounded to ONE product boot after menu 1."""
+        self.enable()
+        self.assertEqual(self.state()['probation'], 'yes')
+        self.product_boot(1, confirm=False)
+        self.product_boot(2, expect=False)
+        st = self.state()
+        self.assertEqual((st['tripped'], st['previous'], st['recent']), ('probation', 'unconfirmed', 'U'))
+        for n in range(3, 7):
+            self.product_boot(n, expect=False)
+        self.enable()
+        self.product_boot(7)
+        self.product_boot(8)
+        self.assertEqual(self.state()['probation'], 'no')
+
+    def test_no_report_loop_stops_after_three_unconfirmed_attempts(self):
+        self.enable()
+        self.product_boot(1)  # probation passed
+        selected = []
+        for n in range(2, 12):
+            r = self.product_boot(n, expect=(n <= 4), confirm=False)
+            selected.append(r.returncode == 0)
+        self.assertEqual(selected, [True, True, True] + [False] * 7)
+        st = self.state()
+        self.assertEqual((st['tripped'], st['unconfirmed_count'], st['recent']), ('unconfirmed', '3', 'CUUU'))
+
+    def test_only_a_confirmed_attempt_resets_the_unconfirmed_counter(self):
+        self.enable()
+        self.product_boot(1)
+        self.product_boot(2, confirm=False)
+        self.product_boot(3, confirm=False)
+        self.product_boot(4)          # judges 3: unconfirmed_count 2
+        self.assertEqual(self.state()['unconfirmed_count'], '2')
+        self.product_boot(5, confirm=False)  # judges 4 confirmed: 0
+        self.assertEqual(self.state()['unconfirmed_count'], '0')
+        self.product_boot(6, confirm=False)  # judges 5: 1
+        self.reset_during('boot 6')
+        self.product_boot(7, confirm=False)  # judges 6: reset, counter kept at 1
+        st = self.state()
+        self.assertEqual((st['previous'], st['unconfirmed_count'], st['fail_count']), ('failed_reset', '1', '1'))
+        self.product_boot(8, confirm=False)  # judges 7: 2; fail_count not reset by unconfirmed
+        self.assertEqual((self.state()['unconfirmed_count'], self.state()['fail_count']), ('2', '1'))
+        self.product_boot(9, expect=False)  # judges 8: 3
+        self.assertEqual(self.state()['tripped'], 'unconfirmed')
+
+    def test_alternating_reset_and_good_boots_hit_the_cumulative_cap(self):
+        self.enable()
+        self.product_boot(1)
+        outcomes = []
+        for n in range(2, 8):
+            if n % 2 == 0:
+                self.reset_during('boot %d' % (n - 1))
+            r = self.product_boot(n, expect=(n < 6))
+            outcomes.append((n, self.state()['previous'], self.state()['tripped']))
+        # R C R C R within 10 attempts: the third reset trips although no two were consecutive.
+        self.assertEqual(outcomes[4], (6, 'failed_reset', 'reset_reports_repeated'))
+        self.assertEqual(self.state()['recent'], 'RCRCR')
+
+    def test_old_resets_leave_the_ten_attempt_window(self):
+        self.enable()
+        self.product_boot(1)
+        self.reset_during('boot 1')
+        for n in range(2, 12):
+            self.product_boot(n)       # judges 1 (R), then 2..10 (C)
+        self.reset_during('boot 11')
+        self.product_boot(12)          # judges 11: R
+        self.product_boot(13)          # judges 12: C
+        self.reset_during('boot 13')
+        self.product_boot(14)          # judges 13: R; the first R left the window
+        st = self.state()
+        self.assertEqual((st['recent'], st['fail_count'], st['tripped']), ('CCCCCCCRCR', '1', 'no'))
+
+    def test_confirm_rules(self):
+        self.enable()
+        # Installing boot: nothing to confirm.
+        self.assertNotEqual(self.call('confirm').returncode, 0)
+        r = self.product_boot(1, confirm=False)
+        trial = r.stdout.strip()
+        # SM not running with this trial (rejected config / stock SM): rejected.
+        self.assertNotEqual(self.call('confirm').returncode, 0)
+        self.sm_process(trial.replace('/sm.conf', 'X/sm.conf'), pid='300')
+        self.assertNotEqual(self.call('confirm').returncode, 0)
+        stock = self.root / 'proc/301'
+        stock.mkdir(parents=True)
+        (stock / 'cmdline').write_bytes(b'/jci/sm/sm\0-f\0/jci/sm/sm.conf\0-e\0/tmp/smevents.txt\0')
+        self.assertNotEqual(self.call('confirm').returncode, 0)
+        self.assertEqual(self.state()['confirmed_boot'], 'none')
+        # The SM of this boot with the published trial: confirmed, then idempotent.
+        self.sm_process(trial)
+        self.assertEqual(self.call('confirm').returncode, 0)
+        before = (self.root / BASE / 'guard/persist-state').read_bytes()
+        self.assertEqual(self.call('confirm').returncode, 0)
+        self.assertEqual((self.root / BASE / 'guard/persist-state').read_bytes(), before)
+        # A confirm that runs after a reboot (different boot id) is rejected.
+        self.boot(2)
+        self.assertNotEqual(self.call('confirm').returncode, 0)
+        self.assertEqual((self.root / BASE / 'guard/persist-state').read_bytes(), before)
+        # A missing commit marker (last-boot) is rejected too.
+        r = self.product_boot(2, confirm=False)
+        self.sm_process(r.stdout.strip())
+        (self.root / BASE / 'guard/last-boot').unlink()
+        self.assertNotEqual(self.call('confirm').returncode, 0)
+        self.assertEqual(self.state()['confirmed_boot'], 'none')
+
+    def test_confirm_not_run_counts_as_unconfirmed(self):
+        """Ignition off 30 s after start: the backgrounded confirm never runs."""
+        self.enable()
+        self.product_boot(1)
+        self.product_boot(2, confirm=False)
+        self.product_boot(3)
+        st = self.state()
+        self.assertEqual((st['previous'], st['unconfirmed_count'], st['recent']), ('unconfirmed', '1', 'CU'))
+
+    def test_trip_and_lost_trial_state_cannot_be_confirmed(self):
+        self.enable()
+        r = self.product_boot(1)
+        self.reset_during('b1')
+        self.product_boot(2, confirm=False)
+        self.reset_during('b2')
+        self.boot(3)
+        self.assertNotEqual(self.select().returncode, 0)
+        self.assertEqual(self.state()['tripped'], 'reset_reports')
+        self.assertNotEqual(self.call('confirm').returncode, 0)
+
     def test_failed_enable_publication_revokes(self):
         r = self.call('enable', env=dict(self.env, MX5DR_GUARD_FAIL_FSYNC='persist'))
         self.assertNotEqual(r.returncode, 0)
@@ -604,7 +752,7 @@ class PersistentRuleOn(Fixture):
         self.product_boot(2)
         self.product_boot(3)
         st = self.state()
-        self.assertEqual((st['previous'], st['fail_count']), ('ok', '0'))  # 2 attempts so far
+        self.assertEqual((st['previous'], st['fail_count']), ('confirmed', '0'))  # 2 attempts so far
         self.product_boot(4)  # boot 3 was the third attempt without healthy
         st = self.state()
         self.assertEqual((st['previous'], st['fail_count'], st['tripped']), ('failed_bootloop', '1', 'no'))
@@ -621,7 +769,7 @@ class PersistentRuleOn(Fixture):
         self.assertEqual(self.state()['fail_count'], '1')
         self.product_boot(3)  # boot 2: no reset, no healthy: not a recovery
         st = self.state()
-        self.assertEqual((st['previous'], st['fail_count']), ('ok', '1'))
+        self.assertEqual((st['previous'], st['fail_count']), ('confirmed', '1'))
         self.healthy(3)
         self.product_boot(4)
         st = self.state()

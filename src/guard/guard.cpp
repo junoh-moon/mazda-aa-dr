@@ -181,8 +181,14 @@ void clean_stale_temps(){
 // build: no runtime writes the marker yet, so only the SM reset-report rule
 // detects failures. The manifest records the value; a mismatch declines.
 const bool healthy_rule=MX5DR_GUARD_HEALTHY_RULE!=0;
-const unsigned TRIP_FAILURES=2;          // consecutive failed attempts
+const unsigned TRIP_FAILURES=2;          // consecutive failed_reset attempts
 const unsigned HEALTHY_RULE_ATTEMPTS=3;  // attempts since the last healthy marker
+// Guard-owned confirmation (no runtime cooperation): the owned autostart
+// block runs `confirm` CONFIRM_DELAY_S after a selection; it records the boot
+// only while the SM still runs with that boot's trial configuration.
+const unsigned UNCONFIRMED_TRIP=3;       // consecutive unconfirmed attempts
+const unsigned RECENT_WINDOW=10;         // attempts kept in `recent`
+const unsigned RECENT_RESET_TRIP=3;      // failed_reset attempts within the window
 const unsigned MAX_COUNT=999999;
 const unsigned MAX_REPORTS=64;           // *.out entries considered in /data
 const size_t REPORT_READ_CAP=1024*1024;  // bytes hashed per report
@@ -191,37 +197,55 @@ std::string persist_text(const std::string&expected){
  return std::string("mx5dr-persist-v1\nmode=BETA\nhealthy_rule=")+(healthy_rule?"on":"off")+"\n"+expected;
 }
 struct State{
- std::string enabled_boot,attempt_boot,attempt_reports,previous,healthy_previous,tripped;
- unsigned fail_count,attempts;
+ std::string enabled_boot,probation,recent,attempt_boot,attempt_reports,attempt_trial,confirmed_boot,previous,healthy_previous,tripped;
+ unsigned fail_count,unconfirmed,attempts;
 };
-const char*const state_keys[]={"enabled_boot","fail_count","attempts_since_healthy","attempt_boot","attempt_reports","previous","healthy_previous","tripped"};
+const char*const state_keys[]={"enabled_boot","probation","fail_count","unconfirmed_count","recent","attempts_since_healthy",
+ "attempt_boot","attempt_reports","attempt_trial","confirmed_boot","previous","healthy_previous","tripped"};
+const size_t STATE_KEYS=sizeof(state_keys)/sizeof(state_keys[0]);
 bool number(const std::string&s,unsigned&n){if(s.empty()||s.size()>6||(s.size()>1&&s[0]=='0'))return false;n=0;for(size_t i=0;i<s.size();i++){if(s[i]<'0'||s[i]>'9')return false;n=n*10+unsigned(s[i]-'0');}return true;}
 bool hex64(const std::string&s){if(s.size()!=64)return false;for(size_t i=0;i<64;i++)if(!((s[i]>='0'&&s[i]<='9')||(s[i]>='a'&&s[i]<='f')))return false;return true;}
 bool one_of(const std::string&s,const char*const*set){for(;*set;set++)if(s==*set)return true;return false;}
-const char*const previous_values[]={"none","ok","healthy","failed_reset","failed_bootloop",0};
+const char*const previous_values[]={"none","confirmed","healthy","unconfirmed","failed_reset","failed_bootloop",0};
 const char*const healthy_values[]={"none","yes","no",0};
-const char*const tripped_values[]={"no","reset_reports","boot_loop","runtime_disabled",0};
+const char*const tripped_values[]={"no","probation","reset_reports","reset_reports_repeated","unconfirmed","boot_loop","runtime_disabled",0};
+// The exact path shape the autostart block accepts, under the fixture prefix.
+bool trial_path(const std::string&s){
+ const std::string head=prefix+"/tmp/mx5dr-trial-";
+ if(s.size()!=head.size()+6+8||s.compare(0,head.size(),head)||s.compare(head.size()+6,8,"/sm.conf"))return false;
+ for(size_t i=head.size();i<head.size()+6;i++){char c=s[i];if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')))return false;}
+ return true;
+}
+unsigned recent_resets(const std::string&r){unsigned n=0;for(size_t i=0;i<r.size();i++)if(r[i]=='R')n++;return n;}
 std::string state_text(const State&s){
- char counts[64];snprintf(counts,sizeof counts,"fail_count=%u\nattempts_since_healthy=%u\n",s.fail_count,s.attempts);
- return "mx5dr-persist-state-v1\nenabled_boot="+s.enabled_boot+"\n"+counts+"attempt_boot="+s.attempt_boot+"\nattempt_reports="+s.attempt_reports+
+ char counts[96];snprintf(counts,sizeof counts,"fail_count=%u\nunconfirmed_count=%u\n",s.fail_count,s.unconfirmed);
+ char attempts[48];snprintf(attempts,sizeof attempts,"attempts_since_healthy=%u\n",s.attempts);
+ return "mx5dr-persist-state-v2\nenabled_boot="+s.enabled_boot+"\nprobation="+s.probation+"\n"+counts+"recent="+s.recent+"\n"+attempts+
+  "attempt_boot="+s.attempt_boot+"\nattempt_reports="+s.attempt_reports+"\nattempt_trial="+s.attempt_trial+"\nconfirmed_boot="+s.confirmed_boot+
   "\nprevious="+s.previous+"\nhealthy_previous="+s.healthy_previous+"\ntripped="+s.tripped+"\n";
 }
+// The only parser of persist-state; `status` prints what it accepts.
 bool parse_state(const std::string&raw,State&s){
  if(raw.empty()||raw[raw.size()-1]!='\n')return false;
  std::vector<std::string> lines;size_t at=0;
  while(at<raw.size()){size_t end=raw.find('\n',at);lines.push_back(raw.substr(at,end-at));at=end+1;}
- const size_t keys=sizeof(state_keys)/sizeof(state_keys[0]);
- if(lines.size()!=keys+1||lines[0]!="mx5dr-persist-state-v1")return false;
- std::string v[keys];
- for(size_t i=0;i<keys;i++){std::string k=std::string(state_keys[i])+"=";if(lines[i+1].compare(0,k.size(),k))return false;v[i]=lines[i+1].substr(k.size());}
- s.enabled_boot=v[0];s.attempt_boot=v[3];s.attempt_reports=v[4];s.previous=v[5];s.healthy_previous=v[6];s.tripped=v[7];
- if(!uuid36(s.enabled_boot)||!number(v[1],s.fail_count)||!number(v[2],s.attempts)||s.fail_count>TRIP_FAILURES)return false;
+ if(lines.size()!=STATE_KEYS+1||lines[0]!="mx5dr-persist-state-v2")return false;
+ std::string v[STATE_KEYS];
+ for(size_t i=0;i<STATE_KEYS;i++){std::string k=std::string(state_keys[i])+"=";if(lines[i+1].compare(0,k.size(),k))return false;v[i]=lines[i+1].substr(k.size());}
+ s.enabled_boot=v[0];s.probation=v[1];s.recent=v[4];s.attempt_boot=v[6];s.attempt_reports=v[7];s.attempt_trial=v[8];s.confirmed_boot=v[9];
+ s.previous=v[10];s.healthy_previous=v[11];s.tripped=v[12];
+ if(!uuid36(s.enabled_boot)||(s.probation!="yes"&&s.probation!="no"))return false;
+ if(!number(v[2],s.fail_count)||!number(v[3],s.unconfirmed)||!number(v[5],s.attempts))return false;
+ if(s.fail_count>TRIP_FAILURES||s.unconfirmed>UNCONFIRMED_TRIP)return false;
+ if(s.recent!="-"&&(s.recent.empty()||s.recent.size()>RECENT_WINDOW||s.recent.find_first_not_of("RUCB")!=std::string::npos))return false;
  bool none=s.attempt_boot=="none";
- if(none!=(s.attempt_reports=="none"))return false;
- if(!none&&(!uuid36(s.attempt_boot)||!hex64(s.attempt_reports)))return false;
+ if(none!=(s.attempt_reports=="none")||none!=(s.attempt_trial=="none"))return false;
+ if(!none&&(!uuid36(s.attempt_boot)||!hex64(s.attempt_reports)||!trial_path(s.attempt_trial)))return false;
+ if(s.confirmed_boot!="none"&&s.confirmed_boot!=s.attempt_boot)return false;
  if(!one_of(s.previous,previous_values)||!one_of(s.healthy_previous,healthy_values)||!one_of(s.tripped,tripped_values))return false;
- // A tripped state never carries an open attempt; an active one is below the trip count.
- if(s.tripped!="no"?!none:s.fail_count>=TRIP_FAILURES)return false;
+ // A tripped state never carries an open attempt; an active one is below every cap.
+ if(s.tripped!="no"?!none:(s.fail_count>=TRIP_FAILURES||s.unconfirmed>=UNCONFIRMED_TRIP||
+    recent_resets(s.recent)>=RECENT_RESET_TRIP))return false;
  return state_text(s)==raw;
 }
 // Mode is bound by the manifest hash too; persistent product mode is BETA only.
@@ -299,20 +323,52 @@ bool report_fingerprint(std::string&out){
 }
 // Judge the previous product attempt. The result is committed only in the one
 // atomic state write that also replaces the attempt, so nothing counts twice.
+//   R failed_reset: the SM reset reports changed since that selection.
+//   B failed_bootloop: healthy rule only (off in this build).
+//   C confirmed (or healthy): `confirm` recorded that boot.
+//   U unconfirmed: neither a new report nor a confirmation.
+// Only a confirmed attempt resets the consecutive counters and ends probation.
 void evaluate(State&s,const std::string&reports){
  if(s.attempt_boot=="none"){s.previous="none";s.healthy_previous="none";return;}
  bool reset=s.attempt_reports!=reports;
+ bool confirmed=s.confirmed_boot==s.attempt_boot;
  bool healthy=healthy_marker(s.attempt_boot);
  s.healthy_previous=healthy?"yes":"no";
  if(healthy)s.attempts=0;
- bool failed=true;
- if(reset)s.previous="failed_reset";
- else if(healthy_rule&&!healthy&&s.attempts>=HEALTHY_RULE_ATTEMPTS)s.previous="failed_bootloop";
- else{failed=false;s.previous=healthy?"healthy":"ok";}
- if(failed){if(s.fail_count<TRIP_FAILURES)s.fail_count++;}
- // Without the healthy rule a boot without a new reset report ends the run.
- else if(healthy||!healthy_rule)s.fail_count=0;
- if(s.fail_count>=TRIP_FAILURES)s.tripped=s.previous=="failed_reset"?"reset_reports":"boot_loop";
+ char mark;
+ if(reset){mark='R';s.previous="failed_reset";if(s.fail_count<TRIP_FAILURES)s.fail_count++;}
+ else if(healthy_rule&&!healthy&&s.attempts>=HEALTHY_RULE_ATTEMPTS){mark='B';s.previous="failed_bootloop";if(s.fail_count<TRIP_FAILURES)s.fail_count++;}
+ else if(confirmed){mark='C';s.previous=healthy?"healthy":"confirmed";if(healthy||!healthy_rule)s.fail_count=0;}
+ else{mark='U';s.previous="unconfirmed";if(s.unconfirmed<UNCONFIRMED_TRIP)s.unconfirmed++;}
+ if(confirmed)s.unconfirmed=0;
+ s.recent=(s.recent=="-"?std::string():s.recent)+mark;
+ if(s.recent.size()>RECENT_WINDOW)s.recent.erase(0,s.recent.size()-RECENT_WINDOW);
+ bool probation_failed=s.probation=="yes"&&!confirmed;
+ if(confirmed)s.probation="no";
+ if(probation_failed)s.tripped="probation";
+ else if(s.fail_count>=TRIP_FAILURES)s.tripped=mark=='B'?"boot_loop":"reset_reports";
+ else if(recent_resets(s.recent)>=RECENT_RESET_TRIP)s.tripped="reset_reports_repeated";
+ else if(s.unconfirmed>=UNCONFIRMED_TRIP)s.tripped="unconfirmed";
+}
+// The SM of this boot still runs with the published trial: argv is
+// "/jci/sm/sm -f <trial> ..." (vehicle ps 2026-10-04 shows exactly this form).
+bool sm_running(const std::string&trial){
+ const std::string want=trial.substr(prefix.size());
+ int pd=open((prefix+"/proc").c_str(),O_RDONLY|O_DIRECTORY|O_CLOEXEC);if(pd<0)return false;
+ int scan=dup(pd);DIR*dir=scan<0?0:fdopendir(scan);
+ if(!dir){if(scan>=0)close(scan);close(pd);return false;}
+ bool found=false;
+ for(unsigned seen=0;!found&&seen<8192;seen++){
+  struct dirent*e=readdir(dir);if(!e)break;
+  const char*n=e->d_name;if(!n[0]||strspn(n,"0123456789")!=strlen(n)||strlen(n)>10)continue;
+  int fd=openat(pd,(std::string(n)+"/cmdline").c_str(),O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_NOCTTY|O_CLOEXEC);if(fd<0)continue;
+  std::string c;bool ok=read_fd(fd,c,4096);close(fd);if(!ok)continue;
+  std::vector<std::string> argv;size_t at=0;
+  while(at<c.size()&&argv.size()<8){size_t end=c.find('\0',at);if(end==std::string::npos)end=c.size();argv.push_back(c.substr(at,end-at));at=end+1;}
+  if(argv.size()>=3&&argv[0]=="/jci/sm/sm"&&argv[1]=="-f"&&argv[2]==want)found=true;
+ }
+ closedir(dir);close(pd);
+ return found;
 }
 // Exclusive /tmp/mx5dr-trial-XXXXXX/sm.conf, file and directory fsynced.
 int stage_trial(const std::string&content,std::vector<char>&d){
@@ -327,12 +383,17 @@ int stage_trial(const std::string&content,std::vector<char>&d){
  if(!ok){unlinkat(td,"sm.conf",0);close(td);rmdir(&d[0]);return -1;}
  return td;
 }
+void fresh_state(State&s,const std::string&boot){
+ s.enabled_boot=boot;s.probation="yes";s.fail_count=0;s.unconfirmed=0;s.attempts=0;s.recent="-";
+ s.attempt_boot="none";s.attempt_reports="none";s.attempt_trial="none";s.confirmed_boot="none";
+ s.previous="none";s.healthy_previous="none";s.tripped="no";
+}
 int enable_persistent(const std::string&expected){
  // One policy at a time: a pending one-boot arm must be removed first.
  if(!absent("arm")||!beta_config())return 2;
  std::string last,id;if(!last_boot_record(last)||!boot_id(id))return 2;
- State s;s.enabled_boot=id.substr(0,36);s.fail_count=0;s.attempts=0;
- s.attempt_boot="none";s.attempt_reports="none";s.previous="none";s.healthy_previous="none";s.tripped="no";
+ // Probation: the first product boot after enabling must be confirmed.
+ State s;fresh_state(s,id.substr(0,36));
  // Fresh state first; without `persist` it authorizes nothing.
  if(!atomic_file("persist-state",state_text(s)))return 2;
  if(atomic_file("persist",persist_text(expected)))return 0;
@@ -355,20 +416,23 @@ int select_persistent(unsigned index,const std::string&expected){
  if(s.tripped!="no"){
   // Stock baseline from now on; the evidence stays. Re-enabling is menu 1.
   // An undurable trip record is re-derived from the same evidence next boot.
-  s.attempt_boot="none";s.attempt_reports="none";
+  s.attempt_boot="none";s.attempt_reports="none";s.attempt_trial="none";s.confirmed_boot="none";
   atomic_file("persist-state",state_text(s));
   return 2;
  }
  std::string content;if(!read_file(prefix+names[index],content,1024*1024))return 2;
  std::vector<char> d;int td=stage_trial(content,d);if(td<0)return 2;
- s.attempt_boot=boot;s.attempt_reports=reports;if(s.attempts<MAX_COUNT)s.attempts++;
+ std::string result=std::string(&d[0])+"/sm.conf";
+ s.attempt_boot=boot;s.attempt_reports=reports;s.attempt_trial=result;s.confirmed_boot="none";
+ if(s.attempts<MAX_COUNT)s.attempts++;
  // No path is published until the attempt record and boot marker are durable.
  bool ok=atomic_file("persist-state",state_text(s));
  bool last_published=false;
  if(ok)ok=atomic_file("last-boot",id,&last_published);
  if(!ok){
   // A durable attempt record without a published path only makes the next
-  // evaluation stricter. The visible success marker is revoked.
+  // evaluation stricter (it can never be confirmed). The visible success
+  // marker is revoked.
   bool revoked=true;
   if(last_published){
    revoked=unlinkat(gd,"last-boot",0)==0||errno==ENOENT;
@@ -379,9 +443,22 @@ int select_persistent(unsigned index,const std::string&expected){
  }
  close(td);
  clear_stale_capture_stop();
- std::string result=std::string(&d[0])+"/sm.conf";
  if(printf("%s\n",result.c_str())<0||fflush(stdout))return 2;
  return 0;
+}
+// Run by the owned autostart block about 90 s after a committed selection.
+// Records this boot only if it is the open attempt, the selection was
+// committed (last-boot) and the SM still runs with that trial. Idempotent.
+int confirm_persistent(){
+ std::string p,raw,id,last;State s;
+ if(!owned_read("persist",p)||!owned_read("persist-state",raw)||!parse_state(raw,s))return 2;
+ if(!boot_id(id)||!last_boot_record(last)||last!=id)return 2;
+ const std::string boot=id.substr(0,36);
+ if(s.tripped!="no"||s.attempt_boot!=boot)return 2;
+ if(s.confirmed_boot==boot)return 0;
+ if(!sm_running(s.attempt_trial))return 2;
+ s.confirmed_boot=boot;
+ return atomic_file("persist-state",state_text(s))?0:2;
 }
 // Hard bound for every invocation: the Service Manager waits for `select`.
 // SIGALRM's default action ends the process without cleanup; every path
@@ -399,8 +476,12 @@ int run(int argc,char**argv){
 #endif
  hang_point("start");
  gd=trusted(prefix+"/data_persist/mx5-aa-dr/guard",true);if(gd<0)return 2;
- int lock=openat(gd,"lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(lock<0||!safe_stat(lock,false)||flock(lock,LOCK_EX|LOCK_NB))return 2;
+ int lock=openat(gd,"lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(lock<0||!safe_stat(lock,false))return 2;
+ // `confirm` runs in the background and may meet a parked menu action: retry.
+ bool confirm=!strcmp(argv[1],"confirm");
+ for(unsigned tries=0;flock(lock,LOCK_EX|LOCK_NB);tries++){if(!confirm||tries>=5)return 2;sleep(1);}
  clean_stale_temps();
+ if(confirm)return argc==2?confirm_persistent():2;
  std::string expected;if(!baseline_clean()||!manifest(expected))return 2;
  if(!strcmp(argv[1],"check")){
   std::string id,last;return argc==2&&boot_id(id)&&last_boot_record(last)?0:2;
