@@ -489,6 +489,47 @@ class PersistentRuleOff(Fixture):
         self.product_boot(n + 1)
         self.assertEqual(self.state()['previous'], 'ok')
 
+    def test_stale_temporaries_are_removed_under_the_lock(self):
+        self.enable()
+        guard = self.root / BASE / 'guard'
+        stale = ['.persist-state.123', '.last-boot.4567', '.persist.9', '.arm.42', '.last-decision.77']
+        keep = ['.persist-state.12a', '.other.123', '.persist-state.', 'persist-state.5', '.persist-state.12345678901']
+        for name in stale + keep:
+            (guard / name).write_text('x')
+            (guard / name).chmod(0o600)
+        outside = self.root / 'outside'
+        outside.write_text('o')
+        (guard / '.persist.55').symlink_to(outside)
+        (guard / '.last-boot.66').mkdir()
+        self.product_boot(1)
+        for name in stale:
+            self.assertFalse((guard / name).exists(), name)
+        for name in keep:
+            self.assertTrue((guard / name).exists(), name)
+        self.assertTrue((guard / '.persist.55').is_symlink())
+        self.assertEqual(outside.read_text(), 'o')
+        self.assertTrue((guard / '.last-boot.66').is_dir())
+
+    def test_pid_collision_with_a_stale_temporary(self):
+        """A power cut left .persist-state.<pid> and .last-boot.<pid>; the same
+        PID is reused by the next guard (exec keeps the PID)."""
+        self.enable()
+        self.product_boot(1)
+        self.boot(2)
+        gate = subprocess.Popen(['sh', '-c', 'echo $$; read go; exec "$@"', 'sh'] + self.command +
+                                ['select', '/jci/sm/sm.conf'], env=self.env, text=True,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pid = gate.stdout.readline().strip()
+        guard = self.root / BASE / 'guard'
+        for name in ('persist-state', 'last-boot'):
+            (guard / ('.%s.%s' % (name, pid))).write_text('stale from a power cut')
+            (guard / ('.%s.%s' % (name, pid))).chmod(0o600)
+        out, err = gate.communicate('go\n')
+        self.assertEqual(gate.returncode, 0, err)
+        self.assertRegex(out, r'/tmp/mx5dr-trial-\w{6}/sm\.conf\n$')
+        self.assertEqual(self.state()['attempt_boot'], BOOTS[2])
+        self.assertEqual(sorted(p.name for p in guard.glob('.*.%s' % pid)), [])
+
     def test_failed_enable_publication_revokes(self):
         r = self.call('enable', env=dict(self.env, MX5DR_GUARD_FAIL_FSYNC='persist'))
         self.assertNotEqual(r.returncode, 0)

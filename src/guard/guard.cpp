@@ -97,6 +97,9 @@ bool sync_dir(int fd,const char*stage){
 bool atomic_file(const char*name,const std::string&s,bool*published=0){
  if(published)*published=false;
  char temp[96];snprintf(temp,sizeof temp,".%s.%ld",name,(long)getpid());
+ // A power cut can leave this name behind and a later boot can reuse the PID.
+ // Holding the guard lock, the name is ours: drop it (never followed), then O_EXCL.
+ unlinkat(gd,temp,0);
  int fd=openat(gd,temp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
  if(fd<0)return false;
  bool ok=write_all(fd,s)&&fsync(fd)==0;
@@ -128,6 +131,34 @@ bool boot_id(std::string&s){std::string p=prefix+"/proc/sys/kernel/random/boot_i
 bool owned_read(const char*name,std::string&s){int fd=openat(gd,name,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return false;bool ok=safe_stat(fd,false)&&read_fd(fd,s,1024);close(fd);return ok;}
 bool last_boot_record(std::string&s){struct stat st;if(fstatat(gd,"last-boot",&st,AT_SYMLINK_NOFOLLOW)){return errno==ENOENT;}return owned_read("last-boot",s)&&valid_boot_record(s);}
 bool baseline_clean(){for(unsigned i=2;i<=4;i+=2){std::string s;if(!read_file(prefix+names[i],s,1024*1024)||s.find(token)!=std::string::npos||s.find(tap_token)!=std::string::npos||s.find(lds_token)!=std::string::npos)return false;}return true;}
+// Temporary names of atomic_file() that a power cut can leave behind.
+const char*const temp_names[]={"arm","last-boot","persist","persist-state","last-decision",0};
+bool stale_temp_name(const char*n){
+ if(n[0]!='.')return false;
+ for(const char*const*k=temp_names;*k;k++){
+  size_t l=strlen(*k);
+  if(strncmp(n+1,*k,l)||n[1+l]!='.')continue;
+  const char*d=n+2+l;size_t digits=strspn(d,"0123456789");
+  if(digits>=1&&digits<=10&&!d[digits])return true;
+ }
+ return false;
+}
+// Under the guard lock: remove our own stale temporaries (regular, owned,
+// never followed). Bounded scan; best effort.
+void clean_stale_temps(){
+ int fd=dup(gd);DIR*dir=fd<0?0:fdopendir(fd);
+ if(!dir){if(fd>=0)close(fd);return;}
+ bool removed=false;
+ for(unsigned seen=0;seen<256;seen++){
+  struct dirent*e=readdir(dir);if(!e)break;
+  if(!stale_temp_name(e->d_name))continue;
+  struct stat st;
+  if(fstatat(gd,e->d_name,&st,AT_SYMLINK_NOFOLLOW)==0&&S_ISREG(st.st_mode)&&st.st_uid==expected_owner())
+   removed=unlinkat(gd,e->d_name,0)==0||removed;
+ }
+ closedir(dir);
+ if(removed)fsync(gd);
+}
 // ---- Persistent BETA product mode ------------------------------------------
 // The persistent files never contain our preload either: every boot the guard
 // decides again, from root-owned state, whether to publish a /tmp trial.
@@ -344,6 +375,7 @@ int run(int argc,char**argv){if(geteuid()!=expected_owner()||argc<2)return 2;
 #endif
  gd=trusted(prefix+"/data_persist/mx5-aa-dr/guard",true);if(gd<0)return 2;
  int lock=openat(gd,"lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(lock<0||!safe_stat(lock,false)||flock(lock,LOCK_EX|LOCK_NB))return 2;
+ clean_stale_temps();
  std::string expected;if(!baseline_clean()||!manifest(expected))return 2;
  if(!strcmp(argv[1],"check")){
   std::string id,last;return argc==2&&boot_id(id)&&last_boot_record(last)?0:2;
