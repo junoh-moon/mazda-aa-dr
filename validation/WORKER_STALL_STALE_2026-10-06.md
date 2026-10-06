@@ -74,3 +74,24 @@ motion_rejected 84건(stale 69, sequence_discontinuity 15)은 10개 묶음이며
 - `make test-runtime`(부하 없음): 통과, 불확정 0회.
 - IO 부하 아래 래퍼 실행: 1회 불확정 뒤 재시도에서 통과.
 - `test_worker_beta`도 같은 워커를 쓰지만 이번에 부하 측정은 하지 않았습니다.
+
+## 후속 구현 (같은 날)
+
+위 제안 두 가지를 구현했습니다. 차량에서 실행된 적은 없습니다.
+
+- 늦은 도착 허용(`src/navigation/channel.cpp`): 같은 생산자 pid·epoch의 다음 연속
+  순번이고 `received_ns`가 단조이면 2 s(`MotionGapTracker::KEEP_NS`)까지 받아들입니다.
+  `received_ns`는 그대로이고 나이는 `motion_late_accepted` 행과 health의
+  `motion_late`에만 남습니다. 2 s 초과, pid/epoch 변경, 순번 공백, 수신 시각 역행은
+  기존처럼 거부+reset입니다. stale 거부도 같은 소스의 순번 커서를 전진시켜 다음
+  신선한 데이터그램이 discontinuity로 다시 거부되지 않습니다. 파이프라인은 생산자
+  수신 시각으로 적분하므로 오차 예산에 더할 나이가 없고(test_beta에서 정시 처리와
+  같은 출력), 출력 신선도는 lease·sample-age·300 ms 침묵 검사가 now 기준으로
+  제한합니다.
+- journal 쓰기 분리(`src/runtime/journal_ring.h`, `runtime.cpp` writer 스레드): 워커는
+  미리 할당한 링에 행을 넣고 writer 스레드가 fwrite/fflush/statvfs/회전을 합니다.
+  `test_journal --writer`에서 writer에 1 s 정지를 넣어도 워커 turn 최대 0.07 ms,
+  수신 나이 최대 0.5 ms, 거부 0이었습니다(호스트 측정). 넘침 시 진단 행만 오래된
+  것부터 버리고(`journal_dropped` 행), 증거 행을 넣지 못하면 mutation을 끕니다.
+- `test_worker_session`의 불확정 분류(77)는 그대로 두었습니다. 이제 2 s를 넘는
+  정지에서만 stale 행이 생깁니다.
