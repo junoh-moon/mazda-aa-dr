@@ -78,6 +78,7 @@ static void arm_test_mode() {
   // Test-only reset, with no concurrent queue users.
   queue.~ObservationQueue();new(&queue) ObservationQueue;
   assert(A::set_mode(A::SCRUB_STALE));
+  journal_ok.store(1);
 }
 struct FakeReceiver {
   unsigned calls,limit;
@@ -213,6 +214,209 @@ static void late_turn_tests(const char* root,const std::string& logs) {
   motion_late=MotionLate();
   puts("Late arrival: <= 2 s backlog accepted without reset and journaled; > 2 s stays stale "
        "without a following sequence discontinuity");
+}
+// ---- Journal writer thread (2026-10-06) ----
+static std::vector<std::string> trace_rows(const std::string& logs) {
+  std::vector<std::string> rows;
+  for(int i=2;i>=0;--i) {
+    std::ifstream f((logs+"/trace."+char('0'+i)+".jsonl").c_str());std::string line;
+    while(std::getline(f,line))rows.push_back(line);
+  }
+  return rows;
+}
+static void clear_traces(const std::string& logs) {
+  for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
+}
+static uint64_t row_number(const std::string& row,const char* key) {
+  const std::string k=std::string("\"")+key+"\":";
+  const size_t at=row.find(k);
+  return at==std::string::npos?UINT64_MAX:strtoull(row.c_str()+at+k.size(),0,10);
+}
+struct AgeReceiver {
+  N::MotionReceiver* receiver;
+  uint64_t max_age;unsigned events,late,faults;
+  N::ReceiveResult receive(N::RawEvent* out,N::ReceiveDiagnostic* d) {
+    const N::ReceiveResult r=receiver->receive(out,d);
+    if(r==N::CHANNEL_EVENT) { ++events;if(d->age_ns>max_age)max_age=d->age_ns;if(d->late)++late; }
+    else if(r==N::CHANNEL_FAULT)++faults;
+    return r;
+  }
+};
+struct SenderJob { char name[80];unsigned count; };
+static void* motion_sender(void* argument) {
+  SenderJob* job=static_cast<SenderJob*>(argument);
+  N::MotionSender sender;assert(sender.open_channel(job->name));
+  for(unsigned i=1;i<=job->count;++i) {
+    N::RawEvent e=N::RawEvent();e.kind=N::WHEELS;e.epoch=7;e.receive_seq=i;e.received_ns=clock_ns(0);
+    for(unsigned k=0;k<4;++k)e.raw[k]=13600;
+    assert(sender.send_event(e));
+    usleep(20000);
+  }
+  return 0;
+}
+// A writer stalled for 1 s (injected sleep before its next row) must not
+// delay the worker's receive turns or make queued motion stale.
+static void writer_stall_isolation(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=8388608;motion_late=MotionLate();
+  SenderJob job;snprintf(job.name,sizeof job.name,"mx5dr.writer.%ld",(long)getpid());job.count=80;
+  N::MotionReceiver receiver;
+  if(!receiver.open_channel(job.name)) {
+    puts("Writer stall isolation: SKIP (motion socket unavailable on this host)");return;
+  }
+  N::Pipeline navigation;N::GpsHoldout holdout;const mx5_dr_context context={1,1,1};
+  assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+  assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+  AgeReceiver ages={&receiver,0,0,0,0};
+  uint64_t max_turn=0,writer_progress_mid=UINT64_MAX,stall_begin=0;
+  unsigned turns=0;
+  {
+    Journal j(root);assert(j.start_writer());
+    j.line("{\"kind\":\"fixture\",\"n\":0}");
+    assert(j.flush_wait());
+    j.writer->inject_stall_ns.store(1000000000ULL);
+    pthread_t thread;assert(pthread_create(&thread,0,motion_sender,&job)==0);
+    mx5::runtime::MotionBatch batch;
+    const uint64_t begin=clock_ns(0);stall_begin=begin;
+    uint64_t last_flush=begin;
+    while(clock_ns(0)-begin<1800000000ULL) {
+      const uint64_t turn=clock_ns(0);
+      drain_motion(j,batch,ages,navigation,holdout,true);
+      char row[96];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",++turns);
+      j.line(row);
+      if(turn-last_flush>=1000000000ULL) { last_flush=turn;j.flush(); }
+      const uint64_t spent=clock_ns(0)-turn;
+      if(spent>max_turn)max_turn=spent;
+      if(writer_progress_mid==UINT64_MAX && clock_ns(0)-begin>=500000000ULL)
+        writer_progress_mid=j.writer->written.load();
+      receiver.wait_for_input(50);
+    }
+    assert(pthread_join(thread,0)==0);
+    drain_motion(j,batch,ages,navigation,holdout,true);
+    assert(!j.failed);
+  } // joins the writer: everything queued is written
+  const uint64_t elapsed=clock_ns(0)-stall_begin;
+  printf("Writer stall isolation: injected writer stall 1000 ms; worker turns=%u max_turn_ms=%.2f "
+         "motion events=%u max_receive_age_ms=%.2f late=%u rejected=%u writer_rows_at_500ms=%llu elapsed_ms=%llu\n",
+         turns,max_turn/1e6,ages.events,ages.max_age/1e6,ages.late,ages.faults,
+         (unsigned long long)writer_progress_mid,(unsigned long long)(elapsed/1000000ULL));
+  // The writer really was stalled (it wrote at most the row it held)...
+  assert(writer_progress_mid<=2);
+  // ...but reception and the worker turns were not: no stale, no late, and
+  // no turn anywhere near the stall (bound generous for a shared host).
+  assert(ages.events==job.count && ages.faults==0 && ages.late==0);
+  assert(ages.max_age<200000000ULL && max_turn<200000000ULL);
+  const std::vector<std::string> rows=trace_rows(logs);
+  unsigned motion=0,fixtures=0;uint64_t last_n=0;
+  for(size_t i=0;i<rows.size();++i) {
+    assert(rows[i].find("journal_dropped")==std::string::npos);
+    if(rows[i].find("\"kind\":\"fixture\"")!=std::string::npos) {
+      const uint64_t n=row_number(rows[i],"n");assert(!fixtures || n==last_n+1);last_n=n;++fixtures;
+    }
+    if(rows[i].find("\"kind\":\"motion_batch\"")!=std::string::npos) {
+      size_t at=0;while((at=rows[i].find("[1,",at))!=std::string::npos) { ++motion;at+=3; }
+    }
+  }
+  assert(fixtures==turns+1 && motion==job.count);
+  clear_traces(logs);
+}
+// Overflow: the oldest diagnostic rows are dropped with one counter row at
+// the place of the loss; evidence rows and the order of every kept row stay.
+static void writer_overflow(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=65536;
+  {
+    Journal j(root);assert(j.start_writer(2048,1024));
+    j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
+    j.writer->inject_stall_ns.store(300000000ULL);
+    j.line("{\"kind\":\"fixture\",\"n\":1}");      // held by the stalled writer
+    usleep(20000);
+    char row[200];
+    for(unsigned n=2;n<62;++n) {
+      if(n%20==0)snprintf(row,sizeof row,"{\"kind\":\"beta_hold\",\"n\":%u,\"domain\":\"beta\"}",n);
+      else snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u,\"pad\":\"%040u\"}",n,n);
+      j.line(row);
+    }
+    assert(!j.failed && journal_ok.load()==1 && A::mode()==A::SCRUB_STALE);
+  }
+  const std::vector<std::string> rows=trace_rows(logs);
+  uint64_t last=0;unsigned evidence=0,dropped_rows=0,kept=0,gap_rows=0;bool first=true;
+  for(size_t i=0;i<rows.size();++i) {
+    if(rows[i].find("journal_dropped")!=std::string::npos) {
+      ++gap_rows;dropped_rows+=unsigned(row_number(rows[i],"rows"));
+      assert(rows[i].find("\"reason\":\"writer_backlog\"")!=std::string::npos);
+      continue;
+    }
+    const uint64_t n=row_number(rows[i],"n");
+    assert(first || n>last);first=false;last=n;++kept;   // push order kept
+    if(rows[i].find("beta_hold")!=std::string::npos)++evidence;
+  }
+  printf("Writer overflow: kept=%u dropped=%u counter_rows=%u evidence=%u\n",kept,dropped_rows,gap_rows,evidence);
+  assert(evidence==3 && gap_rows>=1 && dropped_rows>0 && kept+dropped_rows==62);
+  clear_traces(logs);
+}
+// An evidence row that cannot be queued, or a failing writer, fails closed:
+// journal_ok drops (read by the OEM provenance callback) and mutation stops.
+static void writer_fail_closed(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=65536;
+  // BETA provenance as the adapter's POSITION hook reads it.
+  A::PositionInput input=A::PositionInput();
+  mx5::runtime::request_trace::Trace trace=mx5::runtime::request_trace::Trace();
+  const A::PositionContext context={input,mx5::runtime::request_trace::Result(),trace,1,1,0};
+  beta_shared.active.store(1);beta_shared.source_epoch.store(1);beta_shared.storage_epoch.store(1);
+  A::Provenance out;
+  assert(provenance(0,context,&out,0) && out.domain==A::Provenance::Domain::BETA);
+  {
+    Journal j(root);assert(j.start_writer(2048,512));
+    j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
+    j.writer->inject_stall_ns.store(300000000ULL);
+    j.line("{\"kind\":\"fixture\",\"n\":1}");usleep(20000);
+    char row[300];unsigned n=2;
+    while(!j.failed && n<100) {
+      snprintf(row,sizeof row,"{\"kind\":\"beta_state\",\"n\":%u,\"pad\":\"%0100u\"}",n,n);++n;
+      j.line(row);
+    }
+    assert(j.failed && n<100 && journal_ok.load()==0 && A::mode()==A::OBSERVE);
+    assert(!provenance(0,context,&out,0) && out.domain!=A::Provenance::Domain::BETA);
+  }
+  arm_test_mode();
+  // The writer's own file failure (no logs directory) reaches the worker.
+  {
+    char missing[]="/tmp/mx5dr-writer-missing-XXXXXX";assert(mkdtemp(missing));
+    Journal j(missing);assert(j.start_writer());
+    j.line("{\"kind\":\"fixture\"}");
+    assert(!j.flush_wait() && j.failed && journal_ok.load()==0 && A::mode()==A::OBSERVE);
+    assert(!provenance(0,context,&out,0));
+    assert(!rmdir(missing));
+  }
+  beta_shared.active.store(0);beta_shared.source_epoch.store(0);beta_shared.storage_epoch.store(0);
+  arm_test_mode();clear_traces(logs);
+  puts("Writer fail-closed: evidence overflow and writer file failure disable mutation and BETA provenance");
+}
+// Every queued row is written on worker exit; a requested stop closes the
+// file durably before its acknowledgement, in order.
+static void writer_shutdown(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=65536;
+  {
+    Journal j(root);assert(j.start_writer());
+    char row[64];
+    for(unsigned n=0;n<1000;++n) { snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n);j.line(row); }
+  }
+  std::vector<std::string> rows=trace_rows(logs);
+  assert(rows.size()==1000);
+  for(unsigned n=0;n<1000;++n)assert(row_number(rows[n],"n")==n);
+  clear_traces(logs);
+  const char* boot="12345678-1234-1234-1234-123456789abc";
+  arm_test_mode();freeze_capture();assert(queue.drained());
+  {
+    Journal j(root);assert(j.start_writer());
+    j.line("{\"kind\":\"fixture\",\"mono_ns\":9}");
+    assert(finish_capture(j,boot,10,11) && !j.writer);
+  }
+  rows=trace_rows(logs);
+  assert(rows.size()==3 && rows[0].find("fixture")!=std::string::npos &&
+         rows[1].find("capture_end")!=std::string::npos && rows[2].find("\"kind\":\"health\"")!=std::string::npos);
+  std::ifstream a((logs+"/capture.done").c_str());std::string value;std::getline(a,value);assert(value==boot);
+  unlink((logs+"/capture.done").c_str());clear_traces(logs);
+  puts("Writer shutdown: exit drains every queued row; capture stop fsyncs and closes before its acknowledgement");
 }
 static void pipeline_fault_capture(const char* root,const std::string& logs) {
   arm_test_mode();config.max_log_bytes=65536;
@@ -763,6 +967,18 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<3;++i)
       unlink((fault_logs+"/trace."+char('0'+i)+".jsonl").c_str());
     assert(!rmdir(fault_logs.c_str())&&!rmdir(fault_root));
+    return 0;
+  }
+  if(argc==2 && !strcmp(argv[1],"--writer")) {
+    // Journal writer thread (about 3 s of deliberate stalls): run separately
+    // so the default run stays a quick fixture for other suites.
+    char root[]="/tmp/mx5dr-writer-XXXXXX";assert(mkdtemp(root));
+    const std::string logs=std::string(root)+"/logs";assert(!mkdir(logs.c_str(),0700));
+    writer_stall_isolation(root,logs);
+    writer_overflow(root,logs);
+    writer_fail_closed(root,logs);
+    writer_shutdown(root,logs);
+    clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));
     return 0;
   }
   cadence_tests();

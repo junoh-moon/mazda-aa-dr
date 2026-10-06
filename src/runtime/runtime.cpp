@@ -18,6 +18,7 @@
 #include "worker_thread.h"
 #include "assist_worker.h"
 #include "journal_queue.h"
+#include "journal_ring.h"
 #include "model_session.h"
 #include "beta_controller.h"
 #include "motion_gap.h"
@@ -27,6 +28,7 @@
 #include "lds_source_bus.h"
 #include "lds_association_channel.h"
 #include "navigation/channel.h"
+#include <atomic>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -49,6 +51,13 @@ const char *const ROOT = "/data_persist/mx5-aa-dr";
 typedef mx5::runtime::JournalQueue<A::Observation,256> ObservationQueue;
 ObservationQueue queue;
 volatile uint32_t audit_fault = 0;
+// 1 while every journal row has been accepted for writing. Any journal failure
+// (worker or writer thread, file error, or an evidence row that cannot be
+// queued) clears it before disabling mutation. The OEM POSITION thread reads
+// it lock-free in provenance(), so a BETA claim stops even before the worker
+// observes the failure. Constant-initialized; never set back to 1 in a boot.
+std::atomic<unsigned> journal_ok(1);
+static_assert(ATOMIC_INT_LOCK_FREE==2,"journal_ok is read by OEM threads");
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
@@ -115,6 +124,8 @@ bool pop(A::Observation *out) { return queue.pop(out); }
 // BETA (MODEL domain) provenance never sets a qualified flag or
 // Domain::QUALIFIED; see beta_provenance() for what each field means.
 bool provenance(void *, const A::PositionContext& context, A::Provenance *out, void *) {
+  // A failed journal can no longer record the evidence of a replacement.
+  if (!journal_ok.load(std::memory_order_acquire)) { memset(out, 0, sizeof *out); return false; }
   if (mx5::runtime::beta_provenance(beta_shared, out)) return true;
   memset(out, 0, sizeof *out);
   if(!context.lds_association ||
@@ -258,20 +269,49 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
   return n>0 && size_t(n)<capacity;
 }
 
+struct JournalWriter;
+void stop_journal_writer(JournalWriter*,bool durable,bool* ok);
+bool journal_writer_push(JournalWriter*,const char*,size_t,bool evidence);
+bool journal_writer_ok(JournalWriter*);
+void journal_writer_request_flush(JournalWriter*);
+bool journal_writer_flush_wait(JournalWriter*,uint64_t timeout_ns);
+JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes);
+
+// The worker's journal. By default (and in unit tests) rows are written
+// synchronously by the calling thread. The runtime worker calls
+// start_writer(): rows are then queued in a preallocated JournalRing and a
+// dedicated writer thread does every fwrite/fflush/statvfs/rotation, so a
+// storage stall cannot block motion reception (2026-10-06). The writer
+// thread itself uses a synchronous Journal as its file backend.
 struct Journal {
   const char *root;
   FILE *f;
   size_t written;
   bool failed;
+  JournalWriter* writer;
   explicit Journal(const char *directory = ROOT)
-      : root(directory), f(0), written(0), failed(false) {}
+      : root(directory), f(0), written(0), failed(false), writer(0) {}
   ~Journal() {
+    if (writer) { bool ignored; stop_journal_writer(writer,false,&ignored); writer=0; }
     if (f)
       fclose(f);
   }
   void fail() {
     failed = true;
+    journal_ok.store(0, std::memory_order_release);
     disable_mutation();
+  }
+  // Ring sizes: 384 KiB of diagnostic rows (about 10 s of the full profile's
+  // peak rate) and 128 KiB that only evidence rows may use. false: no
+  // writer (allocation/thread failure); rows stay synchronous.
+  bool start_writer(size_t diagnostic_bytes=393216,size_t evidence_bytes=131072) {
+    if (writer || f || failed) return false;
+    writer=start_journal_writer(root,diagnostic_bytes,evidence_bytes);
+    return writer!=0;
+  }
+  // Worker side: adopt a failure the writer thread reported.
+  void poll() {
+    if (writer && !failed && !journal_writer_ok(writer)) fail();
   }
   void rotate() {
     if (f) {
@@ -317,6 +357,18 @@ struct Journal {
   void line(const char *s) {
     if (failed)
       return;
+    if (writer) {
+      poll();
+      if (failed) return;
+      const size_t n = strlen(s);
+      // An evidence row that cannot be queued is a journal failure: fail
+      // closed (mutation disabled) instead of dropping it.
+      if (!journal_writer_push(writer, s, n, mx5::runtime::journal_evidence_row(s, n))) fail();
+      return;
+    }
+    write_line(s);
+  }
+  void write_line(const char *s) {
     size_t n = strlen(s);
     if (n + 1 > config.max_log_bytes) {
       fail();
@@ -337,11 +389,162 @@ struct Journal {
     }
     written += n + 1;
   }
+  // Periodic (1 s) flush. Asynchronous with a writer: it only requests one.
   void flush() {
+    if (writer) { journal_writer_request_flush(writer); poll(); return; }
     if (f && fflush(f))
       fail();
   }
+  // Every row queued so far has reached the kernel (fflush), or false. Used
+  // where the next step requires earlier rows to be durable-in-order (the
+  // boot row before BETA is armed). A timeout is not a failure by itself.
+  bool flush_wait(uint64_t timeout_ns = 10000000000ULL) {
+    if (writer) {
+      const bool ok = journal_writer_flush_wait(writer, timeout_ns);
+      poll();
+      return ok && !failed;
+    }
+    flush();
+    return !failed;
+  }
+  // Capture stop: every queued row written, flushed, fsynced and the file
+  // closed. With a writer this stops and joins the writer thread.
+  bool close_durable() {
+    if (writer) {
+      bool ok=false;
+      stop_journal_writer(writer, true, &ok);
+      writer = 0;
+      if (!ok) { fail(); return false; }
+      return !failed;
+    }
+    flush();
+    if (failed || !f || fsync(fileno(f))) { fail(); return false; }
+    const bool close_failed = fclose(f) != 0; f = 0;
+    if (close_failed) { fail(); return false; }
+    return true;
+  }
 };
+
+// The writer thread's state. Allocated once per worker (off the hot path);
+// the ring storage is preallocated with it. Shared fields are atomics; the
+// ring has its own short lock. OEM threads never touch any of it.
+struct JournalWriter {
+  const char* root;
+  unsigned char* storage;      // diagnostic ring | evidence ring | row buffer
+  mx5::runtime::JournalRing ring;
+  pthread_t thread;
+  std::atomic<unsigned> ok, stopping, durable, closed_ok;
+  std::atomic<uint64_t> flush_target, flushed, written;
+  std::atomic<uint64_t> inject_stall_ns;   // tests only: one stall before the next row
+  char* row_buffer;                         // writer thread only
+  JournalWriter(const char* r,unsigned char* buffer,size_t diagnostic,size_t evidence)
+      : root(r),storage(buffer),ring(buffer,diagnostic,buffer+diagnostic,evidence),thread(),
+        ok(1),stopping(0),durable(0),closed_ok(0),flush_target(0),flushed(0),written(0),
+        inject_stall_ns(0),row_buffer(0) {}
+};
+const size_t JOURNAL_ROW_BUFFER=mx5::runtime::JournalRing::MAX_ROW+1;
+void journal_dropped(Journal& file,uint64_t first,uint64_t next,
+                     const mx5::runtime::JournalRing::Stats& stats) {
+  char line[400];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"journal_dropped\",\"schema\":1,\"mono_ns\":%llu,\"class\":\"diagnostic\","
+      "\"rows\":%llu,\"first_seq\":%llu,\"last_seq\":%llu,\"dropped_total\":%llu,"
+      "\"dropped_bytes_total\":%llu,\"reason\":\"writer_backlog\"}",
+      (unsigned long long)clock_ns(0),(unsigned long long)(next-first),(unsigned long long)first,
+      (unsigned long long)(next-1),(unsigned long long)stats.dropped_rows,
+      (unsigned long long)stats.dropped_bytes);
+  if(n>0 && size_t(n)<sizeof line)file.line(line);else file.fail();
+}
+void* journal_writer_main(void* argument) {
+  JournalWriter& w=*static_cast<JournalWriter*>(argument);
+  // The stdio stream belongs to this thread only. No numeric row is
+  // formatted here except the counter row; keep the C locale anyway.
+  locale_t numeric=newlocale(LC_NUMERIC_MASK,"C",(locale_t)0);
+  if(numeric)uselocale(numeric);
+  char* buffer=w.row_buffer;
+  {
+    Journal file(w.root);
+    uint64_t expected=0;
+    for(;;) {
+      // Read stop BEFORE draining: every row pushed before stop() is written.
+      const bool stop=w.stopping.load(std::memory_order_acquire)!=0;
+      unsigned batch=0;size_t n;uint64_t seq;bool evidence;
+      while(batch<64 && w.ring.pop(buffer,JOURNAL_ROW_BUFFER,&n,&seq,&evidence)) {
+        ++batch;
+        const uint64_t stall=w.inject_stall_ns.exchange(0,std::memory_order_acq_rel);
+        if(stall) { struct timespec t={time_t(stall/1000000000ULL),long(stall%1000000000ULL)};nanosleep(&t,0); }
+        if(seq!=expected && !file.failed)journal_dropped(file,expected,seq,w.ring.stats());
+        expected=seq+1;
+        if(!file.failed)file.line(buffer);
+        w.written.store(expected,std::memory_order_release);
+      }
+      if(file.failed)w.ok.store(0,std::memory_order_release);
+      const uint64_t target=w.flush_target.load(std::memory_order_acquire);
+      if(target>w.flushed.load(std::memory_order_acquire) && expected>=target) {
+        file.flush();
+        if(file.failed)w.ok.store(0,std::memory_order_release);
+        w.flushed.store(expected,std::memory_order_release);
+      }
+      if(stop && !batch) {
+        const mx5::runtime::JournalRing::Stats stats=w.ring.stats();
+        if(expected<stats.next_seq && !file.failed)journal_dropped(file,expected,stats.next_seq,stats);
+        file.flush();
+        bool ok=!file.failed;
+        if(w.durable.load(std::memory_order_acquire)) {
+          if(!ok || !file.f || fsync(fileno(file.f)))ok=false;
+          if(file.f) { if(fclose(file.f))ok=false;file.f=0; }
+        }
+        if(!ok)w.ok.store(0,std::memory_order_release);
+        w.closed_ok.store(ok?1:0,std::memory_order_release);
+        break;
+      }
+      if(!batch) { const struct timespec pause={0,5000000};nanosleep(&pause,0); }
+    }
+  }
+  uselocale(LC_GLOBAL_LOCALE);
+  if(numeric)freelocale(numeric);
+  return 0;
+}
+JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes) {
+  unsigned char* buffer=new(std::nothrow) unsigned char[diagnostic_bytes+evidence_bytes+JOURNAL_ROW_BUFFER];
+  if(!buffer)return 0;
+  JournalWriter* w=new(std::nothrow) JournalWriter(root,buffer,diagnostic_bytes,evidence_bytes);
+  if(!w) { delete[] buffer;return 0; }
+  w->row_buffer=reinterpret_cast<char*>(buffer+diagnostic_bytes+evidence_bytes);
+  // Joinable, explicit stack (the stock 128 KiB default is not relied on).
+  if(!mx5::runtime::create_thread(&w->thread,journal_writer_main,w,256u<<10,false)) {
+    delete w;delete[] buffer;return 0;
+  }
+  return w;
+}
+void stop_journal_writer(JournalWriter* w,bool durable,bool* ok) {
+  w->durable.store(durable?1:0,std::memory_order_release);
+  w->stopping.store(1,std::memory_order_release);
+  pthread_join(w->thread,0);
+  *ok=w->closed_ok.load(std::memory_order_acquire)!=0;
+  unsigned char* buffer=w->storage;
+  delete w;delete[] buffer;
+}
+bool journal_writer_push(JournalWriter* w,const char* s,size_t n,bool evidence) {
+  const mx5::runtime::JournalRing::Result r=w->ring.push(s,n,evidence);
+  return r==mx5::runtime::JournalRing::PUSHED || r==mx5::runtime::JournalRing::PUSHED_AFTER_DROP;
+}
+bool journal_writer_ok(JournalWriter* w) { return w->ok.load(std::memory_order_acquire)!=0; }
+void journal_writer_request_flush(JournalWriter* w) {
+  const uint64_t next=w->ring.stats().next_seq;
+  if(next>w->flush_target.load(std::memory_order_acquire))w->flush_target.store(next,std::memory_order_release);
+}
+bool journal_writer_flush_wait(JournalWriter* w,uint64_t timeout_ns) {
+  const uint64_t next=w->ring.stats().next_seq;
+  journal_writer_request_flush(w);
+  const uint64_t begin=clock_ns(0);
+  while(w->flushed.load(std::memory_order_acquire)<next) {
+    if(!journal_writer_ok(w))return false;
+    if(clock_ns(0)-begin>timeout_ns)return false;
+    const struct timespec pause={0,1000000};nanosleep(&pause,0);
+  }
+  return journal_writer_ok(w);
+}
 
 void flush_motion(Journal &j, mx5::runtime::MotionBatch &batch) {
   if (!batch.empty()) {
@@ -674,10 +877,7 @@ bool finish_capture(Journal& j,const char* boot_id,uint64_t cutoff,uint64_t now,
       (unsigned long long)now,boot_id,(unsigned long long)cutoff);
   j.line(line);
   journal_health(j,now,false,false,source);
-  j.flush();
-  if(j.failed || !j.f || fsync(fileno(j.f))) { j.fail();return false; }
-  const bool close_failed=fclose(j.f)!=0;j.f=0;
-  if(close_failed) { j.fail();return false; }
+  if(!j.close_durable())return false;
   if(!strcmp(boot_id,"unknown"))return false;
   char temporary[256],done[256],directory[256];
   snprintf(directory,sizeof directory,"%s/logs",j.root);
@@ -854,6 +1054,9 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   }
   uselocale(numeric_locale);
   Journal j(root);
+  // Journal file I/O on its own thread; without one (allocation or thread
+  // failure) rows stay synchronous as before, and the boot row says so.
+  const bool journal_thread=j.start_writer();
   mx5::runtime::MotionBatch motion_batch;
   char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
   char boot_id[37];
@@ -872,7 +1075,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
            "\"mode\":%u,\"install\":\"%s\",\"assist_ready\":false,\"assist_"
            "block\":\"sensor_timing_quality_calibration_unverified\",\"wire_"
            "timestamp_modified\":false,"
-           "\"session_hooks\":\"%s\","
+           "\"session_hooks\":\"%s\",\"journal_writer\":\"%s\","
            "\"beta\":{\"mode\":\"%s\",\"enabled\":%s,\"reason\":\"%s\",\"session_fence\":\"%s\"},"
            "\"install_diag\":{\"stage\":%u,\"slot_offset\":%llu,\"expected_offset\":%llu,"
            "\"observed_offset\":%llu,\"owner\":\"%s\",\"symbol\":\"%s\"}}",
@@ -880,6 +1083,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
            boot_result,
            !hook_installed ? "none"
                : install_report.sessions_declined ? "declined_third_party_interposer" : "observing",
+           journal_thread ? "thread" : "inline",
            beta_requested ? "BETA" : "off", beta_allowed ? "true" : "false", beta_boot_reason,
            !beta_requested ? "none" : beta_declined ? "declined_send_storage_counter"
                                                     : "observed_session_and_send_storage_counter",
@@ -889,7 +1093,8 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
            (unsigned long long)install_report.observed_offset,
            install_report.owner, install_report.symbol);
   j.line(line);
-  j.flush();
+  // Later decisions (SCRUB/BETA) require this row to have reached the file.
+  const bool boot_durable=j.flush_wait();
   // Optional observation transport failure must not suppress raw capture.
   if(associations && !j.failed && !__sync_fetch_and_add(&audit_fault,0))
     associations->open_channel(association_channel,lds_uid);
@@ -938,7 +1143,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         (unsigned long long)model.reorder_ns);
     j.line(line);j.flush();
   }
-  if (hook_installed && config.mode == 2 && !j.failed &&
+  if (hook_installed && config.mode == 2 && boot_durable && !j.failed &&
       !__sync_fetch_and_add(&audit_fault, 0)) {
     A::set_mode(A::SCRUB_STALE);
     if (__sync_fetch_and_add(&audit_fault, 0))
@@ -947,9 +1152,9 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   if (beta_requested) {
     // Same pattern as SCRUB: only after the durable boot row, with an
     // installed hook and no audit fault. Every outcome is journaled.
-    j.flush();
+    const bool durable=j.flush_wait();
     const char* blocked=!hook_installed?"hook_not_installed":
-        j.failed?"journal_failed":
+        (j.failed || !durable || !boot_durable)?"journal_failed":
         __sync_fetch_and_add(&audit_fault,0)?"audit_fault":
         !capture?"motion_capture_unavailable":
         !shadow?"model_unavailable":
@@ -971,6 +1176,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   bool adapter_fault_reported=false;
   mx5::runtime::WorkerTick model_tick;
   for (;;) {
+    j.poll();   // adopt a writer-thread failure before any decision below
     const uint64_t cutoff=clock_ns(0);
     source.advance(cutoff);
     // The first LDS submission discovers its bus before issuing the request.
