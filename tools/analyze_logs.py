@@ -708,7 +708,10 @@ class Auditor:
                                       state_ns=None, no_fix_ns=None, speed_engaged_ns=None,
                                       # Overlay sends and wheel receipts, checked at close
                                       # (motion batches can be journaled after the send).
-                                      overlays=[], wheels=[], wheel_profile=WHEEL_PROFILE))
+                                      overlays=[], wheels=[], wheel_profile=WHEEL_PROFILE,
+                                      # Intervals with rows lost by the journal writer
+                                      # (journal_dropped): [last time before, first after].
+                                      journal_gaps=[], gap_open=None, last_time_ns=None))
         self.sessions.append(self.session)
         self.positions = {}
         self.invalid_positions = set()
@@ -878,6 +881,8 @@ class Auditor:
             return
         if self.session is None and not collector:
             self.new_session()
+        if not collector and kind != "journal_dropped" and integer(row.get("mono_ns")):
+            self.note_time(row["mono_ns"])
         if (not collector and self.session.get("capture_end_ns") is not None and
                 kind not in ("health", "capture_end")):
             self.issue("record_after_capture_end", source, kind)
@@ -1168,6 +1173,16 @@ class Auditor:
             self.issue("beta_change_during_journal_lag", source,
                        "%s after the journal writer fell behind (BETA must be withheld)" % what, True)
 
+    def note_time(self, ns):
+        """Row times (one monotonic clock) bound journal_dropped gaps: a gap
+        runs from the last time before the counter row to the first after."""
+        beta = self.session["beta"]
+        if beta["gap_open"] is not None:
+            beta["journal_gaps"].append((beta["gap_open"], ns))
+            beta["gap_open"] = None
+        if beta["last_time_ns"] is None or ns > beta["last_time_ns"]:
+            beta["last_time_ns"] = ns
+
     def dropped_rows(self, row, source):
         """The journal writer dropped the oldest DIAGNOSTIC rows under a write
         backlog (evidence rows are never dropped). The loss is real: count it
@@ -1177,6 +1192,9 @@ class Auditor:
             return
         self.journal_dropped["counter_rows"] += 1
         self.journal_dropped["rows"] += row["rows"]
+        beta = self.session["beta"]
+        if beta["gap_open"] is None:
+            beta["gap_open"] = beta["last_time_ns"] if beta["last_time_ns"] is not None else 0
         self.session["motion_epoch"] = None
         self.issue("journal_rows_dropped", source, "%d diagnostic rows dropped under a write backlog" % row["rows"])
 
@@ -1213,6 +1231,7 @@ class Auditor:
             if speed is not None:
                 s["beta"]["wheels"].append((row["received_ns"], speed))
         s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["received_ns"])
+        self.note_time(row["received_ns"])
         if s["motion_epoch"] != row["epoch"]:
             if s["motion_epoch"] is not None:
                 self.issue("motion_source_restart", source, "Observed source epoch changed")
@@ -2313,6 +2332,14 @@ class Auditor:
         wheels = sorted(beta["wheels"])
         times = [w[0] for w in wheels]
         for mono_ns, speed_e3, source in beta["overlays"]:
+            begin = mono_ns - BETA_LEASE_NS - 1000000
+            # Wheel rows of this lease window may be among rows the journal
+            # writer dropped: then the remaining wheels prove nothing.
+            if any(start <= mono_ns and end >= begin for start, end in beta["journal_gaps"]):
+                self.beta_speed_overlay_wheel["unverified_journal_gap"] += 1
+                self.issue("beta_overlay_unverified_journal_gap", source,
+                           "Wheel rows of this overlay's lease window may have been dropped by the journal writer")
+                continue
             lo = bisect.bisect_left(times, mono_ns - BETA_LEASE_NS - 1000000)
             hi = bisect.bisect_right(times, mono_ns)
             window = [w[1] for w in wheels[lo:hi]]
@@ -2406,6 +2433,9 @@ class Auditor:
         if s is None or s["beta"]["closed"]:
             return
         s["beta"]["closed"] = True
+        if s["beta"]["gap_open"] is not None:
+            s["beta"]["journal_gaps"].append((s["beta"]["gap_open"], float("inf")))
+            s["beta"]["gap_open"] = None
         self.check_overlay_speeds(s["beta"])
         s["beta"]["overlays"], s["beta"]["wheels"] = [], []
         if s["beta"]["engaged_ns"] is not None:

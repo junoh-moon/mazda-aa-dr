@@ -559,5 +559,31 @@ class BetaAnalyzeTests(unittest.TestCase):
         self.assertEqual(report["issue_counts"].get("violation", 0), 0)
 
 
+    def test_overlay_over_a_journal_gap_is_unverified_not_a_mismatch(self):
+        # F3-B: wheel rows dropped by the writer (journal_dropped) cannot
+        # prove or disprove an overlay speed in the same lease window.
+        rows = nofix_drive(overlay_speed_e3=15000)
+        self.assertIn("beta_overlay_speed_mismatch", self.codes(self.audit(rows), "violation"))
+        dropped = dict(kind="journal_dropped", schema=1, mono_ns=9_000_000_000, **{"class": "diagnostic"},
+                       rows=12, first_seq=40, last_seq=51, dropped_total=12, reason="writer_backlog")
+        index = next(i for i, r in enumerate(rows) if r.get("to") == "SPEED_ENGAGED")
+        gap = list(rows)
+        gap.insert(index + 1, dropped)
+        report = self.audit(gap)
+        self.assertNotIn("beta_overlay_speed_mismatch", self.codes(report))
+        self.assertIn("beta_overlay_unverified_journal_gap", self.codes(report, "inconclusive"))
+        self.assertEqual(report["beta"]["speed_overlay_wheel_checks"], {"unverified_journal_gap": 1})
+        # A gap outside the lease window (after the GPS return) changes nothing.
+        late = list(rows)
+        late.insert(len(late) - 1, dropped)
+        self.assertIn("beta_overlay_speed_mismatch", self.codes(self.audit(late), "violation"))
+        # A gap still open at the end of the session covers everything after it.
+        tail = list(rows)
+        tail.insert(index + 1, dropped)
+        tail = tail[:index + 2]
+        tail.append(nofix_send(2, 2_200_000_100, overlay_payload(nofix_original(), 15000), choice=4))
+        self.assertNotIn("beta_overlay_speed_mismatch", self.codes(self.audit(tail)))
+
+
 if __name__ == "__main__":
     unittest.main()
