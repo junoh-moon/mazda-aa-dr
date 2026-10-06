@@ -191,6 +191,7 @@ test-loader:
 
 test-recovery:
 	$(PYTHON) tests/recovery/test_guard.py
+	$(PYTHON) tests/recovery/test_guard_persistent.py
 
 test-navigation: $(BUILD)/test_navigation $(BUILD)/test_channel $(BUILD)/test_live_pipeline $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_beta
 	$(BUILD)/test_navigation
