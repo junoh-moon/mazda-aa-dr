@@ -4,7 +4,7 @@
 Host fixtures only (authored files, no OEM binary is executed). The same
 harness runs the guard under ARM/QEMU through GUARD_CXX/GUARD_RUNNER.
 """
-import hashlib, os, pathlib, shlex, subprocess, sys, tempfile, unittest
+import hashlib, os, pathlib, shlex, signal, subprocess, sys, tempfile, time, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from test_guard import HERE, BASE, CFG, TOKEN, TAP_TOKEN, LDS_TOKEN  # noqa: E402
 
@@ -529,6 +529,25 @@ class PersistentRuleOff(Fixture):
         self.assertRegex(out, r'/tmp/mx5dr-trial-\w{6}/sm\.conf\n$')
         self.assertEqual(self.state()['attempt_boot'], BOOTS[2])
         self.assertEqual(sorted(p.name for p in guard.glob('.*.%s' % pid)), [])
+
+    def test_guard_deadline_ends_a_hung_selection_without_a_path(self):
+        self.enable()
+        self.product_boot(1)
+        before = (self.root / BASE / 'guard/persist-state').read_bytes()
+        for n, stage in enumerate(('start', 'reports', 'fsync'), start=2):
+            with self.subTest(stage=stage):
+                self.boot(n)
+                started = time.monotonic()
+                r = self.select(env=dict(self.env, MX5DR_GUARD_HANG=stage, MX5DR_GUARD_ALARM='2'))
+                self.assertLess(time.monotonic() - started, 20)
+                self.assertEqual(r.returncode, -signal.SIGALRM)
+                self.assertEqual(r.stdout, '')
+                if stage != 'fsync':
+                    # (A hung fsync may leave an unpublished /tmp file; SM never sees it.)
+                    self.assertEqual(list((self.root / 'tmp').glob('mx5dr-trial-*/sm.conf')).__len__(), 1)
+                    self.assertEqual((self.root / BASE / 'guard/persist-state').read_bytes(), before)
+        # The next boot still works (a hung fsync may have left a temporary).
+        self.product_boot(6)
 
     def test_failed_enable_publication_revokes(self):
         r = self.call('enable', env=dict(self.env, MX5DR_GUARD_FAIL_FSYNC='persist'))

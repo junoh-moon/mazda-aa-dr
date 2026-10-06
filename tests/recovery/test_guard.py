@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Host gate/editor tests. No target binaries or OEM dumps are shipped/executed."""
-import os, pathlib, subprocess, tempfile, unittest, shutil, shlex, resource, hashlib
+import os, pathlib, subprocess, tempfile, unittest, shutil, shlex, resource, hashlib, time
 HERE=pathlib.Path(__file__).resolve().parents[2]
 BASE='data_persist/mx5-aa-dr'
 STOCK='''#!/bin/sh
@@ -312,18 +312,30 @@ class Editor(unittest.TestCase):
  def test_branch_execution_and_fallback(self):
   with tempfile.TemporaryDirectory() as d:
    root=pathlib.Path(d);helper=root/'guard';calls=root/'calls';launches=root/'launches'
-   edited=self.edit(STOCK,'add').stdout.replace('/data_persist/mx5-aa-dr/guard/mx5dr-guard',str(helper)).replace('/data_persist/mx5-aa-dr/tools/start_collector.sh',str(root/'no-collector'))
+   # Authored stand-in for the stock BusyBox 1.19.2 applet syntax
+   # (timeout -t SECS -s SIG PROG ARGS), bounded to 1 s here for speed.
+   bbtimeout=root/'timeout';bbtimeout.write_text('#!/bin/sh\n[ "$1" = -t ] && [ "$2" = 15 ] && [ "$3" = -s ] && [ "$4" = KILL ] || exit 99\nshift 4\necho t >> "$TCALLS"\nexec timeout -s KILL 1 "$@"\n');bbtimeout.chmod(0o700)
+   edited=self.edit(STOCK,'add').stdout.replace('/data_persist/mx5-aa-dr/guard/mx5dr-guard',str(helper)).replace('/data_persist/mx5-aa-dr/tools/start_collector.sh',str(root/'no-collector')).replace('/usr/bin/timeout',str(bbtimeout))
    # Authored taskset stand-in records config; never executes SM.
    script='taskset() { printf "%s\\n" "$4" >> "$LAUNCHES"; }\n'+edited+'\nwait\n'
-   for board,base in [('2','/jci/sm/sm_WCP.conf'),('0','/jci/sm/sm.conf')]:
-    for state in ['missing','failed','success','malformed']:
-     with self.subTest(board=board,state=state):
-      helper.unlink(missing_ok=True);calls.unlink(missing_ok=True);launches.unlink(missing_ok=True)
-      if state!='missing':
-       output='/tmp/mx5dr-trial-ABC123/sm.conf' if state=='success' else 'garbage'
-       helper.write_text('#!/bin/sh\nprintf "%s\\n" "$2" >> "$CALLS"\nprintf "%s\\n" "'+output+'"\nexit '+('2' if state=='failed' else '0')+'\n');helper.chmod(0o700)
-      r=subprocess.run(['sh'],input=script,text=True,capture_output=True,env=dict(os.environ,BOARD=board,CALLS=str(calls),LAUNCHES=str(launches)))
-      self.assertEqual(r.returncode,0,r.stderr)
-      self.assertEqual(launches.read_text().splitlines(),[('/tmp/mx5dr-trial-ABC123/sm.conf' if state=='success' else base)])
-      self.assertEqual(calls.read_text().splitlines() if calls.exists() else [],[] if state=='missing' else [base])
+   tcalls=root/'tcalls'
+   for with_timeout in [True,False]:
+    if not with_timeout:bbtimeout.unlink()
+    for board,base in [('2','/jci/sm/sm_WCP.conf'),('0','/jci/sm/sm.conf')]:
+     for state in ['missing','failed','success','malformed']+(['hang'] if with_timeout else []):
+      with self.subTest(board=board,state=state,with_timeout=with_timeout):
+       helper.unlink(missing_ok=True);calls.unlink(missing_ok=True);launches.unlink(missing_ok=True);tcalls.unlink(missing_ok=True)
+       if state=='hang':
+        # A guard that never returns: the bound kills it and SM gets the baseline.
+        helper.write_text('#!/bin/sh\nprintf "%s\\n" "$2" >> "$CALLS"\nexec sleep 100\n');helper.chmod(0o700)
+       elif state!='missing':
+        output='/tmp/mx5dr-trial-ABC123/sm.conf' if state=='success' else 'garbage'
+        helper.write_text('#!/bin/sh\nprintf "%s\\n" "$2" >> "$CALLS"\nprintf "%s\\n" "'+output+'"\nexit '+('2' if state=='failed' else '0')+'\n');helper.chmod(0o700)
+       started=time.monotonic()
+       r=subprocess.run(['sh'],input=script,text=True,capture_output=True,timeout=30,env=dict(os.environ,BOARD=board,CALLS=str(calls),LAUNCHES=str(launches),TCALLS=str(tcalls)))
+       self.assertEqual(r.returncode,0,r.stderr)
+       self.assertLess(time.monotonic()-started,10)
+       self.assertEqual(launches.read_text().splitlines(),[('/tmp/mx5dr-trial-ABC123/sm.conf' if state=='success' else base)])
+       self.assertEqual(calls.read_text().splitlines() if calls.exists() else [],[] if state=='missing' else [base])
+       self.assertEqual(tcalls.exists(),with_timeout and state!='missing')
 if __name__=='__main__':unittest.main()

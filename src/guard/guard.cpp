@@ -9,6 +9,7 @@
 #include <sys/file.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
@@ -85,6 +86,15 @@ bool read_fd(int fd,std::string &s,size_t cap){s.clear();char b[4096];for(;;){ss
 bool read_file(const std::string&p,std::string&s,size_t cap){int fd=trusted(p);if(fd<0)return false;bool ok=read_fd(fd,s,cap);close(fd);return ok;}
 bool digest(const std::string&p,std::string&out){std::string s;if(!read_file(p,s,32*1024*1024))return false;char h[65];mx5_sha256_bytes(s.data(),s.size(),h);out=h;return true;}
 bool write_all(int fd,const std::string&s){size_t n=0;while(n<s.size()){ssize_t w=write(fd,s.data()+n,s.size()-n);if(w<0&&errno==EINTR)continue;if(w<=0)return false;n+=size_t(w);}return true;}
+// Test-only: block at a named stage so the time bound can be exercised.
+void hang_point(const char*stage){
+#ifdef MX5DR_GUARD_TESTING
+ const char*h=getenv("MX5DR_GUARD_HANG");
+ if(h&&!strcmp(h,stage))for(;;)pause();
+#else
+ (void)stage;
+#endif
+}
 bool sync_dir(int fd,const char*stage){
 #ifdef MX5DR_GUARD_TESTING
  const char*fail=getenv("MX5DR_GUARD_FAIL_FSYNC");
@@ -92,6 +102,7 @@ bool sync_dir(int fd,const char*stage){
 #else
  (void)stage;
 #endif
+ hang_point("fsync");
  return fsync(fd)==0;
 }
 bool atomic_file(const char*name,const std::string&s,bool*published=0){
@@ -255,7 +266,10 @@ bool report_fingerprint(std::string&out){
  int scan=dup(dfd);DIR*dir=scan<0?0:fdopendir(scan);
  if(!dir){if(scan>=0)close(scan);close(dfd);return false;}
  std::vector<std::string> found;bool ok=true;
- for(;;){
+ hang_point("reports");
+ for(unsigned seen=0;;seen++){
+  // /data holds a few dozen entries; an unbounded directory declines.
+  if(seen>=4096){ok=false;break;}
   errno=0;struct dirent*e=readdir(dir);
   if(!e){if(errno)ok=false;break;}
   std::string n=e->d_name;
@@ -369,10 +383,21 @@ int select_persistent(unsigned index,const std::string&expected){
  if(printf("%s\n",result.c_str())<0||fflush(stdout))return 2;
  return 0;
 }
-int run(int argc,char**argv){if(geteuid()!=expected_owner()||argc<2)return 2;
+// Hard bound for every invocation: the Service Manager waits for `select`.
+// SIGALRM's default action ends the process without cleanup; every path
+// before the printed trial path is fail-closed (no path => stock baseline).
+const unsigned GUARD_DEADLINE_S=10;
+int run(int argc,char**argv){
+ unsigned deadline=GUARD_DEADLINE_S;
+#ifdef MX5DR_GUARD_TESTING
+ const char*a=getenv("MX5DR_GUARD_ALARM");if(a&&atoi(a)>0&&atoi(a)<=60)deadline=unsigned(atoi(a));
+#endif
+ signal(SIGALRM,SIG_DFL);alarm(deadline);
+ if(geteuid()!=expected_owner()||argc<2)return 2;
 #ifdef MX5DR_GUARD_TESTING
  const char*p=getenv("MX5DR_GUARD_ROOT");if(!p||p[0]!='/'||!p[1])return 2;prefix=p;struct stat marker;if(lstat((prefix+"/.mx5dr-fixture").c_str(),&marker)||!S_ISREG(marker.st_mode))return 2;
 #endif
+ hang_point("start");
  gd=trusted(prefix+"/data_persist/mx5-aa-dr/guard",true);if(gd<0)return 2;
  int lock=openat(gd,"lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(lock<0||!safe_stat(lock,false)||flock(lock,LOCK_EX|LOCK_NB))return 2;
  clean_stale_temps();

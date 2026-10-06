@@ -5,7 +5,13 @@ function block(v){
  print "# MX5DR ONE-BOOT BEGIN " v
  print "MX5DR_TRIAL=''"
  print "if [ -x /data_persist/mx5-aa-dr/guard/mx5dr-guard ]; then"
- print "    MX5DR_TRIAL=$(/data_persist/mx5-aa-dr/guard/mx5dr-guard select \"$" v "\") || MX5DR_TRIAL=''"
+ # The SM launch waits for this call. The stock BusyBox 1.19.2 timeout applet
+ # bounds it (the guard also bounds itself); any failure keeps the baseline.
+ print "    if [ -x /usr/bin/timeout ]; then"
+ print "        MX5DR_TRIAL=$(/usr/bin/timeout -t 15 -s KILL /data_persist/mx5-aa-dr/guard/mx5dr-guard select \"$" v "\") || MX5DR_TRIAL=''"
+ print "    else"
+ print "        MX5DR_TRIAL=$(/data_persist/mx5-aa-dr/guard/mx5dr-guard select \"$" v "\") || MX5DR_TRIAL=''"
+ print "    fi"
  print "fi"
  print "case \"$MX5DR_TRIAL\" in"
  print "    /tmp/mx5dr-trial-??????/sm.conf)"
