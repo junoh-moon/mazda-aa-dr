@@ -4,10 +4,13 @@
 // persistent; validation/PERSISTENT_LOGGING_2026-10-06.md). The full profile
 // writes about 28-37 KB/s, mostly raw motion batches and ORIGINAL SEND rows.
 // This filter sits in front of the journal writer and keeps:
-//  * always: boot/shadow_boot/lifecycle rows, every beta_state, beta_anchor,
-//    beta_reverse_latch, beta_hold and beta_session_storage row, every SEND
-//    with choice != ORIGINAL, POSITION rows of the BETA candidate classes
-//    (LOST, NO_FIX) and every POSITION whose class changed;
+//  * always written: boot/shadow_boot/lifecycle rows, every beta_state,
+//    beta_anchor, beta_reverse_latch, beta_hold and beta_session_storage row,
+//    every SEND with choice != ORIGINAL, POSITION rows of the BETA candidate
+//    classes (LOST, NO_FIX) and every POSITION whose class changed. Other
+//    POSITION rows (FIX) are RAW context (window/raw period below); while
+//    BETA is live (last beta_state not DISABLED/FAULT) they are queued in the
+//    journal ring's evidence class so a write backlog cannot drop them;
 //  * rate-limited: beta_summary (1/s while BETA is in a live state, else 1 per
 //    10 s), health/shadow/shadow_calibration (1 per 10 s), faults and
 //    rejections (5 per kind per 10 s, the rest counted);
@@ -102,7 +105,14 @@ public:
             } else ++suppressed_[S_SUMMARY];
             return;
         }
-        case K_TRIGGER: trigger(kind_name(s),now,emit,context);keep(s,emit,context);return;
+        case K_TRIGGER:
+            if(!strncmp(s,"{\"kind\":\"beta_state\"",20)) {
+                // Follow BETA liveness: while BETA may act, every POSITION
+                // row that is written is evidence (NO_FIX overlay checks,
+                // GPS-return measurement), even a raw-context one.
+                beta_live_=!strstr(s,"\"to\":\"DISABLED\"") && !strstr(s,"\"to\":\"FAULT\"");
+            }
+            trigger(kind_name(s),now,emit,context);keep(s,emit,context);return;
         case K_CAPTURE_END:
             trigger("capture_end",now,emit,context);
             digest(now,"final",emit,context);
@@ -134,8 +144,9 @@ public:
         if(o.position_class==adapter::POSITION_LOST || o.position_class==adapter::POSITION_NO_FIX_STALE) {
             keep(s,emit,context);return;
         }
-        raw(s,now,emit,context);
+        raw(s,now,emit,context,beta_live_);
     }
+    bool beta_live() const { return beta_live_; }
     // Every accepted motion event, for the digest statistics.
     void motion(const navigation::RawEvent& e) {
         if(total_events_!=UINT64_MAX)++total_events_;
@@ -225,14 +236,16 @@ private:
         ++fault_rows_[which];keep(s,emit,context);
     }
     // A raw row: written directly during a raw period, else into the window.
-    void raw(const char* s,uint64_t now,Emit emit,void* context) {
-        if(now<raw_until_) { ++raw_direct_;emit(context,s,true);return; }
+    // evidence: written in the journal ring's evidence class (POSITION rows
+    // while BETA is live); otherwise RAW context is diagnostic class.
+    void raw(const char* s,uint64_t now,Emit emit,void* context,bool evidence=false) {
+        if(now<raw_until_) { ++raw_direct_;emit(context,s,!evidence);return; }
         if(!cap_) { ++suppressed_[S_RAW_DROPPED];return; }
         const size_t n=strlen(s),total=HEADER+n;
         if(n>=ROW_BYTES || total>cap_) { ++suppressed_[S_RAW_DROPPED];return; }
         expire(now);
         while(cap_-used_<total)drop_oldest();
-        unsigned char h[HEADER];const uint32_t len=uint32_t(n);
+        unsigned char h[HEADER];const uint32_t len=uint32_t(n)|(evidence?EVIDENCE_BIT:0);
         memcpy(h,&len,4);memcpy(h+4,&now,8);
         put(h,HEADER);put(s,n);++rows_;
     }
@@ -252,10 +265,10 @@ private:
                 (unsigned long long)(RAW_POST_NS/1000000ULL),cap_?"available":"unavailable");
             if(n>0 && size_t(n)<sizeof line)emit(context,line,false);
             while(rows_) {
-                uint32_t len;uint64_t at;header(&len,&at);
+                uint32_t len;uint64_t at;bool evidence;header(&len,&at,&evidence);
                 get((head_+HEADER)%cap_,scratch_,len);scratch_[len]=0;
                 consume(len);
-                emit(context,scratch_,true);
+                emit(context,scratch_,!evidence);
             }
             overwritten_=0;++flushes_;
         }
@@ -358,13 +371,14 @@ private:
         head_=used_=0;rows_=overwritten_=flushes_=0;raw_until_=0;
         last_health_=last_shadow_=last_calibration_=last_summary_=0;
         for(unsigned i=0;i<S_COUNT;++i) { fault_since_[i]=0;fault_rows_[i]=0; }
-        have_class_=false;last_class_=0;have_motion_=false;epoch_=last_seq_=last_motion_ns_=0;total_events_=0;
+        have_class_=false;last_class_=0;beta_live_=false;have_motion_=false;epoch_=last_seq_=last_motion_ns_=0;total_events_=0;
         for(unsigned i=0;i<3;++i)last_received_[i]=0;
         reverse_value_=-1;trigger_[0]=0;
         reset_period(0);since_=0;
     }
-    // ---- RAW window: rows [u32 length][u64 mono_ns][bytes], oldest first ----
+    // ---- RAW window: rows [u32 length|evidence bit][u64 mono_ns][bytes], oldest first ----
     static const size_t HEADER=12;
+    static const uint32_t EVIDENCE_BIT=0x80000000U;
     void put(const void* p,size_t n) {
         const unsigned char* s=static_cast<const unsigned char*>(p);
         const size_t tail=(head_+used_)%cap_,first=n<cap_-tail?n:cap_-tail;
@@ -375,8 +389,10 @@ private:
         const size_t first=n<cap_-at?n:cap_-at;
         memcpy(d,window_+at,first);memcpy(d+first,window_,n-first);
     }
-    void header(uint32_t* len,uint64_t* at) const {
+    void header(uint32_t* len,uint64_t* at,bool* evidence=0) const {
         unsigned char h[HEADER];get(head_,h,HEADER);memcpy(len,h,4);memcpy(at,h+4,8);
+        if(evidence)*evidence=(*len&EVIDENCE_BIT)!=0;
+        *len&=~EVIDENCE_BIT;
     }
     void consume(uint32_t len) { head_=(head_+HEADER+len)%cap_;used_-=HEADER+len;--rows_; }
     void drop_oldest() { uint32_t len;uint64_t at;header(&len,&at);consume(len);++overwritten_; }
@@ -395,7 +411,7 @@ private:
     uint64_t last_health_,last_shadow_,last_calibration_,last_summary_;
     uint64_t fault_since_[S_COUNT];unsigned fault_rows_[S_COUNT];
     uint64_t suppressed_[S_COUNT];
-    bool have_class_;unsigned last_class_;
+    bool have_class_;unsigned last_class_;bool beta_live_;
     // digest period
     uint64_t total_events_,since_,period_events_,kind_events_[3],seq_gaps_,max_gap_ns_,first_seq_;
     bool have_motion_;uint64_t epoch_,last_seq_,last_motion_ns_,last_received_[3];

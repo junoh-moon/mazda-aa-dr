@@ -10,9 +10,11 @@
 //
 // Two preallocated byte rings share one global row sequence:
 //  * EVIDENCE rows (BETA evidence: every beta_* row, every SEND row with
-//    choice != ORIGINAL, POSITION rows and the boot/lifecycle rows) are never
-//    dropped. If one does not fit, push() reports FULL and the caller must
-//    treat it as a journal failure (disable mutation, OBSERVE).
+//    choice != ORIGINAL, the boot/lifecycle rows and POSITION rows, except
+//    that the persistent profile passes RAW-context POSITION rows as
+//    diagnostic while BETA is not live, log_profile.h) are never dropped. If
+//    one does not fit, push() reports FULL and the caller must treat it as a
+//    journal failure (disable mutation, OBSERVE).
 //  * DIAGNOSTIC rows (motion batches, ORIGINAL sends, health, MODEL
 //    diagnostics) make room by dropping the OLDEST diagnostic rows. The
 //    writer sees the resulting sequence gap and journals one counter row at
@@ -170,8 +172,9 @@ private:
 };
 
 // Row class by its leading kind (every journal row starts with {"kind":"..."}).
-// Evidence: BETA rows, POSITION rows, SEND rows with choice != ORIGINAL (0)
-// and the boot/lifecycle/stop rows. Everything else is diagnostic.
+// Evidence by kind: BETA rows, POSITION rows, SEND rows with choice !=
+// ORIGINAL (0) and the boot/lifecycle/stop rows. Everything else is
+// diagnostic. The caller may still queue a RAW-context row as diagnostic.
 inline bool journal_evidence_row(const char* s,size_t n) {
     static const char prefix[]="{\"kind\":\"";
     const size_t p=sizeof prefix-1;

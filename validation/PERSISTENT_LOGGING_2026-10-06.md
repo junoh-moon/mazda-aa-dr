@@ -27,7 +27,7 @@ init 뒤 할당 없음, OEM 스레드는 닿지 않음).
 |---|---|
 | boot, shadow_boot, beta_state, beta_anchor, beta_reverse_latch, beta_hold, beta_session_storage, capture_end/incomplete, shadow_disabled, shadow_session/bus, 모르는 kind | 항상 기록 |
 | choice != ORIGINAL인 SEND | 항상 기록(증거) |
-| POSITION | 등급(class) 전이 행, LOST/NO_FIX 등급 행, CONTEXT_UNAVAILABLE 행은 항상 기록. 나머지는 RAW 창 |
+| POSITION | 등급(class) 전이 행, LOST/NO_FIX 등급 행, CONTEXT_UNAVAILABLE 행은 항상 기록. 나머지(FIX)는 RAW 창. BETA가 live(마지막 beta_state가 DISABLED/FAULT 아님)인 동안에는 RAW 창의 POSITION도 journal 링의 증거 등급으로 넣어 쓰기 백로그에서 버려지지 않음(2026-10-07 수정; 기록량은 바뀌지 않음) |
 | beta_summary | BETA가 ENGAGED/SPEED_ENGAGED/GPS_LOST/NO_FIX면 초당 1, 그 밖에는 10 s당 1, DISABLED/FAULT는 항상 |
 | health, shadow, shadow_calibration | 10 s당 1(capture 종료 health는 항상) |
 | motion_rejected, shadow_input_reset, shadow_pipeline_reset, shadow_position_rejected, shadow_motion_excluded, lds 거부 상태 | 종류별 10 s당 5행, 나머지는 digest의 suppressed 카운터 |

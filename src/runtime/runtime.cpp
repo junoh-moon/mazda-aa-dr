@@ -328,9 +328,10 @@ struct Journal {
     disable_mutation();
   }
   // Ring sizes: 384 KiB of diagnostic rows (about 10 s of the full profile's
-  // peak rate) and 128 KiB that only evidence rows may use. false: no
-  // writer (allocation/thread failure); rows stay synchronous.
-  bool start_writer(size_t diagnostic_bytes=393216,size_t evidence_bytes=131072) {
+  // peak rate) and 256 KiB that only evidence rows may use (a persistent RAW
+  // window holds up to about 60 POSITION rows of 1.5 KiB while BETA is live).
+  // false: no writer (allocation/thread failure); rows stay synchronous.
+  bool start_writer(size_t diagnostic_bytes=393216,size_t evidence_bytes=262144) {
     if (writer || f || failed) return false;
     writer=start_journal_writer(root,diagnostic_bytes,evidence_bytes);
     return writer!=0;

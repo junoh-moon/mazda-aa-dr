@@ -131,8 +131,8 @@ static void window_and_events() {
         if(i>1) { const size_t p=out[i-1].find("\"tag\":\"w");assert(unsigned(atoi(out[i-1].c_str()+p+8))<=n); }
     }
     assert(out.size()==1+3*60+1 || out.size()==1+3*61+1);           // 60-61 s of position+location+batch
-    // Window rows are RAW context (diagnostic class in the journal ring);
-    // the marker and the event row are not.
+    // Window rows are RAW context (diagnostic class in the journal ring)
+    // while BETA was not live; the marker and the event row are not.
     assert(raw_flags.size()>=out.size());
     {
         const size_t base=raw_flags.size()-out.size();
@@ -140,6 +140,14 @@ static void window_and_events() {
         for(size_t i=1;i+1<out.size();++i)assert(raw_flags[base+i]);
     }
     assert(out[0].find("\"overwritten_rows\":")!=std::string::npos);
+    // While BETA is live (the GPS_LOST row above), raw-context POSITION rows
+    // are evidence class; LOCATION sends and batches stay diagnostic.
+    assert(log.beta_live());
+    out.clear();
+    const size_t flags_before=raw_flags.size();
+    observe(log,position(A::POSITION_FIX,1,700),event+500000000ULL,"live_position");
+    observe(log,send(1,A::ORIGINAL,700),event+500000000ULL,"live_location");
+    assert(out.size()==2 && !raw_flags[flags_before] && raw_flags[flags_before+1]);
     // During the post period rows are direct; a second event inside it has
     // no new window to write.
     out.clear();
