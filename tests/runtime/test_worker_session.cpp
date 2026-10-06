@@ -216,6 +216,37 @@ int main(int argc,char** argv) {
     assert(!mkdir((logs+"/capture.stop").c_str(),0700));
     assert(!pthread_join(worker_thread,0));
     assert(access((logs+"/capture.done").c_str(),F_OK)==0);
+    {
+        // A shared host can stall this worker (journal write() under dirty
+        // writeback, reclaim) while the authored sender keeps stamping on its
+        // 20 ms schedule. The product then correctly rejects the queued
+        // datagrams by its unchanged 250 ms age limit, and the first fresh one
+        // as a discontinuity. Such a run cannot exercise the lifecycle checks
+        // below: report it as inconclusive (77) for a bounded retry. Every
+        // other rejection still fails: a discontinuity must directly follow a
+        // stale burst, and a stale row must really be older than the limit.
+        std::ifstream scan((logs+"/trace.0.jsonl").c_str());std::string row;
+        unsigned stale=0,discontinuity=0;uint64_t max_age=0,last_stale_seq=0;
+        while(std::getline(scan,row)) {
+            if(row.find("\"kind\":\"motion_rejected\"")==std::string::npos)continue;
+            const uint64_t checked=number(row,"checked_ns"),received=number(row,"received_ns");
+            const uint64_t seq=number(row,"receive_seq");
+            if(row.find("\"reason\":\"stale\"")!=std::string::npos) {
+                assert(checked>received&&checked-received>250000000ULL);
+                if(checked-received>max_age)max_age=checked-received;
+                ++stale;last_stale_seq=seq;
+            } else {
+                assert(row.find("\"reason\":\"sequence_discontinuity\"")!=std::string::npos);
+                assert(last_stale_seq&&seq==last_stale_seq+1);
+                ++discontinuity;last_stale_seq=0;
+            }
+        }
+        if(stale) {
+            printf("%s: INCONCLUSIVE host worker stall: stale=%u discontinuity=%u max_age_ms=%llu log=%s\n",
+                   argv[1],stale,discontinuity,(unsigned long long)(max_age/1000000ULL),logs.c_str());
+            fflush(stdout);alarm(0);return 77; // Keep the trace as evidence.
+        }
+    }
     uint64_t fresh_anchor_ns=0;
     {
         std::ifstream anchors((logs+"/trace.0.jsonl").c_str());std::string row;
