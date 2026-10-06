@@ -79,3 +79,66 @@ report writer, AA/VBS/LDS processes, the collector at boot, real reboots, power 
 - The boot-loop rule in production: compiled off until the runtime writes `healthy`.
 - `tests/packaging/cmu_emulation.py` (chroot, UID 0 container) was updated for BETA but only its proot copy
   ran here.
+
+## Revision G2 verification (2026-10-06)
+
+After the G2 fixes ([design, revision G2](PERSISTENT_GUARD_DESIGN_2026-10-06.md#revision-g2-2026-10-06-after-two-independent-reviews)).
+The results above are kept as the record of the first round.
+
+### Host
+
+- `tests/recovery/test_guard.py`: 37 OK. One new test: the autostart block backgrounds `confirm` only
+  after a selection with `persist` present and never before the SM line. The branch test now also
+  runs through a stub of the BusyBox `timeout -t 15 -s KILL` syntax, a hanging helper (stock config
+  within 10 s) and the fallback without `timeout`; its earlier cases are unchanged.
+- `tests/recovery/test_guard_persistent.py`: 42 OK (rule OFF 36, rule ON 6). New: probation trip on an
+  unconfirmed first attempt; a no-report loop stops after 3 unconfirmed product boots; only a
+  confirmed attempt resets the counters; alternating reset/confirmed boots trip at 3 resets in 10;
+  window expiry; confirm rules (installing boot, SM absent, SM on another config, idempotent, a
+  later boot id, missing commit marker); a confirm that never ran counts as unconfirmed; a tripped
+  state cannot be confirmed; guard deadline at start, report scan and fsync (SIGALRM, no path);
+  stale temporaries and an exec-preserved PID collision; decline reasons in `last-decision`;
+  `verify` read-only under a held lock; one-boot select writes no decision. Changed expectations:
+  `ok` is now `confirmed`; the power-loss test now ends in `tripped=unconfirmed` (undelivered
+  attempts count as unconfirmed); the clock-free reset test re-enables before its last part
+  because its R/C alternation now hits the cumulative cap.
+- `tests/packaging/test_persistent_beta.py`: 11 OK. New: status/guard parser parity over eight
+  corrupted states (never shown as enabled; the guard's select declines the same states), counter
+  parity, unavailable guard, an edited `sm.conf` visible in the same boot and as the next boot's
+  reason, pending confirmation waits, re-enable keeps trip/disable evidence (3 copies kept), upgrade
+  from a v1.0.0-beta.1 one-boot BETA state.
+- Full `make -k test` with `MX5DR_STOCK_ROOT`: exit 0; packaging discovery 338 OK, 4 skipped
+  (release-bundle/private inputs not set); private trip replay skipped.
+
+### Exact ARM
+
+Pinned GCC 4.9.1 build of commit `5031cc4` verified by `tools/build_arm.py`; both guard suites with the
+guard under `qemu-arm`: 37 OK and 42 OK (including the PID collision through `exec qemu-arm`).
+
+### Stock BusyBox 1.19.2 multi-boot simulation (extended)
+
+Self-contained BETA ZIP from that build (`source_modified=false`, `install_policy=persistent`), driven
+as before with the real ARM guard, stock BusyBox and the stock `/usr/bin/timeout`. Each boot runs the
+owned block extracted from the installed `/usr/bin/autostart`. Deviations: collector path disabled,
+`/bin/sleep 90` shortened to 3 s, an authored SM launch writes `/proc/266/cmdline` in the vehicle `ps`
+form (omitted to model an SM that rejects its config or a boot that ends early). 71/71 checks passed:
+
+1. install (timeout wrapper and background confirm present in the installed autostart), installing
+   boot stock, menu 5;
+2. boots 1-2 product and confirmed by the ARM guard, probation ended, same-boot repeat stock;
+3. two resets trip (`NO BOOT stock this boot` + ` (tripped:reset_reports)`, NO-GO lines);
+4. menu 3 export, menu 1 keeps `backups/persist-evidence/1` and advises export;
+5. probation: the SM never runs the trial, one product boot, then `tripped=probation`;
+6. after re-enable, one confirmed boot and three unconfirmed boots, then `tripped=unconfirmed`;
+7. `sm.conf` edited by another tool: `PERSIST enabled but bindings changed`, the folded message and
+   `NO PERS bindings changed`; the next boot stock with ` (baseline_edited:sm.conf)`;
+8. a guard stub that never returns: stock config after 15.2 s (stock BusyBox `timeout`);
+9. menu 4: autostart byte-identical to stock, later boot stock.
+
+Every verdict line ≤ 40 columns; no awk/shell error text.
+
+### Not verified (G2)
+
+CMU execution of any of this; the real SM argv and lifetime on a CMU beyond the one vehicle `ps`
+line; the CMU power-down timing at ignition off; real hung storage (uninterruptible sleep); the
+chroot variant of `tests/packaging/cmu_emulation.py` (updated, run only as its proot copy).

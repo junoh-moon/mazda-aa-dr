@@ -158,3 +158,87 @@ Recorded with results in [PERSISTENT_GUARD_2026-10-06](PERSISTENT_GUARD_2026-10-
 - `logs` is writable by the collector account; a forged `healthy` marker could only weaken the
   (currently disabled) boot-loop rule, never the reset rule or the root-owned state.
 - The guard reads up to 64 × 1 MiB of reports before the SM starts (actual ≈ 0.3 MiB).
+
+## Revision G2 (2026-10-06, after two independent reviews)
+
+The sections above describe the first persistent design (`persist-state` v1). Two reviews found an
+unbounded loop and four smaller defects; this revision supersedes the state machine above where they
+differ. The healthy-marker rule stays OFF; its replacement needs no runtime cooperation.
+
+### Guard-owned confirmation, probation and caps
+
+- **`confirm`.** After a selection the owned autostart block starts, only when `guard/persist`
+  exists, `( trap '' HUP; /bin/sleep 90; exec .../mx5dr-guard confirm ) </dev/null >/dev/null 2>&1 &`.
+  It is backgrounded after the SM launch line is reached, so it never delays the SM. `/bin/sleep`
+  is the stock BusyBox applet; `trap ''` ignores a hang-up when `autostart` exits. `confirm`
+  writes `confirmed_boot=<this boot>` only if this boot is the open attempt, `last-boot` equals it
+  (the selection was committed) and `/proc/*/cmdline` shows `/jci/sm/sm -f <that trial> ...`
+  (exactly the vehicle `ps` line of 2026-10-04: `/jci/sm/sm -f /tmp/mx5dr-trial-jQHO1w/sm.conf -e
+  /tmp/smevents.txt`). A second `confirm` is a no-op; a stale or different boot is rejected. The lock
+  is retried for 5 s.
+- **State v2** (`mx5dr-persist-state-v2`): adds `probation`, `unconfirmed_count`, `recent` (last 10
+  outcomes), `attempt_trial`, `confirmed_boot`. v1 files decline (menu 1 rewrites them).
+- **Judgement of the previous attempt:** `R` failed_reset (report fingerprint changed, even if it
+  was confirmed earlier), `B` boot loop (healthy rule only), `C` confirmed, `U` unconfirmed (no
+  report and no confirmation). Only `C` resets `fail_count` and `unconfirmed_count` and ends
+  probation; `U` and `R` never reset either counter.
+- **Trips** (first match): `probation` — the first attempt after menu 1 was not confirmed (restores
+  the one-boot bound for deterministic faults such as the SM rejecting the trial config);
+  `reset_reports` — 2 consecutive `R`; `reset_reports_repeated` — 3 `R` within the last 10 attempts
+  (alternating fail/ok cannot hide); `unconfirmed` — 3 consecutive `U`; `boot_loop` (rule on only);
+  `runtime_disabled`.
+- **Bounds:** a fault that leaves no report and stops the SM or the CMU before the confirmation
+  runs the product at most once after menu 1, or at most 3 times in a row later. Undelivered
+  selections (attempt recorded, no path printed, e.g. a failed fsync) also count as `U`.
+
+**Short drives.** A boot counts as confirmed only if the CMU is still up about 90 s after the SM
+launch (autostart runs after the kernel and early scripts; roughly 100–110 s after power-on,
+not measured). Whether the CMU powers down immediately at ignition off is not known. Three such
+boots in a row, or the first one after menu 1, trip to stock: the safe direction; menu 1 re-enables.
+Example: three consecutive trips of under about two minutes (moving the car in a garage) trip;
+one longer drive in between resets the count. The procedure asks the owner to keep the first boot
+after menu 5 running until menu 2 shows `ok CONF confirmed`.
+
+### Hang bound
+
+The block calls `timeout -t 15 -s KILL guard select ...` when the stock `/usr/bin/timeout` applet is
+executable (BusyBox 1.19.2 in this firmware, `-t SECS -s SIG` syntax, checked under the stock
+BusyBox emulation), otherwise the direct call. The guard itself sets `alarm(10)` with SIGALRM's
+default action on every command; every path before the printed trial path is fail-closed, so an
+abort leaves at most an unpublished `/tmp` file or an attempt record that counts as `U`. The `/data`
+scan stops at 4096 entries, the `/proc` scan of `confirm` at 8192.
+
+### Stale temporaries
+
+Under the guard lock every command removes `.{arm,last-boot,persist,persist-state,last-decision}.<1-10
+digits>` that are owned regular files (never followed, scan bounded at 256); `atomic_file()` also
+unlinks its temporary name before the `O_EXCL` create, so a reused PID cannot block a state write.
+
+### Owner visibility
+
+Every persistent decline writes the root-owned `guard/last-decision` (`boot_id`, `reason`, atomic,
+best effort). `mx5dr-guard verify` (read-only, no lock) prints the reason a new boot would decline
+and a one-line instruction (`bindings changed: sm.conf edited by another tool: run menu 1`).
+`mx5dr-guard status` prints the state as key=value lines from the same parser that `select` uses;
+`trial_status.sh` no longer parses the state itself. Menu 2 shows `PERSIST enabled but bindings
+changed`, `NO BOOT stock this boot (<reason>)`, `this boot confirmed yes|pending` and a `CONF` row.
+The car gives no notification: the procedure asks the owner to check menu 2 every few drives.
+
+### Evidence on re-enable
+
+Menu 1 first copies `persist-state`, `last-decision` and `disable-next-start` to
+`backups/persist-evidence/<n>` (numbered, no clock, last 3 kept), prints the previous trip reason and,
+when tripped, advises menu 3 first (not enforced).
+
+### Remaining unbounded or unobservable cases
+
+1. A guard blocked in uninterruptible sleep (e.g. hung flash I/O) ignores both SIGALRM and SIGKILL;
+   the command substitution then waits and the SM does not start. Unbounded.
+2. A failure after the confirmation that leaves no SM report (kernel panic, hardware watchdog, power
+   loss after 90 s) is judged `C` every time: a late, report-free reset loop is not detected.
+3. A product that runs but misbehaves without a crash (AA, touch, HUD or location wrong while the SM
+   stays up) is confirmed; the guard cannot observe it. Only the owner can (menu 2, menu 4).
+4. A failing service the SM restarts or ignores without a reset report is invisible.
+5. Any report rewrite counts as ours (OEM resets, other writers; files are mode 666): trips early.
+6. The 90 s timing, the CMU power-down behaviour and the SM argv on a CMU without our trial were not
+   measured on this firmware beyond the one vehicle `ps` line.

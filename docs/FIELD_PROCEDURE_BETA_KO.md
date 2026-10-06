@@ -27,7 +27,9 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
 ## 상시 실행과 자동 차단
 
 - **매 부팅 실행**: 메뉴 `1`로 한 번 설치하면 CMU가 새로 부팅할 때마다 가드가 BETA를 다시 켭니다. 순정 설정 파일(`sm.conf`, `sm_WCP.conf`)에는 아무것도 쓰지 않고, 매 부팅 `/tmp`에 그 부팅용 설정을 새로 만듭니다. 설치한 그 부팅에서는 켜지지 않으므로 처음에 한 번 `5`로 재부팅합니다.
-- **자동 차단**: 순정 SM은 CMU를 스스로 재부팅하기 직전에 `/data`에 보고서(`dmesg.out` 등)를 남깁니다. 가드는 매 부팅 이 보고서가 지난 BETA 부팅 이후 바뀌었는지 봅니다(시계를 쓰지 않습니다). **BETA 부팅 두 번이 연달아 CMU 리셋으로 끝나면** 그다음 부팅부터 BETA를 켜지 않고 순정만 실행합니다. 런타임이 스스로 꺼짐 표식(`disable-next-start`)을 남겨도 같습니다. 기록과 보고서는 지우지 않습니다.
+- **자동 차단**: 순정 SM은 CMU를 스스로 재부팅하기 직전에 `/data`에 보고서(`dmesg.out` 등)를 남깁니다. 가드는 매 부팅 이 보고서가 지난 BETA 부팅 이후 바뀌었는지 봅니다(시계를 쓰지 않습니다). **BETA 부팅 두 번이 연달아 CMU 리셋으로 끝나면** 그다음 부팅부터 BETA를 켜지 않고 순정만 실행합니다. 연달아가 아니어도 최근 10번 중 3번이 리셋이면 같습니다. 런타임이 스스로 꺼짐 표식(`disable-next-start`)을 남겨도 같습니다. 기록과 보고서는 지우지 않습니다.
+- **확인(2026-10-06 추가)**: BETA로 시작한 부팅은 약 90초 뒤 가드가 SM이 그 설정으로 아직 돌고 있는지 스스로 확인합니다(`this boot confirmed yes`). 보고서도 확인도 없는 부팅(SM이 설정을 거부, 전원 차단, 90초 전에 시동을 끔)이 **세 번 연달아** 나오면 차단합니다. 메뉴 `1` 직후의 **첫** BETA 부팅은 반드시 확인돼야 하며, 아니면 바로 차단합니다(`PERSIST tripped (probation)`). 그래서 `5`로 재부팅한 뒤 메뉴 `2`가 `ok   CONF  confirmed`를 보여 줄 때까지(약 2분) 시동을 유지하십시오. 2분이 안 되는 짧은 운행이 세 번 연달아 이어져도 차단됩니다(안전한 쪽입니다. `1`로 다시 켭니다).
+- **멈춤 방지**: 가드가 멈춰도 순정 BusyBox `timeout`이 15초 안에 끝내고 순정으로 시작합니다.
 - **차단은 저절로 풀리지 않습니다.** 메뉴 `2`가 `PERSIST tripped (…)`와 다음 두 줄을 보여 줍니다.
 
   ```
@@ -36,18 +38,22 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
   ```
 
   `3`으로 기록을 회수해 알려 주십시오. 원인을 이해한 뒤에만 `1`로 다시 켭니다(차단 횟수가 0으로 돌아갑니다).
-- **이 빌드의 한계**: 런타임이 "120초 안정" 표식(`healthy`)을 아직 쓰지 않아, 그 표식이 없을 때 부팅 반복을 실패로 보는 규칙은 꺼져 있습니다(`attempts since healthy … (rule off)`). SM 보고서를 남기지 않는 재부팅(전원 차단, SM 감시 전의 멈춤 등)은 감지하지 못합니다.
+- **이 빌드의 한계**: 런타임이 "120초 안정" 표식(`healthy`)을 아직 쓰지 않아 그 규칙은 꺼져 있습니다(`attempts since healthy … (rule off)`). 확인(90초) **뒤에** 보고서 없이 일어나는 재부팅(전원 차단, 커널 패닉)과, 리셋 없이 AA·터치·위치만 이상한 경우는 가드가 알 수 없습니다. 이상하면 메뉴 `4`로 제거하십시오.
+- **차는 알려 주지 않습니다. 몇 번 운행할 때마다 주차 상태에서 메뉴 `2`를 확인하십시오.** 순정으로 시작한 부팅이면 `NO   BOOT  stock this boot (이유)`가, 다른 도구가 `sm.conf`를 고친 경우 `PERSIST enabled but bindings changed`와 할 일(`run menu 1`)이 나옵니다.
 - **상태 보기**: 언제든 주차 상태에서 메뉴 `2`. 판정 블록 위쪽 다섯 줄이 상시 실행 상태입니다.
 
   ```
   PERSIST enabled (every boot)
-  fail count 0 of 2
+  fail count 0 of 2, unconfirmed 0 of 3
+  recent boots CCC
   attempts since healthy 3 (rule off)
   healthy previous boot no
   this boot selected yes
+  this boot confirmed yes
   ```
 
-  `fail count 1 of 2`는 직전 BETA 부팅이 리셋으로 끝났다는 뜻입니다. 이번 부팅은 BETA로 실행 중이며, 이번 부팅도 리셋으로 끝나면 다음 부팅부터 차단됩니다.
+  `fail count 1 of 2`는 직전 BETA 부팅이 리셋으로 끝났다는 뜻입니다. 이번 부팅도 리셋으로 끝나면 다음 부팅부터 차단됩니다. `unconfirmed 2 of 3`은 확인 없는 부팅이 두 번 이어졌다는 뜻입니다. `recent boots`는 최근 부팅 결과입니다(C 확인, U 미확인, R 리셋). `this boot confirmed pending`이면 90초가 아직 지나지 않았습니다. 60초 뒤 `2`를 다시 누르십시오.
+- **다시 켤 때의 기록 보존**: 메뉴 `1`은 이전 상태 파일을 `backups/persist-evidence/번호`에 복사하고(최근 3개) 어떤 이유로 차단돼 있었는지 보여 줍니다. 차단 중이었다면 먼저 `3`으로 회수하라고 안내합니다.
 - **제거**: 메뉴 `4`. 자동 실행 블록과 상시 실행 설정을 지우고 순정으로 돌아갑니다(기록은 남김). 다시 쓰려면 `1`.
 
 ## 하지 말 것
@@ -90,11 +96,14 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
    ```
    ---- GO / NO-GO ----
    PERSIST enabled (every boot)
-   fail count 0 of 2
+   fail count 0 of 2, unconfirmed 0 of 3
+   recent boots none
    attempts since healthy 1 (rule off)
    healthy previous boot none
    this boot selected yes
+   this boot confirmed yes
    ok   BOOT  product this boot
+   ok   CONF  confirmed
    ok   GUARD committed
    ok   PERS  enabled
    ok   MODE  BETA
