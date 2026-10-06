@@ -109,13 +109,56 @@ chmod 0700 "$BASE/guard"
 if [ -z "$ROOT" ]; then chown 0 "$BASE" "$BASE/guard"; fi
 # A retry must not reuse the old trial's boot marker if later staging fails.
 if [ "$MODE" != OFF ]; then stash_arm_boot; fi
+# Menu 1 resets the persistent state (guard enable) and acknowledges a runtime
+# disable marker. Keep the previous files first: numbered, no clock, last 3.
+if [ "$POLICY" = persistent ]; then
+    evidence=''
+    for item in "$BASE/guard/persist-state" "$BASE/guard/last-decision" "$BASE/logs/disable-next-start"; do
+        if [ -e "$item" ] || [ -L "$item" ]; then regular "$item"; evidence="$evidence $item"; fi
+    done
+    if [ -n "$evidence" ]; then
+        previous_trip=unknown
+        guard_exec=$BASE/guard/mx5dr-guard
+        if [ -n "$ROOT" ]; then guard_exec=${MX5DR_FIXTURE_GUARD:-$ROOT/missing-guard}; fi
+        if [ -e "$BASE/guard/persist" ] && [ -f "$guard_exec" ] && [ -x "$guard_exec" ]; then
+            previous_trip=$(MX5DR_GUARD_ROOT=$ROOT "$guard_exec" status 2>/dev/null |
+                awk -F= '$1=="persist" {p=$2} $1=="tripped" {t=$2} END {if(p=="tripped") print t; else if(p!="") print "no"; else print "unknown"}') ||
+                previous_trip=unknown
+            case "$previous_trip" in ''|*[!a-z_]*) previous_trip=unknown;; esac
+        fi
+        kept=$BASE/backups/persist-evidence
+        [ ! -L "$kept" ] || fail 'Symlink evidence directory'
+        mkdir -p "$kept"
+        number=0
+        for entry in "$kept"/[0-9]*; do
+            name=${entry##*/}
+            case "$name" in *[!0-9]*) continue;; esac
+            [ -d "$entry" ] && [ ! -L "$entry" ] || continue
+            [ "$name" -le "$number" ] || number=$name
+        done
+        number=$((number + 1))
+        mkdir "$kept/$number"
+        for item in $evidence; do cp -p "$item" "$kept/$number/" || fail 'Cannot keep previous BETA evidence'; done
+        sync
+        for entry in "$kept"/[0-9]*; do
+            name=${entry##*/}
+            case "$name" in *[!0-9]*) continue;; esac
+            if [ -d "$entry" ] && [ ! -L "$entry" ] && [ "$name" -le $((number - 3)) ]; then rm -rf "$entry"; fi
+        done
+        echo "Kept the previous BETA state in backups/persist-evidence/$number (tripped: $previous_trip)."
+        if [ "$previous_trip" != no ] && [ "$previous_trip" != unknown ]; then
+            echo "BETA was tripped ($previous_trip). Run menu 3 export first if you have not; menu 1 now re-enables BETA."
+        fi
+    fi
+fi
 # No old arm or persistent enablement may survive a partial replacement.
 rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 clear_capture_markers
 if [ "$POLICY" = persistent ]; then
     # A failure from here on must not leave an enablement behind.
     PERSIST_PENDING=1
-    # Re-enabling is the owner's acknowledgement of a runtime self-disable.
+    # Re-enabling is the owner's acknowledgement of a runtime self-disable
+    # (kept above with the previous state).
     if [ -e "$BASE/logs/disable-next-start" ] || [ -L "$BASE/logs/disable-next-start" ]; then
         regular "$BASE/logs/disable-next-start"
         rm -f "$BASE/logs/disable-next-start" || fail 'Cannot clear the runtime disable marker'

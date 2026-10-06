@@ -300,6 +300,59 @@ class PersistentBetaTests(unittest.TestCase):
         self.assertIn('wait CONF  confirm after 90 s', verdict)
         self.assertEqual(verdict[-1], 'WAIT 60 s, then run 2 again')
 
+    def test_reenable_keeps_trip_and_disable_evidence(self):
+        self.menu1()
+        for n in (1, 2):
+            self.set_boot(n)
+            self.assertIsNotNone(self.autostart_select())
+            (self.root / 'data/dmesg.out').write_text('reset during boot %d\n' % n)
+        self.set_boot(3)
+        self.assertIsNone(self.autostart_select())
+        tripped_state = (self.base / 'guard/persist-state').read_text()
+        self.assertIn('tripped=reset_reports', tripped_state)
+        (self.logs / 'disable-next-start').write_text('runtime reason\n')
+        result = self.install_beta()
+        self.assertIn('Kept the previous BETA state in backups/persist-evidence/1 (tripped: reset_reports).',
+                      result.stdout)
+        self.assertIn('BETA was tripped (reset_reports). Run menu 3 export first', result.stdout)
+        self.assertIn('Cleared the runtime disable marker', result.stdout)
+        kept = self.base / 'backups/persist-evidence/1'
+        self.assertEqual((kept / 'persist-state').read_text(), tripped_state)
+        self.assertEqual((kept / 'disable-next-start').read_text(), 'runtime reason\n')
+        self.assertIn('reason=tripped:reset_reports', (kept / 'last-decision').read_text())
+        self.assertFalse((self.logs / 'disable-next-start').exists())
+        # Bounded: only the last three numbered copies remain.
+        for _ in range(4):
+            self.guard('enable')
+            self.install_beta()
+        names = sorted(int(p.name) for p in (self.base / 'backups/persist-evidence').iterdir())
+        self.assertEqual(names, [3, 4, 5])
+
+    def test_upgrade_from_published_one_boot_beta_state(self):
+        """v1.0.0-beta.1 installed BETA as one guarded boot: arm, consumed,
+        armed-boot and last-boot may all be present."""
+        self.fixture.run_script('install.sh', '--mode=BETA', '--one-boot')
+        guard = self.base / 'guard'
+        manifest = 'mx5dr-one-boot-v3\n' + ('a' * 64 + '\n') * 8
+        for name in ('arm', 'consumed'):
+            (guard / name).write_text(manifest)
+            (guard / name).chmod(0o600)
+        (guard / 'last-boot').write_text(test_trial_menu.BOOT)
+        (guard / 'last-boot').chmod(0o600)
+        self.set_boot(1)
+        self.menu1()
+        self.assertFalse((guard / 'arm').exists())
+        self.assertTrue((guard / 'consumed').exists())  # old evidence kept
+        self.assertIn('policy=persistent', (self.base / 'installed.txt').read_text())
+        screen, verdict = self.status()
+        self.assertIn('guard_policy=persistent persist=enabled', screen)
+        self.assertIn('NO   BOOT  installed; choose 5', verdict)
+        self.set_boot(2)
+        self.assertIsNotNone(self.autostart_select())
+        screen, verdict = self.status()
+        self.assertIn('ok   BOOT  product this boot', verdict)
+        self.assertIn('ok   CONF  confirmed', verdict)
+
     def test_damaged_state_is_not_reported_as_selected(self):
         self.menu1()
         self.set_boot(1)
