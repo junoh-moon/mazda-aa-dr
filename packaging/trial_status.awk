@@ -245,8 +245,9 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
 END {
     report("storage_headroom",space_ok==1,"reserve=8MiB plus_write_margin")
     report("storage_capture_clean",!storage_stopped,"current_boot")
-    report("guard_current_boot",oneboot=="consumed_this_boot",oneboot)
-    report("linux_reboot_after_arm",startup_state=="guard_committed_after_new_boot",startup_state)
+    # Persistent BETA: the guard selected this boot from its persistent state.
+    report("guard_current_boot",oneboot=="consumed_this_boot" || oneboot=="persistent_this_boot",oneboot)
+    report("linux_reboot_after_arm",startup_state=="guard_committed_after_new_boot" || startup_state=="guard_committed_persistent",startup_state)
     report("runtime_current_boot",runtime, "mode=" mode)
     report("health_recent",runtime && health_recent(health),"window=5s health_age_s=" age(health))
     # The boot row records whether the AA hook was installed; a stale or

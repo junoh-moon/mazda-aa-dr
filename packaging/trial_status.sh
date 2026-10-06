@@ -155,6 +155,92 @@ elif [ "$guard_last_boot" = current ] && [ "$guard_consumed" = present ]; then
         esac
     fi
 fi
+# Persistent BETA policy (v1.0): the guard decides again on every boot from
+# root-owned guard/persist and guard/persist-state. Data only; never executed.
+no_nul_small() (
+    [ -f "$1" ] && [ ! -L "$1" ] || exit 1
+    small_bytes=$(wc -c < "$1") || exit 1
+    small_bytes=$(printf '%s\n' "$small_bytes" | tr -d '[:space:]') || exit 1
+    [ "$small_bytes" -gt 0 ] && [ "$small_bytes" -le 1024 ] || exit 1
+    small_hex_raw=$(od -v -An -t x1 "$1") || exit 1
+    small_hex=$(printf '%s\n' "$small_hex_raw" | tr -d '[:space:]') || exit 1
+    [ "${#small_hex}" -eq "$((small_bytes * 2))" ] || exit 1
+    case "$small_hex" in *0a) ;; *) exit 1;; esac
+    printf '%s\n' "$small_hex" | awk '{for(i=1;i<=length($0);i+=2) if(substr($0,i,2)=="00") exit 1}'
+)
+persist_manifest_rule() (
+    no_nul_small "$1" || exit 1
+    LC_ALL=C awk '
+        NR==1 {if($0!="mx5dr-persist-v1") bad=1; next}
+        NR==2 {if($0!="mode=BETA") bad=1; next}
+        NR==3 {if($0=="healthy_rule=off") rule="off"; else if($0=="healthy_rule=on") rule="on"; else bad=1; next}
+        NR==4 {if($0!="mx5dr-one-boot-v3") bad=1; next}
+        NR>=5 && NR<=12 {if(length($0)!=64 || $0 ~ /[^0-9a-f]/) bad=1; next}
+        {bad=1}
+        END {if(bad || NR!=12) exit 1; print rule}' "$1"
+)
+read_persist_state() (
+    no_nul_small "$1" || exit 1
+    LC_ALL=C awk '
+        function uuid(s) {
+            return length(s)==36 && substr(s,9,1)=="-" && substr(s,14,1)=="-" &&
+                substr(s,19,1)=="-" && substr(s,24,1)=="-" && s !~ /[^0-9a-f-]/
+        }
+        function count(s) {return s ~ /^[0-9]+$/ && length(s)<=6 && (s=="0" || s !~ /^0/)}
+        BEGIN {n=split("enabled_boot fail_count attempts_since_healthy attempt_boot attempt_reports previous healthy_previous tripped",key," ")}
+        NR==1 {if($0!="mx5dr-persist-state-v1") bad=1; next}
+        NR>=2 && NR<=n+1 {
+            p=index($0,"=")
+            if(!p || substr($0,1,p-1)!=key[NR-1]) bad=1
+            v[NR-1]=substr($0,p+1); next
+        }
+        {bad=1}
+        END {
+            if(bad || NR!=n+1) exit 1
+            if(!uuid(v[1]) || !count(v[2]) || !count(v[3]) || v[2]+0>2) exit 1
+            if(v[4]!="none" && !uuid(v[4])) exit 1
+            if(v[6] !~ /^(none|ok|healthy|failed_reset|failed_bootloop)$/) exit 1
+            if(v[7] !~ /^(none|yes|no)$/) exit 1
+            if(v[8] !~ /^(no|reset_reports|boot_loop|runtime_disabled)$/) exit 1
+            print v[1], v[2], v[3], v[4], v[6], v[7], v[8]
+        }' "$1"
+)
+guard_policy=one-boot
+persist_status=absent
+persist_reason=none
+persist_rule=none
+persist_fail=none
+persist_attempts=none
+persist_previous=none
+persist_healthy_previous=none
+persist_selected=no
+persist_enabled_this_boot=no
+if [ -e "$BASE/guard/persist" ] || [ -L "$BASE/guard/persist" ]; then
+    guard_policy=persistent
+    persist_status=invalid
+    if persist_rule=$(persist_manifest_rule "$BASE/guard/persist") &&
+       persist_fields=$(read_persist_state "$BASE/guard/persist-state"); then
+        set -- $persist_fields
+        persist_status=enabled
+        persist_fail=$2; persist_attempts=$3; persist_previous=$5; persist_healthy_previous=$6
+        if [ "$7" != no ]; then persist_status=tripped; persist_reason=$7; fi
+        [ "$1" != "$boot_id" ] || persist_enabled_this_boot=yes
+        if [ "$4" = "$boot_id" ] && [ "$guard_last_boot" = current ]; then persist_selected=yes; fi
+        set --
+    else
+        persist_rule=invalid
+    fi
+    oneboot=unconfirmed
+    case "$persist_status:$persist_selected:$persist_enabled_this_boot" in
+        tripped:*) startup_state=persistent_tripped;;
+        invalid:*) startup_state=persistent_state_invalid;;
+        enabled:yes:*) oneboot=persistent_this_boot; startup_state=guard_committed_persistent;;
+        enabled:no:yes) startup_state=persistent_enabled_this_boot;;
+        *) startup_state=persistent_not_selected;;
+    esac
+fi
+echo "guard_policy=$guard_policy persist=$persist_status persist_reason=$persist_reason persist_healthy_rule=$persist_rule"
+echo "persist_fail_count=$persist_fail persist_trip_at=2 persist_attempts_since_healthy=$persist_attempts persist_previous=$persist_previous persist_healthy_previous=$persist_healthy_previous persist_selected_this_boot=$persist_selected persist_enabled_this_boot=$persist_enabled_this_boot"
 # Removal keeps prior guard evidence for export. A disabled, missing, damaged
 # or noncanonical config cannot borrow a prior boot's positive status.
 config_mode=unconfirmed
@@ -193,6 +279,21 @@ if [ "$startup_state" = guard_committed_after_new_boot ]; then
             startup_state=guard_config_changed_since_selection
         fi
     else
+        startup_state=guard_config_unconfirmed
+    fi
+elif [ "$startup_state" = guard_committed_persistent ]; then
+    # Row 6 of the persistent manifest is the same configuration digest.
+    if expected_config_digest=$(LC_ALL=C awk 'NR==6 {print; exit}' "$BASE/guard/persist") &&
+       actual_config_digest=$(hash "$BASE/mx5dr.conf"); then
+        if [ "$expected_config_digest" = "$actual_config_digest" ]; then
+            guard_config_binding=matched
+        else
+            guard_config_binding=changed
+            oneboot=unconfirmed
+            startup_state=guard_config_changed_since_selection
+        fi
+    else
+        oneboot=unconfirmed
         startup_state=guard_config_unconfirmed
     fi
 fi

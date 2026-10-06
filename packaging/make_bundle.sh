@@ -43,4 +43,6 @@ fi
 (cd "$dest" && sha256sum libmx5dr.so > libmx5dr.so.sha256)
 (cd "$dest" && sha256sum libmx5dr-vimtap.so > libmx5dr-vimtap.so.sha256)
 (cd "$dest" && sha256sum libmx5dr-ldstap.so > libmx5dr-ldstap.so.sha256)
-echo "Bundle prepared: $dest (default=$DEFAULT_MODE; one guarded boot; not vehicle-tested)"
+policy='one guarded boot'
+[ "$DEFAULT_MODE" != BETA ] || policy='persistent, every guarded boot'
+echo "Bundle prepared: $dest (default=$DEFAULT_MODE; $policy; not vehicle-tested)"

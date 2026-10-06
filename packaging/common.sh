@@ -19,6 +19,7 @@ MOUNT_LOCKED=0
 REMOUNTED=''
 LOCKED=0
 ARM_PENDING=0
+PERSIST_PENDING=0
 fail() { echo "mx5dr: $*" >&2; exit 1; }
 hash() (
     # A stock CMU need not have sha256sum (or its optional -c mode). FAT USB
@@ -73,6 +74,10 @@ cleanup() {
     trap '' HUP INT TERM
     # A caught signal or failed post-arm diagnostic publication must not leave
     # a live authorization. This cannot cover abrupt power loss.
+    if [ "$PERSIST_PENDING" = 1 ]; then
+        rm -f "$BASE/guard/persist" || rc=1
+        sync || rc=1
+    fi
     if [ "$ARM_PENDING" = 1 ]; then
         rm -f "$BASE/guard/arm" || rc=1
         rm -f "$BASE/guard/armed-boot.new.$$" || rc=1

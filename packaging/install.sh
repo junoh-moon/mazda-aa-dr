@@ -14,6 +14,10 @@ if [ -e "$HERE/bundle-default-mode" ] || [ -L "$HERE/bundle-default-mode" ]; the
     case "$MODE" in OBSERVE|SHADOW|BETA) ;; *) fail 'Invalid bundle default mode';; esac
 fi
 WITH_WCP=0
+# BETA is the v1.0 product: installed PERSISTENT, decided again by the guard on
+# every boot with an automatic fail-safe. --one-boot keeps the earlier single
+# guarded trial for BETA; OBSERVE/SCRUB/SHADOW are always one-boot trials.
+FORCE_ONE_BOOT=0
 # Running the installer authorizes the temporary writes it needs. Restore every
 # mount we changed in common.sh's exit trap, including on installation failure.
 ALLOW_REMOUNT=1
@@ -23,11 +27,14 @@ for arg in "$@"; do
       --with-wcp) WITH_WCP=1;;
       --remount) ALLOW_REMOUNT=1;;
       --no-remount) ALLOW_REMOUNT=0;;
+      --one-boot) FORCE_ONE_BOOT=1;;
       --mode=OBSERVE|--mode=SCRUB|--mode=SHADOW|--mode=BETA|--mode=OFF) MODE=${arg#--mode=};;
       *) fail "Unknown option $arg (ASSIST is not deployable)";;
     esac
 done
 [ -z "$ROOT" ] || [ "$ALLOW_REMOUNT" = 0 ] || fail 'No remounts permitted for fixtures'
+POLICY=one-boot
+if [ "$MODE" = BETA ] && [ "$FORCE_ONE_BOOT" = 0 ]; then POLICY=persistent; fi
 if [ "$MODE" != OFF ]; then prepare_arm_boot; fi
 # Published bundles carry a full manifest; developer bundles still use the
 # mandatory per-binary hashes below. Do not require a separate user command.
@@ -102,9 +109,19 @@ chmod 0700 "$BASE/guard"
 if [ -z "$ROOT" ]; then chown 0 "$BASE" "$BASE/guard"; fi
 # A retry must not reuse the old trial's boot marker if later staging fails.
 if [ "$MODE" != OFF ]; then stash_arm_boot; fi
-# No old arm may survive a partial replacement.
-rm -f "$BASE/guard/arm"
+# No old arm or persistent enablement may survive a partial replacement.
+rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 clear_capture_markers
+if [ "$POLICY" = persistent ]; then
+    # A failure from here on must not leave an enablement behind.
+    PERSIST_PENDING=1
+    # Re-enabling is the owner's acknowledgement of a runtime self-disable.
+    if [ -e "$BASE/logs/disable-next-start" ] || [ -L "$BASE/logs/disable-next-start" ]; then
+        regular "$BASE/logs/disable-next-start"
+        rm -f "$BASE/logs/disable-next-start" || fail 'Cannot clear the runtime disable marker'
+        echo 'Cleared the runtime disable marker (disable-next-start) for re-enable.'
+    fi
+fi
 sync
 TX=$BASE/backups/$(date +%Y%m%dT%H%M%S)-$$
 mkdir "$TX"
@@ -157,7 +174,7 @@ mv -f "$BASE/guard/wcp.source.sha256.new.$$" "$BASE/guard/wcp.source.sha256"
 if [ -z "$ROOT" ]; then
     "$BASE/guard/mx5dr-guard" check || fail 'Guard preflight failed; autostart not changed'
 fi
-printf '%s\n' 'one-boot install: baseline configs and autostart' > "$BASE/pending"
+printf '%s\n' "$POLICY install: baseline configs and autostart" > "$BASE/pending"
 sync
 for name in $TARGETS; do
     file=$ROOT/jci/sm/$name
@@ -167,16 +184,21 @@ file=$ROOT/usr/bin/autostart
 [ "$(hash "$file")" = "$(cat "$TX/autostart.before.sha256")" ] || fail 'Concurrent autostart edit'
 mv -f "$file.mx5dr-new.$$" "$file"
 # Templates bind the current preserved touch settings; later changes decline a trial.
-printf 'mode=%s\npolicy=one-boot\nbackup=%s\npayload_sha256=%s\ntap_sha256=%s\nlds_tap_sha256=%s\n' "$MODE" "$TX" "$want" "$tap_want" "$lds_want" > "$BASE/installed.txt.new.$$"
+printf 'mode=%s\npolicy=%s\nbackup=%s\npayload_sha256=%s\ntap_sha256=%s\nlds_tap_sha256=%s\n' "$MODE" "$POLICY" "$TX" "$want" "$tap_want" "$lds_want" > "$BASE/installed.txt.new.$$"
 mv -f "$BASE/installed.txt.new.$$" "$BASE/installed.txt"
 rm -f "$BASE/pending"
 sync
 if [ -z "$ROOT" ]; then
-    [ "$MODE" = OFF ] || "$BASE/guard/mx5dr-guard" arm || fail 'Arm command failed; inspect guard status before reboot'
+    if [ "$POLICY" = persistent ]; then
+        "$BASE/guard/mx5dr-guard" enable || fail 'Enable command failed; inspect guard status before reboot'
+    else
+        [ "$MODE" = OFF ] || "$BASE/guard/mx5dr-guard" arm || fail 'Arm command failed; inspect guard status before reboot'
+    fi
 else
     echo 'Fixture staged only; target guard not executed.'
 fi
-if [ "$MODE" != OFF ]; then
+PERSIST_PENDING=0
+if [ "$MODE" != OFF ] && [ "$POLICY" = one-boot ]; then
     if ! record_arm_boot; then
         rm -f "$BASE/guard/arm" || fail 'Arming boot marker failed and arm could not be revoked'
         sync
@@ -184,8 +206,17 @@ if [ "$MODE" != OFF ]; then
     fi
 fi
 ARM_PENDING=0
-echo "Staged $MODE for one guarded boot. Persistent service configs retain existing touch only. No processes restarted."
-if [ -z "$ROOT" ] && [ "$MODE" != OFF ]; then
+if [ "$POLICY" = persistent ]; then
+    echo "Installed $MODE persistent: the guard starts it on every CMU boot. Persistent service configs retain existing touch only. No processes restarted."
+    echo 'Automatic fallback: after 2 boots in a row that end in a CMU reset, the guard starts stock only and keeps the logs. Menu 1 re-enables, menu 4 removes.'
+fi
+if [ -z "$ROOT" ] && [ "$POLICY" = persistent ]; then
+    echo 'Install steps finished. Remain parked with the engine running and this USB connected. Choose trial menu 5 once to start the first product boot; later boots start it automatically.'
+    echo 'After CMU restart reopen trial menu 2: check PERSIST enabled, this boot selected yes, ok BETA armed, ok HOOK and ok FENCE.'
+    echo 'Then exit the menu and replace the USB with the AA dongle while parked.'
+fi
+[ "$POLICY" = persistent ] || echo "Staged $MODE for one guarded boot. Persistent service configs retain existing touch only. No processes restarted."
+if [ -z "$ROOT" ] && [ "$MODE" != OFF ] && [ "$POLICY" = one-boot ]; then
     echo 'Install steps finished. A vehicle ignition cycle alone does not prove a new CMU Linux boot.'
     echo 'Remain parked with the engine actually running and this USB connected. Choose trial menu 5 to request CMU reboot; do not press the engine start/stop button.'
     echo "The next guarded CMU startup requests automatic $MODE capture; no driving-time commands are needed."

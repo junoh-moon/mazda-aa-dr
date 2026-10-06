@@ -200,6 +200,22 @@ marker guard.arm "$BASE/guard/arm" manifest "$guard_ok"
 marker guard.consumed "$BASE/guard/consumed" manifest "$guard_ok"
 marker guard.normal_source "$BASE/guard/normal.source.sha256" sha "$guard_ok"
 marker guard.wcp_source "$BASE/guard/wcp.source.sha256" sha "$guard_ok"
+# Persistent BETA policy files: small root-owned text, recorded line by line
+# when every byte is in the guard's own alphabet.
+for persist_name in persist persist-state; do
+    persist_key=guard.$(printf '%s' "$persist_name" | tr '-' '_')
+    if [ "$guard_ok" != 1 ]; then printf '%s.status=parent_unavailable\n' "$persist_key"; continue; fi
+    path_info "$persist_key" "$BASE/guard/$persist_name"
+    kind_of "$BASE/guard/$persist_name"
+    if [ "$kind" = missing ]; then printf '%s.status=missing\n' "$persist_key"; continue; fi
+    if [ "$kind" != file ] || ! read_small "$BASE/guard/$persist_name" 1024; then
+        printf '%s.status=unreadable\n' "$persist_key"; partial=1; continue
+    fi
+    if printf '%s' "$small" | awk '{if($0 !~ /^[A-Za-z0-9=_.-]*$/ || length($0)>80) exit 1} END{if(NR<1 || NR>16) exit 1}'; then
+        printf '%s.status=valid\n' "$persist_key"
+        printf '%s' "$small" | awk -v key="$persist_key" '{printf "%s.line_%d=%s\n", key, NR, $0}'
+    else printf '%s.status=malformed\n' "$persist_key"; partial=1; fi
+done
 if [ "$guard_ok" = 1 ]; then
     # Match names in find itself, before delimiters can be confused with a name.
     # Only count NUL terminators, at most 65; never retain or echo a filename.
@@ -211,7 +227,7 @@ if [ "$guard_ok" = 1 ]; then
             {
                 if find "$BASE/guard" -mindepth 1 -maxdepth 1 \
                     ! -name last-boot ! -name armed-boot ! -name armed-boot.previous \
-                    ! -name arm ! -name consumed \
+                    ! -name arm ! -name consumed ! -name persist ! -name persist-state \
                     ! -name normal.source.sha256 ! -name wcp.source.sha256 \
                     ! -name normal.trial ! -name wcp.trial ! -name mx5dr-guard ! -name lock \
                     -print0 2>/dev/null; then scan_status=0; else scan_status=$?; fi

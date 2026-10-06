@@ -118,7 +118,8 @@ def main():
     parser.add_argument('--build-dir', type=Path, default=REPO / 'build')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--default-mode', choices=('OBSERVE', 'SHADOW', 'BETA'), default='OBSERVE',
-                        help='Bundle install mode; BETA must be requested explicitly (never the default)')
+                        help='Bundle install mode; BETA must be requested explicitly (never the default) and installs '
+                             'the persistent product (every boot); OBSERVE/SHADOW stay one-boot trials')
     parser.add_argument('--shell-only', action='store_true',
                         help='Package for an already authorized shell, without entry assets')
     args = parser.parse_args()
@@ -148,6 +149,7 @@ def main():
                     toolchain_commit=build_record['toolchain']['commit'],
                     arm_build=build_record,
                     target='NA 74.00.324A', default_mode=args.default_mode,
+                    install_policy='persistent' if args.default_mode == 'BETA' else 'one-boot',
                     artifacts={name: digest(bundle / name) for name in ARTIFACTS})
         if args.shell_only:
             info.update(bundle_type='shell-only', entry_payloads_included=False)

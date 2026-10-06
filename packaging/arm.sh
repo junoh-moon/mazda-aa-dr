@@ -18,7 +18,8 @@ regular "$BASE/libmx5dr-vimtap.so"
 regular "$BASE/libmx5dr-ldstap.so"
 stash_arm_boot
 # Disarm first: interrupted template refresh must not retain a previous authorization.
-rm -f "$BASE/guard/arm"
+# Arming one boot also ends any persistent enablement (one policy at a time).
+rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 clear_capture_markers
 sync
 set_config

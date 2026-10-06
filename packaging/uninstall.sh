@@ -8,7 +8,7 @@ for arg in "$@"; do case "$arg" in --remount) ALLOW_REMOUNT=1;; --no-remount) AL
 prepare_storage
 mount_rw "$ROOT/jci/sm"
 mount_rw "$ROOT/usr/bin"
-rm -f "$BASE/guard/arm"
+rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 sync
 file=$ROOT/usr/bin/autostart
 regular "$file"
@@ -51,4 +51,4 @@ else
 fi
 rm -f "$BASE/pending" "$BASE/installed.txt"
 sync
-echo 'Removed owned one-boot autostart blocks and mx5dr preload tokens; OFF config staged. No restart/kill. Library/logs/backups retained for mapped-code lifetime and diagnosis.'
+echo 'Removed owned one-boot autostart blocks, the persistent enablement and mx5dr preload tokens; OFF config staged. No restart/kill. Library/logs/backups retained for mapped-code lifetime and diagnosis.'

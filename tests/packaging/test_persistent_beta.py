@@ -1,0 +1,217 @@
+"""Persistent BETA packaging: menu install, status/verdict and a multi-boot
+host run of the real guard source against the installed fixture tree.
+
+Authored fixtures only. The host-built guard (MX5DR_GUARD_TESTING) stands in
+for the ARM helper that the fixture installer never executes.
+"""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+import test_trial_menu
+
+HERE = Path(__file__).resolve().parents[2]
+BOOT = test_trial_menu.BOOT.strip()
+
+
+def boot_id(n):
+    return '%08x' % (0x87650000 + n) + BOOT[8:]
+
+
+class PersistentBetaTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.build = tempfile.TemporaryDirectory()
+        cls.guard_exe = Path(cls.build.name) / 'guard'
+        subprocess.run(['g++', '-std=c++11', '-Wall', '-Wextra', '-Werror', '-DMX5DR_GUARD_TESTING',
+                        str(HERE / 'src/guard/guard.cpp'), str(HERE / 'src/runtime/sha256.cpp'),
+                        '-o', str(cls.guard_exe)], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.build.cleanup()
+
+    def setUp(self):
+        self.menu_fixture = test_trial_menu.TrialMenuTests()
+        self.addCleanup(self.menu_fixture.doCleanups)
+        self.menu_fixture.setUp()
+        m = self.menu_fixture
+        self.root, self.usb, self.base, self.logs = m.root, m.usb, m.base, m.logs
+        self.fixture = m.fixture
+        (self.root / 'data').mkdir()
+        (self.root / 'data/dmesg.out').write_text('[ 1451.0] an old reset before installation\n')
+        self.genv = dict(os.environ, MX5DR_GUARD_ROOT=str(self.root))
+
+    def menu(self, keys):
+        return self.menu_fixture.menu(keys)
+
+    def set_boot(self, n):
+        (self.root / 'proc/sys/kernel/random/boot_id').write_text(boot_id(n) + '\n')
+
+    def guard(self, *args):
+        return subprocess.run([str(self.guard_exe)] + list(args), env=self.genv, text=True, capture_output=True)
+
+    def install_beta(self):
+        (self.usb / 'bundle-default-mode').write_text('BETA\n')
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
+
+    def menu1(self):
+        """Menu 1 on the vehicle: install, then the target guard's enable."""
+        result = self.install_beta()
+        enabled = self.guard('enable')
+        self.assertEqual(enabled.returncode, 0, enabled.stderr)
+        return result
+
+    def autostart_select(self):
+        result = self.guard('select', '/jci/sm/sm.conf')
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    def status(self):
+        result = self.menu('2\n0\n')
+        text = result.stdout
+        block = text[text.index('---- GO / NO-GO ----'):]
+        verdict = block[:block.index('\n0 Exit')].strip().splitlines()
+        for line in verdict:
+            self.assertLessEqual(len(line), 40, line)
+        return text, verdict
+
+    def test_beta_install_is_persistent_and_shadow_stays_one_boot(self):
+        result = self.install_beta()
+        self.assertIn('Automatic fallback: after 2 boots in a row that end in a CMU reset', result.stdout)
+        self.assertIn('Choose 5 to start the first BETA boot', result.stdout)
+        installed = (self.base / 'installed.txt').read_text()
+        self.assertIn('mode=BETA\npolicy=persistent\n', installed)
+        # The one-boot arming marker belongs to the one-boot policy only.
+        self.assertFalse((self.base / 'guard/armed-boot').exists())
+        self.assertFalse((self.base / 'guard/arm').exists())
+        self.assertIn('ONE-BOOT BEGIN SMCFG_NORMALMODE', self.fixture.autostart.read_text())
+        self.menu('4\n')
+        (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
+        self.assertEqual(self.menu('1\n0\n').returncode, 0)
+        self.assertIn('policy=one-boot', (self.base / 'installed.txt').read_text())
+        self.assertTrue((self.base / 'guard/armed-boot').exists())
+
+    def test_explicit_one_boot_beta_keeps_the_trial_policy(self):
+        self.fixture.run_script('install.sh', '--mode=BETA', '--one-boot')
+        self.assertIn('policy=one-boot', (self.base / 'installed.txt').read_text())
+        self.assertTrue((self.base / 'guard/armed-boot').exists())
+
+    def test_reinstall_clears_enablement_and_beta_acknowledges_runtime_disable(self):
+        self.install_beta()
+        (self.base / 'guard/persist').write_text('stale enablement\n')
+        (self.logs / 'disable-next-start').write_text('x')
+        result = self.install_beta()
+        self.assertIn('Cleared the runtime disable marker', result.stdout)
+        self.assertFalse((self.logs / 'disable-next-start').exists())
+        # The fixture installer cannot run the ARM guard; a stale manifest never survives.
+        self.assertFalse((self.base / 'guard/persist').exists())
+        # A one-boot SHADOW install never clears the runtime's stop marker.
+        (self.logs / 'disable-next-start').write_text('x')
+        (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
+        self.assertEqual(self.menu('1\n0\n').returncode, 0)
+        self.assertTrue((self.logs / 'disable-next-start').exists())
+
+    def test_uninstall_and_one_boot_arm_remove_the_enablement(self):
+        self.menu1()
+        self.assertTrue((self.base / 'guard/persist').exists())
+        result = self.menu('4\n')
+        self.assertIn('the persistent enablement', result.stdout)
+        self.assertFalse((self.base / 'guard/persist').exists())
+        self.assertEqual(self.fixture.autostart.read_bytes(), self.fixture.original_autostart)
+        # Evidence stays for export.
+        self.assertTrue((self.base / 'guard/persist-state').exists())
+        self.menu1()
+        self.fixture.run_script('arm.sh', '--mode=SHADOW')
+        self.assertFalse((self.base / 'guard/persist').exists())
+
+    def test_multi_boot_product_trip_and_reenable(self):
+        self.menu1()
+        # Installing boot: status says reboot with 5; the guard never selects here.
+        text, verdict = self.status()
+        self.assertIn('guard_policy=persistent persist=enabled', text)
+        self.assertIn('persist_enabled_this_boot=yes', text)
+        self.assertIn('NO   BOOT  installed; choose 5', verdict)
+        self.assertIsNone(self.autostart_select())
+        for n in range(1, 4):
+            self.set_boot(n)
+            path = self.autostart_select()
+            self.assertIsNotNone(path)
+            self.assertIn('libmx5dr-vimtap.so', Path(path).read_text())
+            text, verdict = self.status()
+            self.assertIn('startup_state=guard_committed_persistent', text)
+            self.assertIn('one_boot=persistent_this_boot', text)
+            self.assertIn('guard_config_binding=matched', text)
+            self.assertEqual(verdict[1:6], ['PERSIST enabled (every boot)',
+                                            'fail count 0 of 2',
+                                            'attempts since healthy %d (rule off)' % n,
+                                            'healthy previous boot ' + ('none' if n == 1 else 'no'),
+                                            'this boot selected yes'])
+            for row in ('ok   BOOT  product this boot', 'ok   GUARD committed', 'ok   PERS  enabled'):
+                self.assertIn(row, verdict)
+            self.assertFalse(any(line.startswith('NO   ONCE') for line in verdict))
+        # Boot 3 ends in an SM reset: the reports change.
+        (self.root / 'data/dmesg.out').write_text('[ 1452.7] reset during boot 3\n')
+        self.set_boot(4)
+        self.assertIsNotNone(self.autostart_select())
+        text, verdict = self.status()
+        self.assertIn('persist_fail_count=1', text)
+        self.assertIn('persist_previous=failed_reset', text)
+        self.assertIn('fail count 1 of 2', verdict)
+        # Boot 4 also resets: two in a row trip to stock.
+        (self.root / 'data/thread_info.out').write_text('stacks during boot 4\n')
+        self.set_boot(5)
+        self.assertIsNone(self.autostart_select())
+        text, verdict = self.status()
+        self.assertIn('persist=tripped persist_reason=reset_reports', text)
+        self.assertIn('startup_state=persistent_tripped', text)
+        self.assertEqual(verdict[1], 'PERSIST tripped (reset_reports)')
+        self.assertIn('this boot selected no', verdict)
+        self.assertIn('NO   PERS  tripped reset_reports', verdict)
+        self.assertEqual(verdict[-2:], ['NO-GO: tripped, stock runs, BETA off.',
+                                        'Find the cause, then run menu 1 again.'])
+        for n in (6, 7):
+            self.set_boot(n)
+            self.assertIsNone(self.autostart_select())
+        # Logs and reports stay; menu 3 still exports them.
+        (self.logs / 'trace.0.jsonl').write_text('retained raw evidence\n')
+        (self.logs / 'capture.done').write_text(boot_id(7) + '\n')
+        exported = self.menu('3\n')
+        self.assertIn('export_exit=0', exported.stdout)
+        report = self.menu_fixture.assert_export()
+        self.assertIn('guard.persist_state.line_9=tripped=reset_reports', report)
+        self.assertIn('guard.persist.line_3=healthy_rule=off', report)
+        self.assertIn('guard.inventory.status=known_entries_only', report)
+        # Owner re-enables with menu 1 in boot 7; boot 8 is product again and
+        # the previous boot's capture freeze does not carry over.
+        self.menu1()
+        text, verdict = self.status()
+        self.assertIn('persist=enabled', text)
+        self.assertIn('persist_fail_count=0', text)
+        (self.logs / 'capture.stop').mkdir()
+        (self.logs / 'capture.done').write_text(boot_id(7) + '\n')
+        self.set_boot(8)
+        self.assertIsNotNone(self.autostart_select())
+        self.assertFalse((self.logs / 'capture.stop').exists())
+        text, verdict = self.status()
+        self.assertIn('ok   BOOT  product this boot', verdict)
+
+    def test_damaged_state_is_not_reported_as_selected(self):
+        self.menu1()
+        self.set_boot(1)
+        self.assertIsNotNone(self.autostart_select())
+        state = self.base / 'guard/persist-state'
+        state.write_text(state.read_text().replace('fail_count=0', 'fail_count=x'))
+        text, verdict = self.status()
+        self.assertIn('persist=invalid', text)
+        self.assertIn('startup_state=persistent_state_invalid', text)
+        self.assertIn('PERSIST invalid', verdict)
+        self.assertEqual(verdict[-1], 'NO-GO')
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -245,7 +245,11 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('1\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('This USB installs mode BETA: BETA = SHADOW capture', result.stdout)
-        self.assertIn('1 Install BETA for the next boot', result.stdout)
+        # BETA is the persistent v1.0 product: one key installs it for every boot.
+        self.assertIn('1 Install or re-enable BETA, every boot', result.stdout)
+        self.assertNotIn('for the next boot', result.stdout)
+        self.assertIn('Installed BETA persistent: the guard starts it on every CMU boot.', result.stdout)
+        self.assertIn('policy=persistent', (self.base / 'installed.txt').read_text())
         self.assertIn('mode=BETA', (self.base / 'mx5dr.conf').read_text())
         for name in ('normal.trial', 'wcp.trial'):
             self.assertIn('libmx5dr-vimtap.so', (self.base / 'guard' / name).read_text())

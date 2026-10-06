@@ -60,6 +60,24 @@ startup_verdict() {
         printf "%-4s %-5s %s\n",res,tag,substr(txt,1,24)
         if (res=="NO") bad=1; else if (res=="wait") pend=1
     }
+    # Fold a comma-separated owner line to the 40-column screen.
+    function fold40(text,   n,part,k,piece,out,cut,c) {
+        n=split(text,part,", "); out=""
+        for (k=1;k<=n;k++) {
+            piece=part[k] (k<n?",":"")
+            if (out!="" && length(out)+1+length(piece)>40) { print substr(out,1,40); out=" " piece }
+            else out=(out==""?piece:out " " piece)
+            # A single piece wider than the screen (e.g. "last state
+            # SPEED_ENGAGED (speed_published)") breaks at its last space.
+            while (length(out)>40) {
+                cut=0
+                for (c=40;c>1;c--) if (substr(out,c,1)==" ") { cut=c; break }
+                if (!cut) break
+                print substr(out,1,cut-1); out=" " substr(out,cut+1)
+            }
+        }
+        if (out!="") print substr(out,1,40)
+    }
     function service(name,tag,   i,v,rest,w) {
         for (i=1;i<=NR;i++) if (index(line[i],"service_" name "=")==1) {
             rest=substr(line[i],length("service_" name "=")+1); split(rest,w," "); v=w[1]
@@ -73,6 +91,28 @@ startup_verdict() {
     }
     END {
         print "---- GO / NO-GO ----"
+        # Persistent BETA (v1.0): the guard decides on every boot, so the
+        # menu-5 receipt and the one-boot consumption do not apply.
+        persistent=(field("guard_policy=")=="persistent")
+        tripped=0
+        if (persistent) {
+            p=field("persist="); r=field("persist_reason=")
+            if (p=="enabled") print "PERSIST enabled (every boot)"
+            else if (p=="tripped") { print substr("PERSIST tripped (" r ")",1,40); tripped=1 }
+            else print "PERSIST " (p==""?"missing":p)
+            print "fail count " field("persist_fail_count=") " of 2"
+            print substr("attempts since healthy " field("persist_attempts_since_healthy=") " (rule " field("persist_healthy_rule=") ")",1,40)
+            print "healthy previous boot " field("persist_healthy_previous=")
+            print "this boot selected " field("persist_selected_this_boot=")
+            if (field("persist_selected_this_boot=")=="yes") show("ok","BOOT","product this boot")
+            else if (field("persist_enabled_this_boot=")=="yes") show("NO","BOOT","installed; choose 5")
+            else show("NO","BOOT","stock this boot")
+            v=field("startup_state=")
+            if (v=="guard_committed_persistent") show("ok","GUARD","committed")
+            else show("NO","GUARD",v==""?"missing":v)
+            if (p=="enabled") show("ok","PERS","enabled")
+            else show("NO","PERS",p=="tripped"?"tripped " r:(p==""?"missing":p))
+        } else {
         v=field("reboot_check=")
         if (v=="new_boot_observed") show("ok","BOOT","new boot"); else show("NO","BOOT",v==""?"missing":v)
         v=field("startup_state=")
@@ -81,6 +121,7 @@ startup_verdict() {
         else show("NO","GUARD",v==""?"missing":v)
         v=field("one_boot=")
         if (v=="consumed_this_boot") show("ok","ONCE","consumed"); else show("NO","ONCE",v==""?"missing":v)
+        }
         v=field("config_mode=")
         # A SHADOW or BETA bundle must have installed its own mode; never
         # let one pass for the other.
@@ -126,24 +167,12 @@ startup_verdict() {
         }
         for (i=1;i<=NR;i++) if (index(line[i],"BETA NO_FIX: ")==1) print substr(line[i],1,40)
         # The owner-facing BETA count line, folded to the small screen.
-        for (i=1;i<=NR;i++) if (index(line[i],"BETA: ")==1) {
-            n=split(line[i],part,", "); out=""
-            for (k=1;k<=n;k++) {
-                piece=part[k] (k<n?",":"")
-                if (out!="" && length(out)+1+length(piece)>40) { print substr(out,1,40); out=" " piece }
-                else out=(out==""?piece:out " " piece)
-                # A single piece wider than the screen (e.g. "last state
-                # SPEED_ENGAGED (speed_published)") breaks at its last space.
-                while (length(out)>40) {
-                    cut=0
-                    for (c=40;c>1;c--) if (substr(out,c,1)==" ") { cut=c; break }
-                    if (!cut) break
-                    print substr(out,1,cut-1); out=" " substr(out,cut+1)
-                }
-            }
-            if (out!="") print substr(out,1,40)
-        }
-        if (bad) print "NO-GO"
+        for (i=1;i<=NR;i++) if (index(line[i],"BETA: ")==1) fold40(line[i])
+        if (tripped) {
+            # Automatic fallback: stock runs on every boot until menu 1.
+            print "NO-GO: tripped, stock runs, BETA off."
+            print "Find the cause, then run menu 1 again."
+        } else if (bad) print "NO-GO"
         else if (pend) print "WAIT 60 s, then run 2 again"
         else print "GO"
     }'
@@ -219,7 +248,11 @@ finish_and_export() {
     echo "Result saved: $report"
     [ "$export_rc" = 0 ] || return "$export_rc"
     [ "$finish_rc" = 0 ] || return "$finish_rc"
-    echo 'Capture finish acknowledged and available files exported. This menu now exits. To remove the trial, reopen the same menu and choose 4; follow the USB guide for reboot and OFF checks.'
+    if [ "$BUNDLE_MODE" = BETA ]; then
+        echo 'Capture finish acknowledged and available files exported. This menu now exits. The freeze ends with this boot; the next boot starts BETA again by itself. To remove BETA, reopen the same menu and choose 4.'
+    else
+        echo 'Capture finish acknowledged and available files exported. This menu now exits. To remove the trial, reopen the same menu and choose 4; follow the USB guide for reboot and OFF checks.'
+    fi
 }
 
 # Display only: install.sh validates the same marker again before any write.
@@ -240,6 +273,15 @@ case "$BUNDLE_MODE" in
     OBSERVE) mode_text='OBSERVE = observation only; LOCATION is never replaced';;
     *) mode_text='invalid bundle mode; menu 1 will refuse to install';;
 esac
+# BETA installs the persistent product (every boot); others stay one-boot.
+install_text="1 Install $BUNDLE_MODE for the next boot"
+start_text='After install choose 5; keep this USB connected. After restart reopen this menu and choose 2 before switching to AA. For recovery choose 3 without reinstalling or rearming.'
+installed_text='Installation finished. Choose 5 to request a CMU reboot; ignition off/on is not a reboot check.'
+if [ "$BUNDLE_MODE" = BETA ]; then
+    install_text='1 Install or re-enable BETA, every boot'
+    start_text='BETA runs on every boot once installed. After install choose 5 once, then 2 before switching to AA. 2 shows status, 3 saves logs, 4 removes BETA.'
+    installed_text='Installation finished. Choose 5 to start the first BETA boot; later boots start it by themselves.'
+fi
 last_rc=0
 short_menu=0
 while :; do
@@ -249,20 +291,20 @@ while :; do
     else
         printf '\n%s\n' 'Parked USB trial menu' \
             "This USB installs mode $BUNDLE_MODE: $mode_text" \
-            "1 Install $BUNDLE_MODE for the next boot" \
+            "$install_text" \
             '2 Check CMU reboot, current capture and retained records' \
             '3 Finish capture and save logs plus startup diagnostics to this USB' \
             '4 Uninstall (keeps collected logs)' \
             '5 Reboot CMU now through the original system reboot command' \
             '0 Exit'
-        echo 'After install choose 5; keep this USB connected. After restart reopen this menu and choose 2 before switching to AA. For recovery choose 3 without reinstalling or rearming.'
+        echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
     fi
     printf 'Number, then Enter: '
     if ! IFS= read -r choice; then exit "$last_rc"; fi
     case "$choice" in
         1) sh "$HERE/install.sh"; last_rc=0
-           echo 'Installation finished. Choose 5 to request a CMU reboot; ignition off/on is not a reboot check.';;
+           echo "$installed_text";;
         2) current_status;;
         3) finish_and_export; exit 0;;
         4) sh "$HERE/uninstall.sh"; exit 0;;

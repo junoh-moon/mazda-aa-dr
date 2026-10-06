@@ -102,6 +102,9 @@ def make_root(root, stock, bundle):
     (root / 'tmp').chmod(0o1777)
     (root / 'data_persist').symlink_to('/mnt/data_persist')
     (root / 'mnt').symlink_to('/tmp/mnt')
+    # Stock /data alias where the Service Manager writes its reset reports.
+    (root / 'tmp/mnt/data').mkdir()
+    (root / 'data').symlink_to('/mnt/data')
     # Preserve only names/IDs from the OEM factory backup, never credentials.
     # The update's passwdupdate payload confirms cmu=0 and service=1001.
     accounts = []
@@ -702,11 +705,21 @@ def main():
         require(not base.exists(), 'Damaged bundle made installation changes')
         lib.write_bytes(saved)
         run("printf '1\\n' | sh /tmp/mnt/sda1/trial")
-        require((base / 'guard/arm').is_file(), 'Actual ARM guard did not arm')
-        require((base / 'guard/arm').stat().st_size == 538,
-                'Unexpected real ARM guard manifest length')
-        require((base / 'guard/armed-boot').read_text() == BOOT,
-                'Installer did not retain the arming Linux boot identity')
+        # BETA installs the persistent product; the others arm one boot.
+        persistent = default_mode == 'BETA'
+        if persistent:
+            require((base / 'guard/persist').is_file() and not (base / 'guard/arm').exists(),
+                    'Actual ARM guard did not enable the persistent policy')
+            require((base / 'guard/persist').stat().st_size == 582,
+                    'Unexpected real ARM persistent manifest length')
+            require(f'enabled_boot={BOOT}' in (base / 'guard/persist-state').read_text(),
+                    'Persistent state does not fence the installing Linux boot')
+        else:
+            require((base / 'guard/arm').is_file(), 'Actual ARM guard did not arm')
+            require((base / 'guard/arm').stat().st_size == 538,
+                    'Unexpected real ARM guard manifest length')
+            require((base / 'guard/armed-boot').read_text() == BOOT,
+                    'Installer did not retain the arming Linux boot identity')
         require('mode=' + default_mode in (base / 'mx5dr.conf').read_text().splitlines(),
                 'Installed config differs from the bundle default mode')
         for name in ('jci/sm/sm.conf', 'jci/sm/sm_WCP.conf'):
@@ -748,14 +761,17 @@ def main():
                 'Initial trial VBS tap differs from the bundle default mode')
         require('/data_persist/mx5-aa-dr/libmx5dr-ldstap.so' in initial_trial,
                 'Initial trial lacks LDS observation preload')
-        consumed = (base / 'guard/consumed').read_text().splitlines()
-        require(len(consumed) == 9 and consumed[0] == 'mx5dr-one-boot-v3' and
-                consumed[8] == hashlib.sha256((base / 'libmx5dr-ldstap.so').read_bytes()).hexdigest(),
-                'Consumed arm did not bind the exact installed LDS product')
+        bound = (base / 'guard' / ('persist' if persistent else 'consumed')).read_text().splitlines()
+        if persistent:
+            bound = bound[3:]
+        require(len(bound) == 9 and bound[0] == 'mx5dr-one-boot-v3' and
+                bound[8] == hashlib.sha256((base / 'libmx5dr-ldstap.so').read_bytes()).hexdigest(),
+                'Guard manifest did not bind the exact installed LDS product')
         print('PASS: ' + default_mode + ' bundle default and initial trial preload selection', flush=True)
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
         put(root, '/proc/sys/kernel/random/boot_id', '21234567-1234-1234-1234-0123456789ab\n')
-        run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
+        # One-boot consumed its arm; the persistent product selects every new boot.
+        run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=persistent)
         # Later status fixtures describe SHADOW. Select that mode explicitly for
         # this simulated new boot, including a real arm/consume transition.
         run('sh /data_persist/mx5-aa-dr/tools/arm.sh --mode=SHADOW')
