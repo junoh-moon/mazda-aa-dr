@@ -647,6 +647,7 @@ class Auditor:
                                raw_window_triggers=Counter(), digested_motion_events=0,
                                digested_sends=0, unpaired_original_sends=0)
         self.journal_dropped = dict(counter_rows=0, rows=0)
+        self.journal_lag = Counter()
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
@@ -1022,6 +1023,12 @@ class Auditor:
             self.raw_window(row, source)
         elif kind == "journal_dropped":
             self.dropped_rows(row, source)
+        elif kind == "beta_journal_lag":
+            self.journal_lag_row(row, source)
+        elif kind == "journal_not_durable":
+            self.journal_lag["not_durable"] += 1
+            self.issue("journal_not_durable", source,
+                       "Boot row did not reach the journal file in time; SCRUB/BETA stayed off")
         elif kind in ("motion", "motion_batch"):
             try:
                 events = decode_motion_records(row)
@@ -1136,6 +1143,30 @@ class Auditor:
         p["raw_window_rows"] += row["rows"]
         p["raw_window_triggers"][row["trigger"]] += 1
         self.session["motion_epoch"] = None
+
+    def journal_lag_row(self, row, source):
+        """The worker withheld BETA provenance because the journal writer was
+        more than limit_ms behind (lagging) and restored it after catch-up
+        (current). A replacement decided well after 'lagging' contradicts it."""
+        if (row.get("domain") != "beta" or row.get("assist_ready") is not False or
+                row.get("event") not in ("lagging", "current") or
+                not bounded_int(row.get("mono_ns"), 0, 2**64-1)):
+            self.issue("partial_record", source, "Invalid beta_journal_lag row")
+            return
+        self.journal_lag[row["event"]] += 1
+        beta = self.session["beta"]
+        if row["event"] == "lagging":
+            beta["journal_lag_ns"] = row["mono_ns"]
+            self.issue("beta_journal_lag", source, "Journal writer %s ms behind; BETA withheld" % row.get("lag_ms"))
+        else:
+            beta["journal_lag_ns"] = None
+
+    def lag_violation(self, row, source, what):
+        lag = self.session["beta"].get("journal_lag_ns")
+        # One POSITION call may already hold provenance when the flag drops.
+        if lag is not None and row["mono_ns"] > lag + 100000000:
+            self.issue("beta_change_during_journal_lag", source,
+                       "%s after the journal writer fell behind (BETA must be withheld)" % what, True)
 
     def dropped_rows(self, row, source):
         """The journal writer dropped the oldest DIAGNOSTIC rows under a write
@@ -2232,6 +2263,7 @@ class Auditor:
         close because motion batches may be journaled after the send."""
         s = self.session
         beta = s["beta"]
+        self.lag_violation(row, source, "BETA_SPEED_OVERLAY")
         self.beta_speed_overlays += 1
         if row["result"] != 0:
             self.beta_speed_overlay_nonzero += 1
@@ -2299,6 +2331,7 @@ class Auditor:
     def beta_send(self, row, original, outgoing, source):
         s = self.session
         beta = s["beta"]
+        self.lag_violation(row, source, "BETA_REPLACEMENT")
         self.beta_replacements += 1
         if row["result"] != 0:
             self.beta_replaced_nonzero += 1
@@ -2503,6 +2536,7 @@ class Auditor:
                                             raw_window_triggers=dict(self.persistent["raw_window_triggers"]),
                                             scope="digest_counts_not_raw_evidence"),
                     journal_dropped=dict(self.journal_dropped, scope="diagnostic_rows_only"),
+                    journal_lag=dict(self.journal_lag),
                     motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
                                          sensors=dict(self.motion_rejected_sensors),
                                          scope="diagnostic_only_excluded_from_accepted_motion"),

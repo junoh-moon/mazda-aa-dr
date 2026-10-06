@@ -80,7 +80,7 @@ static void arm_test_mode() {
   // Test-only reset, with no concurrent queue users.
   queue.~ObservationQueue();new(&queue) ObservationQueue;
   assert(A::set_mode(A::SCRUB_STALE));
-  journal_ok.store(1);
+  journal_ok.store(1);journal_current.store(1);
 }
 struct FakeReceiver {
   unsigned calls,limit;
@@ -428,6 +428,62 @@ static void writer_idle_and_health(const char* root,const std::string& logs) {
   assert(health);
   clear_traces(logs);
   puts("Writer idle wakeups and health backlog fields passed");
+}
+// Storage stall with a healthy worker (F3-A): BETA provenance is withheld
+// within the 1.5 s lag bound, a beta_journal_lag row records it, and both
+// recover (hysteresis 0.5 s) once the writer catches up. A boot flush that
+// times out keeps BETA/SCRUB off with journal_not_durable, not a failure.
+static void journal_lag_bound(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=65536;
+  A::PositionInput input=A::PositionInput();
+  mx5::runtime::request_trace::Trace trace=mx5::runtime::request_trace::Trace();
+  const A::PositionContext context={input,mx5::runtime::request_trace::Result(),trace,1,1,0};
+  beta_shared.active.store(1);beta_shared.source_epoch.store(1);beta_shared.storage_epoch.store(1);
+  A::Provenance out;
+  uint64_t lowered_after=0,raised_after=0,stall_end=0;
+  {
+    Journal j(root);assert(j.start_writer());
+    j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
+    // A boot-time flush that does not complete in time is not a failure.
+    j.writer->inject_stall_ns.store(2500000000ULL);
+    j.line("{\"kind\":\"fixture\",\"n\":1}");
+    const uint64_t begin=clock_ns(0);
+    assert(!j.flush_wait(200000000ULL) && !j.failed && journal_ok.load()==1);
+    assert(!strcmp(beta_block_reason(true,j.failed,false,false,true,true,true),"journal_not_durable"));
+    assert(!strcmp(beta_block_reason(true,true,false,false,true,true,true),"journal_failed"));
+    assert(beta_block_reason(true,false,true,false,true,true,true)==0);
+    const uint64_t generation=A::generation();
+    // Worker turns every 20 ms while the writer is stalled for 2.5 s.
+    unsigned n=2;
+    while(clock_ns(0)-begin<4000000000ULL) {
+      const uint64_t now=clock_ns(0);
+      char row[64];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n++);j.line(row);
+      journal_lag_guard(j,now);
+      const bool beta=provenance(0,context,&out,0);
+      if(!lowered_after && !journal_current.load()) { lowered_after=now-begin;assert(!beta && A::generation()!=generation); }
+      if(lowered_after && !raised_after && journal_current.load()) { raised_after=now-begin;assert(beta); }
+      if(!stall_end && j.writer->written.load()>2)stall_end=now-begin;
+      usleep(20000);
+    }
+    assert(!j.failed);
+  }
+  printf("Journal lag bound: writer stalled 2500 ms; provenance withheld after %llu ms, "
+         "writer resumed at %llu ms, restored after %llu ms\n",(unsigned long long)(lowered_after/1000000ULL),
+         (unsigned long long)(stall_end/1000000ULL),(unsigned long long)(raised_after/1000000ULL));
+  fflush(stdout);
+  assert(lowered_after>=1400000000ULL && lowered_after<=1700000000ULL);
+  assert(raised_after>=stall_end && raised_after<=stall_end+700000000ULL);
+  const std::vector<std::string> rows=trace_rows(logs);
+  unsigned lagging=0,current=0;
+  for(size_t i=0;i<rows.size();++i) {
+    if(rows[i].find("{\"kind\":\"beta_journal_lag\"")!=0)continue;
+    if(rows[i].find("\"event\":\"lagging\"")!=std::string::npos) { ++lagging;assert(!current); }
+    if(rows[i].find("\"event\":\"current\"")!=std::string::npos)++current;
+  }
+  assert(lagging==1 && current==1);
+  beta_shared.active.store(0);beta_shared.source_epoch.store(0);beta_shared.storage_epoch.store(0);
+  arm_test_mode();clear_traces(logs);
+  puts("Journal lag bound: provenance withheld within 1.5 s, restored after catch-up; boot timeout is journal_not_durable");
 }
 // Every queued row is written on worker exit; a requested stop closes the
 // file durably before its acknowledgement, in order.
@@ -1064,6 +1120,7 @@ int main(int argc,char** argv) {
     writer_fail_closed(root,logs);
     writer_shutdown(root,logs);
     writer_idle_and_health(root,logs);
+    journal_lag_bound(root,logs);
     persistent_worker(root,logs);
     clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));
     return 0;

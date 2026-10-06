@@ -59,6 +59,15 @@ volatile uint32_t audit_fault = 0;
 // observes the failure. Constant-initialized; never set back to 1 in a boot.
 std::atomic<unsigned> journal_ok(1);
 static_assert(ATOMIC_INT_LOCK_FREE==2,"journal_ok is read by OEM threads");
+// 1 while the journal writer keeps up. A storage stall no longer blocks the
+// worker (the writer thread does the I/O), so without this a long eMMC stall
+// would keep BETA replacing while its evidence rows sit only in RAM. The
+// worker lowers it when the oldest unwritten row is older than
+// JOURNAL_LAG_LIMIT_NS and raises it again below JOURNAL_LAG_CLEAR_NS
+// (hysteresis, not sticky). provenance() reads it lock-free with journal_ok.
+std::atomic<unsigned> journal_current(1);
+const uint64_t JOURNAL_LAG_LIMIT_NS=1500000000ULL;
+const uint64_t JOURNAL_LAG_CLEAR_NS=500000000ULL;
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false, mx5::runtime::LOG_PROFILE_FULL};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
@@ -134,7 +143,9 @@ bool pop(A::Observation *out) { return queue.pop(out); }
 // Domain::QUALIFIED; see beta_provenance() for what each field means.
 bool provenance(void *, const A::PositionContext& context, A::Provenance *out, void *) {
   // A failed journal can no longer record the evidence of a replacement.
-  if (!journal_ok.load(std::memory_order_acquire)) { memset(out, 0, sizeof *out); return false; }
+  // A journal that is not writing its rows promptly withholds BETA too.
+  if (!journal_ok.load(std::memory_order_acquire) ||
+      !journal_current.load(std::memory_order_acquire)) { memset(out, 0, sizeof *out); return false; }
   if (mx5::runtime::beta_provenance(beta_shared, out)) return true;
   memset(out, 0, sizeof *out);
   if(!context.lds_association ||
@@ -622,6 +633,43 @@ bool journal_writer_flush_wait(JournalWriter* w,uint64_t timeout_ns) {
   return journal_writer_ok(w);
 }
 
+// Worker, every turn (BETA only): the journal lag guard described at
+// journal_current. Lowering also revokes the adapter generation so a stored
+// candidate cannot be selected by a POSITION that read provenance earlier.
+// The row is BETA evidence (never dropped by the ring); while the writer is
+// stalled it waits in RAM like every other row.
+void journal_lag_guard(Journal& j,uint64_t now) {
+  if(!j.writer || j.failed)return;
+  const JournalLag lag=journal_writer_lag(j.writer,now);
+  const bool current=journal_current.load(std::memory_order_acquire)!=0;
+  const char* event=0;
+  if(current && lag.oldest_ns>JOURNAL_LAG_LIMIT_NS) {
+    journal_current.store(0,std::memory_order_release);
+    A::invalidate();
+    event="lagging";
+  } else if(!current && lag.oldest_ns<JOURNAL_LAG_CLEAR_NS) {
+    journal_current.store(1,std::memory_order_release);
+    event="current";
+  }
+  if(!event)return;
+  char line[400];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"beta_journal_lag\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
+      "\"event\":\"%s\",\"lag_ms\":%llu,\"unwritten_rows\":%llu,\"limit_ms\":%llu,\"clear_ms\":%llu}",
+      (unsigned long long)now,event,(unsigned long long)(lag.oldest_ns/1000000ULL),
+      (unsigned long long)lag.unwritten_rows,(unsigned long long)(JOURNAL_LAG_LIMIT_NS/1000000ULL),
+      (unsigned long long)(JOURNAL_LAG_CLEAR_NS/1000000ULL));
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+// Why BETA stays disabled at startup (0: it may arm). A boot row that did
+// not reach the file in time is "journal_not_durable", distinct from a
+// failed journal.
+const char* beta_block_reason(bool hook,bool failed,bool durable,bool audit,bool capture,
+                              bool shadow,bool core) {
+  return !hook?"hook_not_installed":failed?"journal_failed":!durable?"journal_not_durable":
+      audit?"audit_fault":!capture?"motion_capture_unavailable":!shadow?"model_unavailable":
+      !core?"beta_core_unavailable":0;
+}
 void flush_motion(Journal &j, mx5::runtime::MotionBatch &batch) {
   if (!batch.empty()) {
     j.line(batch.line());
@@ -1285,6 +1333,11 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         (unsigned long long)model.reorder_ns);
     j.line(line);j.flush();
   }
+  if (hook_installed && (config.mode == 2 || beta_requested) && !boot_durable && !j.failed) {
+    // The boot row did not reach the file within the bound: SCRUB/BETA stay
+    // off for this worker, with this reason (not a journal failure).
+    j.line("{\"kind\":\"journal_not_durable\",\"stage\":\"boot\",\"assist_ready\":false}");
+  }
   if (hook_installed && config.mode == 2 && boot_durable && !j.failed &&
       !__sync_fetch_and_add(&audit_fault, 0)) {
     A::set_mode(A::SCRUB_STALE);
@@ -1295,12 +1348,8 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     // Same pattern as SCRUB: only after the durable boot row, with an
     // installed hook and no audit fault. Every outcome is journaled.
     const bool durable=j.flush_wait();
-    const char* blocked=!hook_installed?"hook_not_installed":
-        (j.failed || !durable || !boot_durable)?"journal_failed":
-        __sync_fetch_and_add(&audit_fault,0)?"audit_fault":
-        !capture?"motion_capture_unavailable":
-        !shadow?"model_unavailable":
-        !beta_core?"beta_core_unavailable":0;
+    const char* blocked=beta_block_reason(hook_installed,j.failed,durable && boot_durable,
+        __sync_fetch_and_add(&audit_fault,0)!=0,capture,shadow,beta_core);
     beta.enable(j,clock_ns(0),blocked);
     if (__sync_fetch_and_add(&audit_fault, 0))
       beta.fault(j,clock_ns(0),"audit_fault");
@@ -1319,6 +1368,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   mx5::runtime::WorkerTick model_tick;
   for (;;) {
     j.poll();   // adopt a writer-thread failure before any decision below
+    if(beta_requested)journal_lag_guard(j,clock_ns(0));
     const uint64_t cutoff=clock_ns(0);
     source.advance(cutoff);
     // The first LDS submission discovers its bus before issuing the request.

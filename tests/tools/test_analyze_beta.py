@@ -521,5 +521,43 @@ class BetaAnalyzeTests(unittest.TestCase):
         self.assertIn("unexpected_reverse_latch_domain", self.codes(self.audit(rows), "violation"))
 
 
+    def lag(self, mono_ns, event):
+        return dict(kind="beta_journal_lag", mono_ns=mono_ns, domain="beta", assist_ready=False,
+                    event=event, lag_ms=1500, unwritten_rows=40, limit_ms=1500, clear_ms=500)
+
+    def test_replacement_while_the_journal_lags_is_a_violation(self):
+        # F3-A: the worker withholds BETA provenance once the writer is 1.5 s
+        # behind; a replacement decided after that (one call of grace) is wrong.
+        rows = drive()
+        index = next(i for i, r in enumerate(rows) if r.get("call") == 3 and r["kind"] == "position")
+        rows.insert(index, self.lag(2_600_000_000, "lagging"))
+        report = self.audit(rows)
+        self.assertIn("beta_change_during_journal_lag", self.codes(report, "violation"))
+        self.assertEqual(report["journal_lag"], {"lagging": 1})
+        # Restored before the replacements: no violation, only the lag notice.
+        rows.insert(index + 1, self.lag(2_700_000_000, "current"))
+        report = self.audit(rows)
+        self.assertNotIn("beta_change_during_journal_lag", self.codes(report))
+        self.assertIn("beta_journal_lag", self.codes(report, "inconclusive"))
+        # A send already inside its POSITION call when the flag fell is tolerated.
+        rows = drive()
+        index = next(i for i, r in enumerate(rows) if r.get("call") == 4 and r["kind"] == "position")
+        rows.insert(index, self.lag(3_050_000_000, "lagging"))
+        rows.insert(index + 3, self.lag(4_050_000_000, "current"))
+        report = self.audit(rows)
+        details = [i for i in report["issues"] if i["code"] == "beta_change_during_journal_lag"]
+        self.assertEqual(len(details), 1)   # the call-4 send at 4.0 s, not the call-3 one
+        for event in ("late", None):
+            rows = drive() + [dict(self.lag(7_000_000_000, "lagging"), event=event)]
+            self.assertIn("partial_record", self.codes(self.audit(rows)))
+
+    def test_boot_flush_timeout_is_reported_not_a_violation(self):
+        rows = drive()
+        rows.insert(1, dict(kind="journal_not_durable", stage="boot", assist_ready=False))
+        report = self.audit(rows)
+        self.assertIn("journal_not_durable", self.codes(report, "inconclusive"))
+        self.assertEqual(report["issue_counts"].get("violation", 0), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
