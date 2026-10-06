@@ -440,7 +440,7 @@ static void journal_lag_bound(const char* root,const std::string& logs) {
   const A::PositionContext context={input,mx5::runtime::request_trace::Result(),trace,1,1,0};
   beta_shared.active.store(1);beta_shared.source_epoch.store(1);beta_shared.storage_epoch.store(1);
   A::Provenance out;
-  uint64_t lowered_after=0,raised_after=0,stall_end=0;
+  uint64_t lowered_after=0,raised_after=0,stall_end=0,caught_up=0;
   {
     Journal j(root);assert(j.start_writer());
     j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
@@ -455,9 +455,13 @@ static void journal_lag_bound(const char* root,const std::string& logs) {
     const uint64_t generation=A::generation();
     // Worker turns every 20 ms while the writer is stalled for 2.5 s.
     unsigned n=2;
-    while(clock_ns(0)-begin<4000000000ULL) {
+    while(clock_ns(0)-begin<8000000000ULL && !(raised_after && clock_ns(0)-begin>raised_after+200000000ULL)) {
       const uint64_t now=clock_ns(0);
       char row[64];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n++);j.line(row);
+      // When the writer has caught up (oldest unwritten row < 0.5 s). Under
+      // emulation the backlog after the stall takes longer to write.
+      if(lowered_after && !caught_up && journal_writer_lag(j.writer,now).oldest_ns<JOURNAL_LAG_CLEAR_NS)
+        caught_up=now-begin;
       journal_lag_guard(j,now);
       const bool beta=provenance(0,context,&out,0);
       if(!lowered_after && !journal_current.load()) { lowered_after=now-begin;assert(!beta && A::generation()!=generation); }
@@ -468,11 +472,14 @@ static void journal_lag_bound(const char* root,const std::string& logs) {
     assert(!j.failed);
   }
   printf("Journal lag bound: writer stalled 2500 ms; provenance withheld after %llu ms, "
-         "writer resumed at %llu ms, restored after %llu ms\n",(unsigned long long)(lowered_after/1000000ULL),
-         (unsigned long long)(stall_end/1000000ULL),(unsigned long long)(raised_after/1000000ULL));
+         "writer resumed at %llu ms, caught up at %llu ms, restored after %llu ms\n",
+         (unsigned long long)(lowered_after/1000000ULL),(unsigned long long)(stall_end/1000000ULL),
+         (unsigned long long)(caught_up/1000000ULL),(unsigned long long)(raised_after/1000000ULL));
   fflush(stdout);
   assert(lowered_after>=1400000000ULL && lowered_after<=1700000000ULL);
-  assert(raised_after>=stall_end && raised_after<=stall_end+700000000ULL);
+  // Restored only after the stall ended, in the turn the backlog was caught up.
+  assert(raised_after && raised_after>=stall_end && caught_up && raised_after>=caught_up &&
+         raised_after-caught_up<=60000000ULL);
   const std::vector<std::string> rows=trace_rows(logs);
   unsigned lagging=0,current=0;
   for(size_t i=0;i<rows.size();++i) {
