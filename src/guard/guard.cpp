@@ -26,6 +26,9 @@ const char *const token="/data_persist/mx5-aa-dr/libmx5dr.so";
 const char *const tap_token="/data_persist/mx5-aa-dr/libmx5dr-vimtap.so";
 const char *const lds_token="/data_persist/mx5-aa-dr/libmx5dr-ldstap.so";
 int gd=-1;
+// Why the last check declined, as a short code for the owner (menu 2).
+std::string why;
+const char *const short_names[]={"libmx5dr.so","mx5dr.conf","sm.conf","normal.trial","sm_WCP.conf","wcp.trial","libmx5dr-vimtap.so","libmx5dr-ldstap.so"};
 uid_t expected_owner(){
 #ifdef MX5DR_GUARD_TESTING
  return geteuid(); // Fixture files belong to the host test user; production stays root-only.
@@ -125,13 +128,13 @@ bool atomic_file(const char*name,const std::string&s,bool*published=0){
 bool manifest(std::string&s){
  s="mx5dr-one-boot-v3\n";
  for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){
-  std::string h;if(!digest(prefix+names[i],h))return false;
+  std::string h;if(!digest(prefix+names[i],h)){why=std::string("input_unreadable:")+short_names[i];return false;}
   if(i==2||i==4){
    // Bind a template to the snapshot from which the editor created it. Merely
    // hashing today's baseline and yesterday's template would authorize both.
    std::string source;
    const char *name=i==2?"normal.source.sha256":"wcp.source.sha256";
-   if(!read_file(prefix+"/data_persist/mx5-aa-dr/guard/"+name,source,65)||source!=h+"\n")return false;
+   if(!read_file(prefix+"/data_persist/mx5-aa-dr/guard/"+name,source,65)||source!=h+"\n"){why=std::string("baseline_edited:")+short_names[i];return false;}
   }
   s+=h+"\n";
  }
@@ -141,7 +144,7 @@ bool valid_boot_record(const std::string&s){if(s.size()!=37||s[36]!='\n')return 
 bool boot_id(std::string&s){std::string p=prefix+"/proc/sys/kernel/random/boot_id";int fd=open(p.c_str(),O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return false;bool ok=read_fd(fd,s,80);close(fd);return ok&&valid_boot_record(s);}
 bool owned_read(const char*name,std::string&s){int fd=openat(gd,name,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);if(fd<0)return false;bool ok=safe_stat(fd,false)&&read_fd(fd,s,1024);close(fd);return ok;}
 bool last_boot_record(std::string&s){struct stat st;if(fstatat(gd,"last-boot",&st,AT_SYMLINK_NOFOLLOW)){return errno==ENOENT;}return owned_read("last-boot",s)&&valid_boot_record(s);}
-bool baseline_clean(){for(unsigned i=2;i<=4;i+=2){std::string s;if(!read_file(prefix+names[i],s,1024*1024)||s.find(token)!=std::string::npos||s.find(tap_token)!=std::string::npos||s.find(lds_token)!=std::string::npos)return false;}return true;}
+bool baseline_clean(){for(unsigned i=2;i<=4;i+=2){std::string s;if(!read_file(prefix+names[i],s,1024*1024)||s.find(token)!=std::string::npos||s.find(tap_token)!=std::string::npos||s.find(lds_token)!=std::string::npos){why=std::string("baseline_has_token:")+short_names[i];return false;}}return true;}
 // Temporary names of atomic_file() that a power cut can leave behind.
 const char*const temp_names[]={"arm","last-boot","persist","persist-state","last-decision",0};
 bool stale_temp_name(const char*n){
@@ -402,15 +405,35 @@ int enable_persistent(const std::string&expected){
  if(!removed||!sync_dir(gd,"persist-cancel"))return 3;
  return 2;
 }
+// Which part of the persistent manifest no longer matches today's inputs.
+std::string persist_mismatch(const std::string&p,const std::string&expected){
+ const std::string want=persist_text(expected);
+ if(p==want)return "";
+ size_t head=want.find("mx5dr-one-boot-v3\n");
+ if(p.size()!=want.size()||p.compare(0,head,want,0,head))return "persist_invalid";
+ for(unsigned i=0;i<8;i++){
+  size_t at=head+18+i*65;
+  if(p.compare(at,65,want,at,65))return std::string("binding_changed:")+short_names[i];
+ }
+ return "persist_invalid";
+}
+#define DECLINE(code) do{why=(code);return 2;}while(0)
 int select_persistent(unsigned index,const std::string&expected){
  std::string p,id,last,raw,reports;State s;
- if(!absent("arm")||!owned_read("persist",p)||p!=persist_text(expected)||!beta_config())return 2;
- if(!boot_id(id)||!last_boot_record(last)||last==id)return 2;
- if(!owned_read("persist-state",raw)||!parse_state(raw,s))return 2;
+ if(!absent("arm"))DECLINE("arm_present");
+ if(!owned_read("persist",p))DECLINE("persist_unreadable");
+ std::string mismatch=persist_mismatch(p,expected);if(!mismatch.empty())DECLINE(mismatch);
+ if(!beta_config())DECLINE("config_not_beta");
+ if(!boot_id(id))DECLINE("boot_id_invalid");
+ if(!last_boot_record(last))DECLINE("last_boot_invalid");
+ if(last==id)DECLINE("same_boot");
+ if(!owned_read("persist-state",raw)||!parse_state(raw,s))DECLINE("state_invalid");
  const std::string boot=id.substr(0,36);
  // Never in the enabling Linux boot, never twice in one boot, never once tripped.
- if(s.enabled_boot==boot||s.attempt_boot==boot||s.tripped!="no")return 2;
- if(!report_fingerprint(reports))return 2;
+ if(s.enabled_boot==boot)DECLINE("enabled_this_boot");
+ if(s.attempt_boot==boot)DECLINE("same_boot");
+ if(s.tripped!="no")DECLINE("tripped:"+s.tripped);
+ if(!report_fingerprint(reports))DECLINE("reports_unreadable");
  evaluate(s,reports);
  if(s.tripped=="no"&&runtime_disabled())s.tripped="runtime_disabled";
  if(s.tripped!="no"){
@@ -418,10 +441,10 @@ int select_persistent(unsigned index,const std::string&expected){
   // An undurable trip record is re-derived from the same evidence next boot.
   s.attempt_boot="none";s.attempt_reports="none";s.attempt_trial="none";s.confirmed_boot="none";
   atomic_file("persist-state",state_text(s));
-  return 2;
+  DECLINE("tripped:"+s.tripped);
  }
- std::string content;if(!read_file(prefix+names[index],content,1024*1024))return 2;
- std::vector<char> d;int td=stage_trial(content,d);if(td<0)return 2;
+ std::string content;if(!read_file(prefix+names[index],content,1024*1024))DECLINE("template_unreadable");
+ std::vector<char> d;int td=stage_trial(content,d);if(td<0)DECLINE("trial_write_failed");
  std::string result=std::string(&d[0])+"/sm.conf";
  s.attempt_boot=boot;s.attempt_reports=reports;s.attempt_trial=result;s.confirmed_boot="none";
  if(s.attempts<MAX_COUNT)s.attempts++;
@@ -439,12 +462,48 @@ int select_persistent(unsigned index,const std::string&expected){
    if(revoked)revoked=sync_dir(gd,"last-boot-cancel");
   }
   unlinkat(td,"sm.conf",0);close(td);rmdir(&d[0]);
+  why="state_write_failed";
   return revoked?2:3;
  }
  close(td);
  clear_stale_capture_stop();
  if(printf("%s\n",result.c_str())<0||fflush(stdout))return 2;
  return 0;
+}
+// Best effort, root-owned: why this boot runs stock (menu 2 shows it).
+void record_decision(const std::string&code){
+ std::string id;
+ std::string boot=boot_id(id)?id.substr(0,36):"none";
+ std::string clean=code.empty()?"unknown":code;
+ for(size_t i=0;i<clean.size();i++){char c=clean[i];if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c==':'||c=='.'||c=='-'))clean[i]='_';}
+ atomic_file("last-decision","mx5dr-last-decision-v1\nboot_id="+boot+"\nreason="+clean.substr(0,64)+"\n");
+}
+// What a selection in a NEW boot would decline for now (boot fences aside).
+std::string verify_reason(bool inputs,const std::string&expected){
+ if(!inputs)return why.empty()?"inputs_invalid":why;
+ if(!absent("arm"))return "arm_present";
+ std::string p,raw;State s;
+ if(!owned_read("persist",p))return "persist_unreadable";
+ std::string mismatch=persist_mismatch(p,expected);if(!mismatch.empty())return mismatch;
+ if(!beta_config())return "config_not_beta";
+ if(!owned_read("persist-state",raw)||!parse_state(raw,s))return "state_invalid";
+ if(s.tripped!="no")return "tripped:"+s.tripped;
+ std::string reports;if(!report_fingerprint(reports))return "reports_unreadable";
+ if(runtime_disabled())return "runtime_disabled_pending";
+ return "ok";
+}
+std::string reason_text(const std::string&code){
+ size_t colon=code.find(':');std::string kind=code.substr(0,colon),what=colon==std::string::npos?"":code.substr(colon+1);
+ if(kind=="ok")return "ok";
+ if(kind=="baseline_edited")return "bindings changed: "+what+" edited by another tool: run menu 1";
+ if(kind=="binding_changed")return "bindings changed: "+what+" differs from install: run menu 1";
+ if(kind=="input_unreadable")return "file missing or unsafe: "+what+": run menu 1";
+ if(kind=="baseline_has_token")return "stock "+what+" carries our preload: run menu 4, then 1";
+ if(kind=="tripped")return "tripped ("+what+"): run menu 3, then menu 1";
+ if(kind=="runtime_disabled_pending")return "runtime asked to stop: next boot trips: run menu 3";
+ if(kind=="arm_present")return "a one-boot trial is armed: run menu 1";
+ if(kind=="config_not_beta")return "config is not BETA: run menu 1";
+ return code+": run menu 3 and report";
 }
 // Run by the owned autostart block about 90 s after a committed selection.
 // Records this boot only if it is the open attempt, the selection was
@@ -476,13 +535,23 @@ int run(int argc,char**argv){
 #endif
  hang_point("start");
  gd=trusted(prefix+"/data_persist/mx5-aa-dr/guard",true);if(gd<0)return 2;
+ // Read-only: never takes the lock, never writes.
+ if(!strcmp(argv[1],"verify")){
+  if(argc!=2)return 2;
+  std::string expected;bool inputs=baseline_clean()&&manifest(expected);
+  std::string code=verify_reason(inputs,expected);
+  if(printf("verify=%s\nmessage=%s\n",code.c_str(),reason_text(code).c_str())<0||fflush(stdout))return 2;
+  return code=="ok"?0:1;
+ }
  int lock=openat(gd,"lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(lock<0||!safe_stat(lock,false))return 2;
  // `confirm` runs in the background and may meet a parked menu action: retry.
  bool confirm=!strcmp(argv[1],"confirm");
  for(unsigned tries=0;flock(lock,LOCK_EX|LOCK_NB);tries++){if(!confirm||tries>=5)return 2;sleep(1);}
  clean_stale_temps();
  if(confirm)return argc==2?confirm_persistent():2;
- std::string expected;if(!baseline_clean()||!manifest(expected))return 2;
+ std::string expected;bool inputs=baseline_clean()&&manifest(expected);
+ bool persistent_select=!strcmp(argv[1],"select")&&!absent("persist");
+ if(!inputs){if(persistent_select)record_decision(why);return 2;}
  if(!strcmp(argv[1],"check")){
   std::string id,last;return argc==2&&boot_id(id)&&last_boot_record(last)?0:2;
  }
@@ -499,7 +568,11 @@ int run(int argc,char**argv){
  if(strcmp(argv[1],"select")||argc!=3)return 2;
  unsigned index;if(!strcmp(argv[2],"/jci/sm/sm.conf"))index=3;else if(!strcmp(argv[2],"/jci/sm/sm_WCP.conf"))index=5;else return 2;
  // An installed persistent manifest selects the product policy; otherwise one-boot.
- if(!absent("persist"))return select_persistent(index,expected);
+ if(persistent_select){
+  int r=select_persistent(index,expected);
+  if(r)record_decision(why);
+  return r;
+ }
  std::string arm,id,last,armed;
  if(!owned_read("arm",arm)||arm!=expected||!boot_id(id)||!last_boot_record(last)||
     !owned_read("armed-boot",armed)||!valid_boot_record(armed))return 2;

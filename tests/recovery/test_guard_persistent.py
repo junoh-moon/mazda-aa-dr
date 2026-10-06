@@ -697,6 +697,82 @@ class PersistentRuleOff(Fixture):
         self.assertEqual(self.state()['tripped'], 'reset_reports')
         self.assertNotEqual(self.call('confirm').returncode, 0)
 
+    # ---- owner visibility: last-decision and verify (2026-10-06 G2) ----
+    def decision(self):
+        lines = (self.root / BASE / 'guard/last-decision').read_text().splitlines()
+        self.assertEqual(lines[0], 'mx5dr-last-decision-v1')
+        return dict(line.split('=', 1) for line in lines[1:])
+
+    def verify(self):
+        r = self.call('verify')
+        out = dict(line.split('=', 1) for line in r.stdout.splitlines())
+        self.assertEqual(r.returncode, 0 if out['verify'] == 'ok' else 1, r.stderr)
+        return out
+
+    def test_every_persistent_decline_records_a_reason(self):
+        self.enable()
+        self.product_boot(0, expect=False)
+        self.assertEqual(self.decision(), {'boot_id': BOOTS[0], 'reason': 'enabled_this_boot'})
+        self.product_boot(1)
+        self.assertFalse(self.select().stdout)
+        self.assertEqual(self.decision(), {'boot_id': BOOTS[1], 'reason': 'same_boot'})
+        cases = [
+            ('jci/sm/sm.conf', (CFG + '<!-- other tool -->').encode(), 'baseline_edited:sm.conf'),
+            (BASE + '/libmx5dr.so', b'replaced payload', 'binding_changed:libmx5dr.so'),
+            (BASE + '/guard/wcp.trial', b'other template', 'binding_changed:wcp.trial'),
+        ]
+        n = 2
+        for path, data, code in cases:
+            with self.subTest(code=code):
+                saved = (self.root / path).read_bytes()
+                self.put(path, data)
+                self.product_boot(n, expect=False)
+                self.assertEqual(self.decision(), {'boot_id': BOOTS[n], 'reason': code})
+                v = self.verify()
+                self.assertEqual(v['verify'], code)
+                self.assertIn('bindings changed', v['message'])
+                self.put(path, saved)
+                n += 1
+        (self.root / BASE / 'libmx5dr-ldstap.so').unlink()
+        self.product_boot(n, expect=False)
+        self.assertEqual(self.decision()['reason'], 'input_unreadable:libmx5dr-ldstap.so')
+        self.put(BASE + '/libmx5dr-ldstap.so', b'author-fixture-lds-tap')
+        n += 1
+        (self.root / 'data').rename(self.root / 'data-away')
+        self.product_boot(n, expect=False)
+        self.assertEqual(self.decision()['reason'], 'reports_unreadable')
+        self.assertEqual(self.verify()['verify'], 'reports_unreadable')
+        (self.root / 'data-away').rename(self.root / 'data')
+        n += 1
+        self.assertEqual(self.verify(), {'verify': 'ok', 'message': 'ok'})
+        self.product_boot(n)
+        self.reset_during('a')
+        self.product_boot(n + 1)
+        self.reset_during('b')
+        self.product_boot(n + 2, expect=False)
+        self.assertEqual(self.decision()['reason'], 'tripped:reset_reports')
+        self.assertEqual(self.verify()['message'], 'tripped (reset_reports): run menu 3, then menu 1')
+        self.product_boot(n + 3, expect=False)
+        self.assertEqual(self.decision(), {'boot_id': BOOTS[n + 3], 'reason': 'tripped:reset_reports'})
+
+    def test_verify_is_read_only_and_needs_no_lock(self):
+        self.enable()
+        self.product_boot(1)
+        before = sorted((p.name, p.read_bytes()) for p in (self.root / BASE / 'guard').iterdir() if p.is_file())
+        import fcntl
+        with open(self.root / BASE / 'guard/lock', 'r+') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.assertEqual(self.verify()['verify'], 'ok')
+            (self.root / BASE / 'logs/disable-next-start').write_text('x')
+            self.assertEqual(self.verify()['verify'], 'runtime_disabled_pending')
+        after = sorted((p.name, p.read_bytes()) for p in (self.root / BASE / 'guard').iterdir() if p.is_file())
+        self.assertEqual(before, after)
+
+    def test_one_boot_select_never_writes_a_decision(self):
+        self.put(BASE + '/mx5dr.conf', b'mode=SHADOW\n')
+        self.assertNotEqual(self.select().returncode, 0)
+        self.assertFalse((self.root / BASE / 'guard/last-decision').exists())
+
     def test_failed_enable_publication_revokes(self):
         r = self.call('enable', env=dict(self.env, MX5DR_GUARD_FAIL_FSYNC='persist'))
         self.assertNotEqual(r.returncode, 0)

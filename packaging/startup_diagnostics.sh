@@ -202,7 +202,7 @@ marker guard.normal_source "$BASE/guard/normal.source.sha256" sha "$guard_ok"
 marker guard.wcp_source "$BASE/guard/wcp.source.sha256" sha "$guard_ok"
 # Persistent BETA policy files: small root-owned text, recorded line by line
 # when every byte is in the guard's own alphabet.
-for persist_name in persist persist-state; do
+for persist_name in persist persist-state last-decision; do
     persist_key=guard.$(printf '%s' "$persist_name" | tr '-' '_')
     if [ "$guard_ok" != 1 ]; then printf '%s.status=parent_unavailable\n' "$persist_key"; continue; fi
     path_info "$persist_key" "$BASE/guard/$persist_name"
@@ -227,7 +227,7 @@ if [ "$guard_ok" = 1 ]; then
             {
                 if find "$BASE/guard" -mindepth 1 -maxdepth 1 \
                     ! -name last-boot ! -name armed-boot ! -name armed-boot.previous \
-                    ! -name arm ! -name consumed ! -name persist ! -name persist-state \
+                    ! -name arm ! -name consumed ! -name persist ! -name persist-state ! -name last-decision \
                     ! -name normal.source.sha256 ! -name wcp.source.sha256 \
                     ! -name normal.trial ! -name wcp.trial ! -name mx5dr-guard ! -name lock \
                     -print0 2>/dev/null; then scan_status=0; else scan_status=$?; fi
