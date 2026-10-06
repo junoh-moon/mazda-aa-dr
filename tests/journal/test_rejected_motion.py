@@ -84,6 +84,24 @@ class RejectedMotion(unittest.TestCase):
             self.assertEqual(a.motion_rejected_reasons, {reason: 1})
             self.assertEqual(a.session['last_diagnostic_ns'], 0 if reason == 'clock_unavailable' else 2**63+3)
 
+    def test_late_arrival_diagnostic_is_bounded_and_not_a_sample(self):
+        late = dict(kind='motion_late_accepted', schema=1, mono_ns=3000000000, domain='model',
+                    assist_ready=False, epoch=42, first_seq=2, last_seq=6, events=5,
+                    max_late_ms=1500, fresh_limit_ms=250, late_limit_ms=2000, late_accepted_total=5)
+        a = read(late)
+        self.assertEqual(a.motion_late, dict(bursts=1, events=5, max_late_ms=1500))
+        self.assertEqual(a.motion_samples, 0)
+        self.assertEqual(a.issue_counts['violation'], 0)
+        self.assertNotIn('unknown_record_kind', [x['code'] for x in a.issues])
+        for changes in ({'max_late_ms': 2001}, {'max_late_ms': 250}):
+            a = read(dict(late, **changes))
+            self.assertIn('late_motion_out_of_bounds', [x['code'] for x in a.issues])
+        for changes in ({'assist_ready': True}, {'domain': 'beta'}, {'events': 0},
+                        {'last_seq': 1}, {'schema': 2}):
+            a = read(dict(late, **changes))
+            self.assertIn('malformed_late_motion', [x['code'] for x in a.issues])
+            self.assertEqual(a.motion_late['bursts'], 0)
+
     def test_capture_inactive_not_confused_with_active_model(self):
         base = dict(kind='shadow_boot', domain='model', assist_ready=False,
                     source='existing_vbs_vim_callback', active=False, capture_active=True)

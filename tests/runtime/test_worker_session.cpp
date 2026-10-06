@@ -219,12 +219,15 @@ int main(int argc,char** argv) {
     {
         // A shared host can stall this worker (journal write() under dirty
         // writeback, reclaim) while the authored sender keeps stamping on its
-        // 20 ms schedule. The product then correctly rejects the queued
-        // datagrams by its unchanged 250 ms age limit, and the first fresh one
-        // as a discontinuity. Such a run cannot exercise the lifecycle checks
-        // below: report it as inconclusive (77) for a bounded retry. Every
-        // other rejection still fails: a discontinuity must directly follow a
-        // stale burst, and a stale row must really be older than the limit.
+        // 20 ms schedule. Since 2026-10-06 the product accepts the queued
+        // datagrams of such a stall as late arrivals up to 2 s (contiguous,
+        // same producer, monotonic receipt; motion_late_accepted rows) and a
+        // stale datagram consumes its sequence number. Only a stall beyond
+        // 2 s still rejects the backlog as stale; that run cannot exercise
+        // the lifecycle checks below: report it as inconclusive (77) for a
+        // bounded retry. Every other rejection still fails: a discontinuity
+        // must directly follow a stale burst (kept for an older product), and
+        // a stale row must really be older than the 250 ms fresh limit.
         std::ifstream scan((logs+"/trace.0.jsonl").c_str());std::string row;
         unsigned stale=0,discontinuity=0;uint64_t max_age=0,last_stale_seq=0;
         while(std::getline(scan,row)) {

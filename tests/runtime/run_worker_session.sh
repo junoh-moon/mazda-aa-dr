@@ -1,7 +1,8 @@
 #!/bin/sh
 # Run one authored worker-session scenario. Exit 77 from the test means the
-# shared host stalled the worker past the unchanged 250 ms motion age limit
-# (see validation/WORKER_STALL_STALE_2026-10-06.md); such a run cannot check
+# shared host stalled the worker past the motion age limit (250 ms fresh,
+# 2 s for contiguous late arrivals since 2026-10-06; see
+# validation/WORKER_STALL_STALE_2026-10-06.md); such a run cannot check
 # the lifecycle. Retry it a bounded number of times and fail if every attempt
 # is inconclusive. Any other failure fails immediately.
 attempts=3

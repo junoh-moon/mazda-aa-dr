@@ -24,7 +24,15 @@ struct ReceiveDiagnostic {
     uid_t sender_uid;
     int syscall_errno;
     RawEvent rejected;
+    // Receipt age at the consumer check (checked_ns - producer received_ns)
+    // for authenticated decoded records with a usable clock; 0 otherwise.
+    // late: accepted although older than MOTION_FRESH_NS (see below).
+    uint64_t age_ns;
+    bool late;
 };
+// A record older than this at the consumer check is stale unless it is a
+// late arrival of the same source (inspect_motion_datagram).
+static const uint64_t MOTION_FRESH_NS=250000000ULL;
 struct MotionDatagram {
     const unsigned char* bytes;
     size_t size;
@@ -34,12 +42,21 @@ struct MotionDatagram {
 };
 class MotionCursor {
 public:
-    MotionCursor():pid_(0),epoch_(0),sequence_(0) {}
+    MotionCursor():pid_(0),epoch_(0),sequence_(0),received_ns_(0) {}
     bool accept(pid_t pid,uint64_t epoch,uint64_t sequence);
-    ReceiveFault check(pid_t pid,uint64_t epoch,uint64_t sequence);
+    // received_ns (producer receipt) is only remembered for the late-arrival
+    // monotonicity check; it is never rewritten or used as event time here.
+    ReceiveFault check(pid_t pid,uint64_t epoch,uint64_t sequence,uint64_t received_ns=0);
+    // Late arrival: the next contiguous record of the current producer pid and
+    // epoch whose receipt time does not go backwards.
+    bool late_admissible(pid_t pid,uint64_t epoch,uint64_t sequence,uint64_t received_ns) const;
+    // A stale record of the current source still consumes its sequence number,
+    // so the next fresh record is not also rejected as a discontinuity. A
+    // replay, rewind or another source leaves the cursor unchanged.
+    void advance_stale(pid_t pid,uint64_t epoch,uint64_t sequence,uint64_t received_ns);
 private:
     pid_t pid_;
-    uint64_t epoch_,sequence_;
+    uint64_t epoch_,sequence_,received_ns_;
 };
 // Shared bounded validation boundary; rejected authenticated records are
 // diagnostic evidence only and are never returned through accepted_out.

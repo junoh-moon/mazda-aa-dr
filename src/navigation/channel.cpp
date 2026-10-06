@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 #include "channel.h"
+#include "runtime/motion_gap.h"
 #include <cerrno>
 #include <climits>
 #include <cstring>
@@ -60,16 +61,27 @@ bool decode_motion(const unsigned char* p,size_t n,RawEvent* out) {
 bool MotionCursor::accept(pid_t pid,uint64_t epoch,uint64_t sequence) {
     return check(pid,epoch,sequence)==RECEIVE_OK;
 }
-ReceiveFault MotionCursor::check(pid_t pid,uint64_t epoch,uint64_t sequence) {
+ReceiveFault MotionCursor::check(pid_t pid,uint64_t epoch,uint64_t sequence,uint64_t received_ns) {
     if(pid<=0 || !epoch || !sequence)return RECEIVE_SEQUENCE;
-    if(!pid_) { pid_=pid;epoch_=epoch;sequence_=sequence;return RECEIVE_OK; }
+    if(!pid_) { pid_=pid;epoch_=epoch;sequence_=sequence;received_ns_=received_ns;return RECEIVE_OK; }
     if(pid_!=pid || epoch_!=epoch) {
-        pid_=pid;epoch_=epoch;sequence_=sequence;return RECEIVE_SOURCE_CHANGED;
+        pid_=pid;epoch_=epoch;sequence_=sequence;received_ns_=received_ns;return RECEIVE_SOURCE_CHANGED;
     }
     // A replay must never rewind the same source's high-water mark.
     if(sequence_==UINT64_MAX || sequence<=sequence_)return RECEIVE_SEQUENCE;
     const bool contiguous=sequence==sequence_+1;
-    sequence_=sequence;return contiguous?RECEIVE_OK:RECEIVE_SEQUENCE;
+    sequence_=sequence;
+    if(received_ns>received_ns_)received_ns_=received_ns;
+    return contiguous?RECEIVE_OK:RECEIVE_SEQUENCE;
+}
+bool MotionCursor::late_admissible(pid_t pid,uint64_t epoch,uint64_t sequence,uint64_t received_ns) const {
+    return pid_>0 && pid==pid_ && epoch && epoch==epoch_ && sequence_!=UINT64_MAX &&
+           sequence==sequence_+1 && received_ns>=received_ns_;
+}
+void MotionCursor::advance_stale(pid_t pid,uint64_t epoch,uint64_t sequence,uint64_t received_ns) {
+    if(pid_<=0 || pid!=pid_ || !epoch || epoch!=epoch_ || sequence<=sequence_)return;
+    sequence_=sequence;
+    if(received_ns>received_ns_)received_ns_=received_ns;
 }
 const char* receive_fault_name(ReceiveFault reason) {
     static const char* const names[]={"ok","syscall","truncated","credentials_missing",
@@ -92,8 +104,27 @@ ReceiveResult inspect_motion_datagram(const MotionDatagram& packet,uid_t expecte
         d.authenticated_decoded=true;
         if(!now)d.reason=RECEIVE_CLOCK_UNAVAILABLE;
         else if(now<e.received_ns)d.reason=RECEIVE_FUTURE;
-        else if(now-e.received_ns>250000000ULL)d.reason=RECEIVE_STALE;
-        else d.reason=cursor.check(packet.sender_pid,e.epoch,e.receive_seq);
+        else {
+            d.age_ns=now-e.received_ns;
+            if(d.age_ns<=MOTION_FRESH_NS)
+                d.reason=cursor.check(packet.sender_pid,e.epoch,e.receive_seq,e.received_ns);
+            // Late arrival (validation/WORKER_STALL_STALE_2026-10-06.md): the
+            // record waited in the socket queue while this consumer was not
+            // receiving. The data are intact, so up to the reverse-latch gap
+            // limit (2 s) the next contiguous record of the same producer pid
+            // and epoch with a monotonic receipt time is accepted. received_ns
+            // is not rewritten: the pipeline keeps using the producer time,
+            // and its own LATE/sensor-age checks and the BETA lease still
+            // bound output freshness. The age is diagnostic only.
+            else if(d.age_ns<=mx5::runtime::MotionGapTracker::KEEP_NS &&
+                    cursor.late_admissible(packet.sender_pid,e.epoch,e.receive_seq,e.received_ns)) {
+                d.reason=cursor.check(packet.sender_pid,e.epoch,e.receive_seq,e.received_ns);
+                d.late=d.reason==RECEIVE_OK;
+            } else {
+                d.reason=RECEIVE_STALE;
+                cursor.advance_stale(packet.sender_pid,e.epoch,e.receive_seq,e.received_ns);
+            }
+        }
         if(d.reason==RECEIVE_OK)*out=e;
         else d.rejected=e;
     }

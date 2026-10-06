@@ -445,8 +445,56 @@ void motion_gap_accept(Journal& j,const N::RawEvent& raw,N::Pipeline& navigation
   } else if(navigation.reverse_latched())
     journal_latch_gap(j,"kept_across_gap",reason,missing,span,navigation);
 }
+// Late arrivals (channel.cpp inspect_motion_datagram): accepted records that
+// waited in the socket queue for more than 250 ms while this worker was not
+// receiving. One motion_late_accepted row per contiguous burst plus totals
+// in health. Diagnostics only; received_ns is never rewritten. Worker only.
+struct MotionLate {
+  uint64_t accepted,bursts,max_ns;            // totals since start
+  uint64_t burst_events,burst_max_ns,burst_first_seq,burst_last_seq,burst_epoch,burst_checked_ns;
+};
+MotionLate motion_late={0,0,0,0,0,0,0,0,0};
+void close_late_burst(Journal& j) {
+  MotionLate& m=motion_late;
+  if(!m.burst_events)return;
+  char line[500];
+  const int n=snprintf(line,sizeof line,
+      "{\"kind\":\"motion_late_accepted\",\"schema\":1,\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"assist_ready\":false,\"epoch\":%llu,\"first_seq\":%llu,\"last_seq\":%llu,"
+      "\"events\":%llu,\"max_late_ms\":%llu,\"fresh_limit_ms\":%llu,\"late_limit_ms\":%llu,"
+      "\"late_accepted_total\":%llu}",
+      (unsigned long long)m.burst_checked_ns,(unsigned long long)m.burst_epoch,
+      (unsigned long long)m.burst_first_seq,(unsigned long long)m.burst_last_seq,
+      (unsigned long long)m.burst_events,(unsigned long long)(m.burst_max_ns/1000000ULL),
+      (unsigned long long)(N::MOTION_FRESH_NS/1000000ULL),
+      (unsigned long long)(mx5::runtime::MotionGapTracker::KEEP_NS/1000000ULL),
+      (unsigned long long)m.accepted);
+  m.burst_events=m.burst_max_ns=m.burst_first_seq=m.burst_last_seq=m.burst_epoch=m.burst_checked_ns=0;
+  if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+void note_late(const N::RawEvent& raw,const N::ReceiveDiagnostic& d) {
+  MotionLate& m=motion_late;
+  if(m.accepted!=UINT64_MAX)++m.accepted;
+  if(d.age_ns>m.max_ns)m.max_ns=d.age_ns;
+  if(!m.burst_events) {
+    if(m.bursts!=UINT64_MAX)++m.bursts;
+    m.burst_first_seq=raw.receive_seq;m.burst_epoch=raw.epoch;
+  }
+  ++m.burst_events;m.burst_last_seq=raw.receive_seq;m.burst_checked_ns=d.checked_ns;
+  if(d.age_ns>m.burst_max_ns)m.burst_max_ns=d.age_ns;
+}
 // One bounded worker receive turn. Capture survives model/AA audit failure;
 // rejected input is separate evidence and can never enter either estimator.
+//
+// A late-accepted record (d.late) enters the estimators exactly like an
+// on-time one, at its PRODUCER receipt time: Pipeline orders and integrates
+// events by that time, never by this worker's receive time. The late arrival
+// therefore adds no extra age to the position error budget: the estimate at
+// the event's time equals the one had it arrived on time (tests/navigation/
+// test_beta.cpp late_arrival_output_stays_bounded). What the delay can
+// affect is how old the newest estimate is when it is published; that stays
+// bounded by the pipeline's sample-age/sensor-timeout faults, the BETA 300 ms
+// receipt-silence check and the publication lease, all measured against now.
 template<class Receiver>
 void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
                   N::Pipeline& navigation,N::GpsHoldout& holdout,bool compute,
@@ -457,6 +505,11 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
     const N::ReceiveResult received=motion.receive(&raw,&d);
     if(received==N::CHANNEL_EMPTY)break;
     const bool enabled=compute && !__sync_fetch_and_add(&audit_fault,0);
+    if(received==N::CHANNEL_EVENT && d.late)note_late(raw,d);
+    else if(motion_late.burst_events) {
+      // The burst row follows the batch that holds its events.
+      flush_motion(j,batch);close_late_burst(j);
+    }
     if(received==N::CHANNEL_FAULT) {
       flush_motion(j,batch);
       char line[1200];
@@ -522,6 +575,7 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
   }
   // No batch crosses the worker sleep, including a capped or failed turn.
   flush_motion(j,batch);
+  close_late_burst(j);
 }
 
 void journal_health(Journal& j,uint64_t now,bool capture,bool computation,
@@ -529,7 +583,7 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation,
   const A::RequestHookHealth h=A::request_hook_health();
   const A::SessionHealth s=A::session_hook_health();
   const A::BusHealth b=A::bus_hook_health();
-  char line[1450],source_status[420]="";
+  char line[1600],source_status[420]="";
   if(source) {
     const mx5::runtime::LdsRequestSource::Status& status=source->status();
     const int n=snprintf(source_status,sizeof source_status,
@@ -548,14 +602,17 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation,
       "\"prepared\":%s,\"abi_fault\":%s,\"result\":\"%s\",\"loss_epoch\":%llu,"
       "\"requests\":%u,\"workers\":%u,\"loss_reasons\":%u,\"exhausted\":%s},"
       "\"session_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u},"
-      "\"bus_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u}%s}",
+      "\"bus_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u},"
+      "\"motion_late\":{\"accepted\":%llu,\"bursts\":%llu,\"max_late_ms\":%llu}%s}",
       (unsigned long long)now,(unsigned long long)queue.dropped(),hook_installed?"true":"false",
       unsigned(A::mode()),__sync_fetch_and_add(&audit_fault,0),capture?"true":"false",
       computation?"true":"false",h.prepared?"true":"false",h.abi_fault?"true":"false",
       A::R::result_name(h.result),(unsigned long long)h.ledger.loss_epoch,h.ledger.requests,
       h.ledger.workers,h.ledger.loss_reasons,h.ledger.exhausted?"true":"false",
       s.prepared?"true":"false",s.contexts,unsigned(A::SESSION_CONTEXT_CAPACITY),s.faults,
-      b.prepared?"true":"false",b.contexts,unsigned(A::BUS_CONTEXT_CAPACITY),b.faults,source_status);
+      b.prepared?"true":"false",b.contexts,unsigned(A::BUS_CONTEXT_CAPACITY),b.faults,
+      (unsigned long long)motion_late.accepted,(unsigned long long)motion_late.bursts,
+      (unsigned long long)(motion_late.max_ns/1000000ULL),source_status);
   if(n<=0 || size_t(n)>=sizeof line)j.fail();else j.line(line);
 }
 // Fail closed: anything except a definitely absent marker counts as present.

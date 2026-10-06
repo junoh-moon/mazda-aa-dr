@@ -617,6 +617,57 @@ static void motion_gap_rule() {
         RawEvent late=raw(YAW,2500,30,7);                             // the gap grew: clear on accept
         CHECK(g.accept(late,&missing,&span)==G::TOO_LARGE); }
 }
+// 2026-10-06 late-arrival tolerance (channel.cpp): a worker stall delivers
+// the queued records late, all at once, with their unchanged producer receipt
+// times. The pipeline orders and integrates them by that time, so the
+// publication after the stall equals the on-time one: the late arrival adds
+// nothing to the position error budget. Output freshness stays bounded by
+// the lease against now, and an event behind the drain watermark stays LATE.
+static void late_arrival_output_stays_bounded() {
+    const Plan plan=straight(LOST_MS+400);
+    Pipeline p,q; init(p); init(q);
+    run(p,plan); run(q,plan);
+    const unsigned stall_from=LOST_MS+480,stall_to=LOST_MS+1980;   // 12100..13600 ms
+    adapter::DrSnapshot sp=adapter::DrSnapshot(),sq=adapter::DrSnapshot();
+    CHECK(publish(p,stall_from-100,&sp)==runtime::CORE_BRIDGE_OK);   // engaged before the stall
+    uint64_t pseq=500000,qseq=600000; unsigned call=900;
+    std::vector<RawEvent> backlog; std::vector<adapter::Observation> positions;
+    for(unsigned ms=stall_from;ms<=stall_to;ms+=100) {
+        RawEvent w=raw(WHEELS,ms,0,plan.epoch); for(unsigned i=0;i<4;++i) w.raw[i]=uint16_t(wheel_raw(36));
+        RawEvent y=raw(YAW,ms,0,plan.epoch); y.raw[0]=STRAIGHT;
+        const adapter::Observation gps=position(fix(ms,0),++call);
+        // On time: every 100 ms, drained like the worker tick.
+        w.receive_seq=++pseq; CHECK(p.enqueue_raw(w)==PIPELINE_OK);
+        y.receive_seq=++pseq; CHECK(p.enqueue_raw(y)==PIPELINE_OK);
+        if(ms%1000==620) CHECK(p.enqueue_position(gps)==PIPELINE_OK);
+        p.drain(T(ms)-100000000ULL);
+        // Stalled worker: nothing received or drained until stall_to.
+        w.receive_seq=++qseq; y.receive_seq=++qseq; backlog.push_back(w); backlog.push_back(y);
+        if(ms%1000==620) positions.push_back(gps);
+    }
+    for(size_t i=0;i<positions.size();++i) CHECK(q.enqueue_position(positions[i])==PIPELINE_OK);
+    for(size_t i=0;i<backlog.size();++i) {
+        const PipelineResult r=q.enqueue_raw(backlog[i]);
+        CHECK(r==PIPELINE_OK||r==PIPELINE_WAITING);
+    }
+    q.drain(T(stall_to)-100000000ULL);
+    CHECK(q.status().resets==p.status().resets && q.status().last_received_ns==p.status().last_received_ns);
+    CHECK(q.status().last_received_ns==T(stall_to));                 // producer time, not the late receipt
+    BetaModelInput ip,iq;
+    const runtime::CoreBridgeResult rp=publish(p,stall_to,&sp,&ip),rq=publish(q,stall_to,&sq,&iq);
+    CHECK(rp==runtime::CORE_BRIDGE_OK && rq==rp);
+    CHECK(sq.frontier_mono_ns==sp.frontier_mono_ns && sq.valid_until_mono_ns==sp.valid_until_mono_ns);
+    CHECK(sq.accuracy_m==sp.accuracy_m && sq.latitude_deg==sp.latitude_deg && sq.longitude_deg==sp.longitude_deg);
+    CHECK(iq.snapshot.error_budget_m==ip.snapshot.error_budget_m);
+    // The newest event is still bounded by the lease against now: with no
+    // newer input the same estimate expires, late or not.
+    CHECK(publish(q,stall_to+1000,&sq)!=runtime::CORE_BRIDGE_OK && !sq.ready);
+    // A record that arrives after the drain watermark passed its time is LATE.
+    RawEvent behind=raw(WHEELS,stall_to-300,++qseq,plan.epoch);
+    for(unsigned i=0;i<4;++i) behind.raw[i]=uint16_t(wheel_raw(36));
+    const uint64_t resets=q.status().resets;
+    CHECK(q.enqueue_raw(behind)!=PIPELINE_OK && q.status().resets==resets+1);
+}
 static void creeping_turn_is_not_a_frame_fault() {
     // Decision F: after the outage the car stops (all wheels zero, quiet yaw)
     // and then creeps at 1 km/h while turning at 0.2 rad/s. The BETA core
@@ -651,6 +702,7 @@ static void creeping_turn_is_not_a_frame_fault() {
 int main() {
     creeping_turn_is_not_a_frame_fault();
     motion_gap_rule();
+    late_arrival_output_stays_bounded();
     speed_publication_without_anchor();
     latch_seeds_from_change_only_stream();
     unknown_reverse_never_seeds();

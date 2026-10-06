@@ -640,6 +640,7 @@ class Auditor:
         self.holdout_aborted = 0
         self.motion_rejected_reasons = Counter()
         self.motion_rejected_sensors = Counter()
+        self.motion_late = dict(bursts=0, events=0, max_late_ms=0)
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
@@ -1000,6 +1001,8 @@ class Auditor:
             self.capture_end(row, source)
         elif kind == "motion_rejected":
             self.rejected_motion(row, source)
+        elif kind == "motion_late_accepted":
+            self.late_motion(row, source)
         elif kind in ("motion", "motion_batch"):
             try:
                 events = decode_motion_records(row)
@@ -1082,6 +1085,30 @@ class Auditor:
         s = self.session
         s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["checked_ns"])
         self.issue("motion_channel_rejected", source, row["reason"])
+
+    def late_motion(self, row, source):
+        # Accepted records that waited > fresh_limit_ms in the socket queue
+        # while the worker was stalled (same producer, contiguous, monotonic,
+        # at most late_limit_ms). Diagnostic only: the records themselves are
+        # in the motion rows with their unchanged producer receipt times.
+        if (row.get("domain") != "model" or row.get("assist_ready") is not False or
+                not bounded_int(row.get("schema"), 1, 1) or
+                any(not bounded_int(row.get(k), 0, 2**64-1) for k in
+                    ("mono_ns", "epoch", "first_seq", "last_seq", "events", "max_late_ms",
+                     "fresh_limit_ms", "late_limit_ms")) or
+                row["last_seq"] < row["first_seq"] or not row["events"]):
+            self.issue("malformed_late_motion", source, "Invalid late-arrival diagnostic")
+            return
+        if not row["fresh_limit_ms"] < row["max_late_ms"] <= row["late_limit_ms"]:
+            self.issue("late_motion_out_of_bounds", source,
+                       "Late arrival %d ms outside (%d, %d] ms" % (
+                           row["max_late_ms"], row["fresh_limit_ms"], row["late_limit_ms"]), True)
+        m = self.motion_late
+        m["bursts"] += 1
+        m["events"] += row["events"]
+        m["max_late_ms"] = max(m["max_late_ms"], row["max_late_ms"])
+        s = self.session
+        s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["mono_ns"])
 
     def motion(self, row, source):
         self.motion_samples += 1
@@ -2403,6 +2430,7 @@ class Auditor:
                     motion=dict(samples=self.motion_samples, batches=self.motion_batches,
                                 sensors=dict(self.motion_sensors), producer_time="unknown",
                                 scope="channel_accepted_records_only"),
+                    motion_late=dict(self.motion_late, scope="accepted_late_arrivals_diagnostic_only"),
                     motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
                                          sensors=dict(self.motion_rejected_sensors),
                                          scope="diagnostic_only_excluded_from_accepted_motion"),

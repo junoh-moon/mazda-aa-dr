@@ -7,6 +7,7 @@
 #include <cassert>
 #include <string>
 #include <fstream>
+#include <sstream>
 #include <iterator>
 #include <vector>
 #include <new>
@@ -130,6 +131,88 @@ static void receive_turn_tests(const char* root,const std::string& logs) {
   Journal j(root);mx5::runtime::MotionBatch batch;FakeReceiver receiver(300);
   drain_motion(j,batch,receiver,navigation,holdout,false);
   assert(receiver.calls==256 && batch.empty() && !j.failed);
+}
+// Synthetic receive clock: record k (seq k+1) was received by the producer
+// at base+recv_ms[k] and read by this worker at base+read_ms[k], as around a
+// worker stall. Only the channel check sees this clock.
+struct LateReceiver {
+  unsigned calls;
+  std::vector<unsigned> recv_ms,read_ms;
+  uint64_t base;
+  N::MotionCursor cursor;
+  LateReceiver(const std::vector<unsigned>& r,const std::vector<unsigned>& c):
+    calls(0),recv_ms(r),read_ms(c),base(clock_ns(0)) {}
+  N::ReceiveResult receive(N::RawEvent* out,N::ReceiveDiagnostic* d) {
+    if(calls==recv_ms.size())return N::CHANNEL_EMPTY;
+    N::RawEvent e=N::RawEvent();e.kind=N::WHEELS;e.epoch=1;
+    e.received_ns=base+recv_ms[calls]*1000000ULL;
+    const uint64_t now=base+read_ms[calls]*1000000ULL;
+    ++calls;e.receive_seq=calls;
+    for(unsigned i=0;i<4;++i)e.raw[i]=10000;
+    unsigned char bytes[N::MOTION_RECORD_SIZE];assert(N::encode_motion(e,bytes));
+    const N::MotionDatagram packet={bytes,sizeof bytes,false,true,42,0};
+    return N::inspect_motion_datagram(packet,0,now,cursor,out,d);
+  }
+};
+// 2026-10-06 late-arrival tolerance through the real drain_motion: a worker
+// stall of <= 2 s no longer resets the MODEL pipeline; > 2 s still does, but
+// the following fresh record is no longer a sequence_discontinuity as well.
+static void late_turn_tests(const char* root,const std::string& logs) {
+  config.max_log_bytes=65536;
+  const mx5_dr_context context={1,1,1};
+  const uint64_t MS=1000000ULL;
+  for(unsigned scenario=0;scenario<2;++scenario) {
+    arm_test_mode();motion_late=MotionLate();
+    N::Pipeline navigation;N::GpsHoldout holdout;
+    assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+    assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+    // seq 1 read on time; seq 2..6 received every 20 ms, then read together
+    // after the stall (scenario 0: ages 1500..1420 ms; scenario 1: ages
+    // 2040, 2020, 2000, 1980, 1960 ms); seq 7..9 fresh after the stall.
+    const unsigned stall_end=scenario==0?1520:2060;
+    std::vector<unsigned> recv,read;recv.push_back(0);read.push_back(0);
+    for(unsigned k=1;k<=5;++k) { recv.push_back(20*k);read.push_back(stall_end); }
+    for(unsigned k=0;k<3;++k) { recv.push_back(stall_end+20*k);read.push_back(stall_end+20*k); }
+    {
+      Journal j(root);mx5::runtime::MotionBatch batch;LateReceiver receiver(recv,read);
+      drain_motion(j,batch,receiver,navigation,holdout,true);j.flush();
+      assert(!j.failed && batch.empty() && receiver.calls==9);
+      if(scenario==0) {
+        // All 9 accepted, no reset, no rejection.
+        assert(navigation.status().events==9 && navigation.status().resets==0);
+        assert(navigation.context().generation==1);
+        assert(motion_late.accepted==5 && motion_late.bursts==1 && motion_late.max_ns==1500*MS);
+      } else {
+        // 2040 and 2020 ms: stale (two resets); 2000 (inclusive), 1980 and
+        // 1960 ms: late again, because the stale records advanced the cursor.
+        assert(navigation.context().generation==3);
+        assert(motion_late.accepted==3 && motion_late.bursts==1 && motion_late.max_ns==2000*MS);
+      }
+    }
+    const std::string saved=storage_read(logs+"/trace.0.jsonl");
+    std::istringstream rows(saved);std::string line;
+    unsigned late_rows=0,stale=0,discontinuity=0,resets=0;
+    size_t last_batch=0,late_at=0,at=0;
+    while(std::getline(rows,line)) {
+      ++at;
+      if(line.find("\"kind\":\"motion_batch\"")!=std::string::npos)last_batch=at;
+      if(line.find("\"kind\":\"motion_late_accepted\"")!=std::string::npos) {
+        ++late_rows;late_at=at;
+        assert(line.find(scenario==0?"\"first_seq\":2,\"last_seq\":6,\"events\":5":
+                                     "\"first_seq\":4,\"last_seq\":6,\"events\":3")!=std::string::npos);
+        assert(line.find("\"fresh_limit_ms\":250,\"late_limit_ms\":2000")!=std::string::npos);
+      }
+      if(line.find("\"reason\":\"stale\"")!=std::string::npos &&
+         line.find("motion_rejected")!=std::string::npos)++stale;
+      if(line.find("sequence_discontinuity")!=std::string::npos)++discontinuity;
+      if(line.find("shadow_input_reset")!=std::string::npos)++resets;
+    }
+    assert(late_rows==1 && late_at>0 && last_batch>0 && discontinuity==0);
+    assert(stale==(scenario==0?0u:2u) && resets==stale);
+  }
+  motion_late=MotionLate();
+  puts("Late arrival: <= 2 s backlog accepted without reset and journaled; > 2 s stays stale "
+       "without a following sequence discontinuity");
 }
 static void pipeline_fault_capture(const char* root,const std::string& logs) {
   arm_test_mode();config.max_log_bytes=65536;
@@ -797,6 +880,7 @@ int main(int argc,char** argv) {
   assert(!queue.dropped() && A::mode() == A::SCRUB_STALE);
   assert(pop(&read));
   receive_turn_tests(tmp,logs);
+  late_turn_tests(tmp,logs);
   pipeline_fault_capture(tmp,logs);
   route_capture_tail(tmp,logs);
   stop_tests(tmp,logs);

@@ -93,8 +93,95 @@ static void inspect_tests() {
     assert(out.received_ns==0 && out.receive_seq==0);
     puts("motion inspection: authenticated rejection retention and distinct bounded faults passed");
 }
+// Late arrival (2026-10-06, validation/WORKER_STALL_STALE_2026-10-06.md):
+// a record older than 250 ms is still accepted up to 2 s when it is the next
+// contiguous record of the same producer pid and epoch and its receipt time
+// is monotonic. Everything else stays stale; a stale record of the current
+// source consumes its sequence number so the next fresh record is accepted.
+static void late_arrival_tests() {
+    const uint64_t R=1000000000ULL,MS=1000000ULL;
+    MotionCursor cursor;ReceiveDiagnostic d;RawEvent out;
+    uint64_t seq=0,received=R;pid_t pid=42;uint64_t epoch=9;
+    // Sends the next record (seq+step) received at received+advance_ms,
+    // checked age_ms later, and returns the inspection result.
+    auto next=[&](unsigned step,unsigned advance_ms,unsigned age_ms_whole,unsigned age_extra_ns=0) {
+        RawEvent e=RawEvent();e.kind=WHEELS;e.epoch=epoch;seq+=step;e.receive_seq=seq;
+        received+=uint64_t(advance_ms)*MS;e.received_ns=received;
+        unsigned char bytes[MOTION_RECORD_SIZE];assert(encode_motion(e,bytes));
+        const MotionDatagram packet={bytes,sizeof bytes,false,true,pid,7};
+        out=RawEvent();
+        const uint64_t now=received+uint64_t(age_ms_whole)*MS+age_extra_ns;
+        const ReceiveResult r=inspect_motion_datagram(packet,7,now,cursor,&out,&d);
+        assert(d.checked_ns==now && d.authenticated_decoded);
+        assert(d.age_ns==now-received);
+        if(r==CHANNEL_EVENT)assert(out.receive_seq==seq && out.received_ns==received); // never rewritten
+        return r;
+    };
+    assert(next(1,0,0)==CHANNEL_EVENT && !d.late);                         // establishes the cursor
+    assert(next(1,10,249)==CHANNEL_EVENT && !d.late);
+    assert(next(1,10,250)==CHANNEL_EVENT && !d.late);                      // 250 ms is still fresh
+    assert(next(1,10,250,1)==CHANNEL_EVENT && d.late && d.reason==RECEIVE_OK);
+    assert(next(1,10,251)==CHANNEL_EVENT && d.late);
+    assert(next(1,10,1999)==CHANNEL_EVENT && d.late && d.age_ns==1999*MS);
+    assert(next(1,10,2000)==CHANNEL_EVENT && d.late);                      // KEEP_NS is inclusive
+    assert(next(1,10,2000,1)==CHANNEL_FAULT && d.reason==RECEIVE_STALE && !d.late);
+    assert(d.rejected.receive_seq==seq);
+    assert(next(1,10,2001)==CHANNEL_FAULT && d.reason==RECEIVE_STALE);
+    // The stale records consumed their sequence numbers: no discontinuity.
+    assert(next(1,10,0)==CHANNEL_EVENT && !d.late);
+    // A gap in the sequence is never a late arrival.
+    assert(next(2,10,500)==CHANNEL_FAULT && d.reason==RECEIVE_STALE);
+    assert(next(1,10,0)==CHANNEL_EVENT);                                   // cursor advanced over the gap
+    assert(next(3,10,0)==CHANNEL_FAULT && d.reason==RECEIVE_SEQUENCE);     // fresh gap: unchanged rule
+    // Another producer pid or epoch: stale, and the cursor keeps the old
+    // source, so the fresh record of the old source continues and a fresh
+    // record of the new source is still a source change (today's rule).
+    pid=43;assert(next(1,10,500)==CHANNEL_FAULT && d.reason==RECEIVE_STALE);
+    pid=42;assert(next(0,10,0)==CHANNEL_EVENT);                            // same seq again, old pid
+    epoch=10;assert(next(1,10,500)==CHANNEL_FAULT && d.reason==RECEIVE_STALE);
+    epoch=9;assert(next(0,10,0)==CHANNEL_EVENT);
+    pid=43;assert(next(1,10,0)==CHANNEL_FAULT && d.reason==RECEIVE_SOURCE_CHANGED);
+    pid=42;assert(next(1,10,0)==CHANNEL_FAULT && d.reason==RECEIVE_SOURCE_CHANGED);
+    assert(next(1,10,0)==CHANNEL_EVENT);
+    // Receipt time going backwards: a late record is rejected...
+    assert(next(1,10,0)==CHANNEL_EVENT);
+    {
+        RawEvent e=RawEvent();e.kind=YAW;e.epoch=epoch;e.receive_seq=++seq;e.received_ns=received-5*MS;
+        e.count=1;unsigned char bytes[MOTION_RECORD_SIZE];assert(encode_motion(e,bytes));
+        const MotionDatagram packet={bytes,sizeof bytes,false,true,pid,7};
+        assert(inspect_motion_datagram(packet,7,e.received_ns+600*MS,cursor,&out,&d)==CHANNEL_FAULT);
+        assert(d.reason==RECEIVE_STALE && !d.late);
+        // ...but it consumed its sequence number; the next fresh one is fine.
+        assert(next(1,10,0)==CHANNEL_EVENT);
+        // A fresh record with a regressed receipt time is unchanged: accepted
+        // here and left to the pipeline's per-sensor clock check.
+        e.receive_seq=++seq;e.received_ns=received-5*MS;assert(encode_motion(e,bytes));
+        assert(inspect_motion_datagram(packet,7,e.received_ns,cursor,&out,&d)==CHANNEL_EVENT && !d.late);
+        // Still the high-water receipt: the next late one must not precede it.
+        e.receive_seq=++seq;e.received_ns=received-1*MS;assert(encode_motion(e,bytes));
+        assert(inspect_motion_datagram(packet,7,e.received_ns+300*MS,cursor,&out,&d)==CHANNEL_FAULT &&
+               d.reason==RECEIVE_STALE);
+        // Equal receipt time is monotonic (non-decreasing).
+        e.receive_seq=++seq;e.received_ns=received;assert(encode_motion(e,bytes));
+        assert(inspect_motion_datagram(packet,7,e.received_ns+300*MS,cursor,&out,&d)==CHANNEL_EVENT && d.late);
+    }
+    // A first record of a new receiver has no cursor: never a late arrival.
+    MotionCursor fresh;
+    {
+        RawEvent e=RawEvent();e.kind=WHEELS;e.epoch=1;e.receive_seq=1;e.received_ns=R;
+        unsigned char bytes[MOTION_RECORD_SIZE];assert(encode_motion(e,bytes));
+        const MotionDatagram packet={bytes,sizeof bytes,false,true,42,7};
+        assert(inspect_motion_datagram(packet,7,R+300*MS,fresh,&out,&d)==CHANNEL_FAULT && d.reason==RECEIVE_STALE);
+        e.receive_seq=2;assert(encode_motion(e,bytes));
+        // The stale first record did not establish a source either.
+        assert(inspect_motion_datagram(packet,7,R,fresh,&out,&d)==CHANNEL_EVENT);
+    }
+    puts("motion late arrival: 250/251 ms and 2000/2001 ms bounds, gap, pid/epoch change, "
+         "monotonic receipt and stale sequence advance passed");
+}
 int main() {
     inspect_tests();
+    late_arrival_tests();
     char name[80];snprintf(name,sizeof name,"mx5dr.test.%ld",(long)getpid());
     MotionReceiver receiver,duplicate;MotionSender sender;
     RawEvent e=RawEvent();e.kind=YAW;e.epoch=9;e.receive_seq=1;e.received_ns=1000000000;
