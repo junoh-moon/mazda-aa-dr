@@ -22,11 +22,17 @@
 //
 // Short lock: one mutex guards both rings; it is held only for index updates
 // and one memcpy of at most MAX_ROW bytes. No allocation, I/O or sleep while
-// holding it; the backing storage is supplied once by the owner.
+// holding it; the backing storage is supplied once by the owner. A condition
+// variable (CLOCK_MONOTONIC) wakes the writer on a push or notify(); the
+// producer only signals it, it never waits.
+//
+// Each row carries its push time (the worker's clock), so the worker can
+// measure how old the oldest unwritten row is (journal lag, runtime.cpp).
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 namespace mx5 { namespace runtime {
 
@@ -34,17 +40,23 @@ class JournalRing {
 public:
     // Largest accepted row (request_log.h OBSERVATION_JSON_CAPACITY).
     static const size_t MAX_ROW=8192;
-    static const size_t HEADER=12;               // u32 length + u64 sequence
+    static const size_t HEADER=20;  // u32 length, u64 sequence, u64 push ns
     enum Result { PUSHED=0, PUSHED_AFTER_DROP, FULL, TOO_LARGE };
     JournalRing(unsigned char* diagnostic,size_t diagnostic_bytes,
                 unsigned char* evidence,size_t evidence_bytes)
         : next_seq_(0),dropped_rows_(0),dropped_bytes_(0),high_water_(0) {
         pthread_mutex_init(&mutex_,0);
+        pthread_condattr_t attr;
+        cond_ok_=!pthread_condattr_init(&attr);
+        if(cond_ok_) {
+            cond_ok_=!pthread_condattr_setclock(&attr,CLOCK_MONOTONIC) && !pthread_cond_init(&cond_,&attr);
+            pthread_condattr_destroy(&attr);
+        }
         ring_[0].init(diagnostic,diagnostic_bytes);ring_[1].init(evidence,evidence_bytes);
     }
-    ~JournalRing() { pthread_mutex_destroy(&mutex_); }
+    ~JournalRing() { if(cond_ok_)pthread_cond_destroy(&cond_);pthread_mutex_destroy(&mutex_); }
     // Producer. n excludes any terminator. FULL only for an evidence row.
-    Result push(const char* row,size_t n,bool evidence) {
+    Result push(const char* row,size_t n,bool evidence,uint64_t now_ns=0) {
         Ring& r=ring_[evidence?1:0];
         const size_t total=HEADER+n;
         if(n>MAX_ROW || total>r.cap)return TOO_LARGE;
@@ -53,47 +65,81 @@ public:
         if(r.cap-r.used<total) {
             if(evidence) { pthread_mutex_unlock(&mutex_);return FULL; }
             while(r.cap-r.used<total) {           // drop oldest diagnostic rows
-                uint32_t len;uint64_t seq;r.header(&len,&seq);
-                r.head=(r.head+HEADER+len)%r.cap;r.used-=HEADER+len;
-                ++dropped_rows_;dropped_bytes_+=len;
+                Header h;r.header(&h);
+                r.head=(r.head+HEADER+h.len)%r.cap;r.used-=HEADER+h.len;
+                ++dropped_rows_;dropped_bytes_+=h.len;
             }
             result=PUSHED_AFTER_DROP;
         }
         unsigned char header[HEADER];
         const uint32_t len=uint32_t(n);const uint64_t seq=next_seq_++;
-        memcpy(header,&len,4);memcpy(header+4,&seq,8);
+        memcpy(header,&len,4);memcpy(header+4,&seq,8);memcpy(header+12,&now_ns,8);
         r.put(header,HEADER);r.put(row,n);
         const size_t used=ring_[0].used+ring_[1].used;
         if(used>high_water_)high_water_=used;
+        if(cond_ok_)pthread_cond_signal(&cond_);
         pthread_mutex_unlock(&mutex_);
         return result;
     }
+    // Wake the consumer (flush/stop requests).
+    void notify() {
+        pthread_mutex_lock(&mutex_);
+        if(cond_ok_)pthread_cond_signal(&cond_);
+        pthread_mutex_unlock(&mutex_);
+    }
+    // Consumer: wait until a row is queued, notify() or timeout_ns elapses.
+    void wait(uint64_t timeout_ns) {
+        pthread_mutex_lock(&mutex_);
+        if(!ring_[0].used && !ring_[1].used) {
+            if(cond_ok_) {
+                struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);
+                const uint64_t ns=uint64_t(t.tv_nsec)+timeout_ns%1000000000ULL;
+                t.tv_sec+=time_t(timeout_ns/1000000000ULL+ns/1000000000ULL);t.tv_nsec=long(ns%1000000000ULL);
+                pthread_cond_timedwait(&cond_,&mutex_,&t);
+            } else {
+                pthread_mutex_unlock(&mutex_);
+                const struct timespec pause={0,20000000};nanosleep(&pause,0);
+                return;
+            }
+        }
+        pthread_mutex_unlock(&mutex_);
+    }
     // Consumer: the row with the lowest sequence, copied to out (capacity
     // >= MAX_ROW+1, NUL-terminated). false when both rings are empty.
-    bool pop(char* out,size_t capacity,size_t* n,uint64_t* seq,bool* evidence) {
+    // push_ns: the row's push time (optional).
+    bool pop(char* out,size_t capacity,size_t* n,uint64_t* seq,bool* evidence,uint64_t* push_ns=0) {
         pthread_mutex_lock(&mutex_);
-        int pick=-1;uint64_t best=0;uint32_t best_len=0;
+        int pick=-1;Header best=Header();
         for(int i=0;i<2;++i) {
             if(!ring_[i].used)continue;
-            uint32_t len;uint64_t s;ring_[i].header(&len,&s);
-            if(pick<0 || s<best) { pick=i;best=s;best_len=len; }
+            Header h;ring_[i].header(&h);
+            if(pick<0 || h.seq<best.seq) { pick=i;best=h; }
         }
-        if(pick<0 || capacity<=best_len) { pthread_mutex_unlock(&mutex_);return false; }
+        if(pick<0 || capacity<=best.len) { pthread_mutex_unlock(&mutex_);return false; }
         Ring& r=ring_[pick];
-        r.get((r.head+HEADER)%r.cap,out,best_len);out[best_len]=0;
-        r.head=(r.head+HEADER+best_len)%r.cap;r.used-=HEADER+best_len;
+        r.get((r.head+HEADER)%r.cap,out,best.len);out[best.len]=0;
+        r.head=(r.head+HEADER+best.len)%r.cap;r.used-=HEADER+best.len;
         pthread_mutex_unlock(&mutex_);
-        *n=best_len;*seq=best;*evidence=pick==1;
+        *n=best.len;*seq=best.seq;*evidence=pick==1;
+        if(push_ns)*push_ns=best.push_ns;
         return true;
     }
-    struct Stats { uint64_t next_seq,dropped_rows,dropped_bytes; size_t used,high_water; };
+    // oldest_push_ns: push time of the oldest row still queued (0: empty).
+    struct Stats { uint64_t next_seq,dropped_rows,dropped_bytes,oldest_push_ns; size_t used,high_water; };
     Stats stats() {
         pthread_mutex_lock(&mutex_);
-        const Stats s={next_seq_,dropped_rows_,dropped_bytes_,ring_[0].used+ring_[1].used,high_water_};
+        uint64_t oldest=0;
+        for(int i=0;i<2;++i) {
+            if(!ring_[i].used)continue;
+            Header h;ring_[i].header(&h);
+            if(h.push_ns && (!oldest || h.push_ns<oldest))oldest=h.push_ns;
+        }
+        const Stats s={next_seq_,dropped_rows_,dropped_bytes_,oldest,ring_[0].used+ring_[1].used,high_water_};
         pthread_mutex_unlock(&mutex_);
         return s;
     }
 private:
+    struct Header { uint32_t len;uint64_t seq,push_ns; };
     struct Ring {
         unsigned char* buf;size_t cap,head,tail,used;
         void init(unsigned char* b,size_t c) { buf=b;cap=b?c:0;head=tail=used=0; }
@@ -108,11 +154,14 @@ private:
             const size_t first=n<cap-at?n:cap-at;
             memcpy(d,buf+at,first);memcpy(d+first,buf,n-first);
         }
-        void header(uint32_t* len,uint64_t* seq) const {
-            unsigned char h[HEADER];get(head,h,HEADER);memcpy(len,h,4);memcpy(seq,h+4,8);
+        void header(Header* out) const {
+            unsigned char h[HEADER];get(head,h,HEADER);
+            memcpy(&out->len,h,4);memcpy(&out->seq,h+4,8);memcpy(&out->push_ns,h+12,8);
         }
     };
     pthread_mutex_t mutex_;
+    pthread_cond_t cond_;
+    bool cond_ok_;
     Ring ring_[2];
     uint64_t next_seq_,dropped_rows_,dropped_bytes_;
     size_t high_water_;

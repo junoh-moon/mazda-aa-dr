@@ -85,6 +85,23 @@ int main() {
         assert(result==JournalRing::PUSHED && i<10);
     }
     assert(ring.stats().dropped_rows==s.dropped_rows);
+    // Push times: the oldest queued row's time (journal lag), per pop.
+    {
+        static unsigned char d2[400],e2[400];
+        JournalRing timed(d2,sizeof d2,e2,sizeof e2);
+        assert(timed.stats().oldest_push_ns==0);
+        assert(timed.push("{\"kind\":\"health\"}",17,false,500)==JournalRing::PUSHED);
+        assert(timed.push("{\"kind\":\"beta_state\"}",21,true,300)==JournalRing::PUSHED);
+        assert(timed.push("{\"kind\":\"health\"}",17,false,900)==JournalRing::PUSHED);
+        assert(timed.stats().oldest_push_ns==300);
+        uint64_t at=0;
+        assert(timed.pop(out,sizeof out,&n,&seq,&evidence,&at) && seq==0 && at==500);
+        assert(timed.pop(out,sizeof out,&n,&seq,&evidence,&at) && seq==1 && at==300 && evidence);
+        assert(timed.stats().oldest_push_ns==900);
+        timed.notify();timed.wait(1000000);                     // returns: a row is queued
+        assert(timed.pop(out,sizeof out,&n,&seq,&evidence,&at) && at==900);
+        assert(timed.stats().oldest_push_ns==0);
+    }
     std::string huge(JournalRing::MAX_ROW+1,'x');
     assert(ring.push(huge.data(),huge.size(),false)==JournalRing::TOO_LARGE);
     std::string big(700,'x');   // larger than the diagnostic ring itself

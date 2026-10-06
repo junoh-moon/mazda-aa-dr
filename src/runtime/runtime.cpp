@@ -285,6 +285,8 @@ bool journal_writer_ok(JournalWriter*);
 void journal_writer_request_flush(JournalWriter*);
 bool journal_writer_flush_wait(JournalWriter*,uint64_t timeout_ns);
 JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes);
+struct JournalLag { bool thread; uint64_t unwritten_rows,oldest_ns,dropped_rows; size_t high_water; };
+JournalLag journal_writer_lag(JournalWriter*,uint64_t now);
 
 // The worker's journal. By default (and in unit tests) rows are written
 // synchronously by the calling thread. The runtime worker calls
@@ -468,24 +470,28 @@ struct JournalWriter {
   pthread_t thread;
   std::atomic<unsigned> ok, stopping, durable, closed_ok;
   std::atomic<uint64_t> flush_target, flushed, written;
+  // Push time of the row the writer is writing, or the start of its fflush
+  // (0: idle). With the ring's oldest row this gives the journal lag.
+  std::atomic<uint64_t> busy_since;
   std::atomic<uint64_t> inject_stall_ns;   // tests only: one stall before the next row
+  std::atomic<uint64_t> loops;             // tests only: writer loop iterations
   char* row_buffer;                         // writer thread only
   JournalWriter(const char* r,unsigned char* buffer,size_t diagnostic,size_t evidence)
       : root(r),storage(buffer),ring(buffer,diagnostic,buffer+diagnostic,evidence),thread(),
         ok(1),stopping(0),durable(0),closed_ok(0),flush_target(0),flushed(0),written(0),
-        inject_stall_ns(0),row_buffer(0) {}
+        busy_since(0),inject_stall_ns(0),loops(0),row_buffer(0) {}
 };
 const size_t JOURNAL_ROW_BUFFER=mx5::runtime::JournalRing::MAX_ROW+1;
-void journal_dropped(Journal& file,uint64_t first,uint64_t next,
-                     const mx5::runtime::JournalRing::Stats& stats) {
+// dropped_total: rows lost up to and including this gap (the writer's own
+// count of sequence gaps), not the ring's later total at write time.
+void journal_dropped(Journal& file,uint64_t first,uint64_t next,uint64_t dropped_total) {
   char line[400];
   const int n=snprintf(line,sizeof line,
       "{\"kind\":\"journal_dropped\",\"schema\":1,\"mono_ns\":%llu,\"class\":\"diagnostic\","
       "\"rows\":%llu,\"first_seq\":%llu,\"last_seq\":%llu,\"dropped_total\":%llu,"
-      "\"dropped_bytes_total\":%llu,\"reason\":\"writer_backlog\"}",
+      "\"reason\":\"writer_backlog\"}",
       (unsigned long long)clock_ns(0),(unsigned long long)(next-first),(unsigned long long)first,
-      (unsigned long long)(next-1),(unsigned long long)stats.dropped_rows,
-      (unsigned long long)stats.dropped_bytes);
+      (unsigned long long)(next-1),(unsigned long long)dropped_total);
   if(n>0 && size_t(n)<sizeof line)file.line(line);else file.fail();
 }
 void* journal_writer_main(void* argument) {
@@ -497,30 +503,45 @@ void* journal_writer_main(void* argument) {
   char* buffer=w.row_buffer;
   {
     Journal file(w.root);
-    uint64_t expected=0;
+    uint64_t expected=0,dropped_seen=0;
     for(;;) {
       // Read stop BEFORE draining: every row pushed before stop() is written.
       const bool stop=w.stopping.load(std::memory_order_acquire)!=0;
-      unsigned batch=0;size_t n;uint64_t seq;bool evidence;
-      while(batch<64 && w.ring.pop(buffer,JOURNAL_ROW_BUFFER,&n,&seq,&evidence)) {
+#ifdef MX5DR_JOURNAL_TEST_HOOKS
+      w.loops.fetch_add(1,std::memory_order_relaxed);
+#endif
+      unsigned batch=0;size_t n;uint64_t seq,push_ns;bool evidence;
+      while(batch<64 && w.ring.pop(buffer,JOURNAL_ROW_BUFFER,&n,&seq,&evidence,&push_ns)) {
         ++batch;
+        w.busy_since.store(push_ns?push_ns:clock_ns(0),std::memory_order_release);
+#ifdef MX5DR_JOURNAL_TEST_HOOKS
         const uint64_t stall=w.inject_stall_ns.exchange(0,std::memory_order_acq_rel);
         if(stall) { struct timespec t={time_t(stall/1000000000ULL),long(stall%1000000000ULL)};nanosleep(&t,0); }
-        if(seq!=expected && !file.failed)journal_dropped(file,expected,seq,w.ring.stats());
+#endif
+        if(seq!=expected) {
+          dropped_seen+=seq-expected;
+          if(!file.failed)journal_dropped(file,expected,seq,dropped_seen);
+        }
         expected=seq+1;
         if(!file.failed)file.line(buffer);
         w.written.store(expected,std::memory_order_release);
+        w.busy_since.store(0,std::memory_order_release);
       }
       if(file.failed)w.ok.store(0,std::memory_order_release);
       const uint64_t target=w.flush_target.load(std::memory_order_acquire);
       if(target>w.flushed.load(std::memory_order_acquire) && expected>=target) {
+        w.busy_since.store(clock_ns(0),std::memory_order_release);
         file.flush();
+        w.busy_since.store(0,std::memory_order_release);
         if(file.failed)w.ok.store(0,std::memory_order_release);
         w.flushed.store(expected,std::memory_order_release);
       }
       if(stop && !batch) {
         const mx5::runtime::JournalRing::Stats stats=w.ring.stats();
-        if(expected<stats.next_seq && !file.failed)journal_dropped(file,expected,stats.next_seq,stats);
+        if(expected<stats.next_seq) {
+          dropped_seen+=stats.next_seq-expected;
+          if(!file.failed)journal_dropped(file,expected,stats.next_seq,dropped_seen);
+        }
         file.flush();
         bool ok=!file.failed;
         if(w.durable.load(std::memory_order_acquire)) {
@@ -531,7 +552,8 @@ void* journal_writer_main(void* argument) {
         w.closed_ok.store(ok?1:0,std::memory_order_release);
         break;
       }
-      if(!batch) { const struct timespec pause={0,5000000};nanosleep(&pause,0); }
+      // Sleep until a push, a flush/stop notify, or at most 1 s (no polling).
+      if(!batch)w.ring.wait(1000000000ULL);
     }
   }
   uselocale(LC_GLOBAL_LOCALE);
@@ -553,19 +575,40 @@ JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,siz
 void stop_journal_writer(JournalWriter* w,bool durable,bool* ok) {
   w->durable.store(durable?1:0,std::memory_order_release);
   w->stopping.store(1,std::memory_order_release);
+  w->ring.notify();
   pthread_join(w->thread,0);
   *ok=w->closed_ok.load(std::memory_order_acquire)!=0;
   unsigned char* buffer=w->storage;
   delete w;delete[] buffer;
 }
 bool journal_writer_push(JournalWriter* w,const char* s,size_t n,bool evidence) {
-  const mx5::runtime::JournalRing::Result r=w->ring.push(s,n,evidence);
+  const mx5::runtime::JournalRing::Result r=w->ring.push(s,n,evidence,clock_ns(0));
   return r==mx5::runtime::JournalRing::PUSHED || r==mx5::runtime::JournalRing::PUSHED_AFTER_DROP;
 }
 bool journal_writer_ok(JournalWriter* w) { return w->ok.load(std::memory_order_acquire)!=0; }
 void journal_writer_request_flush(JournalWriter* w) {
   const uint64_t next=w->ring.stats().next_seq;
-  if(next>w->flush_target.load(std::memory_order_acquire))w->flush_target.store(next,std::memory_order_release);
+  if(next>w->flush_target.load(std::memory_order_acquire)) {
+    w->flush_target.store(next,std::memory_order_release);
+    w->ring.notify();
+  }
+}
+// Worker side, lock-free except the ring's short lock: how far the writer
+// is behind. oldest_ns: age of the oldest row not yet written (queued, or
+// being written/flushed by a possibly blocked writer).
+JournalLag journal_writer_lag(JournalWriter* w,uint64_t now) {
+  JournalLag lag=JournalLag();
+  if(!w)return lag;
+  lag.thread=true;
+  const mx5::runtime::JournalRing::Stats stats=w->ring.stats();
+  const uint64_t written=w->written.load(std::memory_order_acquire);
+  lag.unwritten_rows=stats.next_seq>written?stats.next_seq-written:0;
+  lag.dropped_rows=stats.dropped_rows;lag.high_water=stats.high_water;
+  uint64_t oldest=stats.oldest_push_ns;
+  const uint64_t busy=w->busy_since.load(std::memory_order_acquire);
+  if(busy && (!oldest || busy<oldest))oldest=busy;
+  lag.oldest_ns=oldest && now>oldest?now-oldest:0;
+  return lag;
 }
 bool journal_writer_flush_wait(JournalWriter* w,uint64_t timeout_ns) {
   const uint64_t next=w->ring.stats().next_seq;
@@ -820,7 +863,8 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation,
   const A::RequestHookHealth h=A::request_hook_health();
   const A::SessionHealth s=A::session_hook_health();
   const A::BusHealth b=A::bus_hook_health();
-  char line[1600],source_status[420]="";
+  const JournalLag lag=journal_writer_lag(j.writer,now);
+  char line[1800],source_status[420]="";
   if(source) {
     const mx5::runtime::LdsRequestSource::Status& status=source->status();
     const int n=snprintf(source_status,sizeof source_status,
@@ -840,7 +884,9 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation,
       "\"requests\":%u,\"workers\":%u,\"loss_reasons\":%u,\"exhausted\":%s},"
       "\"session_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u},"
       "\"bus_observer\":{\"prepared\":%s,\"contexts\":%u,\"capacity\":%u,\"faults\":%u},"
-      "\"motion_late\":{\"accepted\":%llu,\"bursts\":%llu,\"max_late_ms\":%llu}%s}",
+      "\"motion_late\":{\"accepted\":%llu,\"bursts\":%llu,\"max_late_ms\":%llu},"
+      "\"journal\":{\"writer\":\"%s\",\"unwritten_rows\":%llu,\"oldest_unwritten_ms\":%llu,"
+      "\"high_water_bytes\":%llu,\"dropped_rows\":%llu}%s}",
       (unsigned long long)now,(unsigned long long)queue.dropped(),hook_installed?"true":"false",
       unsigned(A::mode()),__sync_fetch_and_add(&audit_fault,0),capture?"true":"false",
       computation?"true":"false",h.prepared?"true":"false",h.abi_fault?"true":"false",
@@ -849,7 +895,10 @@ void journal_health(Journal& j,uint64_t now,bool capture,bool computation,
       s.prepared?"true":"false",s.contexts,unsigned(A::SESSION_CONTEXT_CAPACITY),s.faults,
       b.prepared?"true":"false",b.contexts,unsigned(A::BUS_CONTEXT_CAPACITY),b.faults,
       (unsigned long long)motion_late.accepted,(unsigned long long)motion_late.bursts,
-      (unsigned long long)(motion_late.max_ns/1000000ULL),source_status);
+      (unsigned long long)(motion_late.max_ns/1000000ULL),
+      lag.thread?"thread":"inline",(unsigned long long)lag.unwritten_rows,
+      (unsigned long long)(lag.oldest_ns/1000000ULL),(unsigned long long)lag.high_water,
+      (unsigned long long)lag.dropped_rows,source_status);
   if(n<=0 || size_t(n)>=sizeof line)j.fail();else j.line(line);
 }
 // Fail closed: anything except a definitely absent marker counts as present.

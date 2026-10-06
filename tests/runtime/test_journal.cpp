@@ -1,6 +1,8 @@
 // Includes the private logger so failure paths can be tested without exposing
 // configuration switches in the shipped runtime. No firmware is loaded.
 #include "storage_fixture.h"
+// Test-only journal writer hooks (stall injection) compiled into this TU only.
+#define MX5DR_JOURNAL_TEST_HOOKS 1
 #define statvfs(path,info) fixture_statvfs(path,info)
 #include "../../src/runtime/runtime.cpp"
 #undef statvfs
@@ -342,6 +344,8 @@ static void writer_overflow(const char* root,const std::string& logs) {
   for(size_t i=0;i<rows.size();++i) {
     if(rows[i].find("journal_dropped")!=std::string::npos) {
       ++gap_rows;dropped_rows+=unsigned(row_number(rows[i],"rows"));
+      // The total at this loss, not the ring's final total.
+      assert(row_number(rows[i],"dropped_total")==dropped_rows);
       assert(rows[i].find("\"reason\":\"writer_backlog\"")!=std::string::npos);
       continue;
     }
@@ -390,6 +394,40 @@ static void writer_fail_closed(const char* root,const std::string& logs) {
   beta_shared.active.store(0);beta_shared.source_epoch.store(0);beta_shared.storage_epoch.store(0);
   arm_test_mode();clear_traces(logs);
   puts("Writer fail-closed: evidence overflow and writer file failure disable mutation and BETA provenance");
+}
+// The writer sleeps on its condition variable (no 5 ms polling); the health
+// row reports the backlog it sees while the writer is stalled.
+static void writer_idle_and_health(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=65536;
+  {
+    Journal j(root);assert(j.start_writer());
+    j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
+    const uint64_t before=j.writer->loops.load();
+    usleep(1000000);
+    const uint64_t idle=j.writer->loops.load()-before;
+    j.writer->inject_stall_ns.store(600000000ULL);
+    j.line("{\"kind\":\"fixture\",\"n\":1}");
+    for(unsigned n=2;n<12;++n) { char row[64];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n);j.line(row); }
+    usleep(300000);
+    journal_health(j,clock_ns(0),true,false);
+    const JournalLag lag=journal_writer_lag(j.writer,clock_ns(0));
+    printf("Writer idle: %llu wakeups in 1 s; stalled lag %llu ms, %llu unwritten rows\n",
+           (unsigned long long)idle,(unsigned long long)(lag.oldest_ns/1000000ULL),
+           (unsigned long long)lag.unwritten_rows);
+    assert(idle<=3);
+    assert(lag.thread && lag.unwritten_rows>=11 && lag.oldest_ns>=250000000ULL);
+  }
+  const std::vector<std::string> rows=trace_rows(logs);
+  bool health=false;
+  for(size_t i=0;i<rows.size();++i)
+    if(rows[i].find("{\"kind\":\"health\"")==0) {
+      health=true;
+      assert(rows[i].find("\"journal\":{\"writer\":\"thread\",\"unwritten_rows\":")!=std::string::npos);
+      assert(row_number(rows[i],"unwritten_rows")>=11 && row_number(rows[i],"oldest_unwritten_ms")>=250);
+    }
+  assert(health);
+  clear_traces(logs);
+  puts("Writer idle wakeups and health backlog fields passed");
 }
 // Every queued row is written on worker exit; a requested stop closes the
 // file durably before its acknowledgement, in order.
@@ -1025,6 +1063,7 @@ int main(int argc,char** argv) {
     writer_overflow(root,logs);
     writer_fail_closed(root,logs);
     writer_shutdown(root,logs);
+    writer_idle_and_health(root,logs);
     persistent_worker(root,logs);
     clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));
     return 0;
