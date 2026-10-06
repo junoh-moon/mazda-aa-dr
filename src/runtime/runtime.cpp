@@ -791,11 +791,12 @@ void close_late_burst(Journal& j) {
   const int n=snprintf(line,sizeof line,
       "{\"kind\":\"motion_late_accepted\",\"schema\":1,\"mono_ns\":%llu,\"domain\":\"model\","
       "\"assist_ready\":false,\"epoch\":%llu,\"first_seq\":%llu,\"last_seq\":%llu,"
-      "\"events\":%llu,\"max_late_ms\":%llu,\"fresh_limit_ms\":%llu,\"late_limit_ms\":%llu,"
-      "\"late_accepted_total\":%llu}",
+      "\"events\":%llu,\"max_late_ms\":%llu,\"max_late_ns\":%llu,\"fresh_limit_ms\":%llu,"
+      "\"late_limit_ms\":%llu,\"late_accepted_total\":%llu}",
       (unsigned long long)m.burst_checked_ns,(unsigned long long)m.burst_epoch,
       (unsigned long long)m.burst_first_seq,(unsigned long long)m.burst_last_seq,
       (unsigned long long)m.burst_events,(unsigned long long)(m.burst_max_ns/1000000ULL),
+      (unsigned long long)m.burst_max_ns,
       (unsigned long long)(N::MOTION_FRESH_NS/1000000ULL),
       (unsigned long long)(mx5::runtime::MotionGapTracker::KEEP_NS/1000000ULL),
       (unsigned long long)m.accepted);

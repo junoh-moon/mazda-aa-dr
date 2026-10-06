@@ -645,7 +645,7 @@ class Auditor:
         self.log_profiles = Counter()
         self.persistent = dict(digests=0, digest_kinds=Counter(), raw_windows=0, raw_window_rows=0,
                                raw_window_triggers=Counter(), digested_motion_events=0,
-                               digested_sends=0, unpaired_original_sends=0)
+                               digested_sends=0, unpaired_original_sends=0, suppressed=Counter())
         self.journal_dropped = dict(counter_rows=0, rows=0)
         self.journal_lag = Counter()
         self.capture_ends = 0
@@ -1133,6 +1133,13 @@ class Auditor:
             p["digested_motion_events"] += row["motion_events"]
         if bounded_int(row.get("sends"), 0, 2**64-1):
             p["digested_sends"] += row["sends"]
+        # Rate-limited rows the digest counted instead of writing: keep them
+        # in the totals so a verdict does not under-report rejections.
+        suppressed = row.get("suppressed")
+        if isinstance(suppressed, dict):
+            for key, value in suppressed.items():
+                if isinstance(key, str) and bounded_int(value, 0, 2**64-1):
+                    p["suppressed"][key] += value
 
     def raw_window(self, row, source):
         """Start of a persistent-profile raw period: the in-memory window of
@@ -1211,10 +1218,18 @@ class Auditor:
                 row["last_seq"] < row["first_seq"] or not row["events"]):
             self.issue("malformed_late_motion", source, "Invalid late-arrival diagnostic")
             return
-        if not row["fresh_limit_ms"] < row["max_late_ms"] <= row["late_limit_ms"]:
+        # The exact age is in ns (newer rows); the ms field is truncated, so
+        # 250 ms + 1 ns reads as 250 ms and only the legacy check uses <=.
+        if bounded_int(row.get("max_late_ns"), 0, 2**64-1):
+            late_ok = row["fresh_limit_ms"] * 1000000 < row["max_late_ns"] <= row["late_limit_ms"] * 1000000
+            shown = "%d ns" % row["max_late_ns"]
+        else:
+            late_ok = row["fresh_limit_ms"] <= row["max_late_ms"] <= row["late_limit_ms"]
+            shown = "%d ms" % row["max_late_ms"]
+        if not late_ok:
             self.issue("late_motion_out_of_bounds", source,
-                       "Late arrival %d ms outside (%d, %d] ms" % (
-                           row["max_late_ms"], row["fresh_limit_ms"], row["late_limit_ms"]), True)
+                       "Late arrival %s outside (%d, %d] ms" % (
+                           shown, row["fresh_limit_ms"], row["late_limit_ms"]), True)
         m = self.motion_late
         m["bursts"] += 1
         m["events"] += row["events"]
@@ -2563,11 +2578,15 @@ class Auditor:
                     motion_late=dict(self.motion_late, scope="accepted_late_arrivals_diagnostic_only"),
                     log_profiles=dict(self.log_profiles),
                     persistent_profile=dict(self.persistent, digest_kinds=dict(self.persistent["digest_kinds"]),
+                                            suppressed=dict(self.persistent["suppressed"]),
                                             raw_window_triggers=dict(self.persistent["raw_window_triggers"]),
                                             scope="digest_counts_not_raw_evidence"),
                     journal_dropped=dict(self.journal_dropped, scope="diagnostic_rows_only"),
                     journal_lag=dict(self.journal_lag),
                     motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
+                                         suppressed_by_profile=self.persistent["suppressed"]["motion_rejected"],
+                                         total_including_suppressed=sum(self.motion_rejected_reasons.values()) +
+                                         self.persistent["suppressed"]["motion_rejected"],
                                          sensors=dict(self.motion_rejected_sensors),
                                          scope="diagnostic_only_excluded_from_accepted_motion"),
                     capture=dict(completion_records=self.capture_ends,
@@ -2716,9 +2735,11 @@ def main(argv=None):
                        "within" if check["within_reported_accuracy"] else "EXCEEDS"))
             if not beta["gps_return_checks_total"]:
                 print("BETA GPS return: no original GPS fix after a replaced LOCATION in these logs")
-        if report['motion_rejected']['reasons']:
-            print("Rejected sensor diagnostics (not accepted input): %s" %
-                  report['motion_rejected']['reasons'])
+        if report['motion_rejected']['reasons'] or report['motion_rejected']['suppressed_by_profile']:
+            print("Rejected sensor diagnostics (not accepted input): %s; %d more counted only "
+                  "in persistent-profile digests (total %d)" %
+                  (report['motion_rejected']['reasons'], report['motion_rejected']['suppressed_by_profile'],
+                   report['motion_rejected']['total_including_suppressed']))
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")

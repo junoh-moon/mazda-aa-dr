@@ -19,7 +19,7 @@ static void classification() {
         "{\"kind\":\"beta_hold\"}","{\"kind\":\"beta_session_storage\"}","{\"kind\":\"beta_summary\"}",
         "{\"kind\":\"beta_reverse_latch\"}","{\"kind\":\"boot\",\"schema\":1}","{\"kind\":\"position\",\"call\":1}",
         "{\"kind\":\"capture_end\"}","{\"kind\":\"capture_incomplete\"}","{\"kind\":\"shadow_boot\"}",
-        "{\"kind\":\"shadow_disabled\"}",
+        "{\"kind\":\"shadow_disabled\"}","{\"kind\":\"storage_stop\",\"stream\":\"trace\"}",
         "{\"kind\":\"send\",\"call\":1,\"type\":1,\"length\":48,\"choice\":3,\"reason\":0,\"request\":{\"choice\":0}}",
         "{\"kind\":\"send\",\"call\":1,\"choice\":4}","{\"kind\":\"send\",\"call\":1}"};
     for(size_t i=0;i<sizeof evidence/sizeof evidence[0];++i)

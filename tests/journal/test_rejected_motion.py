@@ -93,14 +93,35 @@ class RejectedMotion(unittest.TestCase):
         self.assertEqual(a.motion_samples, 0)
         self.assertEqual(a.issue_counts['violation'], 0)
         self.assertNotIn('unknown_record_kind', [x['code'] for x in a.issues])
-        for changes in ({'max_late_ms': 2001}, {'max_late_ms': 250}):
+        for changes in ({'max_late_ms': 2001}, {'max_late_ms': 249}):
             a = read(dict(late, **changes))
             self.assertIn('late_motion_out_of_bounds', [x['code'] for x in a.issues])
+        # Exact ns (F3-E): 250 ms + 1 ns is late, recorded as 250 ms; 250 ms
+        # itself was fresh and cannot be a late arrival; 2 s is inclusive.
+        for ns, ok in ((250000001, True), (250000000, False), (2000000000, True), (2000000001, False)):
+            a = read(dict(late, max_late_ms=ns // 1000000, max_late_ns=ns))
+            self.assertEqual('late_motion_out_of_bounds' in [x['code'] for x in a.issues], not ok, ns)
+        # Legacy rows without ns: 250 (a truncated 250.x ms) is accepted.
+        self.assertNotIn('late_motion_out_of_bounds',
+                         [x['code'] for x in read(dict(late, max_late_ms=250)).issues])
         for changes in ({'assist_ready': True}, {'domain': 'beta'}, {'events': 0},
                         {'last_seq': 1}, {'schema': 2}):
             a = read(dict(late, **changes))
             self.assertIn('malformed_late_motion', [x['code'] for x in a.issues])
             self.assertEqual(a.motion_late['bursts'], 0)
+
+    def test_profile_suppressed_rejections_are_counted_in_the_totals(self):
+        # F3-E: the persistent profile writes 5 rejections per kind per 10 s
+        # and counts the rest in the digest; the report adds them back.
+        digest = dict(kind='log_digest', schema=1, digest='periodic', profile='persistent',
+                      mono_ns=3000000000, suppressed={'motion_rejected': 7, 'shadow_input_reset': 7})
+        a = read(rejected(), digest)
+        report = a.report()
+        self.assertEqual(report['motion_rejected']['reasons'], {'stale': 1})
+        self.assertEqual(report['motion_rejected']['suppressed_by_profile'], 7)
+        self.assertEqual(report['motion_rejected']['total_including_suppressed'], 8)
+        self.assertEqual(report['persistent_profile']['suppressed'],
+                         {'motion_rejected': 7, 'shadow_input_reset': 7})
 
     def test_capture_inactive_not_confused_with_active_model(self):
         base = dict(kind='shadow_boot', domain='model', assist_ready=False,
