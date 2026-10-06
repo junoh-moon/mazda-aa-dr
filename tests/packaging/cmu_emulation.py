@@ -769,6 +769,12 @@ def main():
                 'Guard manifest did not bind the exact installed LDS product')
         print('PASS: ' + default_mode + ' bundle default and initial trial preload selection', flush=True)
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=False)
+        if persistent:
+            # The background confirm of the autostart block, while an authored
+            # /proc entry shows the SM on this trial (vehicle ps form).
+            put(root, '/proc/266/cmdline', '/jci/sm/sm\0-f\0' + result.stdout.strip() +
+                '\0-e\0/tmp/smevents.txt\0')
+            run('/data_persist/mx5-aa-dr/guard/mx5dr-guard confirm')
         put(root, '/proc/sys/kernel/random/boot_id', '21234567-1234-1234-1234-0123456789ab\n')
         # One-boot consumed its arm; the persistent product selects every new boot.
         run('/data_persist/mx5-aa-dr/guard/mx5dr-guard select /jci/sm/sm.conf', ok=persistent)
