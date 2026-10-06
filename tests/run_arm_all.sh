@@ -122,8 +122,14 @@ MX5DR_PUBLICATION_BUILD="$build/request-publication" sh tests/runtime/run_reques
 MX5DR_JOURNAL_BOUNDARY_BUILD="$build/journal-boundaries" sh tests/runtime/run_journal_boundaries.sh
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_journal_queue.cpp -pthread -o "$build/journal-queue-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-queue-test"
+# Journal writer ring and the persistent log profile (2026-10-06).
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_journal_ring.cpp -pthread -o "$build/journal-ring-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/journal-ring-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_log_profile.cpp -o "$build/log-profile-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/log-profile-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test" --writer
 for scenario in startup during query invalid healthy; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test" --storage "$scenario"
 done

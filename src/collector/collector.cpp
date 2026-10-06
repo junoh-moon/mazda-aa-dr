@@ -25,7 +25,7 @@
 namespace {
 const char *const ROOT = "/data_persist/mx5-aa-dr";
 const char *bus_address = "unix:path=/tmp/dbus_service_socket";
-mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
+mx5::runtime::Config config = {0, 8388608, 3, 1000, false, mx5::runtime::LOG_PROFILE_FULL};
 volatile sig_atomic_t stop_requested = 0;
 void stop_signal(int) { stop_requested = 1; }
 uint64_t clock_ns(void *) {
@@ -341,6 +341,9 @@ int main(int argc, char **argv) {
   // Separate disk budget: at most 2 MiB total for this low-rate stream.
   if (config.max_log_bytes > 4194304) config.max_log_bytes = 4194304;
   if (config.max_log_files > 2) config.max_log_files = 2;
+  // The quiet always-on profile keeps only a small collector ring (2 MiB).
+  if (config.log_profile == mx5::runtime::LOG_PROFILE_PERSISTENT && config.max_log_bytes > 1048576)
+    config.max_log_bytes = 1048576;
   // Kernel lock survives no process death: stale PID files never authorize kill.
   struct stat st;
   // The installer owns the parent and assigns logs to the selected account.

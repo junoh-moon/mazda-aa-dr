@@ -17,7 +17,7 @@ static char *trim(char *p) {
   return p;
 }
 Config read_config(const char *path) {
-  Config c = {0, 8388608, 3, 1000, true};
+  Config c = {0, 8388608, 3, 1000, true, LOG_PROFILE_FULL};
   FILE *f = fopen(path, "r");
   if (!f) {
     c.valid = false;
@@ -61,6 +61,16 @@ Config read_config(const char *path) {
       // The qualified ASSIST token (internal 3) stays unsupported.
       else if (!strcmp(v, "BETA"))
         c.mode = 5;
+      else {
+        c.valid = false;
+        break;
+      }
+    } else if (!strcmp(k, "log_profile")) {
+      bit = 16;
+      if (!strcmp(v, "full"))
+        c.log_profile = LOG_PROFILE_FULL;
+      else if (!strcmp(v, "persistent"))
+        c.log_profile = LOG_PROFILE_PERSISTENT;
       else {
         c.valid = false;
         break;

@@ -596,6 +596,38 @@ exec "$MX5DR_REAL_OD" "$@"
         self.assertIn('health_recent=unavailable window=5s', r.stdout)
         self.assertIn('model_solution=not_observed', r.stdout)
 
+    def test_persistent_profile_health_window_and_digest_receipts(self):
+        # log_profile=persistent (validation/PERSISTENT_LOGGING_2026-10-06.md):
+        # health at most once per 10 s and raw motion rows only around events;
+        # the 10 s digest carries each sensor's latest receipt time.
+        self.trace[0]['log_profile'] = 'persistent'
+        self.trace[2]['mono_ns'] = 88000000000      # 12 s old: within 15 s, not 5 s
+        self.trace = [row for row in self.trace if row['kind'] != 'motion_batch']
+        self.trace.append(dict(kind='log_digest', schema=1, digest='periodic', profile='persistent',
+                               mono_ns=95000000000, wheels_last_ns=95000000000,
+                               yaw_last_ns=95000000000, reverse_last_ns=95000000000))
+        r = self.run_status()
+        self.assertIn('health_recent=observed window=15s', r.stdout)
+        for sensor in ('wheels', 'yaw', 'reverse'):
+            self.assertIn(sensor + '_received_recently=observed', r.stdout)
+        self.assertIn('log_profile=persistent health_window_s=15', r.stdout)
+        # A digest of another boot or from the future proves nothing.
+        self.trace[-1].update(wheels_last_ns=500000000, yaw_last_ns=101000000000)
+        r = self.run_status()
+        self.assertIn('wheels_received_recently=unavailable', r.stdout)
+        self.assertIn('yaw_received_recently=unavailable', r.stdout)
+        # The full profile keeps its 5 s health window for the same rows.
+        del self.trace[0]['log_profile']
+        r = self.run_status()
+        self.assertIn('health_recent=unavailable window=5s', r.stdout)
+        self.assertIn('log_profile=full health_window_s=5', r.stdout)
+
+    def test_persistent_profile_config_key_is_accepted(self):
+        (self.base / 'mx5dr.conf').write_text(CONFIG + 'log_profile=persistent\n')
+        self.assertIn('config_mode=SHADOW', self.run_status().stdout)
+        (self.base / 'mx5dr.conf').write_text(CONFIG + 'log_profile=quiet\n')
+        self.assertIn('config_mode=unconfirmed', self.run_status().stdout)
+
     def test_silent_collector_stop_does_not_reuse_eight_second_old_poll(self):
         self.collector[-1]['end_ns'] = 91000000000
         r = self.run_status()

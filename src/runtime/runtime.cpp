@@ -19,6 +19,7 @@
 #include "assist_worker.h"
 #include "journal_queue.h"
 #include "journal_ring.h"
+#include "log_profile.h"
 #include "model_session.h"
 #include "beta_controller.h"
 #include "motion_gap.h"
@@ -58,7 +59,7 @@ volatile uint32_t audit_fault = 0;
 // observes the failure. Constant-initialized; never set back to 1 in a boot.
 std::atomic<unsigned> journal_ok(1);
 static_assert(ATOMIC_INT_LOCK_FREE==2,"journal_ok is read by OEM threads");
-mx5::runtime::Config config = {0, 8388608, 3, 1000, false};
+mx5::runtime::Config config = {0, 8388608, 3, 1000, false, mx5::runtime::LOG_PROFILE_FULL};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
 mx5::adapter::InstallReport install_report = mx5::adapter::InstallReport();
@@ -103,12 +104,20 @@ void disable_mutation() {
   if (__sync_bool_compare_and_swap(&audit_fault, 0, 1))
     A::set_mode(A::OBSERVE);
 }
+#ifdef MX5DR_SIMULATED_CLOCK
+// Host measurement seam only (tests/runtime/log_rate.cpp): a simulated drive
+// clock for rows and journal-profile decisions. Never defined in a product
+// or ARM build.
+uint64_t simulated_clock_ns = 0;
+uint64_t clock_ns(void *) { return simulated_clock_ns; }
+#else
 uint64_t clock_ns(void *) {
   struct timespec t;
   if (clock_gettime(CLOCK_MONOTONIC, &t))
     return 0;
   return uint64_t(t.tv_sec) * 1000000000ULL + t.tv_nsec;
 }
+#endif
 void sink(const A::Observation *o, void *) {
   if (queue.push(*o) == ObservationQueue::FULL) disable_mutation();
 }
@@ -287,10 +296,14 @@ struct Journal {
   const char *root;
   FILE *f;
   size_t written;
+  uint64_t total_bytes;   // bytes written by this object (all files)
   bool failed;
   JournalWriter* writer;
+  // log_profile=persistent: the quiet profile's filter (log_profile.h) in
+  // front of the writer. Worker side only; the writer's own backend has none.
+  mx5::runtime::PersistentLog* filter;
   explicit Journal(const char *directory = ROOT)
-      : root(directory), f(0), written(0), failed(false), writer(0) {}
+      : root(directory), f(0), written(0), total_bytes(0), failed(false), writer(0), filter(0) {}
   ~Journal() {
     if (writer) { bool ignored; stop_journal_writer(writer,false,&ignored); writer=0; }
     if (f)
@@ -357,13 +370,32 @@ struct Journal {
   void line(const char *s) {
     if (failed)
       return;
+    if (filter) { filter->row(s, clock_ns(0), emit_to, this); return; }
+    emit(s);
+  }
+  // A formatted POSITION/SEND observation row (the profile needs its values).
+  void observation_line(const char *s, const A::Observation& o) {
+    if (failed)
+      return;
+    if (filter) { filter->observation(s, o, clock_ns(0), emit_to, this); return; }
+    emit(s);
+  }
+  // Every accepted motion event (digest statistics of the quiet profile).
+  void note_motion(const N::RawEvent& e) { if (filter) filter->motion(e); }
+  void tick(uint64_t now) { if (filter && !failed) filter->tick(now, emit_to, this); }
+  static void emit_to(void* journal, const char* s, bool raw) { static_cast<Journal*>(journal)->emit(s, raw); }
+  // A row that is written (profile decisions already made). raw: RAW context
+  // from the quiet profile's window, queued as a diagnostic row.
+  void emit(const char *s, bool raw = false) {
+    if (failed)
+      return;
     if (writer) {
       poll();
       if (failed) return;
       const size_t n = strlen(s);
       // An evidence row that cannot be queued is a journal failure: fail
       // closed (mutation disabled) instead of dropping it.
-      if (!journal_writer_push(writer, s, n, mx5::runtime::journal_evidence_row(s, n))) fail();
+      if (!journal_writer_push(writer, s, n, !raw && mx5::runtime::journal_evidence_row(s, n))) fail();
       return;
     }
     write_line(s);
@@ -388,6 +420,7 @@ struct Journal {
       return;
     }
     written += n + 1;
+    total_bytes += n + 1;
   }
   // Periodic (1 s) flush. Asynchronous with a writer: it only requests one.
   void flush() {
@@ -554,6 +587,7 @@ void flush_motion(Journal &j, mx5::runtime::MotionBatch &batch) {
 }
 void journal_motion(Journal &j, mx5::runtime::MotionBatch &batch,
                     const N::RawEvent &raw) {
+  j.note_motion(raw);
   if (!batch.append(raw)) {
     flush_motion(j, batch);
     if (!batch.append(raw))
@@ -840,7 +874,7 @@ bool drain_capture_tail(Journal& j) {
     A::Observation o;
     for(unsigned n=0;n<256 && pop(&o);++n) {
       char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
-      if(format_observation(line,sizeof line,o))j.line(line);else j.fail();
+      if(format_observation(line,sizeof line,o))j.observation_line(line,o);else j.fail();
       if(o.kind==A::Observation::POSITION && o.reason==A::CONTEXT_UNAVAILABLE) {
         j.line("{\"kind\":\"capture_incomplete\",\"reason\":\"adapter_context_unavailable\",\"assist_ready\":false}");
         disable_mutation();
@@ -969,6 +1003,47 @@ void rejected_model_position(Journal& j,const A::Observation& o,const char* reas
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
 }
 
+// One MODEL diagnostic row (100 ms cadence in the worker).
+void journal_shadow(Journal& j,uint64_t now,const N::Pipeline& navigation,
+                    const mx5::runtime::ModelSession& model_session,
+                    const mx5::runtime::ModelBus& model_bus,uint64_t drain_calls) {
+  char line[2048];
+  const N::Diagnostic d=navigation.diagnostic(now);
+  char lat[48],lon[48],heading[48],speed[48],error[48],preview[97]="";
+  json_number(d.snapshot.latitude_deg,lat);json_number(d.snapshot.longitude_deg,lon);
+  json_number(d.snapshot.body_heading_rad,heading);json_number(d.snapshot.speed_mps,speed);
+  json_number(d.snapshot.error_budget_m,error);
+  uint8_t bytes[48];
+  const bool encoded=mx5::runtime::encode_model_location_preview(d.snapshot,bytes);
+  if(encoded)hex48(bytes,preview);
+  const int formatted=snprintf(line,sizeof line,
+      "{\"kind\":\"shadow\",\"mono_ns\":%llu,\"domain\":\"model\","
+      "\"model_session_epoch\":%llu,\"session_revision\":%llu,"
+      "\"model_bus_epoch\":%llu,\"bus_revision\":%llu,"
+      "\"model_valid\":%s,\"assist_ready\":false,\"state\":%u,"
+      "\"result\":\"%s\",\"pipeline\":\"%s\",\"uncertainties\":%u,"
+      "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
+      "\"drain_calls_total\":%llu,"
+      "\"frontier_ns\":%llu,\"lat\":%s,\"lon\":%s,\"heading_rad\":%s,"
+      "\"speed_mps\":%s,\"error_model_m\":%s,\"stopped\":%s,"
+      "\"yaw_zero\":%.17g,\"calibration_version\":%llu,\"wheel_scale\":%.17g,"
+      "\"wheel_scale_version\":%llu,\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
+      (unsigned long long)now,(unsigned long long)navigation.context().session_epoch,
+      (unsigned long long)model_session.current().revision,
+      (unsigned long long)model_bus.epoch(),(unsigned long long)model_bus.current().revision,
+      d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),
+      mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
+      (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
+      (unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
+      (unsigned long long)drain_calls,
+      (unsigned long long)d.snapshot.frontier_ns,lat,lon,heading,speed,error,
+      d.snapshot.stopped?"true":"false",navigation.calibration().active_zero,
+      (unsigned long long)navigation.calibration().calibration_version,
+      navigation.wheel_calibration().active_scale,
+      (unsigned long long)navigation.wheel_calibration().calibration_version,encoded?"true":"false",preview);
+  if(formatted>0 && size_t(formatted)<sizeof line)j.line(line);else j.fail();
+}
+
 void journal_assist(Journal& j,const mx5::runtime::AssistStatus& s,uint64_t now) {
   const char* const states[]={"waiting_source","waiting_begin","waiting_input","published",
       "source_fault","input_fault","clock_fault","context_changed","backlog","stopped"};
@@ -1057,6 +1132,22 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   // Journal file I/O on its own thread; without one (allocation or thread
   // failure) rows stay synchronous as before, and the boot row says so.
   const bool journal_thread=j.start_writer();
+  // log_profile=persistent (validation/PERSISTENT_LOGGING_2026-10-06.md):
+  // digest rows and an in-memory RAW window instead of every raw row. The
+  // window storage is allocated once here; without it the profile still
+  // applies but raw rows are only counted.
+  struct QuietStorage {
+    unsigned char* bytes;
+    ~QuietStorage() { delete[] bytes; }
+  } quiet_storage={0};
+  mx5::runtime::PersistentLog quiet;
+  const bool quiet_profile=config.log_profile==mx5::runtime::LOG_PROFILE_PERSISTENT;
+  if(quiet_profile) {
+    quiet_storage.bytes=new(std::nothrow) unsigned char[mx5::runtime::PersistentLog::WINDOW_BYTES+
+                                                       mx5::runtime::PersistentLog::ROW_BYTES];
+    quiet.init(quiet_storage.bytes,N::research_model_profile());
+    j.filter=&quiet;
+  }
   mx5::runtime::MotionBatch motion_batch;
   char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
   char boot_id[37];
@@ -1075,7 +1166,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
            "\"mode\":%u,\"install\":\"%s\",\"assist_ready\":false,\"assist_"
            "block\":\"sensor_timing_quality_calibration_unverified\",\"wire_"
            "timestamp_modified\":false,"
-           "\"session_hooks\":\"%s\",\"journal_writer\":\"%s\","
+           "\"session_hooks\":\"%s\",\"journal_writer\":\"%s\",\"log_profile\":\"%s\",\"raw_window\":\"%s\","
            "\"beta\":{\"mode\":\"%s\",\"enabled\":%s,\"reason\":\"%s\",\"session_fence\":\"%s\"},"
            "\"install_diag\":{\"stage\":%u,\"slot_offset\":%llu,\"expected_offset\":%llu,"
            "\"observed_offset\":%llu,\"owner\":\"%s\",\"symbol\":\"%s\"}}",
@@ -1084,6 +1175,8 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
            !hook_installed ? "none"
                : install_report.sessions_declined ? "declined_third_party_interposer" : "observing",
            journal_thread ? "thread" : "inline",
+           quiet_profile ? "persistent" : "full",
+           !quiet_profile ? "none" : quiet.window_available() ? "available" : "unavailable",
            beta_requested ? "BETA" : "off", beta_allowed ? "true" : "false", beta_boot_reason,
            !beta_requested ? "none" : beta_declined ? "declined_send_storage_counter"
                                                     : "observed_session_and_send_storage_counter",
@@ -1218,7 +1311,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     unsigned drained = 0;
     while (drained++ < 256 && pop(&o)) {
       if(!format_observation(line,sizeof line,o)) { j.fail();continue; }
-      j.line(line);
+      j.observation_line(line,o);
       if(o.kind==A::Observation::SEND)beta.send(o);
       if(o.kind==A::Observation::POSITION && o.reason==A::CONTEXT_UNAVAILABLE) {
         // A pool miss keeps the raw input but cannot establish a usable
@@ -1321,40 +1414,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         }
         if(now>=last_shadow_log && now-last_shadow_log>=100000000ULL) {
           last_shadow_log=now;
-          const N::Diagnostic d=navigation.diagnostic(now);
-          char lat[48],lon[48],heading[48],speed[48],error[48],preview[97]="";
-          json_number(d.snapshot.latitude_deg,lat);json_number(d.snapshot.longitude_deg,lon);
-          json_number(d.snapshot.body_heading_rad,heading);json_number(d.snapshot.speed_mps,speed);
-          json_number(d.snapshot.error_budget_m,error);
-          uint8_t bytes[48];
-          const bool encoded=mx5::runtime::encode_model_location_preview(d.snapshot,bytes);
-          if(encoded)hex48(bytes,preview);
-          const int formatted=snprintf(line,sizeof line,
-              "{\"kind\":\"shadow\",\"mono_ns\":%llu,\"domain\":\"model\","
-              "\"model_session_epoch\":%llu,\"session_revision\":%llu,"
-              "\"model_bus_epoch\":%llu,\"bus_revision\":%llu,"
-              "\"model_valid\":%s,\"assist_ready\":false,\"state\":%u,"
-              "\"result\":\"%s\",\"pipeline\":\"%s\",\"uncertainties\":%u,"
-              "\"events\":%llu,\"intervals\":%llu,\"resets\":%llu,\"rejected\":%llu,"
-              "\"drain_calls_total\":%llu,"
-              "\"frontier_ns\":%llu,\"lat\":%s,\"lon\":%s,\"heading_rad\":%s,"
-              "\"speed_mps\":%s,\"error_model_m\":%s,\"stopped\":%s,"
-              "\"yaw_zero\":%.17g,\"calibration_version\":%llu,\"wheel_scale\":%.17g,"
-              "\"wheel_scale_version\":%llu,\"preview_encoded\":%s,\"location_preview_hex\":\"%s\"}",
-              (unsigned long long)now,(unsigned long long)navigation.context().session_epoch,
-              (unsigned long long)model_session.current().revision,
-              (unsigned long long)model_bus.epoch(),(unsigned long long)model_bus.current().revision,
-              d.snapshot.model_valid?"true":"false",unsigned(d.snapshot.state),
-              mx5_dr_result_name(d.result),N::pipeline_result_name(d.status.result),d.status.uncertainties,
-              (unsigned long long)d.status.events,(unsigned long long)d.status.intervals,
-              (unsigned long long)d.status.resets,(unsigned long long)d.status.rejected,
-              (unsigned long long)drain_calls,
-              (unsigned long long)d.snapshot.frontier_ns,lat,lon,heading,speed,error,
-              d.snapshot.stopped?"true":"false",navigation.calibration().active_zero,
-              (unsigned long long)navigation.calibration().calibration_version,
-              navigation.wheel_calibration().active_scale,
-              (unsigned long long)navigation.wheel_calibration().calibration_version,encoded?"true":"false",preview);
-          if(formatted>0 && size_t(formatted)<sizeof line)j.line(line);else j.fail();
+          journal_shadow(j,now,navigation,model_session,model_bus,drain_calls);
         }
     }
     if(beta.live() && (model_ticked || !shadow)) {
@@ -1371,6 +1431,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     }
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;
+      j.tick(now);
       journal_health(j,now,capture&&!j.failed,shadow && model_session.available() && model_bus.available(),&source);
       j.flush();
     }

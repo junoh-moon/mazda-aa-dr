@@ -597,6 +597,53 @@ static void route_general_worker(const char* root,const std::string& logs) {
   assert(!rmdir((logs+"/capture.stop").c_str()));
   puts("Long route: ordinary worker and capture tail retain the entire row");
 }
+// log_profile=persistent through the real worker and writer thread: the
+// boot row names the profile, the first POSITION (a class transition) opens
+// a raw period behind a raw_window marker, and the capture stop writes the
+// final digest before capture_end and its acknowledgement.
+static void persistent_worker(const char* root,const std::string& logs) {
+  clear_traces(logs);
+  arm_test_mode();config.mode=1;config.max_log_bytes=65536;
+  config.log_profile=mx5::runtime::LOG_PROFILE_PERSISTENT;
+  A::Observation event=long_route_event();event.kind=A::Observation::POSITION;
+  const A::Observation other=long_route_event();   // an ORIGINAL non-LOCATION SEND
+  char expected[mx5::runtime::OBSERVATION_JSON_CAPACITY],digested[mx5::runtime::OBSERVATION_JSON_CAPACITY];
+  assert(format_observation(expected,sizeof expected,event));
+  assert(format_observation(digested,sizeof digested,other));
+  sink(&event,0);sink(&other,0);
+  pthread_t thread;assert(!pthread_create(&thread,0,route_worker,const_cast<char*>(root)));
+  bool found=false;
+  for(unsigned attempt=0;attempt<150&&!found;++attempt) {
+    usleep(20000);
+    std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
+    while(std::getline(f,line))if(line==expected)found=true;
+  }
+  assert(found);
+  assert(!mkdir((logs+"/capture.stop").c_str(),0700));
+  assert(!pthread_join(thread,0) && queue.drained() && !audit_fault);
+  config.log_profile=mx5::runtime::LOG_PROFILE_FULL;
+  const std::vector<std::string> rows=trace_rows(logs);
+  size_t boot=rows.size(),marker=rows.size(),position=rows.size(),digest=rows.size(),end=rows.size();
+  for(size_t i=0;i<rows.size();++i) {
+    if(rows[i].find("{\"kind\":\"boot\"")==0)boot=i;
+    if(rows[i].find("{\"kind\":\"raw_window\"")==0 && marker==rows.size())marker=i;
+    if(rows[i]==expected)position=i;
+    assert(rows[i]!=digested);                     // counted in the digest only
+    if(rows[i].find("{\"kind\":\"log_digest\"")==0 && rows[i].find("\"digest\":\"final\"")!=std::string::npos)digest=i;
+    if(rows[i].find("{\"kind\":\"capture_end\"")==0)end=i;
+  }
+  assert(boot<rows.size() && rows[boot].find("\"log_profile\":\"persistent\",\"raw_window\":\"available\"")!=std::string::npos);
+  assert(rows[boot].find("\"journal_writer\":\"thread\"")!=std::string::npos);
+  assert(boot<marker && marker<position && position<digest && digest<end && end<rows.size());
+  assert(rows[marker].find("\"trigger\":\"position_class\"")!=std::string::npos);
+  assert(rows[digest].find("\"sends\":1,")!=std::string::npos &&
+         rows[digest].find("\"send_original\":1")!=std::string::npos);
+  assert(access((logs+"/capture.done").c_str(),F_OK)==0);
+  assert(!unlink((logs+"/capture.done").c_str()));
+  assert(!rmdir((logs+"/capture.stop").c_str()));
+  clear_traces(logs);
+  puts("Persistent profile worker: boot names the profile; raw window, final digest and stop acknowledgement in order");
+}
 static void context_loss_worker(const char* root,const std::string& logs) {
   assert(!unlink((logs+"/trace.0.jsonl").c_str()) || errno==ENOENT);
   arm_test_mode();config.mode=1;config.max_log_bytes=65536;
@@ -978,6 +1025,7 @@ int main(int argc,char** argv) {
     writer_overflow(root,logs);
     writer_fail_closed(root,logs);
     writer_shutdown(root,logs);
+    persistent_worker(root,logs);
     clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));
     return 0;
   }

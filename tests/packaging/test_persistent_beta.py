@@ -100,6 +100,11 @@ class PersistentBetaTests(unittest.TestCase):
         self.assertIn('Choose 5 to start the first BETA boot', result.stdout)
         installed = (self.base / 'installed.txt').read_text()
         self.assertIn('mode=BETA\npolicy=persistent\n', installed)
+        # The always-on product journals with the quiet profile and a 16 MiB
+        # trace ring (validation/PERSISTENT_LOGGING_2026-10-06.md).
+        self.assertEqual((self.base / 'mx5dr.conf').read_text(),
+                         'mode=BETA\nmax_log_bytes=8388608\nmax_log_files=2\nsample_ms=1000\n'
+                         'log_profile=persistent\n')
         # The one-boot arming marker belongs to the one-boot policy only.
         self.assertFalse((self.base / 'guard/armed-boot').exists())
         self.assertFalse((self.base / 'guard/arm').exists())
@@ -108,6 +113,9 @@ class PersistentBetaTests(unittest.TestCase):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         self.assertEqual(self.menu('1\n0\n').returncode, 0)
         self.assertIn('policy=one-boot', (self.base / 'installed.txt').read_text())
+        # SHADOW trial bundles keep the full journal profile (no profile key).
+        self.assertEqual((self.base / 'mx5dr.conf').read_text(),
+                         'mode=SHADOW\nmax_log_bytes=41943040\nmax_log_files=3\nsample_ms=1000\n')
         self.assertTrue((self.base / 'guard/armed-boot').exists())
 
     def test_explicit_one_boot_beta_keeps_the_trial_policy(self):

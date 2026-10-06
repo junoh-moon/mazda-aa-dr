@@ -15,9 +15,11 @@ function field(key, s, p) {
 function not_future(ns) {return ns ~ /^[0-9]+$/ && ns+0>0 && ns+0<=now*1e9+10000000}
 function recent(ns, seconds) {return not_future(ns) && now-ns/1e9<=seconds}
 function fresh(ns) {return recent(ns,30)}
-function health_recent(ns) {return recent(ns,5)}
+# log_profile=persistent (the always-on BETA journal) writes health and the
+# MODEL diagnostic at most once per 10 s; its windows follow the boot row.
+function health_recent(ns) {return recent(ns,health_window)}
 function poll_recent(ns) {return recent(ns,8)}
-function model_recent(ns) {return recent(ns,2)}
+function model_recent(ns) {return recent(ns,model_window)}
 function after_now(ns) {return ns ~ /^[0-9]+$/ && ns+0>now*1e9+10000000}
 # Whole seconds between a row time and `now`, or "none" for no usable row.
 function age(ns, a) {
@@ -57,6 +59,7 @@ function beta_member(key, s, p) {
 }
 function clear_model_snapshot() {shadow=""; solution=""; processed=""; pipeline=""; result=""; attempts=""; intervals=""}
 function reset_runtime() {
+    health_window=5; model_window=2; log_profile="full"
     health=""; hooks=""; boot_install=""; dropped=""; audit=""; capture=""; mode=""
     computation=""; position=""; position_mode=""; anchor="none_observed"
     rejected_raw=0; untimed_rejected_raw=0; untimed_motion_reset=0
@@ -108,6 +111,7 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
         reset_runtime(); runtime=(field("boot_id")==boot); runtime_boot=field("mono_ns")
         if (!not_future(runtime_boot)) runtime=0
         mode=field("mode"); boot_install=field("install")
+        if (field("log_profile")=="persistent") {log_profile="persistent"; health_window=15; model_window=12}
         if (retained_boot!="") {
             # The latest boot row of the retained boot owns these fields; a
             # restarted worker journals its own enable decision again.
@@ -226,6 +230,13 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
             if (fresh(field("checked_ns")) && field("checked_ns")+0>=runtime_boot+0)
                 rejected_sensor[field("sensor")]=1
         }
+        # Persistent profile: raw motion rows exist only around events; the
+        # 10 s digest carries each sensor's latest receipt time instead.
+        if (kind=="log_digest" && field("schema")=="1") {
+            if (fresh(field("wheels_last_ns")) && field("wheels_last_ns")+0>=runtime_boot+0) sensor[1]=field("wheels_last_ns")
+            if (fresh(field("yaw_last_ns")) && field("yaw_last_ns")+0>=runtime_boot+0) sensor[2]=field("yaw_last_ns")
+            if (fresh(field("reverse_last_ns")) && field("reverse_last_ns")+0>=runtime_boot+0) sensor[3]=field("reverse_last_ns")
+        }
         if (kind=="motion_batch" && field("schema")=="1") {
             rows=$0
             sub(/^.*"events":\[\[/,"",rows); sub(/\]\]\}$/, "", rows)
@@ -249,7 +260,7 @@ END {
     report("guard_current_boot",oneboot=="consumed_this_boot" || oneboot=="persistent_this_boot",oneboot)
     report("linux_reboot_after_arm",startup_state=="guard_committed_after_new_boot" || startup_state=="guard_committed_persistent",startup_state)
     report("runtime_current_boot",runtime, "mode=" mode)
-    report("health_recent",runtime && health_recent(health),"window=5s health_age_s=" age(health))
+    report("health_recent",runtime && health_recent(health),"window=" health_window "s health_age_s=" age(health))
     # The boot row records whether the AA hook was installed; a stale or
     # missing health row is a separate (health_recent) question.
     report("hooks",runtime && boot_install=="ok" && hooks!="false","install=" (boot_install=="" ? "missing" : boot_install) " health_hook_installed=" (hooks=="" ? "unknown" : hooks))
@@ -282,6 +293,7 @@ END {
     usable=runtime && health_recent(health) && computation=="true" && model_recent(shadow) &&
         solution=="true" && result=="OK" && pipeline=="OK" && audit=="0" && dropped=="0"
     print "model_solution=" (usable ? "observed" : "not_observed") " domain=model assist_ready=false"
+    print "log_profile=" log_profile " health_window_s=" health_window
     print "gps_anchor_gate=" anchor " last_position_rejection_30s=" position_rejection " last_motion_reset_30s=" motion_rejection " last_model_exclusion_30s=" motion_exclusion
     print "rejected_raw_seen_this_boot=" (rejected_raw ? "true" : "false") " untimed_rejected_raw_seen=" (untimed_rejected_raw ? "true" : "false") " untimed_motion_reset_seen=" (untimed_motion_reset ? "true" : "false")
     print "last_pipeline_reset_this_boot=" pipeline_reset " operation=" reset_operation " receive_seq=" reset_sequence " mono_ns=" reset_time " untimed_reset_seen=" (untimed_pipeline_reset ? "true" : "false")

@@ -641,6 +641,12 @@ class Auditor:
         self.motion_rejected_reasons = Counter()
         self.motion_rejected_sensors = Counter()
         self.motion_late = dict(bursts=0, events=0, max_late_ms=0)
+        # log_profile=persistent (validation/PERSISTENT_LOGGING_2026-10-06.md).
+        self.log_profiles = Counter()
+        self.persistent = dict(digests=0, digest_kinds=Counter(), raw_windows=0, raw_window_rows=0,
+                               raw_window_triggers=Counter(), digested_motion_events=0,
+                               digested_sends=0, unpaired_original_sends=0)
+        self.journal_dropped = dict(counter_rows=0, rows=0)
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
@@ -684,7 +690,9 @@ class Auditor:
     def new_session(self, boot=None):
         self.close_beta_session()
         self.lds.begin()
-        self.session = dict(boot=boot, last_send_ns=-1, health_ns=-1, sends=0,
+        profile = boot.get("log_profile", "full") if isinstance(boot, dict) else "full"
+        self.session = dict(boot=boot, log_profile=profile if profile in ("full", "persistent") else "full",
+                            last_send_ns=-1, health_ns=-1, sends=0,
                             dropped_max=0, health_records=0, motion_epoch=None,
                             motion_seq=0, motion_ns=0, last_diagnostic_ns=-1,
                             shadow_resets=0, shadow_rejected=0, shadow_pipeline=None,
@@ -851,6 +859,11 @@ class Auditor:
                                  ("install", "assist_block"), ("assist_ready", "wire_timestamp_modified")):
                 return
             self.installs[row["install"]] += 1
+            if "log_profile" in row:
+                if row["log_profile"] not in ("full", "persistent"):
+                    self.issue("partial_record", source, "Unknown boot log_profile")
+                else:
+                    self.log_profiles[row["log_profile"]] += 1
             if row["schema"] != 1:
                 self.issue("unsupported_schema", source, str(row["schema"]))
             if row["mode"] not in (1, 2, 4, 5):
@@ -1003,6 +1016,12 @@ class Auditor:
             self.rejected_motion(row, source)
         elif kind == "motion_late_accepted":
             self.late_motion(row, source)
+        elif kind == "log_digest" or kind.endswith("_digest"):
+            self.digest(row, source)
+        elif kind == "raw_window":
+            self.raw_window(row, source)
+        elif kind == "journal_dropped":
+            self.dropped_rows(row, source)
         elif kind in ("motion", "motion_batch"):
             try:
                 events = decode_motion_records(row)
@@ -1085,6 +1104,50 @@ class Auditor:
         s = self.session
         s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["checked_ns"])
         self.issue("motion_channel_rejected", source, row["reason"])
+
+    def digest(self, row, source):
+        """Persistent-profile summary of the rows it replaced (raw motion,
+        ORIGINAL sends, rate-limited diagnostics). Counted only; a digest is
+        never accepted motion, a send or a MODEL result. Unknown digest kinds
+        and fields are tolerated."""
+        if (not bounded_int(row.get("schema"), 1, 1) or not bounded_int(row.get("mono_ns"), 0, 2**64-1) or
+                ("assist_ready" in row and row["assist_ready"] is not False)):
+            self.issue("malformed_digest", source, "Invalid digest envelope")
+            return
+        p = self.persistent
+        p["digests"] += 1
+        p["digest_kinds"][row["kind"] + ":" + str(row.get("digest", "unspecified"))] += 1
+        if bounded_int(row.get("motion_events"), 0, 2**64-1):
+            p["digested_motion_events"] += row["motion_events"]
+        if bounded_int(row.get("sends"), 0, 2**64-1):
+            p["digested_sends"] += row["sends"]
+
+    def raw_window(self, row, source):
+        """Start of a persistent-profile raw period: the in-memory window of
+        older raw rows follows, then raw rows are written directly for a
+        while. Raw rows before it are absent by design, so accepted-motion
+        sequence continuity restarts here (not healed, not a gap issue)."""
+        if (not bounded_int(row.get("schema"), 1, 1) or not bounded_int(row.get("mono_ns"), 0, 2**64-1) or
+                not bounded_int(row.get("rows"), 0, 2**64-1) or not isinstance(row.get("trigger"), str)):
+            self.issue("malformed_raw_window", source, "Invalid raw window marker")
+            return
+        p = self.persistent
+        p["raw_windows"] += 1
+        p["raw_window_rows"] += row["rows"]
+        p["raw_window_triggers"][row["trigger"]] += 1
+        self.session["motion_epoch"] = None
+
+    def dropped_rows(self, row, source):
+        """The journal writer dropped the oldest DIAGNOSTIC rows under a write
+        backlog (evidence rows are never dropped). The loss is real: count it
+        and restart motion continuity at this point."""
+        if not bounded_int(row.get("rows"), 1, 2**64-1) or row.get("class") != "diagnostic":
+            self.issue("malformed_journal_dropped", source, "Invalid dropped-row counter")
+            return
+        self.journal_dropped["counter_rows"] += 1
+        self.journal_dropped["rows"] += row["rows"]
+        self.session["motion_epoch"] = None
+        self.issue("journal_rows_dropped", source, "%d diagnostic rows dropped under a write backlog" % row["rows"])
 
     def late_motion(self, row, source):
         # Accepted records that waited > fresh_limit_ms in the socket queue
@@ -1984,7 +2047,11 @@ class Auditor:
                 self.issue("non_location_mutation", source, "Only type1 length48 LOCATION may be scrubbed", True)
             return
         p = self.positions.get((row["call"], row["generation"]))
-        if p is None:
+        if p is None and choice == 0 and s["log_profile"] == "persistent":
+            # A RAW window starts at an arbitrary row: its first ORIGINAL
+            # send can precede the window. Changed sends keep this check.
+            self.persistent["unpaired_original_sends"] += 1
+        elif p is None:
             self.issue("missing_position_context", source, "No matching position call/generation")
         elif p["mode"] != row["mode"]:
             self.issue("context_mode_mismatch", source, "Position/send original modes differ", True)
@@ -2431,6 +2498,11 @@ class Auditor:
                                 sensors=dict(self.motion_sensors), producer_time="unknown",
                                 scope="channel_accepted_records_only"),
                     motion_late=dict(self.motion_late, scope="accepted_late_arrivals_diagnostic_only"),
+                    log_profiles=dict(self.log_profiles),
+                    persistent_profile=dict(self.persistent, digest_kinds=dict(self.persistent["digest_kinds"]),
+                                            raw_window_triggers=dict(self.persistent["raw_window_triggers"]),
+                                            scope="digest_counts_not_raw_evidence"),
+                    journal_dropped=dict(self.journal_dropped, scope="diagnostic_rows_only"),
                     motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
                                          sensors=dict(self.motion_rejected_sensors),
                                          scope="diagnostic_only_excluded_from_accepted_motion"),

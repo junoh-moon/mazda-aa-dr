@@ -66,6 +66,22 @@ int main() {
   require(c.valid && c.mode == 5 && c.max_log_bytes == 41943040);
   c = parse("mode=beta\n");
   require(!c.valid && c.mode == 0);
+  // Journal profile (2026-10-06): full stays the default; persistent is the
+  // quiet always-on BETA profile. Anything else invalidates the file.
+  c = parse("mode=BETA\n");
+  require(c.valid && c.log_profile == mx5::runtime::LOG_PROFILE_FULL);
+  c = parse("mode=BETA\nlog_profile=persistent\nmax_log_bytes=8388608\nmax_log_files=2\n");
+  require(c.valid && c.mode == 5 && c.log_profile == mx5::runtime::LOG_PROFILE_PERSISTENT &&
+          c.max_log_bytes == 8388608 && c.max_log_files == 2);
+  c = parse("log_profile = full # explicit\nmode=SHADOW\n");
+  require(c.valid && c.mode == 4 && c.log_profile == mx5::runtime::LOG_PROFILE_FULL);
+  const char *bad_profile[] = {"mode=BETA\nlog_profile=quiet\n", "mode=BETA\nlog_profile=\n",
+                               "mode=BETA\nlog_profile=PERSISTENT\n",
+                               "mode=BETA\nlog_profile=full\nlog_profile=persistent\n"};
+  for (const auto *input : bad_profile) {
+    c = parse(input);
+    require(!c.valid && c.mode == 0);
+  }
   c = parse("mode=OFF\n");
   require(c.valid && c.mode == 0);
   c = parse("sample_ms=500\n # explicit mode may come last\n mode = OBSERVE");

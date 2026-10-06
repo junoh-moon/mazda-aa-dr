@@ -295,7 +295,13 @@ verify_firmware() {
 }
 set_config() {
     tmp=$BASE/mx5dr.conf.new.$$
-    printf 'mode=%s\nmax_log_bytes=41943040\nmax_log_files=3\nsample_ms=1000\n' "$MODE" > "$tmp"
+    # The always-on BETA install (persistent policy) uses the quiet journal
+    # profile and a 16 MiB trace ring; one-boot trials keep the full profile.
+    if [ "${POLICY:-}" = persistent ]; then
+        printf 'mode=%s\nmax_log_bytes=8388608\nmax_log_files=2\nsample_ms=1000\nlog_profile=persistent\n' "$MODE" > "$tmp"
+    else
+        printf 'mode=%s\nmax_log_bytes=41943040\nmax_log_files=3\nsample_ms=1000\n' "$MODE" > "$tmp"
+    fi
     chmod 0644 "$tmp"
     if [ -z "$ROOT" ]; then chown 0 "$tmp"; fi
     mv -f "$tmp" "$BASE/mx5dr.conf"

@@ -67,6 +67,10 @@ read_config_mode() (
                 if(value!="OFF" && value!="OBSERVE" && value!="SCRUB" && value!="SHADOW" && value!="BETA") {bad=1; exit}
                 mode=value; next
             }
+            if(key=="log_profile") {
+                if(value!="full" && value!="persistent") {bad=1; exit}
+                next
+            }
             if(value !~ /^[0-9]+$/ || length(value)>12) {bad=1; exit}
             n=value+0
             if(key=="max_log_bytes") {if(n<65536 || n>41943040) bad=1}
