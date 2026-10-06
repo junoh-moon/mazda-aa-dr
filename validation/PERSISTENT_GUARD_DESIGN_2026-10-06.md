@@ -169,7 +169,7 @@ differ. The healthy-marker rule stays OFF; its replacement needs no runtime coop
 
 - **`confirm`.** After a selection the owned autostart block starts, only when `guard/persist`
   exists, `( trap '' HUP; /bin/sleep 90; exec .../mx5dr-guard confirm ) </dev/null >/dev/null 2>&1 &`.
-  It is backgrounded after the SM launch line is reached, so it never delays the SM. `/bin/sleep`
+  It is backgrounded inside the owned block that runs before the `taskset ... sm` launch anchor (not after it), and the 90 s `sleep` is inside the background subshell, so it never delays the SM. `/bin/sleep`
   is the stock BusyBox applet; `trap ''` ignores a hang-up when `autostart` exits. `confirm`
   writes `confirmed_boot=<this boot>` only if this boot is the open attempt, `last-boot` equals it
   (the selection was committed) and `/proc/*/cmdline` shows `/jci/sm/sm -f <that trial> ...`
@@ -192,7 +192,7 @@ differ. The healthy-marker rule stays OFF; its replacement needs no runtime coop
   selections (attempt recorded, no path printed, e.g. a failed fsync) also count as `U`.
 
 **Short drives.** A boot counts as confirmed only if the CMU is still up about 90 s after the SM
-launch (autostart runs after the kernel and early scripts; roughly 100–110 s after power-on,
+launch (autostart runs after the kernel and early scripts; roughly 115–130 s uptime by the 2026-10-05 boot row (uptime 42 s at the boot row, SM earlier),
 not measured). Whether the CMU powers down immediately at ignition off is not known. Three such
 boots in a row, or the first one after menu 1, trip to stock: the safe direction; menu 1 re-enables.
 Example: three consecutive trips of under about two minutes (moving the car in a garage) trip;
@@ -242,3 +242,12 @@ when tripped, advises menu 3 first (not enforced).
 5. Any report rewrite counts as ours (OEM resets, other writers; files are mode 666): trips early.
 6. The 90 s timing, the CMU power-down behaviour and the SM argv on a CMU without our trial were not
    measured on this firmware beyond the one vehicle `ps` line.
+
+### Review notes added with the publication of v1.0.0-beta.2 (2026-10-06)
+
+- **Confirmation timing (M1).** `confirm` runs at about 115-130 s uptime, before the AA dongle connects (190 s in the 2026-10-05 trace) and before most product activity. A reset WITHOUT an SM report after that point (kernel panic, hardware watchdog, power cut) is judged `C` every time and never trips. A jciAAPA crash is covered because `reset_board=yes` writes `/data/*.out` (`R`, trips at 2 consecutive or 3 of 10). A second confirmation stage (for example a 600 s mark) is future work.
+- **No HMI-free emergency stop (M2).** Menu 4 needs the HMI/USB entry. If the SM is alive but the HMI is broken, `C` keeps being judged and the product keeps running. The practical way out is the unconfirmed cap: turning the ignition off before the 90 s mark three times in a row gives `tripped=unconfirmed`. Whether the CMU really powers down at ignition off is NOT measured; do not treat this as verified.
+- **Unconfirmed cap is not windowed (M3).** `C` resets the unconfirmed counter, so a defect that kills the CMU without a report before 90 s in two of three boots (pattern U,U,C) is never tripped. This is the price for not tripping on honest short trips.
+- **Display (L6).** If the guard is KILLed after printing the trial path but before exiting, the CMU boots stock while status shows `selected_this_boot=yes`; the next boot is judged `U`.
+- **Lock retry (L5).** `enable` does not retry the lock; menu 1 run in the instant the background `confirm` holds it fails once, run it again.
+- **Evidence backup (L4).** The menu-1 evidence copy uses `cp -pP` so a collector-owned file swapped for a symlink is copied as a link, not followed.

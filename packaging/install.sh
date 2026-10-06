@@ -138,7 +138,7 @@ if [ "$POLICY" = persistent ]; then
         done
         number=$((number + 1))
         mkdir "$kept/$number"
-        for item in $evidence; do cp -p "$item" "$kept/$number/" || fail 'Cannot keep previous BETA evidence'; done
+        for item in $evidence; do cp -pP "$item" "$kept/$number/" || fail 'Cannot keep previous BETA evidence'; done
         sync
         for entry in "$kept"/[0-9]*; do
             name=${entry##*/}
