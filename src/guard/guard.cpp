@@ -505,6 +505,50 @@ std::string reason_text(const std::string&code){
  if(kind=="config_not_beta")return "config is not BETA: run menu 1";
  return code+": run menu 3 and report";
 }
+// Machine-readable state for the parked status check (trial_status.sh). The
+// same parser as select: a state select rejects is never shown as enabled.
+int print_status(bool inputs,const std::string&expected){
+ std::string out="status_schema=1\n",p,raw,id,last;State s;
+ bool persist=!absent("persist"),have_state=false;
+ bool arm=!absent("arm")||!absent("consumed");
+ out+=std::string("policy=")+(persist?"persistent":arm?"one-boot":"none")+"\n";
+ std::string boot=boot_id(id)?id.substr(0,36):"none";
+ bool last_ok=last_boot_record(last);
+ std::string persist_value="absent";
+ if(persist){
+  std::string head=std::string("mx5dr-persist-v1\nmode=BETA\nhealthy_rule=")+(healthy_rule?"on":"off")+"\n";
+  have_state=owned_read("persist",p)&&p.compare(0,head.size(),head)==0&&owned_read("persist-state",raw)&&parse_state(raw,s);
+  persist_value=!have_state?"invalid":s.tripped!="no"?"tripped":"enabled";
+ }
+ out+="persist="+persist_value+"\n";
+ out+=std::string("healthy_rule=")+(healthy_rule?"on":"off")+"\n";
+ char counts[160];
+ if(have_state){
+  snprintf(counts,sizeof counts,"fail_count=%u\nunconfirmed_count=%u\nattempts_since_healthy=%u\n",s.fail_count,s.unconfirmed,s.attempts);
+  bool selected=boot!="none"&&s.attempt_boot==boot&&last_ok&&last==id;
+  out+="tripped="+s.tripped+"\nprobation="+s.probation+"\n"+counts+"recent="+s.recent+"\nprevious="+s.previous+
+   "\nhealthy_previous="+s.healthy_previous+"\nenabled_this_boot="+(s.enabled_boot==boot?"yes":"no")+
+   "\nselected_this_boot="+(selected?"yes":"no")+"\nconfirmed_this_boot="+(!selected?"no":s.confirmed_boot==boot?"yes":"pending")+"\n";
+ }else{
+  out+="tripped=none\nprobation=none\nfail_count=none\nunconfirmed_count=none\nattempts_since_healthy=none\nrecent=none\nprevious=none\n"
+   "healthy_previous=none\nenabled_this_boot=no\nselected_this_boot=no\nconfirmed_this_boot=no\n";
+ }
+ std::string code=persist?verify_reason(inputs,expected):"absent";
+ out+="verify="+code+"\n";
+ // last-decision is ours, root-owned; shown only for the current boot.
+ std::string d,decision="none";
+ if(boot!="none"&&owned_read("last-decision",d)){
+  std::string head="mx5dr-last-decision-v1\nboot_id="+boot+"\nreason=";
+  if(d.size()>head.size()+1&&d.size()<=head.size()+65&&!d.compare(0,head.size(),head)&&d[d.size()-1]=='\n'){
+   std::string r=d.substr(head.size(),d.size()-head.size()-1);
+   if(r.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:.-")==std::string::npos)decision=r;
+  }
+ }
+ out+="last_decision="+decision+"\n";
+ // Free text last: the owner message for a failed verify.
+ out+="verify_message="+reason_text(code)+"\n";
+ return printf("%s",out.c_str())<0||fflush(stdout)?2:0;
+}
 // Run by the owned autostart block about 90 s after a committed selection.
 // Records this boot only if it is the open attempt, the selection was
 // committed (last-boot) and the SM still runs with that trial. Idempotent.
@@ -542,6 +586,11 @@ int run(int argc,char**argv){
   std::string code=verify_reason(inputs,expected);
   if(printf("verify=%s\nmessage=%s\n",code.c_str(),reason_text(code).c_str())<0||fflush(stdout))return 2;
   return code=="ok"?0:1;
+ }
+ if(!strcmp(argv[1],"status")){
+  if(argc!=2)return 2;
+  std::string expected;bool inputs=baseline_clean()&&manifest(expected);
+  return print_status(inputs,expected);
  }
  int lock=openat(gd,"lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);if(lock<0||!safe_stat(lock,false))return 2;
  // `confirm` runs in the background and may meet a parked menu action: retry.

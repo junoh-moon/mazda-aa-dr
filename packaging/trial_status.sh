@@ -156,91 +156,64 @@ elif [ "$guard_last_boot" = current ] && [ "$guard_consumed" = present ]; then
     fi
 fi
 # Persistent BETA policy (v1.0): the guard decides again on every boot from
-# root-owned guard/persist and guard/persist-state. Data only; never executed.
-no_nul_small() (
-    [ -f "$1" ] && [ ! -L "$1" ] || exit 1
-    small_bytes=$(wc -c < "$1") || exit 1
-    small_bytes=$(printf '%s\n' "$small_bytes" | tr -d '[:space:]') || exit 1
-    [ "$small_bytes" -gt 0 ] && [ "$small_bytes" -le 1024 ] || exit 1
-    small_hex_raw=$(od -v -An -t x1 "$1") || exit 1
-    small_hex=$(printf '%s\n' "$small_hex_raw" | tr -d '[:space:]') || exit 1
-    [ "${#small_hex}" -eq "$((small_bytes * 2))" ] || exit 1
-    case "$small_hex" in *0a) ;; *) exit 1;; esac
-    printf '%s\n' "$small_hex" | awk '{for(i=1;i<=length($0);i+=2) if(substr($0,i,2)=="00") exit 1}'
-)
-persist_manifest_rule() (
-    no_nul_small "$1" || exit 1
-    LC_ALL=C awk '
-        NR==1 {if($0!="mx5dr-persist-v1") bad=1; next}
-        NR==2 {if($0!="mode=BETA") bad=1; next}
-        NR==3 {if($0=="healthy_rule=off") rule="off"; else if($0=="healthy_rule=on") rule="on"; else bad=1; next}
-        NR==4 {if($0!="mx5dr-one-boot-v3") bad=1; next}
-        NR>=5 && NR<=12 {if(length($0)!=64 || $0 ~ /[^0-9a-f]/) bad=1; next}
-        {bad=1}
-        END {if(bad || NR!=12) exit 1; print rule}' "$1"
-)
-read_persist_state() (
-    no_nul_small "$1" || exit 1
-    LC_ALL=C awk '
-        function uuid(s) {
-            return length(s)==36 && substr(s,9,1)=="-" && substr(s,14,1)=="-" &&
-                substr(s,19,1)=="-" && substr(s,24,1)=="-" && s !~ /[^0-9a-f-]/
-        }
-        function count(s) {return s ~ /^[0-9]+$/ && length(s)<=6 && (s=="0" || s !~ /^0/)}
-        BEGIN {n=split("enabled_boot probation fail_count unconfirmed_count recent attempts_since_healthy attempt_boot attempt_reports attempt_trial confirmed_boot previous healthy_previous tripped",key," ")}
-        NR==1 {if($0!="mx5dr-persist-state-v2") bad=1; next}
-        NR>=2 && NR<=n+1 {
-            p=index($0,"=")
-            if(!p || substr($0,1,p-1)!=key[NR-1]) bad=1
-            v[NR-1]=substr($0,p+1); next
-        }
-        {bad=1}
-        END {
-            if(bad || NR!=n+1) exit 1
-            if(!uuid(v[1]) || !count(v[3]) || !count(v[6]) || v[3]+0>2) exit 1
-            if(v[7]!="none" && !uuid(v[7])) exit 1
-            if(v[11] !~ /^(none|confirmed|healthy|unconfirmed|failed_reset|failed_bootloop)$/) exit 1
-            if(v[12] !~ /^(none|yes|no)$/) exit 1
-            if(v[13] !~ /^(no|probation|reset_reports|reset_reports_repeated|unconfirmed|boot_loop|runtime_disabled)$/) exit 1
-            print v[1], v[3], v[6], v[7], v[11], v[12], v[13]
-        }' "$1"
-)
+# root-owned guard/persist and guard/persist-state. The guard itself reports
+# them (`mx5dr-guard status`, read-only, same parser as its selection), so a
+# state the guard rejects is never displayed as enabled.
+guard_status_value() {
+    printf '%s\n' "$guard_status" | awk -F= -v key="$1" '$1==key {print substr($0,length(key)+2); exit}'
+}
 guard_policy=one-boot
 persist_status=absent
 persist_reason=none
 persist_rule=none
-persist_fail=none
-persist_attempts=none
-persist_previous=none
-persist_healthy_previous=none
 persist_selected=no
+persist_confirmed=no
 persist_enabled_this_boot=no
+persist_verify=absent
+persist_decision=none
+persist_line2=''
 if [ -e "$BASE/guard/persist" ] || [ -L "$BASE/guard/persist" ]; then
     guard_policy=persistent
-    persist_status=invalid
-    if persist_rule=$(persist_manifest_rule "$BASE/guard/persist") &&
-       persist_fields=$(read_persist_state "$BASE/guard/persist-state"); then
-        set -- $persist_fields
-        persist_status=enabled
-        persist_fail=$2; persist_attempts=$3; persist_previous=$5; persist_healthy_previous=$6
-        if [ "$7" != no ]; then persist_status=tripped; persist_reason=$7; fi
-        [ "$1" != "$boot_id" ] || persist_enabled_this_boot=yes
-        if [ "$4" = "$boot_id" ] && [ "$guard_last_boot" = current ]; then persist_selected=yes; fi
-        set --
+    persist_status=unavailable
+    guard_exec=$BASE/guard/mx5dr-guard
+    # Fixtures cannot run the ARM helper; tests supply a host build.
+    if [ -n "$ROOT" ]; then guard_exec=${MX5DR_FIXTURE_GUARD:-$ROOT/missing-guard}; fi
+    guard_status=''
+    if [ -f "$guard_exec" ] && [ -x "$guard_exec" ] &&
+       guard_status=$(MX5DR_GUARD_ROOT=$ROOT "$guard_exec" status 2>/dev/null) &&
+       printf '%s\n' "$guard_status" | LC_ALL=C awk '
+           /^verify_message=/ {if(length($0)>200) bad=1; next}
+           !/^[a-z_]+=[A-Za-z0-9_:.-]*$/ {bad=1}
+           END {if(bad || NR<10 || NR>40) exit 1}' &&
+       [ "$(guard_status_value status_schema)" = 1 ]; then
+        persist_status=$(guard_status_value persist)
+        persist_rule=$(guard_status_value healthy_rule)
+        persist_selected=$(guard_status_value selected_this_boot)
+        persist_confirmed=$(guard_status_value confirmed_this_boot)
+        persist_enabled_this_boot=$(guard_status_value enabled_this_boot)
+        persist_verify=$(guard_status_value verify)
+        persist_decision=$(guard_status_value last_decision)
+        [ "$persist_status" != tripped ] || persist_reason=$(guard_status_value tripped)
+        persist_line2="persist_fail_count=$(guard_status_value fail_count) persist_trip_at=2 persist_unconfirmed_count=$(guard_status_value unconfirmed_count) persist_unconfirmed_trip_at=3 persist_recent=$(guard_status_value recent) persist_probation=$(guard_status_value probation) persist_attempts_since_healthy=$(guard_status_value attempts_since_healthy) persist_previous=$(guard_status_value previous) persist_healthy_previous=$(guard_status_value healthy_previous)"
     else
-        persist_rule=invalid
+        guard_status=''
     fi
     oneboot=unconfirmed
     case "$persist_status:$persist_selected:$persist_enabled_this_boot" in
         tripped:*) startup_state=persistent_tripped;;
-        invalid:*) startup_state=persistent_state_invalid;;
         enabled:yes:*) oneboot=persistent_this_boot; startup_state=guard_committed_persistent;;
         enabled:no:yes) startup_state=persistent_enabled_this_boot;;
-        *) startup_state=persistent_not_selected;;
+        enabled:*) startup_state=persistent_not_selected;;
+        unavailable:*) startup_state=persistent_status_unavailable;;
+        *) startup_state=persistent_state_invalid;;
     esac
 fi
 echo "guard_policy=$guard_policy persist=$persist_status persist_reason=$persist_reason persist_healthy_rule=$persist_rule"
-echo "persist_fail_count=$persist_fail persist_trip_at=2 persist_attempts_since_healthy=$persist_attempts persist_previous=$persist_previous persist_healthy_previous=$persist_healthy_previous persist_selected_this_boot=$persist_selected persist_enabled_this_boot=$persist_enabled_this_boot"
+[ -z "$persist_line2" ] || echo "$persist_line2"
+if [ "$guard_policy" = persistent ]; then
+    echo "persist_selected_this_boot=$persist_selected persist_confirmed_this_boot=$persist_confirmed persist_enabled_this_boot=$persist_enabled_this_boot persist_verify=$persist_verify persist_last_decision=$persist_decision"
+    [ -z "$guard_status" ] || echo "persist_verify_message: $(guard_status_value verify_message)"
+fi
 # Removal keeps prior guard evidence for export. A disabled, missing, damaged
 # or noncanonical config cannot borrow a prior boot's positive status.
 config_mode=unconfirmed

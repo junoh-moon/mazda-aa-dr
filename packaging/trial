@@ -96,21 +96,46 @@ startup_verdict() {
         persistent=(field("guard_policy=")=="persistent")
         tripped=0
         if (persistent) {
-            p=field("persist="); r=field("persist_reason=")
-            if (p=="enabled") print "PERSIST enabled (every boot)"
+            p=field("persist="); r=field("persist_reason="); vf=field("persist_verify=")
+            sel=field("persist_selected_this_boot="); conf=field("persist_confirmed_this_boot=")
+            bindings=(vf ~ /^(baseline_edited|binding_changed|input_unreadable|baseline_has_token)/)
+            if (p=="enabled" && vf=="ok") print "PERSIST enabled (every boot)"
+            else if (p=="enabled" && bindings) print "PERSIST enabled but bindings changed"
+            else if (p=="enabled") print substr("PERSIST enabled but " vf,1,40)
             else if (p=="tripped") { print substr("PERSIST tripped (" r ")",1,40); tripped=1 }
             else print "PERSIST " (p==""?"missing":p)
-            print "fail count " field("persist_fail_count=") " of 2"
-            print substr("attempts since healthy " field("persist_attempts_since_healthy=") " (rule " field("persist_healthy_rule=") ")",1,40)
-            print "healthy previous boot " field("persist_healthy_previous=")
-            print "this boot selected " field("persist_selected_this_boot=")
-            if (field("persist_selected_this_boot=")=="yes") show("ok","BOOT","product this boot")
+            if (p=="enabled" && vf!="ok")
+                for (i=1;i<=NR;i++) if (index(line[i],"persist_verify_message: ")==1) fold40(substr(line[i],25))
+            # Counters only from a state the guard accepted.
+            if (p=="enabled" || p=="tripped") {
+                print "fail count " field("persist_fail_count=") " of 2, unconfirmed " field("persist_unconfirmed_count=") " of 3"
+                v=field("persist_recent=")
+                print substr("recent boots " (v=="-"?"none":v),1,40)
+                print substr("attempts since healthy " field("persist_attempts_since_healthy=") " (rule " field("persist_healthy_rule=") ")",1,40)
+                print "healthy previous boot " field("persist_healthy_previous=")
+            }
+            print "this boot selected " sel
+            print "this boot confirmed " conf
+            if (sel=="yes") show("ok","BOOT","product this boot")
             else if (field("persist_enabled_this_boot=")=="yes") show("NO","BOOT","installed; choose 5")
-            else show("NO","BOOT","stock this boot")
+            else {
+                # Why the guard ran stock in this boot (guard/last-decision).
+                d=field("persist_last_decision=")
+                if (d=="" || d=="none") d=(vf=="" || vf=="ok") ? "no decision" : vf
+                row=sprintf("%-4s %-5s %s","NO","BOOT","stock this boot (" d ")")
+                if (length(row)<=40) print row
+                else { printf "%-4s %-5s %s\n","NO","BOOT","stock this boot"; fold40(" (" d ")") }
+                bad=1
+            }
+            if (sel=="yes") {
+                if (conf=="yes") show("ok","CONF","confirmed")
+                else show("wait","CONF","confirm after 90 s")
+            }
             v=field("startup_state=")
             if (v=="guard_committed_persistent") show("ok","GUARD","committed")
             else show("NO","GUARD",v==""?"missing":v)
-            if (p=="enabled") show("ok","PERS","enabled")
+            if (p=="enabled" && vf=="ok") show("ok","PERS","enabled")
+            else if (p=="enabled") show("NO","PERS",bindings?"bindings changed":vf)
             else show("NO","PERS",p=="tripped"?"tripped " r:(p==""?"missing":p))
         } else {
         v=field("reboot_check=")

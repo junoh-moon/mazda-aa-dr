@@ -44,6 +44,8 @@ class PersistentBetaTests(unittest.TestCase):
         (self.root / 'data').mkdir()
         (self.root / 'data/dmesg.out').write_text('[ 1451.0] an old reset before installation\n')
         self.genv = dict(os.environ, MX5DR_GUARD_ROOT=str(self.root))
+        # trial_status asks the guard (`status`); fixtures supply the host build.
+        self.menu_fixture.env['MX5DR_FIXTURE_GUARD'] = str(self.guard_exe)
 
     def menu(self, keys):
         return self.menu_fixture.menu(keys)
@@ -158,12 +160,15 @@ class PersistentBetaTests(unittest.TestCase):
             self.assertIn('startup_state=guard_committed_persistent', text)
             self.assertIn('one_boot=persistent_this_boot', text)
             self.assertIn('guard_config_binding=matched', text)
-            self.assertEqual(verdict[1:6], ['PERSIST enabled (every boot)',
-                                            'fail count 0 of 2',
+            self.assertEqual(verdict[1:8], ['PERSIST enabled (every boot)',
+                                            'fail count 0 of 2, unconfirmed 0 of 3',
+                                            'recent boots ' + ('none' if n == 1 else 'C' * (n - 1)),
                                             'attempts since healthy %d (rule off)' % n,
                                             'healthy previous boot ' + ('none' if n == 1 else 'no'),
-                                            'this boot selected yes'])
-            for row in ('ok   BOOT  product this boot', 'ok   GUARD committed', 'ok   PERS  enabled'):
+                                            'this boot selected yes',
+                                            'this boot confirmed yes'])
+            for row in ('ok   BOOT  product this boot', 'ok   CONF  confirmed', 'ok   GUARD committed',
+                        'ok   PERS  enabled'):
                 self.assertIn(row, verdict)
             self.assertFalse(any(line.startswith('NO   ONCE') for line in verdict))
         # Boot 3 ends in an SM reset: the reports change.
@@ -173,7 +178,7 @@ class PersistentBetaTests(unittest.TestCase):
         text, verdict = self.status()
         self.assertIn('persist_fail_count=1', text)
         self.assertIn('persist_previous=failed_reset', text)
-        self.assertIn('fail count 1 of 2', verdict)
+        self.assertIn('fail count 1 of 2, unconfirmed 0 of 3', verdict)
         # Boot 4 also resets: two in a row trip to stock.
         (self.root / 'data/thread_info.out').write_text('stacks during boot 4\n')
         self.set_boot(5)
@@ -184,6 +189,8 @@ class PersistentBetaTests(unittest.TestCase):
         self.assertEqual(verdict[1], 'PERSIST tripped (reset_reports)')
         self.assertIn('this boot selected no', verdict)
         self.assertIn('NO   PERS  tripped reset_reports', verdict)
+        self.assertIn('NO   BOOT  stock this boot', verdict)
+        self.assertIn(' (tripped:reset_reports)', verdict)
         self.assertEqual(verdict[-2:], ['NO-GO: tripped, stock runs, BETA off.',
                                         'Find the cause, then run menu 1 again.'])
         for n in (6, 7):
@@ -211,6 +218,87 @@ class PersistentBetaTests(unittest.TestCase):
         self.assertFalse((self.logs / 'capture.stop').exists())
         text, verdict = self.status()
         self.assertIn('ok   BOOT  product this boot', verdict)
+
+    def test_status_and_guard_share_one_parser(self):
+        """A state the guard rejects is never displayed as enabled (parity)."""
+        self.menu1()
+        self.set_boot(1)
+        self.assertIsNotNone(self.autostart_select())
+        state = self.base / 'guard/persist-state'
+        good = state.read_text()
+        variants = {
+            'noncanonical count': good.replace('fail_count=0', 'fail_count=00'),
+            'count above cap': good.replace('unconfirmed_count=0', 'unconfirmed_count=3'),
+            'unknown trip': good.replace('tripped=no', 'tripped=maybe'),
+            'old schema': good.replace('mx5dr-persist-state-v2', 'mx5dr-persist-state-v1'),
+            'extra line': good + 'x=1\n',
+            'bad recent': good.replace('recent=-', 'recent=CX'),
+            'foreign confirm': good.replace('confirmed_boot=' + boot_id(1), 'confirmed_boot=' + boot_id(9)),
+            'foreign trial path': good.replace('/tmp/mx5dr-trial-', '/tmp/other-trial-'),
+        }
+        for label, text in variants.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(text, good)
+                state.write_text(text)
+                status = self.guard('status')
+                self.assertIn('persist=invalid\n', status.stdout)
+                screen, verdict = self.status()
+                self.assertIn('guard_policy=persistent persist=invalid', screen)
+                self.assertNotIn('PERSIST enabled', screen)
+                self.assertIn('PERSIST invalid', verdict)
+                self.assertEqual(verdict[-1], 'NO-GO')
+                # The guard's own selection rejects the same state.
+                self.set_boot(2)
+                self.assertIsNone(self.autostart_select(confirm=False))
+                self.set_boot(1)
+        state.write_text(good)
+        status = dict(line.split('=', 1) for line in self.guard('status').stdout.splitlines())
+        screen, verdict = self.status()
+        self.assertIn('persist_fail_count=%s persist_trip_at=2 persist_unconfirmed_count=%s'
+                      % (status['fail_count'], status['unconfirmed_count']), screen)
+        self.assertIn('PERSIST enabled (every boot)', verdict)
+        # Without a runnable guard nothing is claimed.
+        self.menu_fixture.env['MX5DR_FIXTURE_GUARD'] = str(self.root / 'missing')
+        screen, verdict = self.status()
+        self.assertIn('persist=unavailable', screen)
+        self.assertIn('PERSIST unavailable', verdict)
+        self.assertEqual(verdict[-1], 'NO-GO')
+
+    def test_binding_change_is_visible_in_status(self):
+        self.menu1()
+        self.set_boot(1)
+        self.assertIsNotNone(self.autostart_select())
+        screen, verdict = self.status()
+        self.assertIn('ok   PERS  enabled', verdict)
+        # Another tool edits the stock SM config in this boot.
+        sm = self.root / 'jci/sm/sm.conf'
+        sm.write_text(sm.read_text() + '<!-- other tool -->\n')
+        screen, verdict = self.status()
+        self.assertIn('persist_verify=baseline_edited:sm.conf', screen)
+        self.assertEqual(verdict[1], 'PERSIST enabled but bindings changed')
+        message = ' '.join(line.strip() for line in verdict[2:5])
+        self.assertIn('bindings changed: sm.conf edited by another tool: run menu 1', message)
+        self.assertIn('NO   PERS  bindings changed', verdict)
+        self.assertEqual(verdict[-1], 'NO-GO')
+        # The next boot runs stock and says why.
+        self.set_boot(2)
+        self.assertIsNone(self.autostart_select())
+        screen, verdict = self.status()
+        self.assertIn('persist_last_decision=baseline_edited:sm.conf', screen)
+        self.assertIn('NO   BOOT  stock this boot', verdict)
+        self.assertIn(' (baseline_edited:sm.conf)', verdict)
+        # A short reason fits on the row.
+        self.assertIsNone(self.autostart_select())  # same boot again
+        screen, verdict = self.status()
+
+    def test_pending_confirmation_waits(self):
+        self.menu1()
+        self.set_boot(1)
+        self.assertIsNotNone(self.autostart_select(confirm=False))
+        screen, verdict = self.status()
+        self.assertIn('this boot confirmed pending', verdict)
+        self.assertIn('wait CONF  confirm after 90 s', verdict)
+        self.assertEqual(verdict[-1], 'WAIT 60 s, then run 2 again')
 
     def test_damaged_state_is_not_reported_as_selected(self):
         self.menu1()
