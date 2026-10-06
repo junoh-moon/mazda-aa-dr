@@ -1,4 +1,6 @@
-# BETA 차량 시험 한 번의 절차 (2026-10-05)
+# BETA 설치·사용 절차 (2026-10-05, 2026-10-06 상시 실행으로 갱신)
+
+**2026-10-06 갱신: BETA는 한 번만 켜지는 시험이 아니라 설치해 두면 매 부팅 스스로 켜지는 제품입니다.** 설치는 한 번(메뉴 `1`), 첫 시작은 메뉴 `5`이고 그 뒤에는 아무것도 누르지 않아도 됩니다. 안전은 제거가 아니라 자동 차단이 맡습니다. 아래 "상시 실행과 자동 차단"을 먼저 읽으십시오([설계](../validation/PERSISTENT_GUARD_DESIGN_2026-10-06.md)).
 
 **이 문서는 절차입니다. 차량 방문이나 주행을 요청하는 것이 아닙니다.** 화면 인용은 순정 BusyBox 1.19.2 에뮬레이션(`validation/STOCK_BUSYBOX_BETA_2026-10-05.md`)에서 제품이 쓴 BETA 기록으로 만든 출력이며 실제 CMU에서 실행한 것이 아닙니다. 실제 값(번호, 시간, 개수)은 다릅니다.
 구조와 하지 말 것은 [2026-10-04 절차](FIELD_PROCEDURE_2026-10-04_KO.md)와 같습니다. 이 절차 이전의 `shadow.5` 주행에서 후킹 설치와 약 15분의 무리셋이 확인됐습니다([기록](../validation/TRIP_SHADOW5_2026-10-05.md)).
@@ -22,10 +24,36 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
 
 운전 중에는 아무것도 조작하지 않습니다. BETA는 주행 중 끄는 방법이 없고 필요 없습니다. 이상이 있으면 스스로 순정으로 돌아갑니다.
 
+## 상시 실행과 자동 차단
+
+- **매 부팅 실행**: 메뉴 `1`로 한 번 설치하면 CMU가 새로 부팅할 때마다 가드가 BETA를 다시 켭니다. 순정 설정 파일(`sm.conf`, `sm_WCP.conf`)에는 아무것도 쓰지 않고, 매 부팅 `/tmp`에 그 부팅용 설정을 새로 만듭니다. 설치한 그 부팅에서는 켜지지 않으므로 처음에 한 번 `5`로 재부팅합니다.
+- **자동 차단**: 순정 SM은 CMU를 스스로 재부팅하기 직전에 `/data`에 보고서(`dmesg.out` 등)를 남깁니다. 가드는 매 부팅 이 보고서가 지난 BETA 부팅 이후 바뀌었는지 봅니다(시계를 쓰지 않습니다). **BETA 부팅 두 번이 연달아 CMU 리셋으로 끝나면** 그다음 부팅부터 BETA를 켜지 않고 순정만 실행합니다. 런타임이 스스로 꺼짐 표식(`disable-next-start`)을 남겨도 같습니다. 기록과 보고서는 지우지 않습니다.
+- **차단은 저절로 풀리지 않습니다.** 메뉴 `2`가 `PERSIST tripped (…)`와 다음 두 줄을 보여 줍니다.
+
+  ```
+  NO-GO: tripped, stock runs, BETA off.
+  Find the cause, then run menu 1 again.
+  ```
+
+  `3`으로 기록을 회수해 알려 주십시오. 원인을 이해한 뒤에만 `1`로 다시 켭니다(차단 횟수가 0으로 돌아갑니다).
+- **이 빌드의 한계**: 런타임이 "120초 안정" 표식(`healthy`)을 아직 쓰지 않아, 그 표식이 없을 때 부팅 반복을 실패로 보는 규칙은 꺼져 있습니다(`attempts since healthy … (rule off)`). SM 보고서를 남기지 않는 재부팅(전원 차단, SM 감시 전의 멈춤 등)은 감지하지 못합니다.
+- **상태 보기**: 언제든 주차 상태에서 메뉴 `2`. 판정 블록 위쪽 다섯 줄이 상시 실행 상태입니다.
+
+  ```
+  PERSIST enabled (every boot)
+  fail count 0 of 2
+  attempts since healthy 3 (rule off)
+  healthy previous boot no
+  this boot selected yes
+  ```
+
+  `fail count 1 of 2`는 직전 BETA 부팅이 리셋으로 끝났다는 뜻입니다. 이번 부팅은 BETA로 실행 중이며, 이번 부팅도 리셋으로 끝나면 다음 부팅부터 차단됩니다.
+- **제거**: 메뉴 `4`. 자동 실행 블록과 상시 실행 설정을 지우고 순정으로 돌아갑니다(기록은 남김). 다시 쓰려면 `1`.
+
 ## 하지 말 것
 
 - 시동 OFF/ON으로 CMU 재부팅을 대신하지 마십시오. 재부팅은 메뉴 `5`로만 합니다.
-- 설치 후 다시 `1`을 누르지 마십시오(회수 때도).
+- 차단(`PERSIST tripped`)이 아닐 때 다시 `1`을 누르지 마십시오. 누르면 실패 횟수가 0으로 돌아가고 그 부팅에서는 BETA가 꺼집니다(다시 `5`가 필요합니다).
 - USB와 AA 동글을 동시에 연결하지 마십시오(포트가 하나입니다).
 - 시험 중 시동을 끄지 마십시오. 끄면 그 부팅의 기록과 BETA가 끝납니다.
 - 운전 중 USB를 바꾸거나, 명령을 입력하거나, 폰을 보며 비교하지 마십시오.
@@ -51,19 +79,24 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
 
    ```
    This USB installs mode BETA: BETA = SHADOW capture + dead-reckoned LOCATION only while GPS is lost
-   1 Install BETA for the next boot
+   1 Install or re-enable BETA, every boot
    ```
 
    `mode SHADOW`나 `mode OBSERVE`가 나오면 BETA 묶음이 아닙니다. 설치하지 말고 알려 주십시오. `can't open`이 나오면 `sda1`을 `sdb1`, `sdc1`로 바꿔 다시 입력하십시오.
-3. `1`과 Enter. 끝날 때까지 기다리십시오. `Staged BETA for one guarded boot.`와 `Installation finished.`가 나와야 합니다. 없거나 오류가 나오면 `5`를 누르지 말고 사진을 남기십시오.
+3. `1`과 Enter. 끝날 때까지 기다리십시오. `Installed BETA persistent: the guard starts it on every CMU boot.`와 `Installation finished.`가 나와야 합니다. 없거나 오류가 나오면 `5`를 누르지 말고 사진을 남기십시오. 이 부팅에서 `2`를 누르면 `NO BOOT installed; choose 5`가 정상입니다.
 4. `5`와 Enter. `reboot_command_exit=0`이 나오면 시동 버튼을 누르지 말고 CMU 화면이 꺼졌다 켜질 때까지 기다리십시오.
 5. 화면이 돌아오면 셸을 다시 열고 2번의 한 줄을 입력한 뒤 `2`와 Enter. 화면 맨 아래 판정 블록으로만 판단합니다. 정상이면 다음과 같은 모양입니다(합성 기록의 호스트 출력).
 
    ```
    ---- GO / NO-GO ----
-   ok   BOOT  new boot
+   PERSIST enabled (every boot)
+   fail count 0 of 2
+   attempts since healthy 1 (rule off)
+   healthy previous boot none
+   this boot selected yes
+   ok   BOOT  product this boot
    ok   GUARD committed
-   ok   ONCE  consumed
+   ok   PERS  enabled
    ok   MODE  BETA
    ok   STOP  not disabled
    ok   DATA  1275 bytes
@@ -95,7 +128,7 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
    - `GO` → 7번으로 갑니다.
    - `WAIT 60 s, then run 2 again` → 60초 기다린 뒤 `2`를 한 번 더 누르십시오. `wait BETA no state yet`도 여기에 해당합니다.
    - `NO-GO`이고 `NO`가 **BETA, HOOK, FENCE 줄에만** 있으면: 기록(SHADOW)은 동작합니다. 주행하면 2026-10-04 절차와 같은 자료는 얻지만 BETA 시험은 되지 않습니다. 사진을 남기고, 주행 여부는 소유자가 정하십시오.
-   - 그 밖의 `NO-GO` → 출발하지 마십시오. 사진을 남기고 3절의 `3`과 `4`를 하십시오. `NO BOOT same_boot`만은 `5`를 한 번 더 누르고 5분 뒤 `2`로 다시 확인합니다.
+   - 그 밖의 `NO-GO` → 출발하지 마십시오. 사진을 남기고 3절의 `3`과 `4`를 하십시오. `NO BOOT installed; choose 5`만은 `5`를 한 번 더 누르고 5분 뒤 `2`로 다시 확인합니다. `PERSIST tripped`는 위 "상시 실행과 자동 차단"을 따르십시오.
 7. `0`과 Enter로 메뉴를 끝내고, USB를 빼고 AA 동글을 연결하십시오. 주차 상태에서 AA 연결, 터치, km/L 표시가 평소와 같은지 확인하십시오. 다르면 출발하지 말고 회수·제거하십시오.
 
 ## 2. 주행 (조작 없음)
@@ -131,8 +164,8 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
    - `scope previous_boot`가 나오면 시험 부팅이 이미 끝난 뒤(시동을 껐거나 CMU가 재부팅됨)라는 뜻입니다. 숫자는 그 부팅의 기록입니다.
 
    **이 단계의 짧은 판정(`GO`든 `NO-GO`든)은 출발 전 시작 확인용입니다. 주행이 끝난 뒤의 `GO`를 주행 결과로 읽지 마십시오.** 주행 결과는 위 BETA 줄만 봅니다. 같은 내용이 USB의 `startup-result.txt`에 저장됩니다.
-3. `3`과 Enter. `export_exit=0`이면 회수 성공입니다(2026-10-04 절차 S9와 같음). 상세 상태(BETA 줄 포함)가 `trial-result.txt`에 저장됩니다.
-4. 셸을 다시 열고 `4`와 Enter로 제거하십시오. `Removed owned one-boot autostart blocks…` 줄이 나와야 합니다.
+3. `3`과 Enter. `export_exit=0`이면 회수 성공입니다(2026-10-04 절차 S9와 같음). 상세 상태(BETA 줄, 상시 실행 상태 포함)가 `trial-result.txt`에 저장됩니다. `3`의 기록 정지는 이번 부팅에만 해당하며 다음 부팅에서 BETA가 스스로 다시 켜집니다.
+4. **제거는 필요하지 않습니다.** BETA를 더 쓰지 않으려면 셸을 다시 열고 `4`와 Enter. `Removed owned one-boot autostart blocks, the persistent enablement…` 줄이 나와야 합니다.
 5. 시동을 꺼도 됩니다. 다음을 비공개로 보관하고 알려 주십시오: `mx5dr-logs-….tar`와 `.sha256`, `trial-result.txt`, `startup-result.txt`, `reboot-request.txt`, 2번의 사진, 동승자 메모가 있으면 그것도.
 
 ## 회수 뒤 분석 (PC)
