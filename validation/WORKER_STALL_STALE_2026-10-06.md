@@ -75,23 +75,38 @@ motion_rejected 84건(stale 69, sequence_discontinuity 15)은 10개 묶음이며
 - IO 부하 아래 래퍼 실행: 1회 불확정 뒤 재시도에서 통과.
 - `test_worker_beta`도 같은 워커를 쓰지만 이번에 부하 측정은 하지 않았습니다.
 
-## 후속 구현 (같은 날)
+## 후속 구현 (같은 날, 2026-10-07 정정)
 
 위 제안 두 가지를 구현했습니다. 차량에서 실행된 적은 없습니다.
 
+**실제 완화책은 journal 쓰기 분리입니다.** CMU의 motion 소켓 큐는 순정
+`net.unix.max_dgram_qlen` = 10입니다(validation/SHADOW_RUNTIME_2026-09-30.md:36).
+datagram 간격이 10-20 ms면 워커가 110-220 ms만 멈춰도 큐가 차고, 그 뒤
+datagram은 생산자 쪽에서 EAGAIN으로 **사라집니다**. 2026-10-05 차량 속도(wheel·yaw
+각 약 10 Hz, 약 50 ms 간격)에서도 약 0.5 s면 찹니다. 따라서 2 s 늦은 도착 허용이
+의미 있는 경우는 드물고, 손실을 막는 것은 워커가 I/O로 멈추지 않게 한 writer
+스레드입니다.
+
+- journal 쓰기 분리(`src/runtime/journal_ring.h`, `runtime.cpp` writer 스레드):
+  워커는 미리 할당한 링에 행을 넣고 writer 스레드가 fwrite/fflush/statvfs/회전을
+  합니다. `test_journal --writer`에서 writer에 1 s 정지를 넣어도 워커 turn 최대
+  0.1 ms, 수신 나이 최대 0.6 ms, 거부 0이었습니다(호스트). 넘침 시 진단 행만 오래된
+  것부터 버리고(`journal_dropped` 행), 증거 행을 넣지 못하면 mutation을 끕니다.
+  writer가 1.5 s 넘게 밀리면 BETA provenance를 거두고(`beta_journal_lag`), 따라잡으면
+  되돌립니다.
 - 늦은 도착 허용(`src/navigation/channel.cpp`): 같은 생산자 pid·epoch의 다음 연속
   순번이고 `received_ns`가 단조이면 2 s(`MotionGapTracker::KEEP_NS`)까지 받아들입니다.
   `received_ns`는 그대로이고 나이는 `motion_late_accepted` 행과 health의
-  `motion_late`에만 남습니다. 2 s 초과, pid/epoch 변경, 순번 공백, 수신 시각 역행은
-  기존처럼 거부+reset입니다. stale 거부도 같은 소스의 순번 커서를 전진시켜 다음
-  신선한 데이터그램이 discontinuity로 다시 거부되지 않습니다. 파이프라인은 생산자
-  수신 시각으로 적분하므로 오차 예산에 더할 나이가 없고(test_beta에서 정시 처리와
-  같은 출력), 출력 신선도는 lease·sample-age·300 ms 침묵 검사가 now 기준으로
-  제한합니다.
-- journal 쓰기 분리(`src/runtime/journal_ring.h`, `runtime.cpp` writer 스레드): 워커는
-  미리 할당한 링에 행을 넣고 writer 스레드가 fwrite/fflush/statvfs/회전을 합니다.
-  `test_journal --writer`에서 writer에 1 s 정지를 넣어도 워커 turn 최대 0.07 ms,
-  수신 나이 최대 0.5 ms, 거부 0이었습니다(호스트 측정). 넘침 시 진단 행만 오래된
-  것부터 버리고(`journal_dropped` 행), 증거 행을 넣지 못하면 mutation을 끕니다.
+  `motion_late`에만 남습니다. 큐가 넘친 정지에서 하는 일은 reset 횟수를 줄이는
+  것뿐입니다: 예전에는 큐의 10개가 각각 stale 거부+reset이고 첫 신선한 것이
+  discontinuity여서 정지 한 번에 약 11회 reset이었지만, 이제 큐의 10개는 late로
+  받아들여지고 잃은 datagram 뒤의 첫 것 하나만 `sequence_discontinuity`로 거부+reset
+  됩니다(1회). stale 거부도 같은 소스의 순번 커서를 전진시킵니다. 파이프라인은
+  생산자 수신 시각으로 적분하므로 오차 예산에 더할 나이가 없습니다.
+- `Pipeline::CAPACITY` = 128: 한 receive turn에서 drain 전 이벤트가 128을 넘으면
+  129번째가 `PIPELINE_OVERFLOW`로 MODEL reset(`shadow_pipeline_reset` OVERFLOW 행)이
+  되고 raw 기록은 모두 남습니다(`test_journal`의 pipeline_capacity_overflow).
+  큐가 10개라 정지 backlog로는 이 한도에 닿지 않습니다.
 - `test_worker_session`의 불확정 분류(77)는 그대로 두었습니다. 이제 2 s를 넘는
-  정지에서만 stale 행이 생깁니다.
+  정지에서만 stale 행이 생깁니다. 이 호스트의 max_dgram_qlen은 512이고 시험 sender는
+  EAGAIN에 최대 100 ms 재시도하므로, 호스트 시험은 CMU의 큐 손실을 재현하지 않습니다.

@@ -512,6 +512,30 @@ static void writer_shutdown(const char* root,const std::string& logs) {
   unlink((logs+"/capture.done").c_str());clear_traces(logs);
   puts("Writer shutdown: exit drains every queued row; capture stop fsyncs and closes before its acknowledgement");
 }
+// Pipeline::CAPACITY (128 queued events) within one receive turn: the 129th
+// undrained event is PIPELINE_OVERFLOW, a MODEL reset with its own row; raw
+// capture keeps every record and later events enter the reset pipeline.
+// (On the CMU the motion socket queue holds only 10 datagrams, so a worker
+// stall loses datagrams long before a backlog could reach this bound.)
+static void pipeline_capacity_overflow(const char* root,const std::string& logs) {
+  arm_test_mode();config.max_log_bytes=65536;
+  N::Pipeline navigation;N::GpsHoldout holdout;const mx5_dr_context context={1,1,1};
+  assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+  assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
+  {
+    Journal j(root);mx5::runtime::MotionBatch batch;FakeReceiver receiver(140);
+    drain_motion(j,batch,receiver,navigation,holdout,true);j.flush();
+    assert(!j.failed && receiver.calls==140 && !audit_fault);
+    assert(navigation.status().resets==1 && navigation.status().events==128+11);
+  }
+  const std::string saved=storage_read(logs+"/trace.0.jsonl");
+  assert(saved.find("\"reason\":\"OVERFLOW\",\"operation\":\"raw\"")!=std::string::npos);
+  assert(saved.find("\"receive_seq\":129,")!=std::string::npos);
+  size_t events=0,at=0;
+  while((at=saved.find("[1,",at))!=std::string::npos) { ++events;at+=3; }
+  assert(events==140);
+  puts("Pipeline capacity: the 129th undrained event resets MODEL with an OVERFLOW row; raw capture keeps all 140");
+}
 static void pipeline_fault_capture(const char* root,const std::string& logs) {
   arm_test_mode();config.max_log_bytes=65536;
   N::Pipeline navigation;N::GpsHoldout holdout;const mx5_dr_context context={1,1,1};
@@ -1241,6 +1265,7 @@ int main(int argc,char** argv) {
   assert(pop(&read));
   receive_turn_tests(tmp,logs);
   late_turn_tests(tmp,logs);
+  pipeline_capacity_overflow(tmp,logs);
   pipeline_fault_capture(tmp,logs);
   route_capture_tail(tmp,logs);
   stop_tests(tmp,logs);
