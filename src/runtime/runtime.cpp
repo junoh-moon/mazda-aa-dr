@@ -327,11 +327,12 @@ struct Journal {
     journal_ok.store(0, std::memory_order_release);
     disable_mutation();
   }
-  // Ring sizes: 384 KiB of diagnostic rows (about 10 s of the full profile's
-  // peak rate) and 256 KiB that only evidence rows may use (a persistent RAW
+  // Ring sizes: 512 KiB of diagnostic rows (about 16 s of the full profile's
+  // peak rate; holds a whole 400 KiB persistent RAW window flush) and 256 KiB
+  // that only evidence rows may use (a persistent RAW
   // window holds up to about 60 POSITION rows of 1.5 KiB while BETA is live).
   // false: no writer (allocation/thread failure); rows stay synchronous.
-  bool start_writer(size_t diagnostic_bytes=393216,size_t evidence_bytes=262144) {
+  bool start_writer(size_t diagnostic_bytes=524288,size_t evidence_bytes=262144) {
     if (writer || f || failed) return false;
     writer=start_journal_writer(root,diagnostic_bytes,evidence_bytes);
     return writer!=0;

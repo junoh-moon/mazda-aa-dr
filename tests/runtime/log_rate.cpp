@@ -131,18 +131,25 @@ struct KindStat { uint64_t rows,bytes; };
 
 int main(int argc,char** argv) {
     std::string profile="full",out;unsigned seconds=600,event_every=0,nofix_s=45,outage_s=25;
+    // motion_ms: wheels and yaw each every motion_ms (vehicle 2026-10-05:
+    // about 100 ms each); turn_ms: worker receive turn (the real worker wakes
+    // per datagram, so a turn per datagram is turn_ms = motion_ms/2).
+    unsigned motion_ms=100,turn_ms=50;
     for(int i=1;i+1<argc;i+=2) {
         const std::string k=argv[i],v=argv[i+1];
         if(k=="--profile")profile=v;else if(k=="--seconds")seconds=unsigned(atoi(v.c_str()));
         else if(k=="--event-every")event_every=unsigned(atoi(v.c_str()));
         else if(k=="--nofix")nofix_s=unsigned(atoi(v.c_str()));
         else if(k=="--outage")outage_s=unsigned(atoi(v.c_str()));
+        else if(k=="--motion-ms")motion_ms=unsigned(atoi(v.c_str()));
+        else if(k=="--turn-ms")turn_ms=unsigned(atoi(v.c_str()));
         else if(k=="--out")out=v;
         else { fprintf(stderr,"unknown option %s\n",k.c_str());return 64; }
     }
-    if(out.empty() || (profile!="full" && profile!="persistent")) {
+    if(out.empty() || (profile!="full" && profile!="persistent") || !motion_ms || motion_ms%20 ||
+       !turn_ms || turn_ms%10) {
         fprintf(stderr,"usage: log_rate --profile full|persistent --out DIR [--seconds N] "
-                       "[--event-every S] [--nofix S] [--outage S]\n");return 64;
+                       "[--event-every S] [--nofix S] [--outage S] [--motion-ms 20k] [--turn-ms 10k]\n");return 64;
     }
     const std::string logs=out+"/logs";
     if(mkdir(out.c_str(),0700) && errno!=EEXIST)return 73;
@@ -207,10 +214,11 @@ int main(int argc,char** argv) {
         const uint64_t ms=(now-start)/1000000ULL;
         drive.step(0.01);
         const Truth x=drive.truth();
-        // Motion producer: wheels and yaw at 10 Hz each, reverse 1 then 0 at boot.
-        if(ms%100==0 || ms%100==50) {
+        // Motion producer: wheels and yaw every motion_ms each (offset by
+        // half a period), reverse 1 then 0 at boot.
+        if(ms%motion_ms==0 || ms%motion_ms==motion_ms/2) {
             N::RawEvent e=N::RawEvent();e.epoch=7;e.receive_seq=++sequence;e.received_ns=now;
-            if(ms%100==0) {
+            if(ms%motion_ms==0) {
                 e.kind=N::WHEELS;
                 for(unsigned i=0;i<4;++i)e.raw[i]=uint16_t(lround(x.kmh*100+10000));
             } else {
@@ -238,7 +246,7 @@ int main(int argc,char** argv) {
         }
         if(ms%90==0)oem_other_send(3,++other_counter);
         // One worker turn every 50 ms, in run_worker_association order.
-        if(ms%50)continue;
+        if(ms%turn_ms)continue;
         A::Observation o;
         while(pop(&o)) {
             if(!format_observation(line,sizeof line,o)) { j.fail();continue; }

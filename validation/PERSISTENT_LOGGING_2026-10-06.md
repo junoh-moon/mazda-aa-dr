@@ -40,11 +40,17 @@ init 뒤 할당 없음, OEM 스레드는 닿지 않음).
   min/max/mean과 rad/s 평균/절댓값 최대, 마지막 후진 값, 센서별 최신 수신 시각
   (`wheels_last_ns` 등), SEND 수(유형별, 변경, 0 아닌 결과), POSITION 수(mode,
   등급별), 억제 카운터, RAW 창 상태.
-- **RAW 창**: 192 KiB 미리 할당 링(최근 60 s 이내의 motion_batch, ORIGINAL LOCATION
+- **RAW 창**: 400 KiB 미리 할당 링(최근 최대 60 s의 motion_batch, ORIGINAL LOCATION
   SEND, FIX POSITION). 사건(BETA 상태 전이, hold, session storage 변경, GPS 등급
   전이, 고장/거부 묶음의 첫 행, late-accept 묶음, capture 종료) 때
   `raw_window` 표시 행 뒤에 오래된 순으로 쓰고, 이후 30 s는 raw 행을 바로 씁니다.
-  표시 행에는 trigger, 행 수, 바이트, 덮어쓴 행 수가 있습니다.
+  표시 행에는 trigger, 행 수, 바이트, 덮어쓴 행 수와 실제로 담긴 기간
+  `span_ms`가 있습니다. 실제 기간은 입력 속도로 정해집니다(2026-10-07 측정,
+  log_rate `--motion-ms/--turn-ms`): 차량 속도(wheel·yaw 각 약 10 Hz, 워커가
+  datagram마다 깸)에서 RAW 행 6.2 KB/s, 창 60 s(한도); 각 25 Hz에서 약 39 s;
+  각 50 Hz에서 약 23 s. 처음 구현의 192 KiB 창은 차량 속도에서도 약 32 s만
+  담았으므로 400 KiB로 늘렸습니다. 창 flush는 진단 등급이며 journal 링의 진단
+  용량(512 KiB)보다 작습니다. 메모리: 창 400 KiB(persistent에서만) + 링 768 KiB.
 
 분석기(`tools/analyze_logs.py`): boot 행의 `log_profile`을 세션에 기록,
 `log_digest`와 `*_digest`(모르는 digest 종류·필드 포함)는 세기만, `raw_window`에서
@@ -78,17 +84,20 @@ journal, writer 스레드(바이트는 같음), 실제 타이밍. 모든 수치�
 
 | 시나리오 | full | persistent | 비율 |
 |---|---|---|---|
-| NO_FIX 없음, GPS 끊김 없음 | 110.5 MB/h (30.7 KB/s) | 2.33 MB/h (0.65 KB/s) | 1/47 |
-| 부팅 NO_FIX 45 s, 끊김 없음 | 110.6 MB/h (30.7 KB/s) | 2.64 MB/h (0.73 KB/s) | 1/42 |
-| 부팅 NO_FIX 45 s, 10분마다 25 s 끊김 | 110.7 MB/h (30.8 KB/s) | 5.79 MB/h (1.61 KB/s) | 1/19 |
-| 부팅 NO_FIX 12분(10-05 주행과 같은 길이), 끊김 없음 | - | 5.43 MB/h (1.51 KB/s) | - |
-| 부팅 NO_FIX 12분, 10분마다 끊김 | - | 8.05 MB/h (2.24 KB/s) | - |
+| NO_FIX 없음, GPS 끊김 없음 | 약 111 MB/h (30.8 KB/s) | 2.54 MB/h (0.71 KB/s) | 1/44 |
+| 부팅 NO_FIX 45 s, 끊김 없음 | 111.0 MB/h (30.8 KB/s) | 2.86 MB/h (0.79 KB/s) | 1/39 |
+| 부팅 NO_FIX 45 s, 10분마다 25 s 끊김 | 111.1 MB/h (30.9 KB/s) | 7.02 MB/h (1.95 KB/s) | 1/16 |
+| 부팅 NO_FIX 12분(10-05 주행과 같은 길이), 끊김 없음 | - | 5.64 MB/h (1.57 KB/s) | - |
+| 부팅 NO_FIX 12분, 10분마다 끊김 | - | 9.12 MB/h (2.53 KB/s) | - |
 
-사건 하나(끊김 25 s: 등급 전이, ENGAGED, budget 철회, GPS 복귀)의 비용은 약
-0.5 MB입니다(60 s 이전 + 30 s 이후 raw, 증거 행). 12분 NO_FIX에서는 모든 NO_FIX
-POSITION과 초당 속도 overlay SEND가 증거로 남아 증가합니다.
+2026-10-07 재측정: RAW 창 400 KiB(실제 60 s), health의 journal 필드, BETA live 중
+POSITION 증거 등급(기록량 불변)을 반영했습니다. 처음 수치(192 KiB 창)는 각각
+2.33/2.64/5.79/5.43/8.05 MB/h였습니다. 사건 하나(끊김 25 s: 등급 전이, ENGAGED,
+budget 철회, GPS 복귀)의 비용은 약 0.7 MB입니다(60 s 이전 + 30 s 이후 raw, 증거
+행). 12분 NO_FIX에서는 모든 NO_FIX POSITION과 초당 속도 overlay SEND가 증거로
+남아 증가합니다. 사건이 10분보다 잦거나 NO_FIX가 길면 2 KB/s를 넘습니다.
 
-persistent, 부팅 NO_FIX 45 s, 끊김 없음의 행별 기여(B/s): beta_anchor 221,
+persistent, 부팅 NO_FIX 45 s, 끊김 없음의 행별 기여(B/s, 192 KiB 창 때 측정): beta_anchor 221,
 log_digest 98, motion_batch(사건 창) 80, beta_summary 75, shadow 55,
 shadow_calibration 55, health 53, POSITION 44, ORIGINAL LOCATION(창) 30, overlay
 SEND 21. full에서는 type 3 SEND 17,253, shadow 5,524, motion_batch 2,721,
@@ -98,9 +107,9 @@ LOCATION 1,729, POSITION 1,514 B/s입니다.
 
 | | full | persistent(사건 없음) | persistent(10분당 사건 1) |
 |---|---|---|---|
-| 논리 바이트/일 | 약 111 MB | 약 2.6 MB | 약 5.8 MB |
-| 연간 | 약 40 GB | 약 1.0 GB | 약 2.1 GB |
-| 16 MiB 링에 담기는 운전 | (120 MiB 링에 약 1.1 h) | 약 6.3 h | 약 2.9 h |
+| 논리 바이트/일 | 약 111 MB | 약 2.9 MB | 약 7.0 MB |
+| 연간 | 약 41 GB | 약 1.0 GB | 약 2.6 GB |
+| 16 MiB 링에 담기는 운전 | (120 MiB 링에 약 1.1 h) | 약 5.9 h | 약 2.4 h |
 
 물리 flash 쓰기는 다릅니다. stdio는 1 s마다 fflush하고 fsync는 capture 종료에만
 하므로, 커널 writeback(주기·dirty 만료)이 부분 페이지를 다시 쓰는 만큼 늘 수
@@ -112,7 +121,8 @@ LOCATION 1,729, POSITION 1,514 B/s입니다.
 - `build/test_log_profile`: 종류별 유지/억제/비율 제한, RAW 창 순서와 60 s 한도,
   30 s 이후 구간, 용량 초과 시 최신 행 유지, 저장소 없는 경우, digest 통계와 주기
   초기화, capture 종료 순서(창, final digest, capture_end).
-- `tests/journal/test_log_profile.py`(log_rate 20분, 10분마다 끊김): persistent < 2 KB/s,
+- `tests/journal/test_log_profile.py`(log_rate 1시간, 10분마다 끊김): persistent < 2 KB/s,
+  채울 수 있었던 RAW 창의 `span_ms` >= 59 s,
   full > 20 KB/s; beta_state/anchor/hold/session_storage/reverse_latch와 변경 SEND가
   두 프로파일에서 바이트 단위로 같음; motion 이벤트 수가 digest 합과 같음; 분석기
   위반 0, persistent의 발견 코드가 같은 주행의 full 발견 코드의 부분집합, BETA
@@ -130,6 +140,11 @@ LOCATION 1,729, POSITION 1,514 B/s입니다.
 - 합성 데이터와 모의 시간입니다. LDS sideband 행(full에서도 측정하지 않음)과
   collector 비율은 수치에 없습니다.
 - 물리 flash 쓰기량, 파일시스템, eMMC 구조는 모릅니다.
-- RAW 창은 사건 직전 60 s(192 KiB 한도) 밖의 raw 행을 버립니다. 사건이 없는 구간의
-  원자료는 digest 통계뿐이며, 이것으로 DR 재구성은 할 수 없습니다.
+- RAW 창은 사건 직전 최대 60 s(400 KiB 한도; 입력이 빠르면 더 짧고 `span_ms`가
+  실제 값) 밖의 raw 행을 버립니다. 사건이 없는 구간의 원자료는 digest 통계뿐이며,
+  이것으로 DR 재구성은 할 수 없습니다.
+- 사건 없이 CMU가 reset되거나 프로세스가 죽으면, 메모리의 마지막 RAW 창과 writer
+  링에 남은 행(정상 시 수 ms, 저장장치 정지 시 더 많음)을 잃습니다. 그때 진단은
+  10 s digest, health, 10 s당 shadow 행과 collector journal(1 MiB x 2)에
+  의존합니다.
 - persistent 프로파일은 차량에서 실행된 적이 없습니다.

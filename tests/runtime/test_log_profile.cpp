@@ -140,6 +140,8 @@ static void window_and_events() {
         for(size_t i=1;i+1<out.size();++i)assert(raw_flags[base+i]);
     }
     assert(out[0].find("\"overwritten_rows\":")!=std::string::npos);
+    // The marker states how far back the written rows really reach.
+    assert(out[0].find("\"span_ms\":60000,\"pre_limit_ms\":60000")!=std::string::npos);
     // While BETA is live (the GPS_LOST row above), raw-context POSITION rows
     // are evidence class; LOCATION sends and batches stay diagnostic.
     assert(log.beta_live());
@@ -217,7 +219,7 @@ static void window_bounds() {
     log.row(row("shadow_disabled").c_str(),111*S,emit,0);
     assert(out.front().find("\"trigger\":\"shadow_disabled\"")!=std::string::npos);
     const size_t kept=out.size()-2;
-    assert(kept>100 && kept<200);                                   // about 192 KiB of 1 KiB rows
+    assert(kept>370 && kept<400);                                   // about 400 KiB of 1 KiB rows
     for(size_t i=1;i<=kept;++i) {                                   // the newest rows, contiguous
         const unsigned n=unsigned(atoi(out[i].c_str()+out[i].find("\"n\":")+4));
         assert(n==1000-kept+(i-1));

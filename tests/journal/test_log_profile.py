@@ -26,7 +26,7 @@ spec.loader.exec_module(audit)
 EVIDENCE_KINDS = ('beta_state', 'beta_anchor', 'beta_hold', 'beta_session_storage', 'beta_reverse_latch')
 
 
-def run(profile, directory, seconds=1200, every=600):
+def run(profile, directory, seconds=3600, every=600):
     result = subprocess.run([str(TOOL), '--profile', profile, '--seconds', str(seconds),
                              '--event-every', str(every), '--out', directory],
                             capture_output=True, text=True, timeout=120)
@@ -98,6 +98,14 @@ class PersistentProfile(unittest.TestCase):
             times = [r['mono_ns'] for r in self.quiet_rows if r['kind'] == kind]
             self.assertTrue(times)
             self.assertLessEqual(max(b - a for a, b in zip(times, times[1:])), limit, kind)
+        # At the vehicle cadence (10 Hz wheels and yaw) the RAW window really
+        # holds the 60 s before an event (marker span_ms, F3-D).
+        # Only windows that could fill: >= 60 s since the previous raw period.
+        marks = [r for r in self.quiet_rows if r['kind'] == 'raw_window']
+        spans = [b['span_ms'] for a, b in zip(marks, marks[1:])
+                 if b['mono_ns'] - (a['mono_ns'] + a['post_ms'] * 1000000) >= 60e9]
+        self.assertGreaterEqual(len(spans), 3)
+        self.assertGreaterEqual(min(spans), 59000)
         # Every motion event appears in the digests exactly once.
         digested = sum(r['motion_events'] for r in self.quiet_rows if r['kind'] == 'log_digest')
         accepted = sum(len(r['events']) for r in self.full_rows if r['kind'] == 'motion_batch')

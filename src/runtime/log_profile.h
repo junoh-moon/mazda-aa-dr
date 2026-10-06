@@ -17,12 +17,15 @@
 //  * instead of raw motion batches and ORIGINAL sends: one log_digest row per
 //    10 s (speed/yaw statistics, event counts, sequence gaps, send/position
 //    counts, suppressed-row counters);
-//  * a preallocated in-memory RAW window (the last <= 60 s of raw motion
-//    batches and ORIGINAL LOCATION sends/positions) written only around an
-//    event (BETA state change, hold, session storage change, GPS class
-//    transition, fault, late-arrival burst, capture stop), followed by 30 s
-//    of raw rows written directly, so the evidence around each event stays
-//    complete. Each such raw period starts with a raw_window marker row.
+//  * a preallocated in-memory RAW window (raw motion batches and ORIGINAL
+//    LOCATION sends/positions of at most the last 60 s, and at most
+//    WINDOW_BYTES: 60 s at the vehicle's ~10 Hz wheel/yaw cadence, about
+//    23 s at 50 Hz) written only around an event (BETA state change, hold,
+//    session storage change, GPS class transition, fault, late-arrival
+//    burst, capture stop), followed by 30 s of raw rows written directly.
+//    Each such raw period starts with a raw_window marker row whose span_ms
+//    is how far back the written rows really reach. Without an event (CMU
+//    reset, process death) the window in memory is lost.
 // Worker thread only. No allocation after init(), no I/O except through the
 // emit callback, bounded work per row. OEM threads never reach this code.
 #include "adapter/adapter.h"
@@ -47,7 +50,11 @@ public:
     static const unsigned FAULT_ROWS=5;
     static const uint64_t RAW_PRE_NS=60000000000ULL;
     static const uint64_t RAW_POST_NS=30000000000ULL;
-    static const size_t WINDOW_BYTES=196608;
+    // 400 KiB: about 60 s at the vehicle cadence (2026-10-05: wheels and yaw
+    // about 10 Hz each, 1 Hz POSITION+LOCATION; measured 6.2 KB/s of RAW
+    // rows with tests/runtime/log_rate.cpp). It must stay below the journal
+    // ring's diagnostic capacity (512 KiB) so a whole flush can be queued.
+    static const size_t WINDOW_BYTES=409600;
     static const size_t ROW_BYTES=8193;
 
     PersistentLog():window_(0),cap_(0),scratch_(0) { reset_all(); }
@@ -259,9 +266,9 @@ private:
             const int n=snprintf(line,sizeof line,
                 "{\"kind\":\"raw_window\",\"schema\":1,\"mono_ns\":%llu,\"profile\":\"persistent\","
                 "\"trigger\":\"%s\",\"rows\":%llu,\"bytes\":%llu,\"overwritten_rows\":%llu,"
-                "\"pre_limit_ms\":%llu,\"post_ms\":%llu,\"window\":\"%s\"}",
+                "\"span_ms\":%llu,\"pre_limit_ms\":%llu,\"post_ms\":%llu,\"window\":\"%s\"}",
                 (unsigned long long)now,why,(unsigned long long)rows_,(unsigned long long)used_,
-                (unsigned long long)overwritten_,(unsigned long long)(RAW_PRE_NS/1000000ULL),
+                (unsigned long long)overwritten_,(unsigned long long)span_ms(now),(unsigned long long)(RAW_PRE_NS/1000000ULL),
                 (unsigned long long)(RAW_POST_NS/1000000ULL),cap_?"available":"unavailable");
             if(n>0 && size_t(n)<sizeof line)emit(context,line,false);
             while(rows_) {
@@ -393,6 +400,12 @@ private:
         unsigned char h[HEADER];get(head_,h,HEADER);memcpy(len,h,4);memcpy(at,h+4,8);
         if(evidence)*evidence=(*len&EVIDENCE_BIT)!=0;
         *len&=~EVIDENCE_BIT;
+    }
+    // How far back the held rows reach (the real pre-event span).
+    uint64_t span_ms(uint64_t now) const {
+        if(!rows_)return 0;
+        uint32_t len;uint64_t at;header(&len,&at);
+        return now>at?(now-at)/1000000ULL:0;
     }
     void consume(uint32_t len) { head_=(head_+HEADER+len)%cap_;used_-=HEADER+len;--rows_; }
     void drop_oldest() { uint32_t len;uint64_t at;header(&len,&at);consume(len);++overwritten_; }
