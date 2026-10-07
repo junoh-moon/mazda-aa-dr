@@ -585,5 +585,62 @@ class BetaAnalyzeTests(unittest.TestCase):
         self.assertNotIn("beta_overlay_speed_mismatch", self.codes(self.audit(tail)))
 
 
+    def test_journal_gap_closes_only_on_a_later_worker_time_row(self):
+        # 2026-10-07: a hook-time POSITION/SEND row, a producer-time motion
+        # batch, RAW-window rows or an older worker row right after the
+        # counter row must not close the gap early: the dropped rows may be
+        # later than their times. Overlay at 2.2 s, lease window from 1.7 s.
+        dropped = dict(kind="journal_dropped", schema=1, mono_ns=9_000_000_000, **{"class": "diagnostic"},
+                       rows=12, first_seq=40, last_seq=51, dropped_total=12, reason="writer_backlog")
+        base = nofix_drive(overlay_speed_e3=15000)
+        index = next(i for i, r in enumerate(base) if r.get("to") == "NO_FIX")   # 1.05 s
+        early_closers = (
+            nofix_position(9, 1_060_000_000),                                  # hook time
+            nofix_send(9, 1_060_000_100),                                      # hook time
+            wheel_batch(50, [1_060_000_000]),                                  # producer time
+            health(500_000_000),                                               # older than the gap start
+        )
+        for closer in early_closers:
+            rows = list(base)
+            rows[index + 1:index + 1] = [dropped, closer]
+            report = self.audit(rows)
+            self.assertNotIn("beta_overlay_speed_mismatch", self.codes(report), closer["kind"])
+            self.assertIn("beta_overlay_unverified_journal_gap", self.codes(report, "inconclusive"), closer["kind"])
+        # RAW-window rows behind their marker keep the gap open too, even a
+        # worker-kind row with a time after the gap start.
+        marker = dict(kind="raw_window", schema=1, mono_ns=1_070_000_000, profile="persistent",
+                      trigger="beta_hold", rows=2, bytes=100, overwritten_rows=0, span_ms=1000,
+                      pre_limit_ms=60000, post_ms=30000, window="available")
+        rows = list(base)
+        rows[index + 1:index + 1] = [marker, dropped, wheel_batch(60, [1_065_000_000]),
+                                     dict(kind="shadow", mono_ns=1_066_000_000)]
+        report = self.audit(rows)
+        self.assertNotIn("beta_overlay_speed_mismatch", self.codes(report))
+        self.assertIn("beta_overlay_unverified_journal_gap", self.codes(report, "inconclusive"))
+        # A later worker-time row closes it before the lease window: checked.
+        rows = list(base)
+        rows[index + 1:index + 1] = [dropped, nofix_position(9, 1_060_000_000), health(1_100_000_000)]
+        report = self.audit(rows)
+        self.assertIn("beta_overlay_speed_mismatch", self.codes(report, "violation"))
+        self.assertNotIn("beta_overlay_unverified_journal_gap", self.codes(report))
+
+    def test_digest_and_not_durable_counts_are_lower_bounds(self):
+        rows = drive()
+        rows.insert(1, dict(kind="journal_not_durable", stage="boot", assist_ready=False))
+        report = self.audit(rows)
+        self.assertEqual(report["journal_lag"], {"not_durable": 1})
+        for key in ("journal_lag.not_durable", "persistent_profile.suppressed",
+                    "motion_rejected.suppressed_by_profile", "motion_rejected.total_including_suppressed"):
+            self.assertIn(key, report["lower_bounds"])
+        self.assertEqual(report["persistent_profile"]["suppressed_counts"], "lower_bound")
+        self.assertEqual(report["motion_rejected"]["profile_counts"], "lower_bound")
+        detail = next(i["detail"] for i in report["issues"] if i["code"] == "journal_not_durable")
+        self.assertIn("lower bound", detail)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            module.main([str(self.path)])
+        self.assertIn("journal_not_durable): at least 1 (lower bound", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

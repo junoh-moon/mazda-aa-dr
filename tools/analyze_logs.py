@@ -43,6 +43,23 @@ BETA_MAX_SPEED_E3 = 100000
 # BetaProfile.lease_ns / Options.max_snapshot_age_ns: an overlay speed comes
 # from a wheel event received at most this long before the send.
 BETA_LEASE_NS = 500000000
+# Row kinds whose time is not the worker's clock at the moment the row was
+# queued: POSITION/SEND carry the OEM hook time, motion rows the producer
+# receipt time (both can precede rows the journal writer dropped before
+# them). They, and rows written from a persistent-profile RAW window, never
+# close a journal_dropped gap (2026-10-07).
+GAP_NON_CLOSING_KINDS = frozenset(("position", "send", "motion", "motion_batch"))
+# Report values that can only under-count (2026-10-07): the rows that carry
+# them are diagnostic class, so the journal writer may drop them under a
+# backlog, and a reset or process death loses the final digest.
+LOWER_BOUNDS = {
+    "persistent_profile.suppressed": "log_digest rows are diagnostic class (droppable); the final digest is lost "
+                                     "on a reset or process death",
+    "motion_rejected.suppressed_by_profile": "from log_digest suppressed counters (see persistent_profile.suppressed)",
+    "motion_rejected.total_including_suppressed": "written rejection rows plus digest counters; both can be dropped",
+    "journal_lag.not_durable": "the journal_not_durable row is diagnostic class and is written while the journal "
+                               "is already behind",
+}
 # Adapter PositionClass numbers carried as the send/position "class" field.
 POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
 BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor")
@@ -882,7 +899,14 @@ class Auditor:
         if self.session is None and not collector:
             self.new_session()
         if not collector and kind != "journal_dropped" and integer(row.get("mono_ns")):
-            self.note_time(row["mono_ns"])
+            # Rows written from a RAW window (count from its marker) carry
+            # their older buffered times: they never close a gap.
+            window_row = self.session.get("raw_flush_left", 0) > 0
+            if window_row:
+                self.session["raw_flush_left"] -= 1
+            self.note_time(row["mono_ns"], closes=not window_row and kind not in GAP_NON_CLOSING_KINDS)
+        elif not collector and kind != "journal_dropped" and self.session.get("raw_flush_left", 0) > 0:
+            self.session["raw_flush_left"] -= 1
         if (not collector and self.session.get("capture_end_ns") is not None and
                 kind not in ("health", "capture_end")):
             self.issue("record_after_capture_end", source, kind)
@@ -1033,7 +1057,8 @@ class Auditor:
         elif kind == "journal_not_durable":
             self.journal_lag["not_durable"] += 1
             self.issue("journal_not_durable", source,
-                       "Boot row did not reach the journal file in time; SCRUB/BETA stayed off")
+                       "Boot row did not reach the journal file in time; SCRUB/BETA stayed off "
+                       "(occurrence count is a lower bound)")
         elif kind in ("motion", "motion_batch"):
             try:
                 events = decode_motion_records(row)
@@ -1155,6 +1180,7 @@ class Auditor:
         p["raw_window_rows"] += row["rows"]
         p["raw_window_triggers"][row["trigger"]] += 1
         self.session["motion_epoch"] = None
+        self.session["raw_flush_left"] = row["rows"]
 
     def journal_lag_row(self, row, source):
         """The worker withheld BETA provenance because the journal writer was
@@ -1180,11 +1206,15 @@ class Auditor:
             self.issue("beta_change_during_journal_lag", source,
                        "%s after the journal writer fell behind (BETA must be withheld)" % what, True)
 
-    def note_time(self, ns):
+    def note_time(self, ns, closes=True):
         """Row times (one monotonic clock) bound journal_dropped gaps: a gap
-        runs from the last time before the counter row to the first after."""
+        runs from the last time before the counter row to the first later
+        row that was timed by the worker when it was queued (closes) and is
+        not earlier than the gap's start. Hook-time POSITION/SEND rows,
+        producer-time motion rows and RAW-window rows keep the gap open:
+        their times can precede rows that were dropped."""
         beta = self.session["beta"]
-        if beta["gap_open"] is not None:
+        if beta["gap_open"] is not None and closes and ns >= beta["gap_open"]:
             beta["journal_gaps"].append((beta["gap_open"], ns))
             beta["gap_open"] = None
         if beta["last_time_ns"] is None or ns > beta["last_time_ns"]:
@@ -1246,7 +1276,7 @@ class Auditor:
             if speed is not None:
                 s["beta"]["wheels"].append((row["received_ns"], speed))
         s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["received_ns"])
-        self.note_time(row["received_ns"])
+        self.note_time(row["received_ns"], closes=False)
         if s["motion_epoch"] != row["epoch"]:
             if s["motion_epoch"] is not None:
                 self.issue("motion_source_restart", source, "Observed source epoch changed")
@@ -2580,14 +2610,17 @@ class Auditor:
                     persistent_profile=dict(self.persistent, digest_kinds=dict(self.persistent["digest_kinds"]),
                                             suppressed=dict(self.persistent["suppressed"]),
                                             raw_window_triggers=dict(self.persistent["raw_window_triggers"]),
+                                            suppressed_counts="lower_bound",
                                             scope="digest_counts_not_raw_evidence"),
                     journal_dropped=dict(self.journal_dropped, scope="diagnostic_rows_only"),
                     journal_lag=dict(self.journal_lag),
+                    lower_bounds=dict(LOWER_BOUNDS),
                     motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
                                          suppressed_by_profile=self.persistent["suppressed"]["motion_rejected"],
                                          total_including_suppressed=sum(self.motion_rejected_reasons.values()) +
                                          self.persistent["suppressed"]["motion_rejected"],
                                          sensors=dict(self.motion_rejected_sensors),
+                                         profile_counts="lower_bound",
                                          scope="diagnostic_only_excluded_from_accepted_motion"),
                     capture=dict(completion_records=self.capture_ends,
                                  scope="recorded_cutoff_not_proof_of_storage_or_vehicle_safety"),
@@ -2736,10 +2769,15 @@ def main(argv=None):
             if not beta["gps_return_checks_total"]:
                 print("BETA GPS return: no original GPS fix after a replaced LOCATION in these logs")
         if report['motion_rejected']['reasons'] or report['motion_rejected']['suppressed_by_profile']:
-            print("Rejected sensor diagnostics (not accepted input): %s; %d more counted only "
-                  "in persistent-profile digests (total %d)" %
+            print("Rejected sensor diagnostics (not accepted input): %s; at least %d more counted only "
+                  "in persistent-profile digests (total at least %d; digests can be lost)" %
                   (report['motion_rejected']['reasons'], report['motion_rejected']['suppressed_by_profile'],
                    report['motion_rejected']['total_including_suppressed']))
+        if report["journal_lag"].get("not_durable"):
+            print("Boot journal flush timeouts (journal_not_durable): at least %d (lower bound; the row "
+                  "itself is diagnostic class)" % report["journal_lag"]["not_durable"])
+        if report["persistent_profile"]["suppressed"]:
+            print("Persistent-profile suppressed rows (lower bound): %s" % report["persistent_profile"]["suppressed"])
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")
