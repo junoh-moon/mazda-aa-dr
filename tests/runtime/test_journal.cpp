@@ -505,6 +505,9 @@ static void writer_lag_and_wakeups(const char* root,const std::string& logs) {
   uint64_t unflushed_ms=0,flushed_ms=0,flush_latency=0,stop_latency=0;
   {
     Journal j(root);assert(j.start_writer());
+    // Request-driven flushes only here (the age-triggered flush would hide
+    // both effects; it has its own test below).
+    j.writer->flush_max_age_ns.store(0);
     j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
     for(unsigned n=1;n<=5;++n) { char row[64];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n);j.line(row); }
     const uint64_t begin=clock_ns(0);
@@ -548,6 +551,80 @@ static void writer_lag_and_wakeups(const char* root,const std::string& logs) {
   for(unsigned n=0;n<8;++n)assert(row_number(rows[n],"n")==n);
   clear_traces(logs);
   puts("Writer: stdio-buffered rows count as lag; flush/stop requests in the wait gap are not lost");
+}
+
+// Age-triggered fflush (2026-10-07 follow-up): rows in the stdio buffer are
+// flushed once the oldest is JOURNAL_FLUSH_MAX_AGE_NS old, so the steady-state
+// lag stays near 250 ms. A single 400 ms fflush must not withdraw BETA; a
+// 1.6 s writer stall must (within the unchanged 1.5 s bound).
+static void writer_age_flush(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=8388608;
+  A::PositionInput input=A::PositionInput();
+  mx5::runtime::request_trace::Trace trace=mx5::runtime::request_trace::Trace();
+  const A::PositionContext context={input,mx5::runtime::request_trace::Result(),trace,1,1,0};
+  beta_shared.active.store(1);beta_shared.source_epoch.store(1);beta_shared.storage_epoch.store(1);
+  A::Provenance out;
+  uint64_t first_flush_ms=0,steady_max=0,slow_max=0,lowered_after=0,raised_after=0;
+  unsigned steady_samples=0,lowered_in_steady=0;
+  {
+    Journal j(root);assert(j.start_writer());
+    j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
+    // (a) No request at all: the writer flushes by itself after ~250 ms.
+    const uint64_t flushes=j.writer->flush_count.load();
+    uint64_t t0=clock_ns(0);
+    j.line("{\"kind\":\"fixture\",\"n\":1}");
+    while(j.writer->flush_count.load()==flushes) { assert(clock_ns(0)-t0<2000000000ULL);usleep(1000); }
+    first_flush_ms=(clock_ns(0)-t0)/1000000ULL;
+    assert(first_flush_ms>=240 && first_flush_ms<600);
+    assert(journal_writer_lag(j.writer,clock_ns(0)).oldest_ns<50000000ULL);
+    // (b) Steady state: a row every 20 ms, guard every turn, worker flush
+    // request every 1 s; (c) one 400 ms fflush in the middle.
+    unsigned n=2;uint64_t last_flush=clock_ns(0);const uint64_t begin=last_flush;bool slow_armed=false;
+    while(clock_ns(0)-begin<6000000000ULL) {
+      const uint64_t now=clock_ns(0);
+      char row[64];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n++);j.line(row);
+      if(now-last_flush>=1000000000ULL) { last_flush=now;j.flush(); }
+      const uint64_t lag=journal_writer_lag(j.writer,now).oldest_ns;
+      journal_lag_guard(j,now);
+      if(!journal_current.load())++lowered_in_steady;
+      assert(provenance(0,context,&out,0));
+      if(now-begin<3000000000ULL) { if(lag>steady_max)steady_max=lag;++steady_samples; }
+      else {
+        if(!slow_armed) { slow_armed=true;j.writer->inject_flush_stall_ns.store(400000000ULL); }
+        if(lag>slow_max)slow_max=lag;
+      }
+      usleep(20000);
+    }
+    assert(j.writer->inject_flush_stall_ns.load()==0);   // the slow fflush happened
+    // (d) A 1.6 s writer stall: withheld within the 1.5 s bound, restored after.
+    j.writer->inject_stall_ns.store(1600000000ULL);
+    t0=clock_ns(0);
+    while(clock_ns(0)-t0<5000000000ULL && !(raised_after && clock_ns(0)-t0>raised_after+100000000ULL)) {
+      const uint64_t now=clock_ns(0);
+      char row[64];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n++);j.line(row);
+      if(now-last_flush>=1000000000ULL) { last_flush=now;j.flush(); }
+      journal_lag_guard(j,now);
+      if(!lowered_after && !journal_current.load())lowered_after=now-t0;
+      if(lowered_after && !raised_after && journal_current.load())raised_after=now-t0;
+      usleep(20000);
+    }
+    assert(!j.failed);
+  }
+  printf("Writer age flush: first self-flush after %llu ms; steady lag max %.1f ms over %u turns; "
+         "with one 400 ms fflush max %.1f ms (journal_current never lowered: %u); 1.6 s stall lowered after "
+         "%llu ms, restored after %llu ms\n",
+         (unsigned long long)first_flush_ms,steady_max/1e6,steady_samples,slow_max/1e6,lowered_in_steady,
+         (unsigned long long)(lowered_after/1000000ULL),(unsigned long long)(raised_after/1000000ULL));
+  fflush(stdout);
+  assert(steady_max<450000000ULL && lowered_in_steady==0);
+  assert(slow_max>=400000000ULL && slow_max<JOURNAL_LAG_LIMIT_NS);
+  // Measured from the stall's first row; rows already waiting in the stdio
+  // buffer (at most ~250 ms old) count too, so it can trip up to ~0.25 s
+  // earlier than 1.5 s after that row, never later than the bound.
+  assert(lowered_after>=1200000000ULL && lowered_after<=1700000000ULL && raised_after>lowered_after);
+  beta_shared.active.store(0);beta_shared.source_epoch.store(0);beta_shared.storage_epoch.store(0);
+  arm_test_mode();clear_traces(logs);
+  puts("Writer age flush: steady lag near 250 ms; a 400 ms fflush keeps BETA; a 1.6 s stall withdraws it");
 }
 // (3) While the lag guard is engaged (journal_current 0) FIX-class POSITION
 // rows are diagnostic: a long stall drops old ones instead of filling the
@@ -1246,6 +1323,7 @@ int main(int argc,char** argv) {
     writer_idle_and_health(root,logs);
     journal_lag_bound(root,logs);
     writer_lag_and_wakeups(root,logs);
+    writer_age_flush(root,logs);
     writer_lagging_fix_rows(root,logs);
     persistent_worker(root,logs);
     clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));

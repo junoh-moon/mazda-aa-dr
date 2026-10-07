@@ -68,6 +68,13 @@ static_assert(ATOMIC_INT_LOCK_FREE==2,"journal_ok is read by OEM threads");
 std::atomic<unsigned> journal_current(1);
 const uint64_t JOURNAL_LAG_LIMIT_NS=1500000000ULL;
 const uint64_t JOURNAL_LAG_CLEAR_NS=500000000ULL;
+// The writer fflushes on its own once the oldest row handed to stdio since
+// the last fflush is this old (2026-10-07 follow-up). Rows in the stdio
+// buffer count as journal lag, so without it the steady-state lag rose to the
+// worker's 1 s flush period, leaving about 0.4 s of margin to
+// JOURNAL_LAG_LIMIT_NS. At most about 4 fflush calls per second; fsync policy
+// unchanged (capture stop only).
+const uint64_t JOURNAL_FLUSH_MAX_AGE_NS=250000000ULL;
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false, mx5::runtime::LOG_PROFILE_FULL};
 const char *boot_result = "not_attempted";
 bool hook_installed = false;
@@ -496,12 +503,18 @@ struct JournalWriter {
   std::atomic<uint64_t> busy_since;
   std::atomic<uint64_t> inject_stall_ns;   // tests only: one stall before the next row
   std::atomic<uint64_t> inject_wait_gap_ns; // tests only: one stall between the flush check and wait()
+  std::atomic<uint64_t> inject_flush_stall_ns; // tests only: one slow fflush
+  // Age-triggered fflush bound (JOURNAL_FLUSH_MAX_AGE_NS; 0: only on a
+  // worker request, the earlier behaviour; tests and measurements only).
+  std::atomic<uint64_t> flush_max_age_ns;
+  std::atomic<uint64_t> flush_count;         // fflush calls by the writer (measurement)
   std::atomic<uint64_t> loops;             // tests only: writer loop iterations
   char* row_buffer;                         // writer thread only
   JournalWriter(const char* r,unsigned char* buffer,size_t diagnostic,size_t evidence)
       : root(r),storage(buffer),ring(buffer,diagnostic,buffer+diagnostic,evidence),thread(),
         ok(1),stopping(0),durable(0),closed_ok(0),flush_target(0),flushed(0),written(0),
-        busy_since(0),inject_stall_ns(0),inject_wait_gap_ns(0),loops(0),row_buffer(0) {}
+        busy_since(0),inject_stall_ns(0),inject_wait_gap_ns(0),inject_flush_stall_ns(0),
+        flush_max_age_ns(JOURNAL_FLUSH_MAX_AGE_NS),flush_count(0),loops(0),row_buffer(0) {}
 };
 const size_t JOURNAL_ROW_BUFFER=mx5::runtime::JournalRing::MAX_ROW+1;
 // dropped_total: rows lost up to and including this gap (the writer's own
@@ -564,8 +577,20 @@ void* journal_writer_main(void* argument) {
       }
       if(file.failed)w.ok.store(0,std::memory_order_release);
       const uint64_t target=w.flush_target.load(std::memory_order_acquire);
-      if(target>w.flushed.load(std::memory_order_acquire) && expected>=target) {
+      // Age-triggered flush: the oldest row in the stdio buffer reached the
+      // bound. Otherwise the time until it does bounds the wait below.
+      const uint64_t max_age=w.flush_max_age_ns.load(std::memory_order_acquire);
+      const uint64_t unflushed=max_age?w.ring.stats().unflushed_push_ns:0;
+      const uint64_t now=unflushed?clock_ns(0):0;
+      const uint64_t age=unflushed && now>unflushed?now-unflushed:0;
+      const bool aged=unflushed && age>=max_age;
+      if((target>w.flushed.load(std::memory_order_acquire) && expected>=target) || aged) {
         w.busy_since.store(clock_ns(0),std::memory_order_release);
+#ifdef MX5DR_JOURNAL_TEST_HOOKS
+        const uint64_t slow=w.inject_flush_stall_ns.exchange(0,std::memory_order_acq_rel);
+        if(slow) { struct timespec t={time_t(slow/1000000000ULL),long(slow%1000000000ULL)};nanosleep(&t,0); }
+#endif
+        w.flush_count.fetch_add(1,std::memory_order_relaxed);
         file.flush();
         if(!file.failed)w.ring.flushed();
         w.busy_since.store(0,std::memory_order_release);
@@ -588,13 +613,16 @@ void* journal_writer_main(void* argument) {
         w.closed_ok.store(ok?1:0,std::memory_order_release);
         break;
       }
-      // Sleep until a push, a flush/stop request, or at most 1 s (no polling).
+      // Sleep until a push, a flush/stop request, the age-triggered flush is
+      // due, or at most 1 s (no polling).
       if(!batch) {
+        uint64_t timeout=1000000000ULL;
+        if(unflushed && !aged) { timeout=max_age-age;if(timeout<1000000ULL)timeout=1000000ULL; }
 #ifdef MX5DR_JOURNAL_TEST_HOOKS
         const uint64_t gap=w.inject_wait_gap_ns.exchange(0,std::memory_order_acq_rel);
         if(gap) { struct timespec t={time_t(gap/1000000000ULL),long(gap%1000000000ULL)};nanosleep(&t,0); }
 #endif
-        w.ring.wait(1000000000ULL,journal_writer_pending,&w);
+        w.ring.wait(timeout,journal_writer_pending,&w);
       }
     }
   }
