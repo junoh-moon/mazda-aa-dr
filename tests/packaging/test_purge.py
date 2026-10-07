@@ -114,7 +114,7 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(tree(self.root, self.skip), clean)
         report = (self.usb / 'purge-result.txt').read_text()
         self.assertIn('status=finished', report)
-        self.assertIn('verdict: identical to the pre-install state', report)
+        self.assertIn('verdict: identical to all 1 recorded pre-install states', report)
         self.assertIn('after_package_directory=absent', report)
         self.assertIn('/data_persist/mx5-aa-dr/logs/trace.0.jsonl', report)
         # Idempotent: the second run has nothing to delete and changes nothing.
@@ -237,8 +237,9 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(self.fixture.sm.read_text(), edited)
         report = (self.usb / 'purge-result.txt').read_text()
         self.assertIn('verdict: differs from the pre-install state: /jci/sm/sm.conf (changed after installation', report)
-        self.assertIn('compare /jci/sm/sm_WCP.conf identical', report)
-        self.assertIn('compare /usr/bin/autostart identical', report)
+        self.assertRegex(report, r'compare \S+ /jci/sm/sm_WCP.conf identical')
+        self.assertRegex(report, r'compare \S+ /usr/bin/autostart identical')
+        self.assertNotIn('identical to all', report)
 
     def test_upgrade_leftovers_and_external_staging_files_are_deleted(self):
         # A v0.3.12-shadow.5 one-boot tree, several installs, one interrupted.
@@ -289,7 +290,8 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(self.fixture.autostart.read_bytes(), self.fixture.original_autostart)
         self.assertFalse((self.root / 'data_persist/.mx5dr-install-lock').exists())
         report = (self.usb / 'purge-result.txt').read_text()
-        self.assertIn(f'compare_basis={sets[0]}', report)
+        self.assertIn(f'compare_records= {sets[0]} {sets[1]}', report)
+        self.assertIn('verdict: identical to all 2 recorded pre-install states', report)
         self.assertIn('compare_complete_records=2', report)
         self.assertIn('compare_records_agree=yes', report)
         self.assertIn('compare_incomplete_or_not_original= 19700101T000001-1 19700101T002334-12846', report)
@@ -344,14 +346,39 @@ class PurgeTests(unittest.TestCase):
         self.assertIn('unexpected, left as is: /usr/bin/autostart.mx5dr-remove.8', report.replace(str(self.root), ''))
 
     def test_disagreeing_records_are_reported(self):
+        # Review 2026-10-07: original install (A), another tool edits
+        # sm_WCP.conf, reinstall (B) whose name sorts first after a clock
+        # restart, uninstall. The verdict must not claim "identical".
         self.install_and_uninstall()
         self.fixture.wcp.write_text(self.fixture.wcp.read_text() + '<!-- edit -->\n')
         self.install_and_uninstall()
+        backups = self.base / 'backups'
+        first, second = sorted(p.name for p in backups.iterdir() if p.name[0].isdigit())
+        (backups / second).rename(backups / '19700101T000001-9')
         result = self.purge()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('identical', result.stdout)
+        self.assertIn('Pre-install records disagree.\nNothing restored. Current files match:\n'
+                      '  19700101T000001-9\n', result.stdout)
         report = (self.usb / 'purge-result.txt').read_text()
         self.assertIn('compare_records_agree=no', report)
         self.assertIn('compare_complete_records=2', report)
+        self.assertIn(f'verdict: recorded pre-install states disagree: 19700101T000001-9 {first}; '
+                      'current files match: 19700101T000001-9 (nothing restored)', report)
+        self.assertIn(f'compare {first} /jci/sm/sm_WCP.conf differs', report)
+        self.assertNotIn('verdict: identical', report)
+        # Neither record matches after a further edit.
+        self.assertEqual(self.purge().returncode, 0)
+
+    def test_disagreeing_records_with_no_match(self):
+        self.install_and_uninstall()
+        self.fixture.wcp.write_text(self.fixture.wcp.read_text() + '<!-- edit -->\n')
+        self.install_and_uninstall()
+        self.fixture.sm.write_text(self.fixture.sm.read_text() + '<!-- later -->\n')
+        result = self.purge()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Nothing restored. Current files match:\n  none\n', result.stdout)
+        self.assertIn('current files match: none (nothing restored)', (self.usb / 'purge-result.txt').read_text())
 
     def test_report_keeps_an_interrupted_earlier_report(self):
         self.install_and_uninstall()

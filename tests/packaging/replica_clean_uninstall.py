@@ -380,13 +380,15 @@ def lifecycle(run, reference, upgrade):
     report = (run.root / 'tmp/mnt/sda1/purge-result.txt').read_text()
     (run.out / 'purge-result.txt').write_text(report)
     run.check('report: finished', 'status=finished' in report)
-    run.check('report: verdict identical', 'verdict: identical to the pre-install state' in report)
+    run.check('report: verdict identical to every record', 'verdict: identical to all ' in report)
     run.check('report: package directory absent', 'after_package_directory=absent' in report)
     run.check('report: stale install lock reclaimed', 'stale_install_lock_reclaimed=yes' in report)
     run.check('report: stale /tmp hash copy listed', 'dir 0 /tmp/mx5dr-hash.Zx9Qw1' in report)
     if upgrade:
-        run.check('report: basis is the oldest vehicle record',
-                  'compare_basis=19700101T000140-5752' in report)
+        run.check('report: all four complete vehicle records compared',
+                  'compare_records= 19700101T000140-5752 19700101T000230-11109 19700101T000238-11190 '
+                  '19700101T000247-13442\n' in report)
+        run.check('report: identical to all 4', 'verdict: identical to all 4 recorded pre-install states' in report)
         run.check('report: interrupted vehicle record not used',
                   '19700101T002334-12846' in report.split('compare_incomplete_or_not_original=')[1].splitlines()[0])
         run.check('report: records agree', 'compare_records_agree=yes' in report)

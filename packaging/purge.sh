@@ -231,11 +231,33 @@ oem_path() {
     case "$1" in autostart) printf '%s\n' "$AUTOSTART";; *) printf '%s\n' "$ROOT/jci/sm/$1";; esac
 }
 first_field() { awk 'NR==1 {print $1}' "$1" 2>/dev/null || :; }
+backup_set_name() {
+    # YYYYMMDDTHHMMSS-<pid>, exactly as install.sh names a transaction.
+    case "$1" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-*) ;; *) return 1;; esac
+    digits "${1#*-}"
+}
+now_of() {
+    case "$1" in autostart) printf '%s\n' "$NOW_AUTOSTART";; sm.conf) printf '%s\n' "$NOW_SM";; *) printf '%s\n' "$NOW_WCP";; esac
+}
+# The current files are compared with EVERY complete record. "identical" is
+# claimed only when all records agree and the current files match them; when
+# records disagree (e.g. another tool edited a file between two installs and
+# the clock restarted, so the name order is not the install order) the report
+# names the records and which of them the current files match, never more.
 compare_pre_install() {
-    BASIS=''; COMPLETE=0; INCOMPLETE=''; AGREE=yes
+    BASIS=''; COMPLETE=0; INCOMPLETE=''; AGREE=yes; SETS=''; MATCHING=''
+    COMPARE_LINES=''; DIFFERS=''
+    for file in $COMPARE_FILES; do
+        current=$(oem_path "$file")
+        now=missing
+        if [ -f "$current" ] && [ ! -L "$current" ]; then now=$(hash "$current") || now=unreadable; fi
+        case "$file" in autostart) NOW_AUTOSTART=$now;; sm.conf) NOW_SM=$now;; *) NOW_WCP=$now;; esac
+        COMPARE_LINES="${COMPARE_LINES}current ${current#"$ROOT"} sha256=$now
+"
+    done
     for set in "$BASE"/backups/*; do
         name=${set##*/}
-        case "$name" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*) ;; *) continue;; esac
+        backup_set_name "$name" || continue
         [ -d "$set" ] && [ ! -L "$set" ] || continue
         complete=1
         for file in $COMPARE_FILES; do
@@ -252,33 +274,31 @@ compare_pre_install() {
         done
         if [ "$complete" = 0 ]; then INCOMPLETE="$INCOMPLETE $name"; continue; fi
         COMPLETE=$((COMPLETE + 1))
-        if [ -z "$BASIS" ]; then
-            BASIS=$name
-        else
-            for file in $COMPARE_FILES; do
-                [ "$(first_field "$set/$file.before.sha256")" = "$(first_field "$BASE/backups/$BASIS/$file.before.sha256")" ] || AGREE=no
-            done
-        fi
-    done
-    COMPARE_LINES=''; DIFFERS=''
-    for file in $COMPARE_FILES; do
-        current=$(oem_path "$file")
-        now=missing
-        if [ -f "$current" ] && [ ! -L "$current" ]; then now=$(hash "$current") || now=unreadable; fi
-        if [ -z "$BASIS" ]; then
-            state=unavailable; was=none
-        else
-            was=$(first_field "$BASE/backups/$BASIS/$file.before.sha256")
-            if [ "$now" = "$was" ]; then state=identical; else state=differs; DIFFERS="$DIFFERS ${current#"$ROOT"}"; fi
-        fi
-        COMPARE_LINES="${COMPARE_LINES}compare ${current#"$ROOT"} $state now=$now pre_install=$was
+        SETS="$SETS $name"
+        [ -n "$BASIS" ] || BASIS=$name
+        match=yes
+        for file in $COMPARE_FILES; do
+            was=$(first_field "$set/$file.before.sha256")
+            [ "$was" = "$(first_field "$BASE/backups/$BASIS/$file.before.sha256")" ] || AGREE=no
+            current=$(oem_path "$file")
+            if [ "$(now_of "$file")" = "$was" ]; then state=identical; else state=differs; match=no; fi
+            COMPARE_LINES="${COMPARE_LINES}compare $name ${current#"$ROOT"} $state pre_install=$was
 "
+        done
+        [ "$match" = no ] || MATCHING="$MATCHING $name"
     done
-    if [ -z "$BASIS" ]; then
+    if [ "$COMPLETE" = 0 ]; then
         VERDICT='no complete pre-install record; comparison unavailable'
-    elif [ -z "$DIFFERS" ]; then
-        VERDICT='identical to the pre-install state'
+    elif [ "$AGREE" = no ]; then
+        VERDICT="recorded pre-install states disagree:$SETS; current files match:${MATCHING:- none} (nothing restored)"
+    elif [ -n "$MATCHING" ]; then
+        VERDICT="identical to all $COMPLETE recorded pre-install states"
     else
+        for file in $COMPARE_FILES; do
+            current=$(oem_path "$file")
+            [ "$(now_of "$file")" = "$(first_field "$BASE/backups/$BASIS/$file.before.sha256")" ] ||
+                DIFFERS="$DIFFERS ${current#"$ROOT"}"
+        done
         VERDICT="differs from the pre-install state:$DIFFERS (changed after installation, e.g. by another tool such as the touch mod; left as it is, not restored)"
     fi
 }
@@ -295,7 +315,8 @@ save_report() {
         printf 'purge_schema=1\nstatus=%s\nboot_id=%s\n' "$1" "$BOOT_NOW"
         printf 'package_directory=%s\n' "${BASE#"$ROOT"}"
         printf 'stale_install_lock_reclaimed=%s\n' "$STALE_LOCK"
-        printf 'compare_basis=%s\n' "${BASIS:-none}"
+        printf 'compare_records=%s\n' "${SETS:- none}"
+        printf 'compare_current_matches=%s\n' "${MATCHING:- none}"
         printf 'compare_complete_records=%s (set names use the CMU clock; name order is nominal)\n' "$COMPLETE"
         printf 'compare_records_agree=%s\n' "$AGREE"
         printf 'compare_incomplete_or_not_original=%s\n' "${INCOMPLETE:- none}"
@@ -379,10 +400,15 @@ printf '%s\n' '---- DELETE RESULT ----'
 echo "Deleted $PLANNED_FILES files, $PLANNED_BYTES bytes"
 if [ "$absent" = absent ]; then echo 'Package directory absent'; else echo 'Package directory STILL PRESENT'; fi
 [ -z "$remaining" ] || echo "Still present:$remaining"
-if [ -z "$BASIS" ]; then
+if [ "$COMPLETE" = 0 ]; then
     echo 'OEM files: no pre-install record'
-elif [ -z "$DIFFERS" ]; then
+elif [ "$AGREE" = no ]; then
+    echo 'Pre-install records disagree.'
+    echo 'Nothing restored. Current files match:'
+    if [ -z "$MATCHING" ]; then echo '  none'; else for name in $MATCHING; do echo "  $name"; done; fi
+elif [ -n "$MATCHING" ]; then
     echo 'OEM files: identical to pre-install'
+    echo "(all $COMPLETE recorded states agree)"
 else
     echo 'OEM files differ from pre-install:'
     for path in $DIFFERS; do echo "  ${path##*/} (kept as it is)"; done
