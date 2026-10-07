@@ -183,10 +183,11 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
    Deleted 67 files, 39942433 bytes
    Package directory absent
    OEM files: identical to pre-install
+   (all 4 recorded states agree)
    Saved: purge-result.txt
    ```
 
-   터치 모드 등 다른 도구가 설치 뒤 `sm.conf`를 바꿨다면 `OEM files differ from pre-install:`과 `sm.conf (kept as it is)`가 나옵니다. 오류가 아니며 되돌리지 않습니다. `Refused, nothing deleted: …`이면 아무것도 지우지 않았습니다. 한 줄 사유대로 `4` 또는 `5`를 먼저 하고 다시 `6`을 누르십시오. 같은 내용과 지운 파일 목록이 USB의 `purge-result.txt`에 저장됩니다.
+   터치 모드 등 다른 도구가 설치 뒤 `sm.conf`를 바꿨다면 `OEM files differ from pre-install:`과 `sm.conf (kept as it is)`가 나옵니다. 오류가 아니며 되돌리지 않습니다. 설치 사이에 다른 도구가 파일을 바꿔 설치 전 기록끼리 다르면 `Pre-install records disagree.`와 현재 파일이 맞는 기록 이름(없으면 `none`)이 나옵니다. `Refused, nothing deleted: …`이면 아무것도 지우지 않았습니다. 한 줄 사유대로 `4` 또는 `5`를 먼저 하고 다시 `6`을 누르십시오. 같은 내용과 지운 파일 목록이 USB의 `purge-result.txt`에 저장됩니다.
 5. 시동을 꺼도 됩니다. 다음을 비공개로 보관하고 알려 주십시오: `mx5dr-logs-….tar`와 `.sha256`, `trial-result.txt`, `startup-result.txt`, `reboot-request.txt`, 2번의 사진, 동승자 메모가 있으면 그것도.
 
 ## 회수 뒤 분석 (PC)

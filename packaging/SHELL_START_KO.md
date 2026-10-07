@@ -171,12 +171,20 @@ USB 진단 폴더도 보존하십시오. PC에서 archive의 체크섬을 확인
 뒤 같은 한 줄로 메뉴를 열고 **`6`과 Enter**를 누르십시오. 수집 로그가 필요하면 그 전에 `3`으로
 회수하십시오. 지운 로그·백업은 되살릴 수 없습니다. `6`은 `/data_persist/mx5-aa-dr` 전체(guard,
 설치 파일, 로그, 백업, 설정)와 설치기·guard·런타임이 그 밖에 남겼을 수 있는 임시 파일만 지우며,
-순정 파일(`/jci`, autostart 내용, `/data` 보고서)과 터치 모드(`oem-aa-mod`)는 건드리지 않습니다.
+지우는 대상은 이름이 정확히 맞는 것뿐입니다(`/tmp` 작업 파일은 접두사 뒤 영문·숫자 여섯 글자,
+OEM 파일 옆 사본은 프로세스 번호). 이름이 다르거나 링크이거나 안에 다른 파일이 든 것은 지우지 않고
+보고서에 `unexpected, left as is`로 적습니다. 순정 파일(`/jci`, autostart 내용, `/data` 보고서)과
+터치 모드 폴더(`oem-aa-mod`)는 지우는 경로 밖이며, 패키지 폴더 안에 그쪽을 가리키는 링크가 있으면
+링크만 지웁니다. 터치 모드가 쓰는 파일의 내용은 검사하지 않습니다.
 지우기 전에 현재 autostart·`sm.conf`·`sm_WCP.conf`를 설치기가 남긴 설치 전 기록과 비교해
-USB의 `purge-result.txt`에 판정(`identical to the pre-install state` 또는 다른 파일 이름), 삭제 목록과
-바이트 합계를 먼저 쓰고, 삭제 뒤 `package directory absent` 확인으로 다시 씁니다. 다른 도구가
-나중에 바꾼 파일은 다르다고 보고만 하며 되돌리지 않습니다. 아직 설치돼 있거나(`guard/persist`,
+USB의 `purge-result.txt`에 판정, 삭제 목록과 바이트 합계를 **삭제 전에** 쓰고, 삭제 뒤
+`package directory absent` 확인으로 다시 씁니다. 모든 설치 전 기록이 같고 현재 파일도 같을 때만
+`identical to all N recorded pre-install states`이며, 기록끼리 다르면(설치 사이에 다른 도구가
+파일을 바꾼 경우) `Pre-install records disagree.`와 현재 파일이 맞는 기록만 보여 줍니다. 다른
+도구가 바꾼 파일은 보고만 하며 되돌리지 않습니다. USB가 가득 찼거나 읽기 전용이면 첫 보고서를
+쓰지 못하므로 `nothing deleted`로 멈춥니다. 아직 설치돼 있거나(`guard/persist`,
 autostart 블록, preload 토큰), 패키지 파일을 쓰는 프로세스가 있거나 확인할 수 없거나, collector가
-실행 중이거나, 설치 잠금이 잡혀 있으면 `Refused, nothing deleted: …` 한 줄과 함께 아무것도 지우지
+실행 중이거나, 설치 잠금이 잡혀 있거나, `sm.conf`·`sm_WCP.conf`가 일반 파일이 아니거나, 패키지 폴더
+안에 다른 파일 시스템이 마운트돼 있으면 `Refused, nothing deleted: …` 한 줄과 함께 아무것도 지우지
 않습니다. 그때는 안내대로 `4`·`5`를 먼저 하십시오. 다시 `6`을 누르면 `Nothing to delete`가 나옵니다.
 실제 CMU에서는 실행하지 않았습니다([기록](https://github.com/junoh-moon/mazda-aa-dr/blob/master/validation/CLEAN_UNINSTALL_2026-10-07.md)).
