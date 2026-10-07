@@ -549,6 +549,42 @@ static void writer_lag_and_wakeups(const char* root,const std::string& logs) {
   clear_traces(logs);
   puts("Writer: stdio-buffered rows count as lag; flush/stop requests in the wait gap are not lost");
 }
+// (3) While the lag guard is engaged (journal_current 0) FIX-class POSITION
+// rows are diagnostic: a long stall drops old ones instead of filling the
+// evidence ring and failing the journal. LOST rows stay evidence.
+static void writer_lagging_fix_rows(const char* root,const std::string& logs) {
+  A::Observation fix=A::Observation();fix.kind=A::Observation::POSITION;fix.position_class=A::POSITION_FIX;
+  A::Observation lost=fix;lost.position_class=A::POSITION_LOST;
+  char row[300];
+  for(unsigned c=0;c<3;++c) {
+    // c 0: FIX while lagging (diagnostic); 1: FIX while current (evidence);
+    // 2: LOST while lagging (evidence).
+    arm_test_mode();clear_traces(logs);config.max_log_bytes=65536;
+    journal_current.store(c==1?1:0);
+    unsigned n=2;bool failed=false;
+    {
+      Journal j(root);assert(j.start_writer(2048,512));
+      j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
+      j.writer->inject_stall_ns.store(300000000ULL);
+      j.line("{\"kind\":\"fixture\",\"n\":1}");usleep(20000);
+      while(!j.failed && n<100) {
+        snprintf(row,sizeof row,"{\"kind\":\"position\",\"n\":%u,\"pad\":\"%0100u\"}",n,n);++n;
+        j.observation_line(row,c==2?lost:fix);
+      }
+      failed=j.failed;
+    }
+    journal_current.store(1);
+    const std::vector<std::string> rows=trace_rows(logs);
+    unsigned dropped=0;
+    for(size_t i=0;i<rows.size();++i)if(rows[i].find("journal_dropped")!=std::string::npos)++dropped;
+    printf("Writer lagging FIX rows: case %u rows=%u failed=%d dropped_counters=%u\n",c,n-2,int(failed),dropped);
+    if(c==0) assert(!failed && n==100 && dropped>=1 && journal_ok.load()==1);
+    else assert(failed && n<100 && journal_ok.load()==0 && A::mode()==A::OBSERVE);
+    clear_traces(logs);
+  }
+  arm_test_mode();
+  puts("Writer: FIX POSITION rows are diagnostic while the lag guard is engaged; LOST and current FIX stay evidence");
+}
 // Every queued row is written on worker exit; a requested stop closes the
 // file durably before its acknowledgement, in order.
 static void writer_shutdown(const char* root,const std::string& logs) {
@@ -1210,6 +1246,7 @@ int main(int argc,char** argv) {
     writer_idle_and_health(root,logs);
     journal_lag_bound(root,logs);
     writer_lag_and_wakeups(root,logs);
+    writer_lagging_fix_rows(root,logs);
     persistent_worker(root,logs);
     clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));
     return 0;

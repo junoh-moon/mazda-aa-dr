@@ -385,19 +385,26 @@ struct Journal {
   void line(const char *s) {
     if (failed)
       return;
-    if (filter) { filter->row(s, clock_ns(0), emit_to, this); return; }
+    if (filter) { sync_filter(); filter->row(s, clock_ns(0), emit_to, this); return; }
     emit(s);
   }
   // A formatted POSITION/SEND observation row (the profile needs its values).
+  // While the lag guard holds journal_current at 0 no POSITION can select a
+  // replacement (provenance() refuses), so a FIX-class POSITION row is
+  // queued as a diagnostic row: a long storage stall then drops old FIX rows
+  // instead of filling the evidence ring and failing the journal. LOST and
+  // NO_FIX rows stay evidence. Restored when the guard recovers (2026-10-07).
   void observation_line(const char *s, const A::Observation& o) {
     if (failed)
       return;
-    if (filter) { filter->observation(s, o, clock_ns(0), emit_to, this); return; }
-    emit(s);
+    if (filter) { sync_filter(); filter->observation(s, o, clock_ns(0), emit_to, this); return; }
+    emit(s, o.kind == A::Observation::POSITION && o.position_class == A::POSITION_FIX &&
+                !journal_current.load(std::memory_order_acquire));
   }
   // Every accepted motion event (digest statistics of the quiet profile).
   void note_motion(const N::RawEvent& e) { if (filter) filter->motion(e); }
-  void tick(uint64_t now) { if (filter && !failed) filter->tick(now, emit_to, this); }
+  void tick(uint64_t now) { if (filter && !failed) { sync_filter(); filter->tick(now, emit_to, this); } }
+  void sync_filter() { filter->set_journal_current(journal_current.load(std::memory_order_acquire) != 0); }
   static void emit_to(void* journal, const char* s, bool raw) { static_cast<Journal*>(journal)->emit(s, raw); }
   // A row that is written (profile decisions already made). raw: RAW context
   // from the quiet profile's window, queued as a diagnostic row.

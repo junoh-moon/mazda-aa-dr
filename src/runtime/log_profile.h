@@ -9,8 +9,9 @@
 //    every SEND with choice != ORIGINAL, POSITION rows of the BETA candidate
 //    classes (LOST, NO_FIX) and every POSITION whose class changed. Other
 //    POSITION rows (FIX) are RAW context (window/raw period below); while
-//    BETA is live (last beta_state not DISABLED/FAULT) they are queued in the
-//    journal ring's evidence class so a write backlog cannot drop them;
+//    BETA is live (last beta_state not DISABLED/FAULT) and the journal lag
+//    guard is not engaged they are queued in the journal ring's evidence
+//    class so a write backlog cannot drop them;
 //  * rate-limited: beta_summary (1/s while BETA is in a live state, else 1 per
 //    10 s), health/shadow/shadow_calibration (1 per 10 s), faults and
 //    rejections (5 per kind per 10 s, the rest counted);
@@ -154,6 +155,12 @@ public:
         raw(s,now,emit,context,beta_live_);
     }
     bool beta_live() const { return beta_live_; }
+    // The journal lag guard's state (runtime.cpp journal_current). While it
+    // is false, raw-context POSITION rows are diagnostic class even while
+    // BETA is live: no replacement can be selected then, and a long storage
+    // stall must not fill the evidence ring with FIX rows (2026-10-07). Read
+    // when a row is emitted, so window rows buffered earlier follow it too.
+    void set_journal_current(bool current) { journal_current_=current; }
     // Every accepted motion event, for the digest statistics.
     void motion(const navigation::RawEvent& e) {
         if(total_events_!=UINT64_MAX)++total_events_;
@@ -246,7 +253,7 @@ private:
     // evidence: written in the journal ring's evidence class (POSITION rows
     // while BETA is live); otherwise RAW context is diagnostic class.
     void raw(const char* s,uint64_t now,Emit emit,void* context,bool evidence=false) {
-        if(now<raw_until_) { ++raw_direct_;emit(context,s,!evidence);return; }
+        if(now<raw_until_) { ++raw_direct_;emit(context,s,!(evidence && journal_current_));return; }
         if(!cap_) { ++suppressed_[S_RAW_DROPPED];return; }
         const size_t n=strlen(s),total=HEADER+n;
         if(n>=ROW_BYTES || total>cap_) { ++suppressed_[S_RAW_DROPPED];return; }
@@ -275,7 +282,7 @@ private:
                 uint32_t len;uint64_t at;bool evidence;header(&len,&at,&evidence);
                 get((head_+HEADER)%cap_,scratch_,len);scratch_[len]=0;
                 consume(len);
-                emit(context,scratch_,!evidence);
+                emit(context,scratch_,!(evidence && journal_current_));
             }
             overwritten_=0;++flushes_;
         }
@@ -378,7 +385,7 @@ private:
         head_=used_=0;rows_=overwritten_=flushes_=0;raw_until_=0;
         last_health_=last_shadow_=last_calibration_=last_summary_=0;
         for(unsigned i=0;i<S_COUNT;++i) { fault_since_[i]=0;fault_rows_[i]=0; }
-        have_class_=false;last_class_=0;beta_live_=false;have_motion_=false;epoch_=last_seq_=last_motion_ns_=0;total_events_=0;
+        have_class_=false;last_class_=0;beta_live_=false;journal_current_=true;have_motion_=false;epoch_=last_seq_=last_motion_ns_=0;total_events_=0;
         for(unsigned i=0;i<3;++i)last_received_[i]=0;
         reverse_value_=-1;trigger_[0]=0;
         reset_period(0);since_=0;
@@ -424,7 +431,7 @@ private:
     uint64_t last_health_,last_shadow_,last_calibration_,last_summary_;
     uint64_t fault_since_[S_COUNT];unsigned fault_rows_[S_COUNT];
     uint64_t suppressed_[S_COUNT];
-    bool have_class_;unsigned last_class_;bool beta_live_;
+    bool have_class_;unsigned last_class_;bool beta_live_;bool journal_current_;
     // digest period
     uint64_t total_events_,since_,period_events_,kind_events_[3],seq_gaps_,max_gap_ns_,first_seq_;
     bool have_motion_;uint64_t epoch_,last_seq_,last_motion_ns_,last_received_[3];

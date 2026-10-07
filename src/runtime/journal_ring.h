@@ -12,7 +12,9 @@
 //  * EVIDENCE rows (BETA evidence: every beta_* row, every SEND row with
 //    choice != ORIGINAL, the boot/lifecycle rows and POSITION rows, except
 //    that the persistent profile passes RAW-context POSITION rows as
-//    diagnostic while BETA is not live, log_profile.h) are never dropped. If
+//    diagnostic while BETA is not live, log_profile.h, and FIX-class POSITION
+//    rows are diagnostic while the journal lag guard is engaged, runtime.cpp
+//    Journal::observation_line) are never dropped. If
 //    one does not fit, push() reports FULL and the caller must treat it as a
 //    journal failure (disable mutation, OBSERVE).
 //  * DIAGNOSTIC rows (motion batches, ORIGINAL sends, health, MODEL

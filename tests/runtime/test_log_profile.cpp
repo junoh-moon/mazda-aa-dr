@@ -235,11 +235,56 @@ static void window_bounds() {
     puts("persistent log: window capacity keeps the newest rows; no-storage fallback passed");
 }
 
+// Journal lag guard engaged (2026-10-07): no replacement can be selected, so
+// raw-context FIX POSITION rows are diagnostic class again even while BETA is
+// live, both written directly and from the window; evidence again after.
+static void lag_guard_classes() {
+    static unsigned char storage[PersistentLog::WINDOW_BYTES+PersistentLog::ROW_BYTES];
+    PersistentLog log;log.init(storage,model());out.clear();raw_flags.clear();
+    observe(log,position(A::POSITION_FIX,1,1),1*S,"first");          // transition: raw period to 31 s
+    log.row(row("beta_state",",\"to\":\"GPS_LOST\"").c_str(),2*S,emit,0);
+    assert(log.beta_live());
+    out.clear();raw_flags.clear();
+    observe(log,position(A::POSITION_FIX,1,2),3*S,"direct_current");
+    log.set_journal_current(false);
+    observe(log,position(A::POSITION_FIX,1,3),4*S,"direct_lagging");
+    observe(log,position(A::POSITION_LOST,0,4),5*S,"lost_lagging");    // class change: kept, evidence
+    observe(log,position(A::POSITION_LOST,0,5),6*S,"lost_kept");       // candidate class: evidence
+    log.set_journal_current(true);
+    observe(log,position(A::POSITION_FIX,1,6),7*S,"fix_transition");   // class change: kept
+    observe(log,position(A::POSITION_FIX,1,7),8*S,"direct_restored");
+    assert(out.size()==6 && raw_flags.size()==6);
+    assert(!raw_flags[0] && raw_flags[1] && !raw_flags[2] && !raw_flags[3] && !raw_flags[4] && !raw_flags[5]);
+    // Window rows buffered while current but written while lagging follow
+    // the guard at the time they are written.
+    for(unsigned i=0;i<5;++i)observe(log,position(A::POSITION_FIX,1,10+i),(50+i)*S,"window");
+    log.set_journal_current(false);
+    out.clear();raw_flags.clear();
+    log.row(row("beta_hold").c_str(),56*S,emit,0);
+    assert(out.size()==7 && out[0].find("\"kind\":\"raw_window\"")==1 && count("position")==5);
+    assert(!raw_flags[0] && !raw_flags[6]);
+    for(size_t i=1;i<6;++i)assert(raw_flags[i]);
+    // Recovered: the next window is evidence again.
+    log.set_journal_current(true);
+    for(unsigned i=0;i<3;++i)observe(log,position(A::POSITION_FIX,1,20+i),(90+i)*S,"window2");
+    out.clear();raw_flags.clear();
+    log.row(row("beta_hold").c_str(),94*S,emit,0);
+    assert(out.size()==5 && count("position")==3);
+    for(size_t i=1;i<4;++i)assert(!raw_flags[i]);
+    // BETA not live: diagnostic regardless of the guard (unchanged).
+    log.row(row("beta_state",",\"to\":\"DISABLED\"").c_str(),95*S,emit,0);
+    out.clear();raw_flags.clear();
+    observe(log,position(A::POSITION_FIX,1,30),96*S,"not_live");
+    assert(out.size()==1 && raw_flags[0]);
+    puts("persistent log: FIX POSITION rows are diagnostic while the journal lag guard is engaged");
+}
+
 int main() {
     rate_limits();
     window_and_events();
     digest_contents();
     window_bounds();
+    lag_guard_classes();
     puts("persistent log profile tests passed");
     return 0;
 }
