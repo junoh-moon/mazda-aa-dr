@@ -219,6 +219,14 @@ class PurgeTests(unittest.TestCase):
             (lock / 'pid').write_text('4242\n')
         self.refusal_keeps_everything(prepare, 6, 'install lock is held')
 
+    def test_refuses_a_file_system_mounted_inside_the_package(self):
+        def prepare():
+            self.install_and_uninstall()
+            (self.base / 'logs/usb').mkdir()
+            mounts = self.root / 'proc/self/mounts'
+            mounts.write_text(mounts.read_text() + f'/dev/sdc1 {self.base.resolve()}/logs/usb vfat rw 0 0\n')
+        self.refusal_keeps_everything(prepare, 8, 'a file system is mounted inside the package directory')
+
     def test_refuses_symlinked_package_directory(self):
         elsewhere = self.root / 'elsewhere'
         elsewhere.mkdir()

@@ -6,7 +6,7 @@
 # touch mod) are never written, restored or removed.
 #   3 package still installed   4 package file in use or unprovable
 #   5 collector running          6 install lock held
-#   7 unexpected file type
+#   7 unexpected file type        8 file system mounted inside it
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
 [ "$#" = 1 ] || fail 'Usage: sh purge.sh /mounted/usb/directory'
@@ -104,6 +104,15 @@ check_collector() {
     # read-only (never create) in a subshell that releases it on exit.
     ( exec 7< "$collector_lock" && flock -n 7 ) 2>/dev/null ||
         refuse 5 'collector is running (its lock is held); reboot with 5 first'
+}
+# BusyBox 1.19.2 rm has no -xdev: never recurse into another file system.
+check_submounts() {
+    [ -d "$BASE" ] && [ ! -L "$BASE" ] || return 0
+    real_base=$(CDPATH= cd -P -- "$BASE" && pwd -P) || refuse 7 'cannot resolve the package directory'
+    mount_table=$(cat "$ROOT/proc/mounts") || refuse 8 'cannot read /proc/mounts'
+    if printf '%s\n' "$mount_table" | awk -v b="$real_base" '$2==b || index($2, b "/")==1 {found=1} END {exit !found}'; then
+        refuse 8 'a file system is mounted inside the package directory'
+    fi
 }
 STALE_LOCK=no
 check_lock() {
@@ -346,6 +355,7 @@ if [ ! -e "$BASE" ] && [ "$EXTERNAL_COUNT" = 0 ] && [ "$STALE_LOCK" = no ]; then
     [ -z "$UNEXPECTED" ] || printf '%s\n' "$UNEXPECTED"
     exit 0
 fi
+check_submounts
 check_processes
 check_collector
 BOOT_NOW=$(cat "$ROOT/proc/sys/kernel/random/boot_id" 2>/dev/null) || BOOT_NOW=unavailable
@@ -366,6 +376,7 @@ if [ "$STALE_LOCK" = yes ]; then
 fi
 lock
 check_uninstalled
+check_submounts
 check_collector
 # Record the comparison before anything is deleted: it needs the backups.
 save_report started 'result=interrupted unless a finished report replaces this one
