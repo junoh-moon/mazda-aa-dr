@@ -124,8 +124,14 @@ v1.0.0-beta.3(`0dc5a9b`) 독립 재검토가 제안한 다섯 가지를 구현�
   `row_written()`, `fflush` 성공 뒤 `flushed()`를 부릅니다.
   `journal_writer_lag`는 대기 행, held, unflushed, 진행 중인 `fflush` 시작
   시각 중 가장 이른 값을 씁니다. stdio가 버퍼 일부를 먼저 내보냈어도 이 값은
-  지연을 크게 볼 뿐 작게 보지 않습니다. 이제 정상 동작에서도 지연이 worker의
-  1 s flush 요청 주기만큼 올라가므로 1.5 s 한도와의 여유는 약 0.4-0.5 s입니다.
+  지연을 크게 볼 뿐 작게 보지 않습니다. 이것만으로는 정상 동작에서도 지연이
+  worker의 1 s flush 요청 주기만큼 올라가 1.5 s 한도와의 여유가 약 0.5 s뿐이었으므로
+  아래 250 ms 자체 flush를 함께 넣었습니다.
+- **250 ms 자체 flush**(`JOURNAL_FLUSH_MAX_AGE_NS`): 마지막 `fflush` 뒤 stdio에
+  넘긴 행 중 가장 오래된 것이 250 ms가 되면 writer가 스스로 `fflush`하고, 대기
+  시간도 그때까지로 줄입니다. worker의 1 s flush 요청은 그대로입니다
+  (`flush_wait`, health 주기). fsync 정책은 바뀌지 않았습니다(capture 종료에만).
+  정상 지연은 약 250 ms 이하로 유지되고 guard 한도까지 1.2 s 이상 남습니다.
 - **pop과 `busy_since` 사이 틈 제거**: held 시각을 `pop()`의 임계 구역 안에서
   저장하므로 꺼낸 행이 지연 계산에서 사라지는 순간이 없습니다. 행 단위
   `busy_since`는 없앴고 `fflush` 시작 시각에만 씁니다.
@@ -153,6 +159,26 @@ v1.0.0-beta.3(`0dc5a9b`) 독립 재검토가 제안한 다섯 가지를 구현�
   값을 표시하지 않아 바꾸지 않았습니다.
 - OEM 스레드 경로(adapter hook, `JournalQueue`, `provenance()`)는 바뀌지
   않았습니다. 바뀐 것은 worker·writer 스레드와 분석기뿐입니다.
+
+### 정상 지연과 쓰기 횟수 (실시간 재생, 2026-10-08)
+
+`build/writer_lag`(tests/runtime/writer_lag.cpp, `make test`에는 없음)는 `log_rate`의
+10분 합성 주행(부팅 NO_FIX 45 s, 25 s GPS 끊김 1회)이 만든 journal을 실제 시간으로
+제품 Journal과 writer 스레드에 다시 넣습니다. 10 ms마다 worker처럼 지연을 재고
+1 s마다 flush를 요청하며 `journal_lag_guard`를 돌립니다. 쓰기 횟수는
+`/proc/self/io`의 syscw/wchar입니다. 호스트 SSD에서 네 실행을 동시에 돌렸으며,
+CMU eMMC 측정은 아닙니다.
+
+| 프로파일 | flush | 지연 p50 / p99 / 최대 (ms) | fflush/s | write 호출/s | 바이트/write |
+|---|---|---|---|---|---|
+| full (30.8 KB/s) | 요청만(1 s) | 474 / 976 / 1001 | 0.99 | 7.97 | 3861 |
+| full | 250 ms 자체 | 101 / 242 / 505 | 3.97 | 9.63 | 3194 |
+| persistent (2.5 KB/s, 사건 포함) | 요청만(1 s) | 71 / 868 / 1006 | 0.99 | 1.39 | 1788 |
+| persistent | 250 ms 자체 | 0 / 236 / 353 | 1.28 | 1.64 | 1523 |
+
+어느 실행에서도 guard가 내려가지 않았습니다. full의 최대 505 ms는 p99.9(246 ms)
+밖의 한 번이며 동시 실행의 호스트 지연으로 보입니다. persistent는 이론상 최대
+초당 4회 쓰기이고 실제 1.64회입니다.
 
 ### 실행한 테스트 (호스트, 이 브랜치)
 
@@ -183,3 +209,18 @@ v1.0.0-beta.3(`0dc5a9b`) 독립 재검토가 제안한 다섯 가지를 구현�
   backlog 쓰기가 느림). `tests/adapter/run_arm.sh` PASS 109, 실제 BLM+`libpatch`
   0.9.1 `run_aa_install_probe.sh` PASS 4. QEMU 결과는 차량 검증이 아닙니다.
 - `mx5dr-guard` 해시는 beta.3와 같습니다(`248a3ef5…`).
+
+### 250 ms 자체 flush 뒤 재실행 (2026-10-08, master `e3b9427` 병합 후)
+
+- `test_journal --writer` writer_age_flush: 요청 없이 250 ms에 첫 자체 flush; 20 ms
+  주기 정상 지연 최대 242 ms; `fflush` 한 번이 400 ms 걸려도 최대 583 ms이고
+  `journal_current`는 내려가지 않음; 1.6 s 정지는 그 정지의 첫 행부터 약 1.33 s에
+  내림(stdio에 남아 있던 더 오래된 행이 함께 세어짐), 정지 뒤 복구. 기존 lag bound
+  시험(2.5 s 정지, 1505 ms 철회)은 바꾸지 않았습니다. 분석기와 verdict는 바뀌지
+  않았습니다.
+- 전체 호스트 `make -k test`: 종료 0, PASS 309줄, Python 763개 통과, packaging
+  356개 중 4개 생략(위와 같은 릴리즈 묶음 미빌드 이유).
+- ARM 새 빌드(`release_verified=true`): `run_arm_all.sh` PASS 323/FAIL 0/SKIP 1(내장
+  AA probe, 별도 실행), QEMU writer_age_flush 정상 최대 243 ms·400 ms flush 626 ms·
+  1.6 s 정지 1353 ms 철회; `run_arm.sh` PASS 109; `run_aa_install_probe.sh`
+  (libpatch 0.9.1) PASS 4. QEMU·호스트 결과는 차량 검증이 아닙니다.

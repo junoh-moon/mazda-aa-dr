@@ -112,7 +112,10 @@ LOCATION 1,729, POSITION 1,514 B/s입니다.
 | 16 MiB 링에 담기는 운전 | (120 MiB 링에 약 1.1 h) | 약 5.9 h | 약 2.4 h |
 
 물리 flash 쓰기는 다릅니다. stdio는 1 s마다 fflush하고 fsync는 capture 종료에만
-하므로, 커널 writeback(주기·dirty 만료)이 부분 페이지를 다시 쓰는 만큼 늘 수
+하므로(2026-10-08부터는 버퍼의 가장 오래된 행이 250 ms가 되어도 fflush합니다:
+10분 실시간 재생에서 persistent 1.64 write/s, 1.5 KB/write, full 9.6 write/s;
+[워커 정지 기록](WORKER_STALL_STALE_2026-10-06.md)의 2026-10-07 절. write()는
+페이지 캐시까지이므로 아래 writeback 추정의 구조는 같습니다), 커널 writeback(주기·dirty 만료)이 부분 페이지를 다시 쓰는 만큼 늘 수
 있습니다. 예를 들어 5 s마다 마지막 4 KiB 페이지를 다시 쓰면 약 0.8 KB/s가 더해질
 수 있습니다. 파일시스템 메타데이터와 eMMC FTL 쓰기 증폭은 측정하지 않았습니다.
 
