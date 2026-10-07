@@ -33,7 +33,6 @@ fi
 validate_persist
 [ ! -L "$BASE" ] || refuse 7 'the package directory is a symlink'
 AUTOSTART=$ROOT/usr/bin/autostart
-CONFIGS="$ROOT/jci/sm/sm.conf $ROOT/jci/sm/sm_WCP.conf"
 
 # --- 1. Read-only preconditions -------------------------------------------
 check_uninstalled() {
@@ -48,9 +47,11 @@ check_uninstalled() {
     else
         [ "$?" = 1 ] || refuse 7 'cannot read /usr/bin/autostart'
     fi
-    for config in $CONFIGS; do
-        [ -e "$config" ] || [ -L "$config" ] || continue
-        [ -f "$config" ] && [ ! -L "$config" ] || refuse 7 "unexpected file type: ${config#"$ROOT"}"
+    for config_name in sm.conf sm_WCP.conf; do
+        config=$ROOT/jci/sm/$config_name
+        # A missing or replaced original makes a staged *.mx5dr-remove.* copy
+        # possibly the only copy left: never proceed to delete those.
+        [ -f "$config" ] && [ ! -L "$config" ] || refuse 7 "/jci/sm/$config_name is not a regular file; inspect it first"
         if grep -F -e 'libmx5dr' -e '/mx5-aa-dr/' "$config" >/dev/null; then
             refuse 3 "${config##*/} has mx5dr tokens; run 4, then 5"
         else

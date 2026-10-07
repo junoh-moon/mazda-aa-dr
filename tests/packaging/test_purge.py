@@ -248,6 +248,23 @@ class PurgeTests(unittest.TestCase):
             mounts.write_text(mounts.read_text() + f'/dev/sdc1 {self.base.resolve()}/logs/usb vfat rw 0 0\n')
         self.refusal_keeps_everything(prepare, 8, 'a file system is mounted inside the package directory')
 
+    def test_refuses_when_a_service_config_is_not_a_regular_file(self):
+        for name in ('sm.conf', 'sm_WCP.conf'):
+            with self.subTest(name=name):
+                config = self.root / 'jci/sm' / name
+                original = config.read_bytes()
+                staged = self.root / 'jci/sm' / (name + '.mx5dr-remove.55')
+
+                def prepare():
+                    self.install_and_uninstall()
+                    staged.write_bytes(original)  # possibly the only copy left
+                    config.unlink()
+                self.refusal_keeps_everything(prepare, 7, f'/jci/sm/{name} is not a regular file')
+                self.assertEqual(staged.read_bytes(), original)
+                staged.unlink()
+                config.write_bytes(original)
+                shutil.rmtree(self.base)
+
     def test_refuses_symlinked_package_directory(self):
         elsewhere = self.root / 'elsewhere'
         elsewhere.mkdir()
