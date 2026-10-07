@@ -37,7 +37,11 @@ def tree(root, skip):
             elif stat.S_ISDIR(info.st_mode):
                 found[rel] = ('dir', mode, '')
             else:
-                found[rel] = ('file', mode, hashlib.sha256(path.read_bytes()).hexdigest())
+                try:
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                except PermissionError:
+                    digest = 'unreadable %d %d' % (info.st_size, info.st_mtime_ns)
+                found[rel] = ('file', mode, digest)
     return found
 
 
@@ -302,6 +306,24 @@ class PurgeTests(unittest.TestCase):
                 self.assertEqual(staged.read_bytes(), original)
                 staged.unlink()
                 config.write_bytes(original)
+                shutil.rmtree(self.base)
+
+    def test_unreadable_autostart_or_config_refuses(self):
+        # Stock BusyBox 1.19.2 grep returns 1 (as for "no match") for an
+        # unreadable file or a directory, so reads go through cat instead.
+        if os.geteuid() == 0:
+            self.skipTest('root reads mode 000 files')
+        for name in ('usr/bin/autostart', 'jci/sm/sm.conf', 'jci/sm/sm_WCP.conf'):
+            with self.subTest(name=name):
+                path = self.root / name
+
+                def prepare():
+                    self.install_and_uninstall()
+                    path.chmod(0)
+                try:
+                    self.refusal_keeps_everything(prepare, 7, 'cannot read /' + name)
+                finally:
+                    path.chmod(0o644)
                 shutil.rmtree(self.base)
 
     def test_refuses_symlinked_package_directory(self):

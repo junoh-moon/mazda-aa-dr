@@ -58,21 +58,17 @@ check_uninstalled() {
         fi
     done
     [ -f "$AUTOSTART" ] && [ ! -L "$AUTOSTART" ] || refuse 7 'cannot read /usr/bin/autostart'
-    if grep -F -e 'MX5DR ONE-BOOT' -e '/mx5-aa-dr/' "$AUTOSTART" >/dev/null; then
-        refuse 3 'autostart has mx5dr blocks; run 4, then 5'
-    else
-        [ "$?" = 1 ] || refuse 7 'cannot read /usr/bin/autostart'
-    fi
+    # Read with cat (its status is the read result), then match in the shell:
+    # no dependence on how grep reports read errors.
+    text=$(cat "$AUTOSTART") || refuse 7 'cannot read /usr/bin/autostart'
+    case "$text" in *'MX5DR ONE-BOOT'*|*'/mx5-aa-dr/'*) refuse 3 'autostart has mx5dr blocks; run 4, then 5';; esac
     for config_name in sm.conf sm_WCP.conf; do
         config=$ROOT/jci/sm/$config_name
         # A missing or replaced original makes a staged *.mx5dr-remove.* copy
         # possibly the only copy left: never proceed to delete those.
         [ -f "$config" ] && [ ! -L "$config" ] || refuse 7 "/jci/sm/$config_name is not a regular file; inspect it first"
-        if grep -F -e 'libmx5dr' -e '/mx5-aa-dr/' "$config" >/dev/null; then
-            refuse 3 "${config##*/} has mx5dr tokens; run 4, then 5"
-        else
-            [ "$?" = 1 ] || refuse 7 "cannot read ${config#"$ROOT"}"
-        fi
+        text=$(cat "$config") || refuse 7 "cannot read /jci/sm/$config_name"
+        case "$text" in *'libmx5dr'*|*'/mx5-aa-dr/'*) refuse 3 "$config_name has mx5dr tokens; run 4, then 5";; esac
     done
 }
 
@@ -293,7 +289,8 @@ compare_pre_install() {
                 actual=$(hash "$before") || actual=unreadable
                 [ "$recorded" = "$actual" ] || complete=0
                 # An earlier owned block or token is not the vehicle's original.
-                if grep -F -e 'MX5DR ONE-BOOT' -e '/mx5-aa-dr/' -e 'libmx5dr' "$before" >/dev/null 2>&1; then complete=0; fi
+                text=$(cat "$before" 2>/dev/null) || complete=0
+                case "$text" in *'MX5DR ONE-BOOT'*|*'/mx5-aa-dr/'*|*'libmx5dr'*) complete=0;; esac
             else
                 complete=0
             fi
