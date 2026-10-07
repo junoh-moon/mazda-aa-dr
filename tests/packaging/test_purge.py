@@ -187,6 +187,27 @@ class PurgeTests(unittest.TestCase):
                 shutil.rmtree(self.root / 'proc/900')
                 shutil.rmtree(self.base)
 
+    def test_processes_are_checked_again_under_the_lock(self):
+        self.install_and_uninstall()
+        hook = self.root.parent / 'after-lock.sh'
+        proc = self.root / 'proc/903'
+        hook.write_text(f'mkdir -p {proc}/fd\n: > {proc}/cmdline\n'
+                        f"printf '%s\\n' 'b6000000-b6080000 r-xp 0 1f:05 9 /data_persist/mx5-aa-dr/libmx5dr.so' > {proc}/maps\n")
+        before = tree(self.root, self.skip | {'proc'})
+        result = subprocess.run(['sh', str(self.usb / 'purge.sh'), str(self.usb)], text=True, capture_output=True,
+                                env=dict(self.env, MX5DR_FIXTURE_AFTER_LOCK=str(hook)), cwd=self.root, timeout=60)
+        self.assert_refused(result, 4, 'process 903 uses a package file (maps)')
+        self.assertEqual(tree(self.root, self.skip | {'proc'}), before)
+        self.assertFalse((self.root / 'data_persist/.mx5dr-install-lock').exists())
+
+    def test_refuses_when_an_fd_directory_cannot_be_read(self):
+        def prepare():
+            self.install_and_uninstall()
+            proc = self.process(904)
+            shutil.rmtree(proc / 'fd')
+            (proc / 'fd').write_text('not a directory\n')
+        self.refusal_keeps_everything(prepare, 4, 'cannot read /proc/904/fd')
+
     def test_refuses_when_process_entries_cannot_be_read(self):
         def prepare():
             self.install_and_uninstall()

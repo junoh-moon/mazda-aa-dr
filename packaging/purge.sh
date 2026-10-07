@@ -375,8 +375,11 @@ if [ "$STALE_LOCK" = yes ]; then
     sync
 fi
 lock
+# Fixture-only hook: lets a test change the kernel view after the lock.
+if [ -n "$ROOT" ] && [ -n "${MX5DR_FIXTURE_AFTER_LOCK:-}" ]; then sh "$MX5DR_FIXTURE_AFTER_LOCK"; fi
 check_uninstalled
 check_submounts
+check_processes
 check_collector
 # Record the comparison before anything is deleted: it needs the backups.
 save_report started 'result=interrupted unless a finished report replaces this one
