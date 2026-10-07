@@ -51,4 +51,4 @@ else
 fi
 rm -f "$BASE/pending" "$BASE/installed.txt"
 sync
-echo 'Removed owned one-boot autostart blocks, the persistent enablement and mx5dr preload tokens; OFF config staged. No restart/kill. Library/logs/backups retained for mapped-code lifetime and diagnosis.'
+echo 'Removed owned one-boot autostart blocks, the persistent enablement and mx5dr preload tokens; OFF config staged. No restart/kill. Library/logs/backups retained for mapped-code lifetime and diagnosis. After a CMU reboot (menu 5), menu 6 deletes them all.'

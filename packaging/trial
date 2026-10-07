@@ -304,7 +304,7 @@ start_text='After install choose 5; keep this USB connected. After restart reope
 installed_text='Installation finished. Choose 5 to request a CMU reboot; ignition off/on is not a reboot check.'
 if [ "$BUNDLE_MODE" = BETA ]; then
     install_text='1 Install or re-enable BETA, every boot'
-    start_text='BETA runs on every boot once installed. After install choose 5 once, then 2 before switching to AA. 2 shows status, 3 saves logs, 4 removes BETA.'
+    start_text='BETA runs on every boot once installed. After install choose 5 once, then 2 before switching to AA. 2 shows status, 3 saves logs, 4 removes BETA; after 4 and a reboot with 5, 6 deletes every file it left.'
     installed_text='Installation finished. Choose 5 to start the first BETA boot; later boots start it by themselves.'
 fi
 last_rc=0
@@ -312,7 +312,7 @@ short_menu=0
 while :; do
     if [ "$short_menu" = 1 ]; then
         short_menu=0
-        printf '\n%s\n' '0 Exit (1-5 as listed before)'
+        printf '\n%s\n' '0 Exit (1-6 as listed before)'
     else
         printf '\n%s\n' 'Parked USB trial menu' \
             "This USB installs mode $BUNDLE_MODE: $mode_text" \
@@ -321,6 +321,7 @@ while :; do
             '3 Finish capture and save logs plus startup diagnostics to this USB' \
             '4 Uninstall (keeps collected logs)' \
             '5 Reboot CMU now through the original system reboot command' \
+            '6 Delete everything this package left on the CMU (run 4, then 5, first)' \
             '0 Exit'
         echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
@@ -334,6 +335,7 @@ while :; do
         3) finish_and_export; exit 0;;
         4) sh "$HERE/uninstall.sh"; exit 0;;
         5) require_usb; sh "$HERE/reboot_cmu.sh"; exit 0;;
+        6) require_usb; sh "$HERE/purge.sh" "$HERE"; exit 0;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac

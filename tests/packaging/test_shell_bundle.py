@@ -17,7 +17,7 @@ zipper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(zipper)
 PRODUCTS = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so',
             'mx5dr-collector', 'mx5dr-guard', 'mx5dr-sha256')
-HELPERS = ('trial install.sh uninstall.sh export_logs.sh common.sh edit_service.awk '
+HELPERS = ('trial install.sh uninstall.sh purge.sh export_logs.sh common.sh edit_service.awk '
            'edit_autostart.awk arm.sh start_collector.sh stop_collector.sh '
            'finish_capture.sh trial_status.sh trial_status.awk startup_diagnostics.sh '
            'reboot_cmu.sh firmware.sha256 mx5dr.conf').split()
