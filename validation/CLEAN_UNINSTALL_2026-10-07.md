@@ -153,3 +153,77 @@ ARM source changed.
 - The touch mod's files are protected by exact-name matching only; no real touch-mod
   install/uninstall ran alongside.
 - `analyze_logs.py` and published ZIPs were not changed or rebuilt; no release was made.
+
+## Review fixes (2026-10-08)
+
+An independent review of the 2026-10-07 state reproduced two defects and listed four
+weaker ones. The sections above describe that earlier state and are left as written; this
+section supersedes them where they differ.
+
+1. **[HIGH, fixed]** Leftover `/tmp` paths were joined into one space-separated word and
+   expanded again with `for path in $EXTERNAL`, and `mx5dr-trial-??????` accepted any six
+   characters. `/tmp/mx5dr-trial-x jci1` deleted files in the working directory's `jci1/`;
+   `/tmp/mx5dr-trial-a * bc` globbed the working directory and deleted a stand-in
+   `/data/dmesg.out`; the run still reported `finished`. Now every glob result is handled
+   in place, always quoted (`external_pass`); a name is ours only when the part after the
+   prefix is exactly six `[A-Za-z0-9]` (glibc `mkdtemp`/`mkstemp` and BusyBox `mktemp`) or,
+   next to OEM files, `<pid>` / `<pid>.tap|lds.<pid>`. Links, look-alikes and directories
+   with other content are listed as `unexpected, left as is` and not deleted.
+2. **[MEDIUM, fixed]** The verdict used the lexically first complete record and ignored
+   `compare_records_agree=no`. The current files are now compared with every complete
+   record: `identical to all N recorded pre-install states` only if all records agree and
+   match; otherwise `recorded pre-install states disagree: <sets>; current files match:
+   <sets|none> (nothing restored)` (screen: `Pre-install records disagree.`), or
+   `differs from the pre-install state: <files>` when the records agree. `compare_basis`
+   was replaced by `compare_records` and `compare_current_matches`.
+3. **[LOW, fixed]** BusyBox 1.19.2 `rm` has no `-xdev`: a mount point at or under the real
+   package path in `/proc/mounts` (or an unreadable table) refuses with exit 8.
+4. **[LOW, fixed]** The `/proc` maps/fd/cmdline scan runs again under the install lock.
+5. **[LOW, fixed]** `sm.conf` or `sm_WCP.conf` not a regular file (missing included)
+   refuses with 7, so a staged `*.mx5dr-remove.*` copy that may be the only copy is kept.
+6. **[LOW, fixed]** Order and USB policy: the first report (`status=started`) is written
+   before the stale lock is reclaimed, persistent storage is remounted or the lock is
+   taken; if it cannot be written (USB full, read-only, removed) menu 6 stops with
+   `...; nothing deleted`. A refusal after it rewrites it as `status=refused`. After
+   deletion the DELETE RESULT is shown first; a failed final report ends with `the deletion
+   DID complete` and the earlier report stays on the USB. `fail` messages state the phase.
+7. **Stock BusyBox facts** (proot + `/tmp/qbin/qemu-arm`, stock `BusyBox v1.19.2
+   (2020-02-14)` in the replica root): `grep` returns 2 for a missing file but **1** (same
+   as no match) for a directory and for a mode-000 file, so the purge no longer uses grep;
+   autostart, both service configs and `.before` files are read with `cat` (its status is
+   the read result) and matched with `case`. `awk cat dirname find flock head ls mktemp mv
+   rm rmdir sync tr wc id mount chmod od` are stock applets, `printf`/`pwd` shell builtins;
+   `rm -rf` removed directory and file links without touching their targets; `tr '\000'`,
+   `head -c`, path `mktemp` and `ls -l` failure status behave as used. Under proot `-0`,
+   `cat` read the mode-000 file (proot fakes root), so unreadable-file refusal is tested on
+   the host only.
+
+Tests after the fixes:
+
+- `tests/packaging/test_purge.py`: 26 tests, OK. New: decoys (space, `*`, `?`, newline,
+  leading `-`, wrong length, links to `/jci` and `/data`, links inside the package
+  directory) with a whole-tree hash comparison where only the package directory and the
+  one genuine `/tmp` leftover may disappear; disagreeing records (reproduction with the
+  reversed names, and no matching record) on screen and in `purge-result.txt`; sub-mount;
+  re-scan under the lock; unreadable `fd`; unreadable autostart/config (host, skipped as
+  root); non-regular `sm.conf`/`sm_WCP.conf`; read-only USB (tree unchanged); final report
+  failure; first report failure.
+- `make -k ... test-packaging` without the stock root: 366 tests, OK, 42 skipped (stock
+  identity fixture unavailable).
+- `replica_clean_uninstall.py`, now with the decoys placed before menu 6 on the ARM
+  BusyBox: scenario A 57/57, scenario D 66/66; both trees identical to the clean replica
+  (333 entries, 0 added/removed/changed; same justified mtime differences as above); D
+  verdict `identical to all 4 recorded pre-install states`.
+- Whole host suite with `MX5DR_STOCK_ROOT` (`make -k ... test`, merged master 75af3a1): exit 2
+  from one failure outside this change: `test_worker_beta disable` aborted once at
+  `tests/runtime/test_worker_beta.cpp:459` (`ENGAGED>DISABLED:disable_next_start`; the run
+  saw `ENGAGED>WITHDRAWN:sensor_silence` first, a timing race under load). Rerun alone:
+  `disable` 10/10 pass, and the other eight cases pass. `src/runtime` and its tests are not
+  touched by these commits and belong to other engineers; reported, not changed. All Python
+  groups passed: 47, 192, 37, 42, 1, 11, 366 (packaging), 71, 6; skipped as before: 4
+  release-bundle tests and the private trip replay.
+
+Still not verified: everything listed under "Not verified" above; a real USB that fills up
+during the write (only a read-only directory and an injected failure were tested); the real
+kernel's `/proc/mounts` octal escapes for unusual mount paths (only the prefix test is
+relied on).
