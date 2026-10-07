@@ -110,3 +110,76 @@ datagram은 생산자 쪽에서 EAGAIN으로 **사라집니다**. 2026-10-05 차
 - `test_worker_session`의 불확정 분류(77)는 그대로 두었습니다. 이제 2 s를 넘는
   정지에서만 stale 행이 생깁니다. 이 호스트의 max_dgram_qlen은 512이고 시험 sender는
   EAGAIN에 최대 100 ms 재시도하므로, 호스트 시험은 CMU의 큐 손실을 재현하지 않습니다.
+
+## 재검토 후속 수정 (2026-10-07, v1.0.0-beta.3 이후)
+
+v1.0.0-beta.3(`0dc5a9b`) 독립 재검토가 제안한 다섯 가지를 구현했습니다
+([릴리즈 기록](RELEASE_V100_BETA3_2026-10-07.md)의 "알려진 제한과 다음 빌드
+과제"). 위 절들은 beta.3 시점 기록으로 그대로 둡니다. 차량에서 실행된 적은
+없습니다.
+
+- **지연 측정에 stdio 버퍼 행 포함**: `JournalRing`이 같은 mutex 아래에서
+  writer가 꺼냈지만 아직 쓰지 않은 행(held)과 마지막 `fflush` 이후 stdio에 넘긴
+  행 중 가장 오래된 push 시각(unflushed)을 기록합니다. writer는 행마다
+  `row_written()`, `fflush` 성공 뒤 `flushed()`를 부릅니다.
+  `journal_writer_lag`는 대기 행, held, unflushed, 진행 중인 `fflush` 시작
+  시각 중 가장 이른 값을 씁니다. stdio가 버퍼 일부를 먼저 내보냈어도 이 값은
+  지연을 크게 볼 뿐 작게 보지 않습니다. 이제 정상 동작에서도 지연이 worker의
+  1 s flush 요청 주기만큼 올라가므로 1.5 s 한도와의 여유는 약 0.4-0.5 s입니다.
+- **pop과 `busy_since` 사이 틈 제거**: held 시각을 `pop()`의 임계 구역 안에서
+  저장하므로 꺼낸 행이 지연 계산에서 사라지는 순간이 없습니다. 행 단위
+  `busy_since`는 없앴고 `fflush` 시작 시각에만 씁니다.
+- **flush·stop 요청 유실 방지**: `JournalRing::wait()`가 mutex 아래에서 조건
+  함수를 평가합니다. writer 조건은 `stopping` 또는
+  `flush_target > flushed && written >= flush_target`입니다. 요청 쪽은 값을
+  저장한 뒤 `notify()`(mutex 사용)하므로 writer가 자기 검사 뒤 wait 전에 온
+  요청을 놓치지 않습니다.
+- **lag guard 동안 FIX POSITION 진단 등급**: `journal_current`가 0이면
+  `provenance()`가 BETA를 거부하므로 치환이 없습니다. 이때 FIX 등급 POSITION
+  행은 진단 등급으로 넣어 긴 저장장치 정지에서 오래된 것부터 버려지고 증거
+  링을 채워 journal을 실패시키지 않습니다. full 프로파일은
+  `Journal::observation_line`, persistent 프로파일은
+  `PersistentLog::set_journal_current()`(매 호출 전 동기화)로 처리하며 RAW 창
+  행도 기록되는 시점의 guard 상태를 따릅니다. LOST/NO_FIX, 등급 전환,
+  CONTEXT_UNAVAILABLE 행은 계속 증거입니다. guard가 복구되면 즉시 증거로
+  돌아갑니다.
+- **분석기**: `journal_dropped` 구간은 이제 worker 시각 종류이면서 구간 시작
+  이후인 행으로만 닫힙니다. POSITION/SEND(hook 시각), motion(생산자 시각),
+  `raw_window` 표지 뒤 `rows`개 행, 시작보다 이른 행은 구간을 닫지 않습니다.
+  digest `suppressed` 합계와 `journal_not_durable` 횟수는 보고서
+  `lower_bounds`와 `suppressed_counts`/`profile_counts` = `lower_bound`, 요약
+  문구 "at least"로 하한임을 표시합니다(해당 행이 진단 등급이라 버려질 수
+  있고, 리셋·프로세스 사망 시 마지막 digest가 사라짐). `trial_status.awk`는 이
+  값을 표시하지 않아 바꾸지 않았습니다.
+- OEM 스레드 경로(adapter hook, `JournalQueue`, `provenance()`)는 바뀌지
+  않았습니다. 바뀐 것은 worker·writer 스레드와 분석기뿐입니다.
+
+### 실행한 테스트 (호스트, 이 브랜치)
+
+- `test_journal_ring`: held/unflushed 회계; 한 스레드에서 "검사 → 요청+notify →
+  wait" 순서를 강제하면 조건 없는 wait는 50.1 ms 타임아웃까지 자고 조건 있는
+  wait는 0.001 ms에 돌아옴; 검사와 wait 사이에 인위적 틈을 넣은 소비자 스레드에
+  요청 3000건, 최악 0.23-2.21 ms.
+- `test_journal --writer`: stdio에만 쓴 행의 지연 301 ms, flush 뒤 0 ms;
+  wait 직전 300 ms 틈(`inject_wait_gap_ns`) 안에 넣은 flush 요청 199 ms,
+  stop 201 ms에 처리(유실 시 1000 ms); 증거 링 512 B와 정지된 writer에서
+  lag 중 FIX 98행은 실패 없이 진단 행 버림(`journal_dropped` 1개), current
+  FIX와 lag 중 LOST는 예전처럼 journal 실패. `journal_lag_bound`는 worker
+  루프처럼 1 s마다 flush를 요청하게 했습니다(stdio 행이 지연에 포함되므로).
+  결과: 1510 ms에 철회, 2515 ms에 따라잡고 복구.
+- `test_log_profile` lag_guard_classes: 직접/RAW 창 행, 복구, BETA 비활성 경우.
+- `tests/tools/test_analyze_beta.py`: 이른 시각 행 네 종류와 RAW 창 행이 구간을
+  닫지 않음, 나중 worker 행은 닫음, 하한 표시와 요약 문구. 두 새 시험은 이전
+  분석기에서 실패함을 확인했습니다.
+- 전체 호스트 `make -k test`(2026-10-08): 종료 0, PASS 309줄, make 오류 0,
+  Python 746개 통과. packaging 340개 중 4개 생략(릴리즈 묶음
+  `MX5DR_RELEASE_BUNDLE`/여섯 산출물 묶음 미빌드 — 이 작업은 ZIP을 만들지
+  않음).
+- ARM(고정 도구체인 `tools/build_arm.py`, `Verified ARM build`,
+  `release_verified=true`): `tests/run_arm_all.sh` 종료 0, PASS 323/FAIL 0,
+  SKIP 1(내장 AA probe는 private 입력 미설정으로 생략, 아래에서 별도 실행).
+  QEMU에서 ring wait 50.2 ms 대 0.154 ms, wait 틈 flush 199.9 ms·stop 215.5 ms,
+  lag 중 FIX 98행 실패 없음, lag bound 1501 ms 철회·4568 ms 복구(에뮬레이션에서
+  backlog 쓰기가 느림). `tests/adapter/run_arm.sh` PASS 109, 실제 BLM+`libpatch`
+  0.9.1 `run_aa_install_probe.sh` PASS 4. QEMU 결과는 차량 검증이 아닙니다.
+- `mx5dr-guard` 해시는 beta.3와 같습니다(`248a3ef5…`).
