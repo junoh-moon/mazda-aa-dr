@@ -138,38 +138,72 @@ staged_suffix() {
         *) return 1;;
     esac
 }
-EXTERNAL=''
-SKIPPED=''
-collect_external() {
+# mkdtemp/mkstemp (glibc) and BusyBox mktemp replace XXXXXX with exactly six
+# characters from [A-Za-z0-9]. Anything else is not ours.
+random6() {
+    [ "${#1}" = 6 ] || return 1
+    case "$1" in *[!A-Za-z0-9]*) return 1;; esac
+    return 0
+}
+# Never collect candidates into a word list: each glob result is checked and
+# handled here, always quoted, so no name is split or glob-expanded again.
+owned_external() {
+    name=${1##*/}
+    kind=file
+    case "$name" in
+        autostart.mx5dr-new.*) staged_suffix "${name#autostart.mx5dr-new.}" || return 1;;
+        autostart.mx5dr-remove.*) staged_suffix "${name#autostart.mx5dr-remove.}" || return 1;;
+        sm.conf.mx5dr-remove.*) staged_suffix "${name#sm.conf.mx5dr-remove.}" || return 1;;
+        sm_WCP.conf.mx5dr-remove.*) staged_suffix "${name#sm_WCP.conf.mx5dr-remove.}" || return 1;;
+        mx5dr-trial-*) random6 "${name#mx5dr-trial-}" || return 1; kind=trial;;
+        mx5dr-hash.*) random6 "${name#mx5dr-hash.}" || return 1; kind=hash;;
+        mx5-lds-association-*) random6 "${name#mx5-lds-association-}" || return 1;;
+        *) return 1;;
+    esac
+    case "$kind" in
+        file) [ -f "$1" ] && [ ! -L "$1" ] || return 1;;
+        trial|hash)
+            [ -d "$1" ] && [ ! -L "$1" ] || return 1
+            want=sm.conf
+            [ "$kind" = trial ] || want=hash
+            for inner in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+                [ -e "$inner" ] || [ -L "$inner" ] || continue
+                [ "$inner" = "$1/$want" ] && [ -f "$inner" ] && [ ! -L "$inner" ] || return 1
+            done;;
+    esac
+    return 0
+}
+remove_external() {
+    case "$1" in
+        "$ROOT"/usr/bin/*) mount_rw "$ROOT/usr/bin";;
+        "$ROOT"/jci/sm/*) mount_rw "$ROOT/jci/sm";;
+    esac
+    if [ -d "$1" ] && [ ! -L "$1" ]; then
+        rm -f "$1/$want" || fail "Cannot remove ${1#"$ROOT"}/$want"
+        rmdir "$1" || fail "Cannot remove ${1#"$ROOT"}"
+    else
+        rm -f "$1" || fail "Cannot remove ${1#"$ROOT"}"
+    fi
+}
+# $1: count | list | unexpected | delete | remaining
+EXTERNAL_COUNT=0
+external_pass() {
     for path in "$ROOT"/usr/bin/autostart.mx5dr-* "$ROOT"/jci/sm/sm.conf.mx5dr-* \
-                "$ROOT"/jci/sm/sm_WCP.conf.mx5dr-* "$ROOT"/tmp/mx5dr-trial-?????? \
-                "$ROOT"/tmp/mx5dr-hash.?????? "$ROOT"/tmp/mx5-lds-association-??????; do
+                "$ROOT"/jci/sm/sm_WCP.conf.mx5dr-* "$ROOT"/tmp/mx5dr-trial-* \
+                "$ROOT"/tmp/mx5dr-hash.* "$ROOT"/tmp/mx5-lds-association-*; do
         [ -e "$path" ] || [ -L "$path" ] || continue
-        name=${path##*/}
-        kind=file
-        case "$name" in
-            autostart.mx5dr-new.*) staged_suffix "${name#autostart.mx5dr-new.}" || continue;;
-            autostart.mx5dr-remove.*) staged_suffix "${name#autostart.mx5dr-remove.}" || continue;;
-            sm.conf.mx5dr-remove.*) staged_suffix "${name#sm.conf.mx5dr-remove.}" || continue;;
-            sm_WCP.conf.mx5dr-remove.*) staged_suffix "${name#sm_WCP.conf.mx5dr-remove.}" || continue;;
-            mx5dr-trial-??????) kind=trial;;
-            mx5dr-hash.??????) kind=hash;;
-            mx5-lds-association-??????) ;;
-            *) continue;;
-        esac
-        case "$kind" in
-            file) [ -f "$path" ] && [ ! -L "$path" ] || { SKIPPED="$SKIPPED $path"; continue; };;
-            trial|hash)
-                [ -d "$path" ] && [ ! -L "$path" ] || { SKIPPED="$SKIPPED $path"; continue; }
-                want=sm.conf
-                [ "$kind" = trial ] || want=hash
-                for inner in "$path"/* "$path"/.[!.]*; do
-                    [ -e "$inner" ] || [ -L "$inner" ] || continue
-                    [ "$inner" = "$path/$want" ] && [ -f "$inner" ] && [ ! -L "$inner" ] ||
-                        { SKIPPED="$SKIPPED $path"; continue 2; }
-                done;;
-        esac
-        EXTERNAL="$EXTERNAL $path"
+        if owned_external "$path"; then
+            case "$1" in
+                count) EXTERNAL_COUNT=$((EXTERNAL_COUNT + 1));;
+                list)
+                    describe "$path"
+                    [ "$kind" = file ] || describe "$path/$want";;
+                delete) remove_external "$path";;
+                remaining) printf ' %s' "${path#"$ROOT"}";;
+            esac
+        elif [ "$1" = unexpected ]; then
+            printf 'unexpected, left as is: %s\n' "${path#"$ROOT"}"
+        fi
     done
 }
 describe() {
@@ -181,14 +215,10 @@ describe() {
 }
 inventory() {
     if [ -e "$BASE" ]; then
+        # Reporting only; deletion never reads these names back.
         find "$BASE" -print | while IFS= read -r item; do describe "$item"; done
     fi
-    for path in $EXTERNAL; do
-        describe "$path"
-        if [ -d "$path" ]; then
-            for inner in "$path"/*; do [ ! -e "$inner" ] || describe "$inner"; done
-        fi
-    done
+    external_pass list
 }
 
 # --- 3. Pre-install comparison (read-only) ----------------------------------
@@ -273,7 +303,7 @@ save_report() {
         printf 'verdict: %s\n' "$VERDICT"
         printf 'delete_list (kind bytes path):\n%s\n' "$PLANNED"
         printf 'delete_total_files=%s delete_total_bytes=%s\n' "$PLANNED_FILES" "$PLANNED_BYTES"
-        printf 'not_deleted_unexpected=%s\n' "${SKIPPED:- none}"
+        printf 'not_deleted_unexpected:\n%s\n' "${UNEXPECTED:-none}"
         printf '%s' "$2"
         if [ -n "$PREVIOUS" ]; then printf '%s\n%s\n' '---- previous purge-result.txt ----' "$PREVIOUS"; fi
     } > "$report_tmp"; then
@@ -286,12 +316,13 @@ save_report() {
 
 check_uninstalled
 check_lock
-collect_external
-if [ ! -e "$BASE" ] && [ -z "$EXTERNAL" ] && [ "$STALE_LOCK" = no ]; then
+external_pass count
+UNEXPECTED=$(external_pass unexpected)
+if [ ! -e "$BASE" ] && [ "$EXTERNAL_COUNT" = 0 ] && [ "$STALE_LOCK" = no ]; then
     echo 'Nothing to delete: the package'
     echo 'directory and its other files are'
     echo 'already absent. No file was changed.'
-    [ -z "$SKIPPED" ] || echo "Not ours, left as is:$SKIPPED"
+    [ -z "$UNEXPECTED" ] || printf '%s\n' "$UNEXPECTED"
     exit 0
 fi
 check_processes
@@ -318,18 +349,7 @@ check_collector
 # Record the comparison before anything is deleted: it needs the backups.
 save_report started 'result=interrupted unless a finished report replaces this one
 '
-for path in $EXTERNAL; do
-    case "$path" in
-        "$ROOT"/usr/bin/*) mount_rw "$ROOT/usr/bin";;
-        "$ROOT"/jci/sm/*) mount_rw "$ROOT/jci/sm";;
-    esac
-    if [ -d "$path" ] && [ ! -L "$path" ]; then
-        for inner in "$path"/*; do [ ! -e "$inner" ] || rm -f "$inner"; done
-        rmdir "$path" || fail "Cannot remove ${path#"$ROOT"}"
-    else
-        rm -f "$path" || fail "Cannot remove ${path#"$ROOT"}"
-    fi
-done
+external_pass delete
 sync
 if [ -e "$BASE" ]; then
     # Guard first: nothing may select a partial package even if a later tool
@@ -341,10 +361,7 @@ if [ -e "$BASE" ]; then
 fi
 absent=absent
 if [ -e "$BASE" ] || [ -L "$BASE" ]; then absent=present; fi
-remaining=''
-for path in $EXTERNAL; do
-    if [ -e "$path" ] || [ -L "$path" ]; then remaining="$remaining ${path#"$ROOT"}"; fi
-done
+remaining=$(external_pass remaining)
 rm -f "$LOCK/pid"
 rmdir "$LOCK"
 LOCKED=0

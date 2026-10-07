@@ -297,8 +297,51 @@ class PurgeTests(unittest.TestCase):
             self.assertIn('/data_persist/mx5-aa-dr/' + name, report)
         self.assertIn('file 7 /usr/bin/autostart.mx5dr-remove.77', report)
         self.assertIn('dir 0 /tmp/mx5dr-trial-1u7LnL', report)
-        self.assertIn('not_deleted_unexpected= ' + str(self.root / 'tmp/mx5dr-trial-zzzzzz'), report)
+        self.assertIn('unexpected, left as is: /tmp/mx5dr-trial-zzzzzz', report)
+        self.assertIn('unexpected, left as is: /jci/sm/sm.conf.mx5dr-remove.x7', report)
         self.assertIn('Nothing to delete', self.purge().stdout)
+
+    def test_decoy_names_and_symlinks_are_never_followed_or_expanded(self):
+        # Review 2026-10-07: names were joined into one word list and expanded
+        # again, so "x jci1" deleted ./jci1 and "a * bc" globbed the cwd.
+        self.install_and_uninstall('--mode=BETA')
+        victim = self.root / 'jci1'
+        victim.mkdir()
+        (victim / 'oemfile').write_text('OEM\n')
+        decoys = ['mx5dr-trial-x jci1', 'mx5dr-trial-a * bc', 'mx5dr-trial-ab?def', 'mx5dr-trial-ab\ncde',
+                  'mx5dr-trial--abcde', 'mx5dr-trial-abcdefg', 'mx5dr-trial-abcd', 'mx5dr-hash.ab*def']
+        for name in decoys:
+            (self.root / 'tmp' / name).mkdir()
+            (self.root / 'tmp' / name / 'sm.conf').write_text('decoy\n')
+        (self.root / 'tmp/mx5dr-hash.xxxxxx').symlink_to(self.root / 'jci')
+        (self.root / 'tmp/mx5-lds-association-abcdef').symlink_to(self.root / 'data/dmesg.out')
+        (self.root / 'tmp/mx5dr-trial-Lnk123').symlink_to(self.root / 'jci/sm')
+        for name in ('jci/sm/sm.conf.mx5dr-remove.1 2', 'jci/sm/sm.conf.mx5dr-remove.*',
+                     'usr/bin/autostart.mx5dr-new.-1', 'usr/bin/autostart.mx5dr-new.7.tap.x'):
+            (self.root / name).write_text('decoy\n')
+        (self.root / 'usr/bin/autostart.mx5dr-remove.8').symlink_to(self.root / 'usr/bin/autostart')
+        # Links inside the package directory point at OEM data; rm -rf removes
+        # the links only.
+        (self.base / 'logs/evil').symlink_to(self.root / 'jci')
+        (self.base / 'evil2').symlink_to(self.root / 'data/dmesg.out')
+        owned = {'tmp/mx5dr-trial-Ab12Z9', 'tmp/mx5dr-trial-Ab12Z9/sm.conf'}
+        (self.root / 'tmp/mx5dr-trial-Ab12Z9').mkdir()
+        (self.root / 'tmp/mx5dr-trial-Ab12Z9/sm.conf').write_text('ours\n')
+        before = tree(self.root, self.skip)
+        result = self.purge()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        after = tree(self.root, self.skip)
+        package = 'data_persist/mx5-aa-dr'
+        gone = {k for k in before if k not in after}
+        self.assertEqual({k for k in gone if k != package and not k.startswith(package + '/')}, owned)
+        self.assertEqual({k: v for k, v in after.items()},
+                         {k: v for k, v in before.items() if k not in gone})
+        self.assertEqual((victim / 'oemfile').read_text(), 'OEM\n')
+        report = (self.usb / 'purge-result.txt').read_text()
+        self.assertIn('status=finished', report)
+        for name in ('mx5dr-trial-x jci1', 'mx5dr-trial-a * bc', 'mx5dr-hash.xxxxxx', 'mx5dr-trial-Lnk123'):
+            self.assertIn('unexpected, left as is: /tmp/' + name, report.replace(str(self.root), ''))
+        self.assertIn('unexpected, left as is: /usr/bin/autostart.mx5dr-remove.8', report.replace(str(self.root), ''))
 
     def test_disagreeing_records_are_reported(self):
         self.install_and_uninstall()
