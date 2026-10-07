@@ -199,6 +199,45 @@ class PurgeTests(unittest.TestCase):
         self.assert_refused(result, 4, 'process 903 uses a package file (maps)')
         self.assertEqual(tree(self.root, self.skip | {'proc'}), before)
         self.assertFalse((self.root / 'data_persist/.mx5dr-install-lock').exists())
+        # The report written before the lock now says refused.
+        report = (self.usb / 'purge-result.txt').read_text()
+        self.assertIn('status=refused', report)
+        self.assertIn('result=refused, nothing deleted: process 903 uses a package file (maps)', report)
+
+    def test_unwritable_usb_aborts_before_any_deletion(self):
+        self.install_and_uninstall()
+        before = tree(self.root, self.skip)
+        self.usb.chmod(0o555)
+        try:
+            result = self.purge()
+        finally:
+            self.usb.chmod(0o755)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('Cannot write purge-result.txt on the USB (full, read-only or removed?); nothing deleted',
+                      result.stderr)
+        self.assertEqual(tree(self.root, self.skip), before)
+        self.assertFalse((self.usb / 'purge-result.txt').exists())
+
+    def test_final_report_failure_says_the_deletion_completed(self):
+        self.install_and_uninstall()
+        result = subprocess.run(['sh', str(self.usb / 'purge.sh'), str(self.usb)], text=True, capture_output=True,
+                                env=dict(self.env, MX5DR_FIXTURE_FAIL_REPORT='finished'), cwd=self.root, timeout=60)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('---- DELETE RESULT ----\nDeleted ', result.stdout)
+        self.assertIn('Package directory absent', result.stdout)
+        self.assertIn('the deletion DID complete', result.stderr)
+        self.assertFalse(self.base.exists())
+        self.assertIn('status=started', (self.usb / 'purge-result.txt').read_text())
+
+    def test_first_report_failure_changes_nothing(self):
+        # The report is attempted before the lock is reclaimed or taken.
+        self.install_and_uninstall()
+        result = subprocess.run(['sh', str(self.usb / 'purge.sh'), str(self.usb)], text=True, capture_output=True,
+                                env=dict(self.env, MX5DR_FIXTURE_FAIL_REPORT='started'), cwd=self.root, timeout=60)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('nothing deleted', result.stderr)
+        self.assertTrue((self.base / 'logs/trace.0.jsonl').exists())
+        self.assertFalse((self.root / 'data_persist/.mx5dr-install-lock').exists())
 
     def test_refuses_when_an_fd_directory_cannot_be_read(self):
         def prepare():

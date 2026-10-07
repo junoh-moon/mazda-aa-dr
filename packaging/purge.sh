@@ -9,6 +9,16 @@
 #   7 unexpected file type        8 file system mounted inside it
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
+# Every failure says whether anything was deleted.
+PHASE=before
+fail() {
+    case "$PHASE" in
+        before) echo "mx5dr: $*; nothing deleted" >&2;;
+        deleting) echo "mx5dr: $*; deletion was interrupted, the rest is inert: run 6 again" >&2;;
+        *) echo "mx5dr: $*; the deletion DID complete (see the result above)" >&2;;
+    esac
+    exit 1
+}
 [ "$#" = 1 ] || fail 'Usage: sh purge.sh /mounted/usb/directory'
 usb=$1
 case "$usb" in /*) ;; *) fail 'USB directory must be absolute';; esac
@@ -17,8 +27,14 @@ usb=$(CDPATH= cd -P -- "$usb" && pwd -P) || fail 'Cannot resolve the USB directo
 ALLOW_REMOUNT=1
 [ -z "$ROOT" ] || ALLOW_REMOUNT=0
 
+REPORT_STARTED=0
 refuse() {
     echo "Refused, nothing deleted: $2"
+    # A refusal after the first USB report replaces it (best effort).
+    if [ "$REPORT_STARTED" = 1 ]; then
+        save_report refused "result=refused, nothing deleted: $2
+" || echo 'purge-result.txt could not be updated; it still says started.'
+    fi
     exit "$1"
 }
 if [ -z "$ROOT" ]; then
@@ -317,10 +333,15 @@ compare_pre_install() {
 REPORT=$usb/purge-result.txt
 PREVIOUS=''
 if [ -f "$REPORT" ] && [ ! -L "$REPORT" ]; then PREVIOUS=$(head -c 32768 "$REPORT") || PREVIOUS=''; fi
+# Returns nonzero when the USB report cannot be written (full, read-only,
+# removed); the caller decides what that means for the deletion.
 save_report() {
     mount_rw "$usb"
-    if [ -e "$REPORT" ] || [ -L "$REPORT" ]; then regular "$REPORT"; fi
-    report_tmp=$(mktemp "$usb/purge-result.XXXXXX") || fail 'Cannot stage purge-result.txt on the USB'
+    if [ -e "$REPORT" ] || [ -L "$REPORT" ]; then
+        [ -f "$REPORT" ] && [ ! -L "$REPORT" ] || return 1
+    fi
+    if [ -n "$ROOT" ] && [ "${MX5DR_FIXTURE_FAIL_REPORT:-}" = "$1" ]; then return 1; fi
+    report_tmp=$(mktemp "$usb/purge-result.XXXXXX" 2>/dev/null) || return 1
     if ! {
         printf 'purge_schema=1\nstatus=%s\nboot_id=%s\n' "$1" "$BOOT_NOW"
         printf 'package_directory=%s\n' "${BASE#"$ROOT"}"
@@ -339,10 +360,10 @@ save_report() {
         if [ -n "$PREVIOUS" ]; then printf '%s\n%s\n' '---- previous purge-result.txt ----' "$PREVIOUS"; fi
     } > "$report_tmp"; then
         rm -f "$report_tmp" || :
-        fail 'Cannot write purge-result.txt on the USB'
+        return 1
     fi
-    mv -f "$report_tmp" "$REPORT" || { rm -f "$report_tmp" || :; fail 'Cannot replace purge-result.txt'; }
-    sync
+    mv -f "$report_tmp" "$REPORT" || { rm -f "$report_tmp" || :; return 1; }
+    sync || return 1
 }
 
 check_uninstalled
@@ -369,6 +390,11 @@ compare_pre_install
 # Autostart and both service configs no longer reference the package (checked
 # above and again under the lock), so every intermediate state after a power
 # cut is inert; running menu 6 again completes the removal.
+# The report comes first: it records the comparison, which needs the backups,
+# and a USB that is full, read-only or gone stops here with nothing changed.
+save_report started 'result=interrupted unless a finished report replaces this one
+' || fail 'Cannot write purge-result.txt on the USB (full, read-only or removed?)'
+REPORT_STARTED=1
 mount_rw "$persist"
 if [ "$STALE_LOCK" = yes ]; then
     rm -f "$LOCK/pid"
@@ -382,9 +408,7 @@ check_uninstalled
 check_submounts
 check_processes
 check_collector
-# Record the comparison before anything is deleted: it needs the backups.
-save_report started 'result=interrupted unless a finished report replaces this one
-'
+PHASE=deleting
 external_pass delete
 sync
 if [ -e "$BASE" ]; then
@@ -406,11 +430,7 @@ lock_left=absent
 if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then lock_left=present; fi
 status=finished
 [ "$absent" = absent ] && [ -z "$remaining" ] && [ "$lock_left" = absent ] || status=incomplete
-save_report "$status" "after_package_directory=$absent
-after_install_lock=$lock_left
-after_other_files_remaining=${remaining:- none}
-result=$status
-"
+[ "$status" != finished ] || PHASE=done
 printf '%s\n' '---- DELETE RESULT ----'
 echo "Deleted $PLANNED_FILES files, $PLANNED_BYTES bytes"
 if [ "$absent" = absent ]; then echo 'Package directory absent'; else echo 'Package directory STILL PRESENT'; fi
@@ -428,5 +448,10 @@ else
     echo 'OEM files differ from pre-install:'
     for path in $DIFFERS; do echo "  ${path##*/} (kept as it is)"; done
 fi
+save_report "$status" "after_package_directory=$absent
+after_install_lock=$lock_left
+after_other_files_remaining=${remaining:- none}
+result=$status
+" || fail 'Cannot write the final purge-result.txt; the USB keeps the report written before deletion'
 echo 'Saved: purge-result.txt'
 [ "$status" = finished ] || fail 'Deletion incomplete; see purge-result.txt'
