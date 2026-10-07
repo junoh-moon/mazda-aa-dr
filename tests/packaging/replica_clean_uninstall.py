@@ -364,6 +364,24 @@ def lifecycle(run, reference, upgrade):
     (run.root / 'tmp/mx5dr-hash.Zx9Qw1').mkdir()
     (run.root / 'tmp/mx5dr-hash.Zx9Qw1/hash').write_bytes(b'\x7fELF stale helper copy')
     (run.base / 'guard/.persist-state.4242').write_text('torn write\n')
+    # Decoys (review 2026-10-07): look-alike names and links must be neither
+    # deleted nor followed nor glob-expanded by the ARM BusyBox shell.
+    decoys = []
+    for name in ('tmp/mx5dr-trial-x jci1', 'tmp/mx5dr-trial-a * bc', 'tmp/mx5dr-trial-ab?def',
+                 'tmp/mx5dr-trial-ab\ncde', 'tmp/mx5dr-trial--abcde', 'tmp/mx5dr-hash.ab*def'):
+        (run.root / name).mkdir()
+        (run.root / name / 'sm.conf').write_text('decoy\n')
+        decoys.append(run.root / name)
+    victim = run.root / 'jci1'
+    victim.mkdir()
+    (victim / 'oemfile').write_text('OEM\n')
+    (run.root / 'tmp/mx5dr-hash.xxxxxx').symlink_to('/jci')
+    (run.root / 'jci/sm/sm.conf.mx5dr-remove.1 2').write_text('decoy\n')
+    (run.root / 'usr/bin/autostart.mx5dr-remove.8').symlink_to('/usr/bin/autostart')
+    (run.base / 'logs/evil').symlink_to('/jci')
+    (run.base / 'evil2').symlink_to('/tmp/mnt/data/dmesg.out')
+    decoys += [run.root / 'tmp/mx5dr-hash.xxxxxx', run.root / 'jci/sm/sm.conf.mx5dr-remove.1 2',
+               run.root / 'usr/bin/autostart.mx5dr-remove.8']
     run.emit('\n#### menu 6')
     deleted_bytes = sum(p.lstat().st_size for p in run.base.rglob('*') if p.is_file() and not p.is_symlink())
     deleted_files = sum(1 for p in run.base.rglob('*') if p.is_file() and not p.is_symlink())
@@ -395,6 +413,15 @@ def lifecycle(run, reference, upgrade):
         for name in ('guard/consumed', 'guard/armed-boot.previous', 'guard/last-boot', 'logs/trace.1.jsonl'):
             run.check(f'report lists shadow.5 leftover {name}', '/data_persist/mx5-aa-dr/' + name in report)
     run.check('package directory absent on disk', not run.base.exists())
+    run.check('decoys kept', all(os.path.lexists(d) for d in decoys))
+    run.check('decoy victim /jci1 kept', (victim / 'oemfile').read_text() == 'OEM\n')
+    run.check('decoys reported as unexpected', report.count('unexpected, left as is: ') == len(decoys))
+    for path in decoys:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    shutil.rmtree(victim)
     run.check('install lock absent', not (persist / '.mx5dr-install-lock').exists())
     run.check('mount table restored to the initial state', (run.root / 'proc/self/mounts').read_text() == mounts0)
     left = run.tmpfs_leftovers()
