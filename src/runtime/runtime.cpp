@@ -62,7 +62,7 @@ static_assert(ATOMIC_INT_LOCK_FREE==2,"journal_ok is read by OEM threads");
 // 1 while the journal writer keeps up. A storage stall no longer blocks the
 // worker (the writer thread does the I/O), so without this a long eMMC stall
 // would keep BETA replacing while its evidence rows sit only in RAM. The
-// worker lowers it when the oldest unwritten row is older than
+// worker lowers it when the oldest unflushed row is older than
 // JOURNAL_LAG_LIMIT_NS and raises it again below JOURNAL_LAG_CLEAR_NS
 // (hysteresis, not sticky). provenance() reads it lock-free with journal_ok.
 std::atomic<unsigned> journal_current(1);
@@ -483,16 +483,18 @@ struct JournalWriter {
   pthread_t thread;
   std::atomic<unsigned> ok, stopping, durable, closed_ok;
   std::atomic<uint64_t> flush_target, flushed, written;
-  // Push time of the row the writer is writing, or the start of its fflush
-  // (0: idle). With the ring's oldest row this gives the journal lag.
+  // Start of the writer's fflush (0: not flushing). The rows themselves
+  // (queued, popped-and-held, written-not-flushed) are timed by the ring
+  // under its mutex; together they give the journal lag.
   std::atomic<uint64_t> busy_since;
   std::atomic<uint64_t> inject_stall_ns;   // tests only: one stall before the next row
+  std::atomic<uint64_t> inject_wait_gap_ns; // tests only: one stall between the flush check and wait()
   std::atomic<uint64_t> loops;             // tests only: writer loop iterations
   char* row_buffer;                         // writer thread only
   JournalWriter(const char* r,unsigned char* buffer,size_t diagnostic,size_t evidence)
       : root(r),storage(buffer),ring(buffer,diagnostic,buffer+diagnostic,evidence),thread(),
         ok(1),stopping(0),durable(0),closed_ok(0),flush_target(0),flushed(0),written(0),
-        busy_since(0),inject_stall_ns(0),loops(0),row_buffer(0) {}
+        busy_since(0),inject_stall_ns(0),inject_wait_gap_ns(0),loops(0),row_buffer(0) {}
 };
 const size_t JOURNAL_ROW_BUFFER=mx5::runtime::JournalRing::MAX_ROW+1;
 // dropped_total: rows lost up to and including this gap (the writer's own
@@ -506,6 +508,15 @@ void journal_dropped(Journal& file,uint64_t first,uint64_t next,uint64_t dropped
       (unsigned long long)clock_ns(0),(unsigned long long)(next-first),(unsigned long long)first,
       (unsigned long long)(next-1),(unsigned long long)dropped_total);
   if(n>0 && size_t(n)<sizeof line)file.line(line);else file.fail();
+}
+// Writer's wait predicate, evaluated under the ring mutex: a stop or a flush
+// it can complete now. Both are stored before the requester's notify(), so
+// a request made after the loop's own check is not slept through.
+bool journal_writer_pending(void* argument) {
+  JournalWriter& w=*static_cast<JournalWriter*>(argument);
+  if(w.stopping.load(std::memory_order_acquire))return true;
+  const uint64_t target=w.flush_target.load(std::memory_order_acquire);
+  return target>w.flushed.load(std::memory_order_acquire) && w.written.load(std::memory_order_acquire)>=target;
 }
 void* journal_writer_main(void* argument) {
   JournalWriter& w=*static_cast<JournalWriter*>(argument);
@@ -526,7 +537,8 @@ void* journal_writer_main(void* argument) {
       unsigned batch=0;size_t n;uint64_t seq,push_ns;bool evidence;
       while(batch<64 && w.ring.pop(buffer,JOURNAL_ROW_BUFFER,&n,&seq,&evidence,&push_ns)) {
         ++batch;
-        w.busy_since.store(push_ns?push_ns:clock_ns(0),std::memory_order_release);
+        // The popped row is already timed by the ring (held), from inside
+        // pop()'s critical section: no window in which the lag reads 0.
 #ifdef MX5DR_JOURNAL_TEST_HOOKS
         const uint64_t stall=w.inject_stall_ns.exchange(0,std::memory_order_acq_rel);
         if(stall) { struct timespec t={time_t(stall/1000000000ULL),long(stall%1000000000ULL)};nanosleep(&t,0); }
@@ -538,13 +550,17 @@ void* journal_writer_main(void* argument) {
         expected=seq+1;
         if(!file.failed)file.line(buffer);
         w.written.store(expected,std::memory_order_release);
-        w.busy_since.store(0,std::memory_order_release);
+        // Handed to stdio, not yet fflush'ed: still counted in the lag
+        // (stdio may also have written it earlier; the lag then over-, never
+        // under-states).
+        w.ring.row_written();
       }
       if(file.failed)w.ok.store(0,std::memory_order_release);
       const uint64_t target=w.flush_target.load(std::memory_order_acquire);
       if(target>w.flushed.load(std::memory_order_acquire) && expected>=target) {
         w.busy_since.store(clock_ns(0),std::memory_order_release);
         file.flush();
+        if(!file.failed)w.ring.flushed();
         w.busy_since.store(0,std::memory_order_release);
         if(file.failed)w.ok.store(0,std::memory_order_release);
         w.flushed.store(expected,std::memory_order_release);
@@ -565,8 +581,14 @@ void* journal_writer_main(void* argument) {
         w.closed_ok.store(ok?1:0,std::memory_order_release);
         break;
       }
-      // Sleep until a push, a flush/stop notify, or at most 1 s (no polling).
-      if(!batch)w.ring.wait(1000000000ULL);
+      // Sleep until a push, a flush/stop request, or at most 1 s (no polling).
+      if(!batch) {
+#ifdef MX5DR_JOURNAL_TEST_HOOKS
+        const uint64_t gap=w.inject_wait_gap_ns.exchange(0,std::memory_order_acq_rel);
+        if(gap) { struct timespec t={time_t(gap/1000000000ULL),long(gap%1000000000ULL)};nanosleep(&t,0); }
+#endif
+        w.ring.wait(1000000000ULL,journal_writer_pending,&w);
+      }
     }
   }
   uselocale(LC_GLOBAL_LOCALE);
@@ -607,8 +629,10 @@ void journal_writer_request_flush(JournalWriter* w) {
   }
 }
 // Worker side, lock-free except the ring's short lock: how far the writer
-// is behind. oldest_ns: age of the oldest row not yet written (queued, or
-// being written/flushed by a possibly blocked writer).
+// is behind. oldest_ns: age of the oldest row that has not reached the
+// kernel: queued, popped and being written, or handed to stdio but not yet
+// fflush'ed (2026-10-07; before, rows in the stdio buffer were not counted
+// and the lag read up to about 1 s young), or the start of a running fflush.
 JournalLag journal_writer_lag(JournalWriter* w,uint64_t now) {
   JournalLag lag=JournalLag();
   if(!w)return lag;
@@ -617,9 +641,10 @@ JournalLag journal_writer_lag(JournalWriter* w,uint64_t now) {
   const uint64_t written=w->written.load(std::memory_order_acquire);
   lag.unwritten_rows=stats.next_seq>written?stats.next_seq-written:0;
   lag.dropped_rows=stats.dropped_rows;lag.high_water=stats.high_water;
-  uint64_t oldest=stats.oldest_push_ns;
-  const uint64_t busy=w->busy_since.load(std::memory_order_acquire);
-  if(busy && (!oldest || busy<oldest))oldest=busy;
+  uint64_t oldest=0;
+  const uint64_t times[4]={stats.oldest_push_ns,stats.held_push_ns,stats.unflushed_push_ns,
+                           w->busy_since.load(std::memory_order_acquire)};
+  for(unsigned i=0;i<4;++i)if(times[i] && (!oldest || times[i]<oldest))oldest=times[i];
   lag.oldest_ns=oldest && now>oldest?now-oldest:0;
   return lag;
 }

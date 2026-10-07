@@ -1,7 +1,11 @@
 // JournalRing (2026-10-06): order across the two classes, drop-oldest of
 // diagnostic rows only, evidence FULL, wrap-around and classification.
 #include "runtime/journal_ring.h"
+#include <atomic>
 #include <cassert>
+#include <pthread.h>
+#include <sched.h>
+#include <time.h>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -29,6 +33,105 @@ static void classification() {
         "{\"kind\":\"positional\"}","{\"kind\":\"bootx\"}","{\"kind\":\"shadow_input_reset\"}","not json","{}"};
     for(size_t i=0;i<sizeof diagnostic/sizeof diagnostic[0];++i)
         assert(!journal_evidence_row(diagnostic[i],strlen(diagnostic[i])));
+}
+
+static uint64_t now_ns() { struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return uint64_t(t.tv_sec)*1000000000ULL+uint64_t(t.tv_nsec); }
+// Held and written-not-flushed rows stay timed until flushed() (2026-10-07):
+// the journal lag counts rows still in the consumer's hands or in stdio.
+static void held_and_unflushed() {
+    static unsigned char d[400],e[400];
+    JournalRing ring(d,sizeof d,e,sizeof e);
+    char out[JournalRing::MAX_ROW+1];size_t n;uint64_t seq,at;bool evidence;
+    assert(ring.push("{\"kind\":\"health\"}",17,false,100)==JournalRing::PUSHED);
+    assert(ring.push("{\"kind\":\"health\"}",17,false,200)==JournalRing::PUSHED);
+    // Popped: no longer queued, but held, in the same critical section.
+    assert(ring.pop(out,sizeof out,&n,&seq,&evidence,&at) && at==100);
+    JournalRing::Stats s=ring.stats();
+    assert(s.oldest_push_ns==200 && s.held_push_ns==100 && s.unflushed_push_ns==0);
+    ring.row_written();
+    s=ring.stats();assert(s.held_push_ns==0 && s.unflushed_push_ns==100);
+    assert(ring.pop(out,sizeof out,&n,&seq,&evidence,&at) && at==200);
+    s=ring.stats();assert(s.oldest_push_ns==0 && s.held_push_ns==200 && s.unflushed_push_ns==100);
+    ring.flushed();   // covers only rows handed to stdio, not the held one
+    s=ring.stats();assert(s.held_push_ns==200 && s.unflushed_push_ns==0);
+    ring.row_written();
+    s=ring.stats();assert(s.held_push_ns==0 && s.unflushed_push_ns==200);
+    // A held row not marked written before the next pop is still counted.
+    assert(ring.push("{\"kind\":\"health\"}",17,false,300)==JournalRing::PUSHED);
+    assert(ring.pop(out,sizeof out,&n,&seq,&evidence,&at) && at==300);
+    assert(ring.push("{\"kind\":\"health\"}",17,false,400)==JournalRing::PUSHED);
+    assert(ring.pop(out,sizeof out,&n,&seq,&evidence,&at) && at==400);
+    s=ring.stats();assert(s.held_push_ns==400 && s.unflushed_push_ns==200);
+    ring.flushed();ring.row_written();
+    s=ring.stats();assert(s.held_push_ns==0 && s.unflushed_push_ns==400);
+    ring.flushed();
+    s=ring.stats();assert(!s.oldest_push_ns && !s.held_push_ns && !s.unflushed_push_ns);
+    puts("journal ring: held and written-not-flushed rows stay timed until flushed()");
+}
+// wait(): a request stored before notify() but after the consumer's own
+// check must not be slept through (2026-10-07 re-review).
+struct Requests { JournalRing* ring; std::atomic<uint64_t> target,done; std::atomic<unsigned> stop,gap; };
+static bool requests_pending(void* p) {
+    Requests& r=*static_cast<Requests*>(p);
+    return r.stop.load() || r.target.load()>r.done.load();
+}
+static void* request_consumer(void* p) {
+    Requests& r=*static_cast<Requests*>(p);
+    for(unsigned i=0;;++i) {
+        const bool stop=r.stop.load()!=0;
+        const uint64_t t=r.target.load();
+        if(t>r.done.load())r.done.store(t);
+        if(stop)break;
+        // Injected interleaving: widen the window between the check above
+        // and wait() taking the mutex.
+        if(r.gap.load() && i%3==0) { if(i%2)sched_yield();else { const struct timespec g={0,20000};nanosleep(&g,0); } }
+        r.ring->wait(5000000000ULL,requests_pending,&r);
+    }
+    return 0;
+}
+static void wait_requests() {
+    static unsigned char d[400],e[400];
+    JournalRing ring(d,sizeof d,e,sizeof e);
+    Requests r;r.ring=&ring;r.target.store(0);r.done.store(0);r.stop.store(0);r.gap.store(0);
+    // Deterministic interleaving in one thread: the consumer has checked
+    // (nothing to do), the request and its notify() land, then it waits.
+    uint64_t begin=now_ns();
+    ring.wait(50000000ULL);                        // nothing pending: sleeps the timeout
+    assert(now_ns()-begin>=40000000ULL);
+    r.target.store(1);ring.notify();               // signal with nobody waiting
+    begin=now_ns();
+    ring.wait(50000000ULL);                        // without a predicate the request is missed
+    const uint64_t missed=now_ns()-begin;
+    begin=now_ns();
+    ring.wait(5000000000ULL,requests_pending,&r);  // with it: returns at once
+    const uint64_t seen=now_ns()-begin;
+    assert(missed>=40000000ULL && seen<20000000ULL);
+    r.target.store(0);
+    r.stop.store(1);ring.notify();
+    begin=now_ns();ring.wait(5000000000ULL,requests_pending,&r);
+    assert(now_ns()-begin<20000000ULL);
+    r.stop.store(0);
+    // Stress: many requests against a consumer thread with an injected gap;
+    // a lost wake-up would cost the 5 s timeout.
+    r.gap.store(1);
+    pthread_t thread;assert(pthread_create(&thread,0,request_consumer,&r)==0);
+    uint64_t worst=0;const unsigned N=3000;
+    for(unsigned i=1;i<=N;++i) {
+        const uint64_t t0=now_ns();
+        r.target.store(i);ring.notify();
+        while(r.done.load()<i) {
+            assert(now_ns()-t0<2000000000ULL);
+            if(i%7==0)sched_yield();
+        }
+        const uint64_t spent=now_ns()-t0;if(spent>worst)worst=spent;
+    }
+    const uint64_t t0=now_ns();
+    r.stop.store(1);ring.notify();
+    assert(pthread_join(thread,0)==0);
+    const uint64_t join=now_ns()-t0;
+    printf("journal ring wait: missed-without-predicate %.1f ms, with %.3f ms; %u requests worst %.2f ms; stop %.2f ms\n",
+           missed/1e6,seen/1e6,N,worst/1e6,join/1e6);
+    assert(worst<2000000000ULL && join<2000000000ULL);
 }
 int main() {
     classification();
@@ -106,6 +209,8 @@ int main() {
     assert(ring.push(huge.data(),huge.size(),false)==JournalRing::TOO_LARGE);
     std::string big(700,'x');   // larger than the diagnostic ring itself
     assert(ring.push(big.data(),big.size(),false)==JournalRing::TOO_LARGE);
+    held_and_unflushed();
+    wait_requests();
     puts("journal ring: push order across classes, wrap-around, drop-oldest diagnostic, evidence FULL passed");
     return 0;
 }

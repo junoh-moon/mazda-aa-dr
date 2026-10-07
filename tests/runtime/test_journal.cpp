@@ -453,11 +453,14 @@ static void journal_lag_bound(const char* root,const std::string& logs) {
     assert(!strcmp(beta_block_reason(true,true,false,false,true,true,true),"journal_failed"));
     assert(beta_block_reason(true,false,true,false,true,true,true)==0);
     const uint64_t generation=A::generation();
-    // Worker turns every 20 ms while the writer is stalled for 2.5 s.
-    unsigned n=2;
+    // Worker turns every 20 ms while the writer is stalled for 2.5 s; a
+    // flush request every 1 s as the worker loop does (rows in the stdio
+    // buffer count as lag since 2026-10-07).
+    unsigned n=2;uint64_t last_flush=begin;
     while(clock_ns(0)-begin<8000000000ULL && !(raised_after && clock_ns(0)-begin>raised_after+200000000ULL)) {
       const uint64_t now=clock_ns(0);
       char row[64];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n++);j.line(row);
+      if(now-last_flush>=1000000000ULL) { last_flush=now;j.flush(); }
       // When the writer has caught up (oldest unwritten row < 0.5 s). Under
       // emulation the backlog after the stall takes longer to write.
       if(lowered_after && !caught_up && journal_writer_lag(j.writer,now).oldest_ns<JOURNAL_LAG_CLEAR_NS)
@@ -491,6 +494,60 @@ static void journal_lag_bound(const char* root,const std::string& logs) {
   beta_shared.active.store(0);beta_shared.source_epoch.store(0);beta_shared.storage_epoch.store(0);
   arm_test_mode();clear_traces(logs);
   puts("Journal lag bound: provenance withheld within 1.5 s, restored after catch-up; boot timeout is journal_not_durable");
+}
+
+// 2026-10-07 re-review follow-ups of the writer thread.
+// (1) Rows handed to stdio but not yet fflush'ed are part of the lag.
+// (2) A flush or stop request that lands between the writer's own check and
+//     its wait() is not slept through (injected gap before wait()).
+static void writer_lag_and_wakeups(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=65536;
+  uint64_t unflushed_ms=0,flushed_ms=0,flush_latency=0,stop_latency=0;
+  {
+    Journal j(root);assert(j.start_writer());
+    j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
+    for(unsigned n=1;n<=5;++n) { char row[64];snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u}",n);j.line(row); }
+    const uint64_t begin=clock_ns(0);
+    while(j.writer->written.load()<6) { assert(clock_ns(0)-begin<2000000000ULL);usleep(1000); }
+    usleep(300000);   // written to stdio, no flush requested
+    JournalLag lag=journal_writer_lag(j.writer,clock_ns(0));
+    unflushed_ms=lag.oldest_ns/1000000ULL;
+    assert(lag.unwritten_rows==0 && lag.oldest_ns>=250000000ULL);
+    assert(j.flush_wait());
+    lag=journal_writer_lag(j.writer,clock_ns(0));
+    flushed_ms=lag.oldest_ns/1000000ULL;
+    assert(lag.oldest_ns<50000000ULL);
+    // Flush request inside the gap between the flush check and wait().
+    j.writer->inject_wait_gap_ns.store(300000000ULL);
+    j.line("{\"kind\":\"fixture\",\"n\":6}");
+    uint64_t t0=clock_ns(0);
+    while(j.writer->written.load()<7) { assert(clock_ns(0)-t0<2000000000ULL);usleep(1000); }
+    usleep(100000);   // the writer sits in the injected gap now
+    assert(j.writer->inject_wait_gap_ns.load()==0);
+    t0=clock_ns(0);
+    j.flush();
+    while(j.writer->flushed.load()<7) { assert(clock_ns(0)-t0<3000000000ULL);usleep(1000); }
+    flush_latency=clock_ns(0)-t0;
+    // Stop inside the same gap.
+    j.writer->inject_wait_gap_ns.store(300000000ULL);
+    j.line("{\"kind\":\"fixture\",\"n\":7}");
+    t0=clock_ns(0);
+    while(j.writer->written.load()<8) { assert(clock_ns(0)-t0<2000000000ULL);usleep(1000); }
+    usleep(100000);
+    t0=clock_ns(0);
+    bool ok=false;stop_journal_writer(j.writer,true,&ok);j.writer=0;
+    stop_latency=clock_ns(0)-t0;
+    assert(ok);
+  }
+  printf("Writer lag/wakeups: unflushed rows lag %llu ms (after flush %llu ms); flush request in the wait gap "
+         "served after %.1f ms, stop after %.1f ms (gap remainder about 200 ms; a lost wake-up costs 1000 ms)\n",
+         (unsigned long long)unflushed_ms,(unsigned long long)flushed_ms,flush_latency/1e6,stop_latency/1e6);
+  assert(flush_latency<700000000ULL && stop_latency<700000000ULL);
+  const std::vector<std::string> rows=trace_rows(logs);
+  assert(rows.size()==8);
+  for(unsigned n=0;n<8;++n)assert(row_number(rows[n],"n")==n);
+  clear_traces(logs);
+  puts("Writer: stdio-buffered rows count as lag; flush/stop requests in the wait gap are not lost");
 }
 // Every queued row is written on worker exit; a requested stop closes the
 // file durably before its acknowledgement, in order.
@@ -1152,6 +1209,7 @@ int main(int argc,char** argv) {
     writer_shutdown(root,logs);
     writer_idle_and_health(root,logs);
     journal_lag_bound(root,logs);
+    writer_lag_and_wakeups(root,logs);
     persistent_worker(root,logs);
     clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));
     return 0;

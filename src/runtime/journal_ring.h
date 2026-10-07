@@ -29,7 +29,12 @@
 // producer only signals it, it never waits.
 //
 // Each row carries its push time (the worker's clock), so the worker can
-// measure how old the oldest unwritten row is (journal lag, runtime.cpp).
+// measure how old the oldest unflushed row is (journal lag, runtime.cpp).
+// The ring also keeps, under the same mutex, the push time of the row the
+// consumer popped but has not written yet (set in the pop's critical section,
+// so there is no instant in which a popped row is invisible to stats()) and
+// the oldest push time of rows written to stdio since the consumer's last
+// fflush (row_written()/flushed(), 2026-10-07 re-review).
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -46,7 +51,8 @@ public:
     enum Result { PUSHED=0, PUSHED_AFTER_DROP, FULL, TOO_LARGE };
     JournalRing(unsigned char* diagnostic,size_t diagnostic_bytes,
                 unsigned char* evidence,size_t evidence_bytes)
-        : next_seq_(0),dropped_rows_(0),dropped_bytes_(0),high_water_(0) {
+        : next_seq_(0),dropped_rows_(0),dropped_bytes_(0),held_push_ns_(0),unflushed_push_ns_(0),
+          high_water_(0) {
         pthread_mutex_init(&mutex_,0);
         pthread_condattr_t attr;
         cond_ok_=!pthread_condattr_init(&attr);
@@ -90,9 +96,14 @@ public:
         pthread_mutex_unlock(&mutex_);
     }
     // Consumer: wait until a row is queued, notify() or timeout_ns elapses.
-    void wait(uint64_t timeout_ns) {
+    // pending (optional) is evaluated under the ring mutex before sleeping:
+    // a request whose state the notifier stored BEFORE calling notify() (a
+    // flush target, a stop flag) is then never lost, even when it arrived
+    // between the consumer's own check and this call (2026-10-07).
+    typedef bool (*Pending)(void* context);
+    void wait(uint64_t timeout_ns,Pending pending=0,void* context=0) {
         pthread_mutex_lock(&mutex_);
-        if(!ring_[0].used && !ring_[1].used) {
+        if(!ring_[0].used && !ring_[1].used && !(pending && pending(context))) {
             if(cond_ok_) {
                 struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);
                 const uint64_t ns=uint64_t(t.tv_nsec)+timeout_ns%1000000000ULL;
@@ -108,7 +119,9 @@ public:
     }
     // Consumer: the row with the lowest sequence, copied to out (capacity
     // >= MAX_ROW+1, NUL-terminated). false when both rings are empty.
-    // push_ns: the row's push time (optional).
+    // push_ns: the row's push time (optional). The row stays counted as
+    // held (stats().held_push_ns) until row_written(); a row still held from
+    // an earlier pop is then counted as written but not flushed.
     bool pop(char* out,size_t capacity,size_t* n,uint64_t* seq,bool* evidence,uint64_t* push_ns=0) {
         pthread_mutex_lock(&mutex_);
         int pick=-1;Header best=Header();
@@ -121,13 +134,31 @@ public:
         Ring& r=ring_[pick];
         r.get((r.head+HEADER)%r.cap,out,best.len);out[best.len]=0;
         r.head=(r.head+HEADER+best.len)%r.cap;r.used-=HEADER+best.len;
+        fold_held();
+        held_push_ns_=best.push_ns;
         pthread_mutex_unlock(&mutex_);
         *n=best.len;*seq=best.seq;*evidence=pick==1;
         if(push_ns)*push_ns=best.push_ns;
         return true;
     }
+    // Consumer: the held row was handed to stdio (written, not flushed).
+    void row_written() {
+        pthread_mutex_lock(&mutex_);
+        fold_held();
+        pthread_mutex_unlock(&mutex_);
+    }
+    // Consumer: every row handed to stdio before this call reached the
+    // kernel (successful fflush). A row still held is not covered.
+    void flushed() {
+        pthread_mutex_lock(&mutex_);
+        unflushed_push_ns_=0;
+        pthread_mutex_unlock(&mutex_);
+    }
     // oldest_push_ns: push time of the oldest row still queued (0: empty).
-    struct Stats { uint64_t next_seq,dropped_rows,dropped_bytes,oldest_push_ns; size_t used,high_water; };
+    // held_push_ns: the popped row not yet written (0: none).
+    // unflushed_push_ns: oldest row written since the last flushed() (0: none).
+    struct Stats { uint64_t next_seq,dropped_rows,dropped_bytes,oldest_push_ns,held_push_ns,unflushed_push_ns;
+                   size_t used,high_water; };
     Stats stats() {
         pthread_mutex_lock(&mutex_);
         uint64_t oldest=0;
@@ -136,11 +167,18 @@ public:
             Header h;ring_[i].header(&h);
             if(h.push_ns && (!oldest || h.push_ns<oldest))oldest=h.push_ns;
         }
-        const Stats s={next_seq_,dropped_rows_,dropped_bytes_,oldest,ring_[0].used+ring_[1].used,high_water_};
+        const Stats s={next_seq_,dropped_rows_,dropped_bytes_,oldest,held_push_ns_,unflushed_push_ns_,
+                       ring_[0].used+ring_[1].used,high_water_};
         pthread_mutex_unlock(&mutex_);
         return s;
     }
 private:
+    // Mutex held. A held row becomes "written, not yet flushed".
+    void fold_held() {
+        if(held_push_ns_ && (!unflushed_push_ns_ || held_push_ns_<unflushed_push_ns_))
+            unflushed_push_ns_=held_push_ns_;
+        held_push_ns_=0;
+    }
     struct Header { uint32_t len;uint64_t seq,push_ns; };
     struct Ring {
         unsigned char* buf;size_t cap,head,tail,used;
@@ -165,7 +203,7 @@ private:
     pthread_cond_t cond_;
     bool cond_ok_;
     Ring ring_[2];
-    uint64_t next_seq_,dropped_rows_,dropped_bytes_;
+    uint64_t next_seq_,dropped_rows_,dropped_bytes_,held_push_ns_,unflushed_push_ns_;
     size_t high_water_;
     JournalRing(const JournalRing&);
     JournalRing& operator=(const JournalRing&);
