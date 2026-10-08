@@ -584,6 +584,19 @@ class BetaAnalyzeTests(unittest.TestCase):
         rows[index + 1:index + 1] = [old, dict(dropped, **{"class": "diagnostic"}), health(1_100_000_000)]
         report = self.audit(rows)
         self.assertIn("beta_overlay_unverified_journal_gap", self.codes(report, "inconclusive"))
+        # Interleaved streams: tagged older window batches and current
+        # batches each keep their own sequence/clock continuity.
+        rows = nofix_drive(overlay_speed_e3=15000, wheel_after_send=False)   # wheels 1..3 first
+        at = next(i for i, r in enumerate(rows) if r.get("to") == "NO_FIX")
+        rows[at + 1:at + 1] = [paced, wheel_batch(4, [2_200_000_000]),
+                               dict(wheel_batch(10, [500_000_000, 510_000_000]), raw_window=True),
+                               wheel_batch(5, [2_300_000_000]),
+                               dict(wheel_batch(12, [520_000_000]), raw_window=True)]
+        codes = self.codes(self.audit(rows))
+        for code in ("motion_sequence_replayed", "motion_clock_regressed", "motion_sequence_gap"):
+            self.assertNotIn(code, codes)
+        rows[at + 3] = dict(wheel_batch(5, [2_300_000_000]), raw_window=True)   # a gap in the window stream
+        self.assertIn("motion_sequence_gap", self.codes(self.audit(rows)))
         # GPS return: tagged window fixes are skipped, the current untagged
         # fix after the replacements is measured.
         rows = drive()

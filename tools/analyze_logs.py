@@ -1075,8 +1075,12 @@ class Auditor:
                 return
             if kind == "motion_batch":
                 self.motion_batches += 1
+            # Tagged RAW-window batches of a paced drain are an older stream
+            # interleaved with the current one (2026-10-08): each keeps its
+            # own continuity cursor.
             for event in events:
-                self.motion(event, source)
+                self.motion(event, source, "window_motion" if window_row and row.get("raw_window") is True
+                            else "motion")
         elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled",
                       "shadow_pipeline_reset"):
             if (kind == "shadow_boot" and bounded_number(row.get("wheel_kmh_per_count"), 0.0001, 1) and
@@ -1188,6 +1192,7 @@ class Auditor:
         p["raw_window_rows"] += row["rows"]
         p["raw_window_triggers"][row["trigger"]] += 1
         self.session["motion_epoch"] = None
+        self.session["window_motion_epoch"] = None
         # Tagged window rows (drain paced/immediate, 2026-10-08) identify
         # themselves; older markers announce `rows` contiguous rows.
         self.session["raw_flush_left"] = 0 if isinstance(row.get("drain"), str) else row["rows"]
@@ -1245,6 +1250,7 @@ class Auditor:
         if beta["gap_open"] is None:
             beta["gap_open"] = beta["last_time_ns"] if beta["last_time_ns"] is not None else 0
         self.session["motion_epoch"] = None
+        self.session["window_motion_epoch"] = None
         self.issue("journal_rows_dropped", source, "%d diagnostic rows dropped under a write backlog" % row["rows"])
 
     def late_motion(self, row, source):
@@ -1279,7 +1285,7 @@ class Auditor:
         s = self.session
         s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["mono_ns"])
 
-    def motion(self, row, source):
+    def motion(self, row, source, cursor="motion"):
         self.motion_samples += 1
         self.motion_sensors[str(row["sensor"])] += 1
         s = self.session
@@ -1289,21 +1295,22 @@ class Auditor:
                 s["beta"]["wheels"].append((row["received_ns"], speed))
         s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["received_ns"])
         self.note_time(row["received_ns"], closes=False)
-        if s["motion_epoch"] != row["epoch"]:
-            if s["motion_epoch"] is not None:
+        epoch, seq, ns = cursor + "_epoch", cursor + "_seq", cursor + "_ns"
+        if s.get(epoch) != row["epoch"]:
+            if s.get(epoch) is not None:
                 self.issue("motion_source_restart", source, "Observed source epoch changed")
-            s["motion_epoch"] = row["epoch"]
-            s["motion_seq"] = row["receive_seq"]
-            s["motion_ns"] = row["received_ns"]
+            s[epoch] = row["epoch"]
+            s[seq] = row["receive_seq"]
+            s[ns] = row["received_ns"]
             return  # First sequence need not be 1: the receiver can start late.
-        if row["receive_seq"] <= s["motion_seq"]:
+        if row["receive_seq"] <= s[seq]:
             self.issue("motion_sequence_replayed", source, "Duplicate/backward observer sequence")
-        elif row["receive_seq"] != s["motion_seq"] + 1:
+        elif row["receive_seq"] != s[seq] + 1:
             self.issue("motion_sequence_gap", source, "Gap in channel-accepted observer records")
-        if row["received_ns"] < s["motion_ns"]:
+        if row["received_ns"] < s[ns]:
             self.issue("motion_clock_regressed", source, "Receipt clock regressed within source epoch")
-        s["motion_seq"] = max(s["motion_seq"], row["receive_seq"])
-        s["motion_ns"] = max(s["motion_ns"], row["received_ns"])
+        s[seq] = max(s[seq], row["receive_seq"])
+        s[ns] = max(s[ns], row["received_ns"])
 
     def model_bus(self, row, source):
         if not self.model_diagnostic(row, source):
