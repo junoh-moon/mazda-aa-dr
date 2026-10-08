@@ -558,6 +558,42 @@ class BetaAnalyzeTests(unittest.TestCase):
         report = self.audit(rows)
         self.assertEqual(report["status"], "local_checks_pass", report["issues"])
 
+    def test_current_rows_during_a_paced_drain_are_current(self):
+        # Review M1 (2026-10-08): during a paced drain, current rows are
+        # written directly and untagged, between the tagged window rows.
+        # They are current: a worker-time row closes a journal gap, and an
+        # untagged FIX after a replacement is the GPS-return reference.
+        paced = dict(kind="raw_window", schema=1, mono_ns=1_070_000_000, profile="persistent",
+                     trigger="beta_hold", rows=900, bytes=300000, overwritten_rows=0, span_ms=50000,
+                     pre_limit_ms=60000, post_ms=30000, window="available", drain="paced",
+                     drain_rows_per_s=150)
+        dropped = dict(kind="journal_dropped", schema=1, mono_ns=1_080_000_000, **{"class": "bulk"},
+                       rows=12, first_seq=40, last_seq=51, dropped_total=12, reason="writer_backlog")
+        base = nofix_drive(overlay_speed_e3=15000)
+        index = next(i for i, r in enumerate(base) if r.get("to") == "NO_FIX")
+        rows = list(base)
+        rows[index + 1:index + 1] = [paced, dict(wheel_batch(60, [1_000_000_000]), raw_window=True),
+                                     dropped, health(1_100_000_000)]
+        report = self.audit(rows)
+        self.assertIn("beta_overlay_speed_mismatch", self.codes(report, "violation"))
+        self.assertNotIn("beta_overlay_unverified_journal_gap", self.codes(report))
+        # The same untagged row under an older count marker was taken as a
+        # window row and kept the gap open.
+        old = {k: v for k, v in paced.items() if k not in ("drain", "drain_rows_per_s")}
+        rows = list(base)
+        rows[index + 1:index + 1] = [old, dict(dropped, **{"class": "diagnostic"}), health(1_100_000_000)]
+        report = self.audit(rows)
+        self.assertIn("beta_overlay_unverified_journal_gap", self.codes(report, "inconclusive"))
+        # GPS return: tagged window fixes are skipped, the current untagged
+        # fix after the replacements is measured.
+        rows = drive()
+        index = next(i for i, r in enumerate(rows) if r.get("call") == 3 and r["kind"] == "send") + 1
+        rows[index:index] = [dict(paced, mono_ns=3_000_000_200),
+                             dict(position(90, 900_000_000, 1), raw_window=True)]
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["beta"]["gps_return_checks_total"], 1)
+
     def test_cadence_fence_rows_are_counted(self):
         # 2026-10-08: a POSITION/SEND gap above 3 s (reconnect) is journaled
         # by the worker; it is BETA evidence, counted per stream.

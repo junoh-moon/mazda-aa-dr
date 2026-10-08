@@ -908,7 +908,9 @@ static void route_general_worker(const char* root,const std::string& logs) {
 // window at the event); paced 150 is the product now.
 struct BurstResult { uint64_t max_lag_ns; unsigned lowered,evidence_rows,window_rows,unwritten_max; };
 static BurstResult window_burst(const char* root,const std::string& logs,unsigned paced,uint64_t stall_ns=0,
-                                uint64_t* lowered_after=0,unsigned writer_rows_per_s=350) {
+                                uint64_t* lowered_after=0,unsigned writer_rows_per_s=350,
+                                uint64_t stall_at_ns=9000000000ULL,bool sparse=false,
+                                uint64_t* live_emit_max_ns=0) {
   arm_test_mode();clear_traces(logs);config.max_log_bytes=8388608;
   journal_current.store(1);
   BurstResult r=BurstResult();
@@ -937,8 +939,15 @@ static BurstResult window_burst(const char* root,const std::string& logs,unsigne
     bool stalled=false;
     while(clock_ns(0)-begin<12000000000ULL) {
       const uint64_t now=clock_ns(0);
-      if(now-begin>=uint64_t(batch)*100000000ULL) {
-        char b[64];snprintf(b,sizeof b,"{\"kind\":\"motion_batch\",\"live\":%u}",batch++);j.line(b);
+      if(!sparse && now-begin>=uint64_t(batch)*100000000ULL) {
+        // A current raw row during the drain (review M1): queued in the
+        // journal ring at once, untagged, timed by the lag.
+        char b[64];snprintf(b,sizeof b,"{\"kind\":\"motion_batch\",\"live\":%u}",batch++);
+        const uint64_t before_seq=j.writer->ring.stats().next_seq;
+        j.line(b);
+        const mx5::runtime::JournalRing::Stats after_push=j.writer->ring.stats();
+        assert(after_push.next_seq>before_seq);
+        if(live_emit_max_ns) { const uint64_t d=clock_ns(0)-now;if(d>*live_emit_max_ns)*live_emit_max_ns=d; }
       }
       if(!last_second || now-last_second>=1000000000ULL) {
         last_second=now;++call;char row[200];
@@ -952,7 +961,7 @@ static BurstResult window_burst(const char* root,const std::string& logs,unsigne
         r.evidence_rows+=3;
       }
       // A real writer stall in the middle (once), after the window drained.
-      if(stall_ns && !stalled && now-begin>=9000000000ULL) { stalled=true;j.writer->inject_stall_ns.store(stall_ns); }
+      if(stall_ns && !stalled && now-begin>=stall_at_ns) { stalled=true;j.writer->inject_stall_ns.store(stall_ns); }
       j.pump(now);
       if(now-last_flush>=1000000000ULL) { last_flush=now;j.flush(); }
       const JournalLag lag=journal_writer_lag(j.writer,now);
@@ -962,7 +971,7 @@ static BurstResult window_burst(const char* root,const std::string& logs,unsigne
       journal_lag_guard(j,now);
       if(before && !journal_current.load()) {
         ++r.lowered;
-        if(lowered_after && stalled && !*lowered_after)*lowered_after=now-begin-9000000000ULL;
+        if(lowered_after && stalled && !*lowered_after)*lowered_after=now-begin-stall_at_ns;
       }
       usleep(20000);
     }
@@ -979,6 +988,7 @@ static BurstResult window_burst(const char* root,const std::string& logs,unsigne
   unsigned tagged=0,positions=0;
   for(size_t i=0;i<rows.size();++i) {
     if(rows[i].find("{\"kind\":\"motion_batch\",\"raw_window\":true,\"n\":")==0)++tagged;
+    if(rows[i].find("\"live\":")!=std::string::npos)assert(rows[i].find("raw_window")==std::string::npos);
     if(rows[i].find("{\"kind\":\"position\",\"call\":")==0)++positions;
   }
   r.window_rows=tagged;
@@ -992,7 +1002,11 @@ static void window_burst_lag(const char* root,const std::string& logs) {
          "journal_current lowered %u times, %u evidence rows, %u window rows\n",
          before.max_lag_ns/1e6,before.unwritten_max,before.lowered,before.evidence_rows,before.window_rows);
   fflush(stdout);
-  const BurstResult after=window_burst(root,logs,mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S);
+  uint64_t live_emit_max=0;
+  const BurstResult after=window_burst(root,logs,mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S,0,0,350,
+                                       9000000000ULL,false,&live_emit_max);
+  printf("Window burst: current raw rows during the drain queued in the journal ring within %.3f ms\n",
+         live_emit_max/1e6);
   printf("Window burst, paced %u rows/s (BULK, untimed): max lag %.0f ms, %u unwritten rows at most, "
          "journal_current lowered %u times, %u evidence rows, %u window rows\n",
          mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S,after.max_lag_ns/1e6,after.unwritten_max,after.lowered,
@@ -1013,6 +1027,17 @@ static void window_burst_lag(const char* root,const std::string& logs) {
          slow.max_lag_ns/1e6,slow.unwritten_max,slow.lowered,slow.window_rows);
   fflush(stdout);
   assert(!slow.lowered && slow.max_lag_ns<1000000000ULL && slow.window_rows==1100);
+  // A real writer stall (1.6 s) DURING the drain (review L1), with only
+  // 1 Hz prompt rows: the writer is blocked on a BULK row, timed from its
+  // pop, so the guard drops within the bound of the stall start, not 1.5 s
+  // after the next prompt row.
+  uint64_t during_after=0;
+  const BurstResult during=window_burst(root,logs,mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S,1600000000ULL,
+                                        &during_after,350,1050000000ULL,true);
+  printf("Window burst, 1.6 s writer stall during the drain (1 Hz prompt rows): journal_current lowered %u times, "
+         "%llu ms after the stall began\n",during.lowered,(unsigned long long)(during_after/1000000ULL));
+  fflush(stdout);
+  assert(during.lowered==1 && during_after>=1000000000ULL && during_after<=1700000000ULL);
   // A real writer stall (1.6 s) during the same traffic still trips it.
   uint64_t lowered_after=0;
   const BurstResult stall=window_burst(root,logs,mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S,1600000000ULL,

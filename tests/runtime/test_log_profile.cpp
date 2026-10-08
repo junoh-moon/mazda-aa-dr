@@ -312,15 +312,29 @@ static void paced_window() {
     assert(out[1].find("\"kind\":\"beta_state\"")==1 && log.draining());
     // Worker turns every 20 ms; a LOST POSITION (kept, evidence) every 1 s;
     // a raw batch every 100 ms while draining. Count window rows per second.
-    unsigned per_second[16]={0};unsigned window_rows=0,max_burst=0,live_rows=0;
+    unsigned per_second[16]={0};unsigned window_rows=0,max_burst=0,live_rows=0,live_positions=0;
     unsigned next_window=0,next_live=0;bool order_ok=true,tags_ok=true;
     for(unsigned turn=1;turn<=750 && log.draining();++turn) {
         const uint64_t now=event+uint64_t(turn)*20000000ULL;
+        // Current rows during the drain (review M1): written at once,
+        // untagged, in their own class, in the order they arrive.
         if(turn%5==0) {
             char live[80];snprintf(live,sizeof live,"{\"kind\":\"motion_batch\",\"live\":%u}",next_live++);
+            const size_t at=out.size();
             log.row(live,now,emit,0);
+            assert(out.size()>at && out.back()==live && classes.back()==PersistentLog::ROW_RAW);  // a due digest may precede it
+            ++live_rows;
         }
-        if(turn%50==0)observe(log,position(A::POSITION_LOST,0,turn),now,"lost");
+        if(turn==50)observe(log,position(A::POSITION_LOST,0,turn),now,"lost");
+        if(turn>50 && turn%25==0) {
+            // FIX while BETA is live: the first is a class change (kept), the
+            // rest take the raw path; both are evidence (ROW_KEEP), untagged.
+            const size_t at=out.size();
+            observe(log,position(A::POSITION_FIX,1,turn),now,"live_fix");
+            assert(out.size()>=at+1 && out.back().find("{\"kind\":\"position\",\"call\":")==0 &&
+                   out.back().find("raw_window")==std::string::npos && classes.back()==PersistentLog::ROW_KEEP);
+            ++live_positions;
+        }
         // Prompt rows still queued (e.g. the POSITION just written): no drain.
         prompt_idle=turn%7!=0;
         const size_t before=out.size();
@@ -337,18 +351,16 @@ static void paced_window() {
         }
         if(burst>max_burst)max_burst=burst;
     }
-    // The rows queued behind the window come out after it, in order.
-    for(size_t i=0;i<out.size();++i)if(out[i].find("\"live\":")!=std::string::npos) {
-        ++live_rows;
-        assert(out[i].find("{\"kind\":\"motion_batch\",\"raw_window\":true,\"live\":")==0);
-    }
+    // Only window rows carry the tag.
+    for(size_t i=0;i<out.size();++i)
+        if(out[i].find("raw_window\":true")!=std::string::npos)assert(out[i].find("\"n\":")!=std::string::npos);
     printf("persistent log paced drain: %u window rows, max %u per turn, per second:",window_rows,max_burst);
     for(unsigned i=0;i<10;++i)printf(" %u",per_second[i]);
-    printf("; %u live rows queued behind it\n",live_rows);
+    printf("; %u live raw rows and %u live FIX POSITION rows written at once\n",live_rows,live_positions);
     assert(order_ok && tags_ok && window_rows==1100 && !log.draining());
     assert(max_burst<=PersistentLog::DRAIN_BURST);
     for(unsigned i=1;i<9;++i)assert(per_second[i]<=PersistentLog::DRAIN_ROWS_PER_S+PersistentLog::DRAIN_BURST);
-    assert(live_rows>=30 && count("position")==7);
+    assert(live_rows>=30 && live_positions>=10 && count("position")==1+live_positions);
     // After the drain, inside the post period, raw rows are direct again.
     out.clear();classes.clear();
     log.row("{\"kind\":\"motion_batch\",\"after\":1}",event+9*S,emit,0);

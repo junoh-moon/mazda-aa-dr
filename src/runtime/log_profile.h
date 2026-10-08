@@ -35,8 +35,11 @@
 //    most DRAIN_ROWS_PER_S (token bucket, DRAIN_BURST rows) from pump(),
 //    which the worker calls every turn and which waits while the journal
 //    still has prompt rows or earlier window rows queued (so the drain
-//    also follows a slower writer). Raw rows arriving during the drain are
-//    appended to the window so the raw stream stays in order; a capture
+//    also follows a slower writer). Current raw rows arriving during the
+//    drain are written directly as in any raw period (untagged; evidence
+//    POSITION rows in the evidence class), so they are timed by the journal
+//    lag and never wait in profile RAM; the older tagged window rows are
+//    interleaved after them (2026-10-08 review M1). A capture
 //    stop writes the rest at once. Each row written from the window carries
 //    "raw_window":true right after its kind (the analyzer then knows it is
 //    older context, interleaved with current rows) and is queued in the
@@ -322,8 +325,10 @@ private:
     // evidence: written in the journal ring's evidence class (POSITION rows
     // while BETA is live); otherwise RAW context is diagnostic class.
     void raw(const char* s,uint64_t now,Emit emit,void* context,bool evidence=false) {
-        // During a paced drain raw rows queue behind the window rows.
-        if(now<raw_until_ && !draining_) {
+        // Current rows are direct during the raw period, also while the
+        // older window rows are still being drained (review M1: queuing
+        // them behind the window hid them from the lag guard for ~7 s).
+        if(now<raw_until_) {
             ++raw_direct_;emit(context,s,evidence && journal_current_?ROW_KEEP:ROW_RAW);return;
         }
         if(!cap_) { ++suppressed_[S_RAW_DROPPED];return; }
