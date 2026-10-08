@@ -28,7 +28,7 @@ struct BetaProfile {
     double yaw_quiet_max_rad_s;   // |yaw| over the preceding window
     uint64_t yaw_quiet_window_ns;
     double wheel_gps_speed_max_diff_kmh;
-    uint64_t fix_pair_max_ns;     // "consecutive" fixes: at most this far apart
+    uint64_t fix_pair_max_ns;     // a pair (repeated-utc polls skipped): at most this far apart
     // BETA_DECISIONS_2026-10-05.md 3.1-3.2 (pair and settling rules).
     uint64_t utc_step_max_s;      // strictly increasing utc pair: at most this step
     double utc_mono_tolerance_s;  // |utc step - receipt mono step| (integer utc seconds)
@@ -59,7 +59,16 @@ inline BetaProfile beta_profile() {
     p.anchor_speed_min_kmh=20.0; p.anchor_speed_max_kmh=60.0;
     p.previous_speed_min_kmh=15.0; p.course_step_max_deg=3.0;
     p.yaw_quiet_max_rad_s=0.05; p.yaw_quiet_window_ns=2000000000ULL;
-    p.wheel_gps_speed_max_diff_kmh=4.0; p.fix_pair_max_ns=2000000000ULL;
+    // 2.5 s (was 2.0 s, 2026-10-08): the OEM POSITION polls the hook sees come
+    // about every 1.0 s (0.9-1.1 s) while the fix utc advances at 1 Hz on its
+    // own phase, so a poll often repeats the previous utc second (UTC: the
+    // baseline is kept) and the next one jumps by 2 s. That pair spans two
+    // poll intervals, 2.0 s +- jitter on the receipt clock; with a 2.0 s limit
+    // about half of them failed as PREVIOUS and restarted the 10 s settle
+    // (first persistent BETA drive, beta.3, mono 1852-1878 s). The utc step
+    // limit (2 s), the utc/receipt agreement (1.0 s) and every other check
+    // are unchanged.
+    p.wheel_gps_speed_max_diff_kmh=4.0; p.fix_pair_max_ns=2500000000ULL;
     p.utc_step_max_s=2; p.utc_mono_tolerance_s=1.0; p.anchor_hdop_max=3.0;
     p.displacement_ratio_min=0.5; p.displacement_ratio_max=1.5;
     p.anchor_settle_ns=10000000000ULL;
