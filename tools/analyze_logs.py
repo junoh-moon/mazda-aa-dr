@@ -62,7 +62,8 @@ LOWER_BOUNDS = {
 }
 # Adapter PositionClass numbers carried as the send/position "class" field.
 POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
-BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor")
+BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor",
+              "beta_cadence_fence")
 # beta_reverse_latch is a MODEL-domain row (also written in SHADOW mode 4).
 WHEEL_PROFILE = (0.01, -100.0)  # research_model_profile(): km/h per count, zero
 EARTH_RADIUS_M = 6371008.8
@@ -697,6 +698,7 @@ class Auditor:
         self.beta_speed_overlay_error_mps = dict(count=0, min=None, max=None, mean=None)
         self.beta_anchor_gates = Counter()
         self.beta_anchor_dropped = 0
+        self.beta_cadence_fences = Counter()  # by stream (2026-10-08)
         self.beta_reverse_latch = Counter()
 
     def issue(self, code, source, detail, violation=False):
@@ -2306,6 +2308,16 @@ class Auditor:
             if self.validate(row, source, ("seq", "mode", "utc_s", "dropped"), ("gate",)):
                 self.beta_anchor_gates[row["gate"]] += 1
                 self.beta_anchor_dropped = max(self.beta_anchor_dropped, row["dropped"])
+        elif kind == "beta_cadence_fence":
+            # The OEM POSITION or SEND stream stopped for longer than
+            # limit_ms (e.g. a dongle reconnect): the worker revoked the
+            # generation, withdrew and reset the BETA anchor state.
+            if not self.validate(row, source, ("gap_ms", "limit_ms"), ("stream", "state")):
+                return
+            if row["stream"] not in ("position", "send") or row["gap_ms"] <= row["limit_ms"]:
+                self.issue("partial_record", source, "Invalid beta_cadence_fence row")
+                return
+            self.beta_cadence_fences[row["stream"]] += 1
         else:  # beta_session_storage
             if self.validate(row, source, ("session_epoch", "previous")):
                 self.beta_storage_changes += 1
@@ -2659,6 +2671,7 @@ class Auditor:
                               replaced_accuracy_m=dict(self.beta_accuracy_m),
                               hold_events=dict(self.beta_hold_events),
                               session_storage_changes=self.beta_storage_changes,
+                              cadence_fences=dict(self.beta_cadence_fences),
                               position_classes=dict(self.beta_position_classes),
                               state_seconds={k: round(v, 3) for k, v in self.beta_state_seconds.items()},
                               no_fix_seconds=dict(self.beta_no_fix_seconds),

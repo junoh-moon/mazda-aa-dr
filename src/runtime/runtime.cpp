@@ -1588,6 +1588,9 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
           A::mode()!=A::BETA?"adapter_mode_changed":
           !shadow?"model_disabled":0;
       now=clock_ns(0);
+      // A POSITION or SEND gap above 3 s (reconnect) ends the session
+      // evidence: the BETA anchor state must be qualified again.
+      if(!fault && beta.cadence_fence(j,now))navigation.fence_beta();
       beta.tick(j,now,navigation,model_session.available() && model_bus.available(),
                 navigation.status().last_received_ns,model_bus.epoch(),fault);
     }

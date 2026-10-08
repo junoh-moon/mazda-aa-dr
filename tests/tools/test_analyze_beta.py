@@ -521,6 +521,23 @@ class BetaAnalyzeTests(unittest.TestCase):
         self.assertIn("unexpected_reverse_latch_domain", self.codes(self.audit(rows), "violation"))
 
 
+    def test_cadence_fence_rows_are_counted(self):
+        # 2026-10-08: a POSITION/SEND gap above 3 s (reconnect) is journaled
+        # by the worker; it is BETA evidence, counted per stream.
+        rows = nofix_drive()
+        fence = dict(kind="beta_cadence_fence", mono_ns=2_300_000_000, domain="beta", assist_ready=False,
+                     stream="position", gap_ms=3050, limit_ms=3000, state="ARMED", generation=7,
+                     session_epoch=1)
+        rows.insert(-1, fence)
+        rows.insert(-1, dict(fence, stream="send", mono_ns=2_300_000_001))
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["beta"]["cadence_fences"], {"position": 1, "send": 1})
+        for bad in (dict(stream="lds"), dict(gap_ms=2999), dict(gap_ms=None), dict(assist_ready=True)):
+            rows = nofix_drive()
+            rows.insert(-1, dict(fence, **bad))
+            self.assertNotEqual(self.audit(rows)["status"], "local_checks_pass", bad)
+
     def lag(self, mono_ns, event):
         return dict(kind="beta_journal_lag", mono_ns=mono_ns, domain="beta", assist_ready=False,
                     event=event, lag_ms=1500, unwritten_rows=40, limit_ms=1500, clear_ms=500)

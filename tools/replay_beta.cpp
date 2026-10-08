@@ -528,6 +528,8 @@ void worker_turn(uint64_t now) {
         const char* fault = journal.failed ? "journal_failed" :
             A::faulted() ? "adapter_fault" :
             A::mode() != A::BETA ? "adapter_mode_changed" : 0;
+        // runtime.cpp: the cadence fence (POSITION/SEND gap > 3 s) first.
+        if (!fault && beta->cadence_fence(journal, now)) nav.fence_beta();
         beta->tick(journal, now, nav, true, nav.status().last_received_ns, 1, fault);
         double w;
         if (count_latch && wheel_at(now, &w) && w > 1.0) {
