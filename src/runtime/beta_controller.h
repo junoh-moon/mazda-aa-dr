@@ -103,6 +103,16 @@ static const uint64_t BETA_SENSOR_SILENCE_NS=300000000ULL;
 // whole episode (design 3.8).
 static const uint64_t BETA_NO_FIX_HOLD_REARM_NS=2000000000ULL;
 static const uint64_t BETA_NO_FIX_STORAGE_SETTLE_NS=5000000000ULL;
+// Cadence fence (2026-10-08): the send-time storage fence did not notice the
+// dongle reconnects of the first persistent BETA drive (session_epoch stayed 1
+// across 17-18 s without any POSITION poll at mono 2088-2123 s). While AA is
+// connected the OEM POSITION polls come about every 1 s (largest other gap of
+// that drive 1.76 s) and SENDs about 11 per second. A gap longer than this in
+// either stream (hook times, CLOCK_MONOTONIC) ends the session evidence: the
+// worker revokes the generation, withdraws, and the BETA anchor state is
+// reset, so BETA needs the normal re-qualification (a POSITION of the new
+// generation; a new gated anchor after 10 s of settled fixes).
+static const uint64_t BETA_CADENCE_GAP_NS=3000000000ULL;
 
 // Worker-owned. J must provide line(const char*), fail() and a bool failed.
 class BetaController {
@@ -122,7 +132,9 @@ public:
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
           last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
           seen_latch_clears_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
-          rearm_needs_hold_clear_(false),rearm_not_before_(0),rearm_reason_("none") {}
+          rearm_needs_hold_clear_(false),rearm_not_before_(0),rearm_reason_("none"),
+          last_position_ns_(0),last_send_ns_(0),position_gap_(false),send_gap_(false),
+          position_gap_seen_ns_(0),send_gap_seen_ns_(0),cadence_fences_(0) {}
     BetaState state() const { return state_; }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
@@ -146,6 +158,7 @@ public:
     // already revoked the generation on every class change; this only
     // follows the class (BETA_DECISIONS 1).
     template<class J> void position(J& j,const adapter::Observation& o,uint64_t now) {
+        note_cadence(o.mono_ns,&last_position_ns_,&position_gap_,&position_gap_seen_ns_);
         if(!live())return;
         have_position_=true;position_mode_=o.original_mode;
         position_generation_=o.prediction_generation;
@@ -184,6 +197,8 @@ public:
     }
     // Every popped SEND observation (diagnostic counters only).
     void send(const adapter::Observation& o) {
+        if(o.kind==adapter::Observation::SEND)
+            note_cadence(o.mono_ns,&last_send_ns_,&send_gap_,&send_gap_seen_ns_);
         if(o.kind!=adapter::Observation::SEND || o.type!=1 || !o.has_payload)return;
         last_original_accuracy_=o.original[16]?double(uint32_t(o.original[20])|(uint32_t(o.original[21])<<8)|
             (uint32_t(o.original[22])<<16)|(uint32_t(o.original[23])<<24))/1000.0:-1;
@@ -204,6 +219,30 @@ public:
         if(!live())return;
         stop_adapter();transition(j,now,BETA_FAULT,reason);summary(j,now,true);
     }
+    // Worker, before tick(): the cadence fence (BETA_CADENCE_GAP_NS). A gap
+    // is found either while it lasts (no observation for longer than the
+    // limit at `now`) or when the first observation after it arrives. Once
+    // per gap and stream; the next observation of that stream re-arms it.
+    // true: the caller must reset the BETA anchor state of its pipeline
+    // (Pipeline::fence_beta) before the next POSITION is handed to it.
+    template<class J> bool cadence_fence(J& j,uint64_t now) {
+        if(!live())return false;
+        const bool position=gap_due(now,last_position_ns_,&position_gap_,&position_gap_seen_ns_);
+        const bool sent=gap_due(now,last_send_ns_,&send_gap_,&send_gap_seen_ns_);
+        if(!position && !sent)return false;
+        if(position)fence_row(j,now,"position",&position_gap_seen_ns_);
+        if(sent)fence_row(j,now,"send",&send_gap_seen_ns_);
+        // Any stored candidate becomes unselectable at once; an engaged
+        // state ends its episode (WITHDRAWN until FIX/NATIVE_DR; a speed
+        // overlay re-arms after the storage settle, as for a reconnect).
+        adapter::invalidate();
+        if(state_==BETA_ENGAGED || state_==BETA_SPEED_ENGAGED) withdraw_episode(j,now,"cadence_gap");
+        else if(state_==BETA_WITHDRAWN && rearm_pending_)
+            rearm_not_before_=later(rearm_not_before_,after(now,BETA_NO_FIX_STORAGE_SETTLE_NS));
+        ++cadence_fences_;
+        return true;
+    }
+    uint64_t cadence_fences() const { return cadence_fences_; }
     // One worker tick. input_ready: MODEL input admitted (session+bus fences).
     // last_motion_ns: newest motion receipt admitted into the pipeline.
     template<class J> void tick(J& j,uint64_t now,const navigation::Pipeline& nav,
@@ -253,6 +292,41 @@ private:
     bool rearm_pending_,rearm_needs_hold_clear_;
     uint64_t rearm_not_before_;
     const char* rearm_reason_;
+    // Cadence fence: newest hook time per stream, whether the current
+    // silence was already fenced, and a gap length waiting to be journaled.
+    uint64_t last_position_ns_,last_send_ns_;
+    bool position_gap_,send_gap_;
+    uint64_t position_gap_seen_ns_,send_gap_seen_ns_;
+    uint64_t cadence_fences_;
+
+    // An observation of one stream: a gap found at its arrival waits for
+    // the next cadence_fence() unless this silence was already fenced while
+    // it lasted. Hook times only grow per stream; an older one is ignored.
+    static void note_cadence(uint64_t at,uint64_t* last,bool* fenced,uint64_t* seen) {
+        if(!at)return;
+        if(*last && at>*last && at-*last>BETA_CADENCE_GAP_NS && !*fenced && !*seen)*seen=at-*last;
+        if(at>*last) { *last=at;*fenced=false; }
+    }
+    // Due now: a gap found at an arrival, or the stream silent for longer
+    // than the limit (fenced once until its next observation).
+    static bool gap_due(uint64_t now,uint64_t last,bool* fenced,uint64_t* seen) {
+        if(*seen)return true;
+        if(!last || *fenced || now<=last || now-last<=BETA_CADENCE_GAP_NS)return false;
+        *fenced=true;*seen=now-last;
+        return true;
+    }
+    template<class J> void fence_row(J& j,uint64_t now,const char* stream,uint64_t* gap) {
+        char line[400];
+        const int n=snprintf(line,sizeof line,
+            "{\"kind\":\"beta_cadence_fence\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
+            "\"stream\":\"%s\",\"gap_ms\":%llu,\"limit_ms\":%llu,\"state\":\"%s\",\"generation\":%u,"
+            "\"session_epoch\":%u}",
+            (unsigned long long)now,stream,(unsigned long long)(*gap/1000000ULL),
+            (unsigned long long)(BETA_CADENCE_GAP_NS/1000000ULL),beta_state_name(state_),adapter::generation(),
+            shared_.storage_epoch.load(std::memory_order_acquire));
+        *gap=0;
+        if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+    }
 
     // A withdrawn NO_FIX episode returns to ARMED (the next POSITION picks
     // its class again) once no hold is set or pending and the settle time
@@ -328,10 +402,10 @@ private:
         if(speed && !strcmp(reason,"send_result_hold")) {
             rearm_pending_=true;rearm_needs_hold_clear_=true;rearm_not_before_=0;
             rearm_reason_="rearm_after_hold";
-        } else if(speed && !strcmp(reason,"session_storage_changed")) {
+        } else if(speed && (!strcmp(reason,"session_storage_changed") || !strcmp(reason,"cadence_gap"))) {
             rearm_pending_=true;rearm_needs_hold_clear_=false;
             rearm_not_before_=after(now,BETA_NO_FIX_STORAGE_SETTLE_NS);
-            rearm_reason_="rearm_after_storage";
+            rearm_reason_=strcmp(reason,"cadence_gap")?"rearm_after_storage":"rearm_after_cadence_gap";
         }
         transition(j,now,BETA_WITHDRAWN,reason);
     }

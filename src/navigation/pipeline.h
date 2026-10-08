@@ -133,6 +133,11 @@ public:
     // GPS fixes that pass the BETA anchor gate. It never changes the MODEL
     // core, diagnostic() or any qualified state. Cleared by init_*().
     bool enable_beta(const runtime::BetaProfile&);
+    // Cadence fence (runtime BetaController::cadence_fence): forget the BETA
+    // anchor, pair baseline, settle streak and yaw window and re-initialize
+    // the BETA core unseeded, so the next anchor needs the full gate again.
+    // The MODEL core, the reverse latch and the gate record sequence stay.
+    void fence_beta();
     bool init_qualified(const mx5_dr_config&, mx5_dr_context);
     // Required before qualified_snapshot()/qualified_publication(). Unbound
     // qualified instances cannot publish; the bound object owns revocation

@@ -62,7 +62,8 @@ LOWER_BOUNDS = {
 }
 # Adapter PositionClass numbers carried as the send/position "class" field.
 POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
-BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor")
+BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor",
+              "beta_cadence_fence")
 # beta_reverse_latch is a MODEL-domain row (also written in SHADOW mode 4).
 WHEEL_PROFILE = (0.01, -100.0)  # research_model_profile(): km/h per count, zero
 EARTH_RADIUS_M = 6371008.8
@@ -697,6 +698,7 @@ class Auditor:
         self.beta_speed_overlay_error_mps = dict(count=0, min=None, max=None, mean=None)
         self.beta_anchor_gates = Counter()
         self.beta_anchor_dropped = 0
+        self.beta_cadence_fences = Counter()  # by stream (2026-10-08)
         self.beta_reverse_latch = Counter()
 
     def issue(self, code, source, detail, violation=False):
@@ -898,15 +900,18 @@ class Auditor:
             return
         if self.session is None and not collector:
             self.new_session()
-        if not collector and kind != "journal_dropped" and integer(row.get("mono_ns")):
-            # Rows written from a RAW window (count from its marker) carry
-            # their older buffered times: they never close a gap.
-            window_row = self.session.get("raw_flush_left", 0) > 0
-            if window_row:
-                self.session["raw_flush_left"] -= 1
-            self.note_time(row["mono_ns"], closes=not window_row and kind not in GAP_NON_CLOSING_KINDS)
-        elif not collector and kind != "journal_dropped" and self.session.get("raw_flush_left", 0) > 0:
+        # Rows written from a RAW window carry their older buffered times.
+        # Since 2026-10-08 they are tagged "raw_window": true and may be
+        # interleaved with current rows (paced drain); before, they were the
+        # `rows` rows right after their marker (counted from it).
+        window_row = not collector and row.get("raw_window") is True
+        if not collector and kind != "journal_dropped" and not window_row and \
+                self.session.get("raw_flush_left", 0) > 0:
+            window_row = True
             self.session["raw_flush_left"] -= 1
+        if not collector and kind != "journal_dropped" and integer(row.get("mono_ns")):
+            # Window rows never close a gap.
+            self.note_time(row["mono_ns"], closes=not window_row and kind not in GAP_NON_CLOSING_KINDS)
         if (not collector and self.session.get("capture_end_ns") is not None and
                 kind not in ("health", "capture_end")):
             self.issue("record_after_capture_end", source, kind)
@@ -941,7 +946,10 @@ class Auditor:
                            "POSITION context unavailable; pool capacity or nesting depth exceeded")
             else:
                 self.lds.position(row, request_valid, source)
-            self.beta_position(row, source)
+            # A window row is older context written after current rows; it
+            # is not the first fix after a replacement (GPS return check).
+            if not window_row:
+                self.beta_position(row, source)
         elif kind in BETA_KINDS:
             self.beta(row, source)
         elif kind == 'lds_sideband':
@@ -1180,7 +1188,9 @@ class Auditor:
         p["raw_window_rows"] += row["rows"]
         p["raw_window_triggers"][row["trigger"]] += 1
         self.session["motion_epoch"] = None
-        self.session["raw_flush_left"] = row["rows"]
+        # Tagged window rows (drain paced/immediate, 2026-10-08) identify
+        # themselves; older markers announce `rows` contiguous rows.
+        self.session["raw_flush_left"] = 0 if isinstance(row.get("drain"), str) else row["rows"]
 
     def journal_lag_row(self, row, source):
         """The worker withheld BETA provenance because the journal writer was
@@ -2306,6 +2316,16 @@ class Auditor:
             if self.validate(row, source, ("seq", "mode", "utc_s", "dropped"), ("gate",)):
                 self.beta_anchor_gates[row["gate"]] += 1
                 self.beta_anchor_dropped = max(self.beta_anchor_dropped, row["dropped"])
+        elif kind == "beta_cadence_fence":
+            # The OEM POSITION or SEND stream stopped for longer than
+            # limit_ms (e.g. a dongle reconnect): the worker revoked the
+            # generation, withdrew and reset the BETA anchor state.
+            if not self.validate(row, source, ("gap_ms", "limit_ms"), ("stream", "state")):
+                return
+            if row["stream"] not in ("position", "send") or row["gap_ms"] <= row["limit_ms"]:
+                self.issue("partial_record", source, "Invalid beta_cadence_fence row")
+                return
+            self.beta_cadence_fences[row["stream"]] += 1
         else:  # beta_session_storage
             if self.validate(row, source, ("session_epoch", "previous")):
                 self.beta_storage_changes += 1
@@ -2659,6 +2679,7 @@ class Auditor:
                               replaced_accuracy_m=dict(self.beta_accuracy_m),
                               hold_events=dict(self.beta_hold_events),
                               session_storage_changes=self.beta_storage_changes,
+                              cadence_fences=dict(self.beta_cadence_fences),
                               position_classes=dict(self.beta_position_classes),
                               state_seconds={k: round(v, 3) for k, v in self.beta_state_seconds.items()},
                               no_fix_seconds=dict(self.beta_no_fix_seconds),

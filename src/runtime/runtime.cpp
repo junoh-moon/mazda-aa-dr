@@ -298,11 +298,13 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
 
 struct JournalWriter;
 void stop_journal_writer(JournalWriter*,bool durable,bool* ok);
-bool journal_writer_push(JournalWriter*,const char*,size_t,bool evidence);
+bool journal_writer_push(JournalWriter*,const char*,size_t,mx5::runtime::JournalRing::Class);
 bool journal_writer_ok(JournalWriter*);
 void journal_writer_request_flush(JournalWriter*);
 bool journal_writer_flush_wait(JournalWriter*,uint64_t timeout_ns);
-JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes);
+JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes,
+                                    size_t bulk_bytes);
+bool journal_writer_bulk_ready(JournalWriter*);
 struct JournalLag { bool thread; uint64_t unwritten_rows,oldest_ns,dropped_rows; size_t high_water; };
 JournalLag journal_writer_lag(JournalWriter*,uint64_t now);
 
@@ -338,10 +340,12 @@ struct Journal {
   // peak rate; holds a whole 400 KiB persistent RAW window flush) and 256 KiB
   // that only evidence rows may use (a persistent RAW
   // window holds up to about 60 POSITION rows of 1.5 KiB while BETA is live).
+  // bulk_bytes (persistent profile, 2026-10-08): the paced RAW window rows,
+  // not timed by the journal lag; 0 queues them as diagnostic rows.
   // false: no writer (allocation/thread failure); rows stay synchronous.
-  bool start_writer(size_t diagnostic_bytes=524288,size_t evidence_bytes=262144) {
+  bool start_writer(size_t diagnostic_bytes=524288,size_t evidence_bytes=262144,size_t bulk_bytes=0) {
     if (writer || f || failed) return false;
-    writer=start_journal_writer(root,diagnostic_bytes,evidence_bytes);
+    writer=start_journal_writer(root,diagnostic_bytes,evidence_bytes,bulk_bytes);
     return writer!=0;
   }
   // Worker side: adopt a failure the writer thread reported.
@@ -406,25 +410,42 @@ struct Journal {
       return;
     if (filter) { sync_filter(); filter->observation(s, o, clock_ns(0), emit_to, this); return; }
     emit(s, o.kind == A::Observation::POSITION && o.position_class == A::POSITION_FIX &&
-                !journal_current.load(std::memory_order_acquire));
+                !journal_current.load(std::memory_order_acquire) ?
+            mx5::runtime::PersistentLog::ROW_RAW : mx5::runtime::PersistentLog::ROW_KEEP);
   }
   // Every accepted motion event (digest statistics of the quiet profile).
   void note_motion(const N::RawEvent& e) { if (filter) filter->motion(e); }
   void tick(uint64_t now) { if (filter && !failed) { sync_filter(); filter->tick(now, emit_to, this); } }
+  // Every worker turn: the quiet profile's paced RAW window drain. It
+  // waits while rows that must be durable promptly are still queued.
+  void pump(uint64_t now) {
+    if (filter && !failed && filter->draining()) { sync_filter(); filter->pump(now, emit_to, this, bulk_ready, this); }
+  }
+  static bool bulk_ready(void* journal) {
+    Journal& j = *static_cast<Journal*>(journal);
+    return !j.writer || journal_writer_bulk_ready(j.writer);
+  }
   void sync_filter() { filter->set_journal_current(journal_current.load(std::memory_order_acquire) != 0); }
-  static void emit_to(void* journal, const char* s, bool raw) { static_cast<Journal*>(journal)->emit(s, raw); }
-  // A row that is written (profile decisions already made). raw: RAW context
-  // from the quiet profile's window, queued as a diagnostic row.
-  void emit(const char *s, bool raw = false) {
+  static void emit_to(void* journal, const char* s, unsigned row_class) {
+    static_cast<Journal*>(journal)->emit(s, row_class);
+  }
+  // A row that is written (profile decisions already made). row_class:
+  // PersistentLog::ROW_KEEP (by kind), ROW_RAW (RAW context, diagnostic) or
+  // ROW_BULK (paced RAW window, not timed by the journal lag).
+  void emit(const char *s, unsigned row_class = mx5::runtime::PersistentLog::ROW_KEEP) {
     if (failed)
       return;
     if (writer) {
       poll();
       if (failed) return;
       const size_t n = strlen(s);
+      typedef mx5::runtime::JournalRing R;
+      const R::Class c = row_class == mx5::runtime::PersistentLog::ROW_BULK ? R::BULK :
+          row_class == mx5::runtime::PersistentLog::ROW_KEEP && mx5::runtime::journal_evidence_row(s, n) ?
+          R::EVIDENCE : R::DIAGNOSTIC;
       // An evidence row that cannot be queued is a journal failure: fail
       // closed (mutation disabled) instead of dropping it.
-      if (!journal_writer_push(writer, s, n, !raw && mx5::runtime::journal_evidence_row(s, n))) fail();
+      if (!journal_writer_push(writer, s, n, c)) fail();
       return;
     }
     write_line(s);
@@ -492,7 +513,7 @@ struct Journal {
 // ring has its own short lock. OEM threads never touch any of it.
 struct JournalWriter {
   const char* root;
-  unsigned char* storage;      // diagnostic ring | evidence ring | row buffer
+  unsigned char* storage;      // diagnostic ring | evidence ring | bulk ring | row buffer
   mx5::runtime::JournalRing ring;
   pthread_t thread;
   std::atomic<unsigned> ok, stopping, durable, closed_ok;
@@ -504,16 +525,18 @@ struct JournalWriter {
   std::atomic<uint64_t> inject_stall_ns;   // tests only: one stall before the next row
   std::atomic<uint64_t> inject_wait_gap_ns; // tests only: one stall between the flush check and wait()
   std::atomic<uint64_t> inject_flush_stall_ns; // tests only: one slow fflush
+  std::atomic<uint64_t> inject_row_delay_ns;   // tests only: a slow writer (sleep before every row)
   // Age-triggered fflush bound (JOURNAL_FLUSH_MAX_AGE_NS; 0: only on a
   // worker request, the earlier behaviour; tests and measurements only).
   std::atomic<uint64_t> flush_max_age_ns;
   std::atomic<uint64_t> flush_count;         // fflush calls by the writer (measurement)
   std::atomic<uint64_t> loops;             // tests only: writer loop iterations
   char* row_buffer;                         // writer thread only
-  JournalWriter(const char* r,unsigned char* buffer,size_t diagnostic,size_t evidence)
-      : root(r),storage(buffer),ring(buffer,diagnostic,buffer+diagnostic,evidence),thread(),
+  JournalWriter(const char* r,unsigned char* buffer,size_t diagnostic,size_t evidence,size_t bulk)
+      : root(r),storage(buffer),ring(buffer,diagnostic,buffer+diagnostic,evidence,
+                                     bulk?buffer+diagnostic+evidence:0,bulk),thread(),
         ok(1),stopping(0),durable(0),closed_ok(0),flush_target(0),flushed(0),written(0),
-        busy_since(0),inject_stall_ns(0),inject_wait_gap_ns(0),inject_flush_stall_ns(0),
+        busy_since(0),inject_stall_ns(0),inject_wait_gap_ns(0),inject_flush_stall_ns(0),inject_row_delay_ns(0),
         flush_max_age_ns(JOURNAL_FLUSH_MAX_AGE_NS),flush_count(0),loops(0),row_buffer(0) {}
 };
 const size_t JOURNAL_ROW_BUFFER=mx5::runtime::JournalRing::MAX_ROW+1;
@@ -562,6 +585,8 @@ void* journal_writer_main(void* argument) {
 #ifdef MX5DR_JOURNAL_TEST_HOOKS
         const uint64_t stall=w.inject_stall_ns.exchange(0,std::memory_order_acq_rel);
         if(stall) { struct timespec t={time_t(stall/1000000000ULL),long(stall%1000000000ULL)};nanosleep(&t,0); }
+        const uint64_t delay=w.inject_row_delay_ns.load(std::memory_order_acquire);
+        if(delay) { struct timespec t={time_t(delay/1000000000ULL),long(delay%1000000000ULL)};nanosleep(&t,0); }
 #endif
         if(seq!=expected) {
           dropped_seen+=seq-expected;
@@ -574,6 +599,15 @@ void* journal_writer_main(void* argument) {
         // (stdio may also have written it earlier; the lag then over-, never
         // under-states).
         w.ring.row_written();
+        // End the batch when a prompt row in the stdio buffer is due for
+        // its age flush (2026-10-08): with a slow writer 64 rows can take
+        // longer than the whole lag limit (QEMU: about 22 ms per row).
+        const uint64_t age_limit=w.flush_max_age_ns.load(std::memory_order_acquire);
+        if(age_limit) {
+          const uint64_t oldest=w.ring.stats().unflushed_push_ns;
+          const uint64_t at=oldest?clock_ns(0):0;
+          if(oldest && at>oldest && at-oldest>=age_limit)break;
+        }
       }
       if(file.failed)w.ok.store(0,std::memory_order_release);
       const uint64_t target=w.flush_target.load(std::memory_order_acquire);
@@ -630,12 +664,14 @@ void* journal_writer_main(void* argument) {
   if(numeric)freelocale(numeric);
   return 0;
 }
-JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes) {
-  unsigned char* buffer=new(std::nothrow) unsigned char[diagnostic_bytes+evidence_bytes+JOURNAL_ROW_BUFFER];
+JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes,
+                                    size_t bulk_bytes) {
+  const size_t rings=diagnostic_bytes+evidence_bytes+bulk_bytes;
+  unsigned char* buffer=new(std::nothrow) unsigned char[rings+JOURNAL_ROW_BUFFER];
   if(!buffer)return 0;
-  JournalWriter* w=new(std::nothrow) JournalWriter(root,buffer,diagnostic_bytes,evidence_bytes);
+  JournalWriter* w=new(std::nothrow) JournalWriter(root,buffer,diagnostic_bytes,evidence_bytes,bulk_bytes);
   if(!w) { delete[] buffer;return 0; }
-  w->row_buffer=reinterpret_cast<char*>(buffer+diagnostic_bytes+evidence_bytes);
+  w->row_buffer=reinterpret_cast<char*>(buffer+rings);
   // Joinable, explicit stack (the stock 128 KiB default is not relied on).
   if(!mx5::runtime::create_thread(&w->thread,journal_writer_main,w,256u<<10,false)) {
     delete w;delete[] buffer;return 0;
@@ -651,11 +687,21 @@ void stop_journal_writer(JournalWriter* w,bool durable,bool* ok) {
   unsigned char* buffer=w->storage;
   delete w;delete[] buffer;
 }
-bool journal_writer_push(JournalWriter* w,const char* s,size_t n,bool evidence) {
-  const mx5::runtime::JournalRing::Result r=w->ring.push(s,n,evidence,clock_ns(0));
+bool journal_writer_push(JournalWriter* w,const char* s,size_t n,mx5::runtime::JournalRing::Class c) {
+  const mx5::runtime::JournalRing::Result r=w->ring.push_class(s,n,c,clock_ns(0));
   return r==mx5::runtime::JournalRing::PUSHED || r==mx5::runtime::JournalRing::PUSHED_AFTER_DROP;
 }
 bool journal_writer_ok(JournalWriter* w) { return w->ok.load(std::memory_order_acquire)!=0; }
+// The paced RAW window drain may add its next rows: no prompt (evidence or
+// diagnostic) row waits and the previous bulk rows were all taken by the
+// writer. The drain then follows the writer's own pace (at most the
+// PersistentLog rate), so a later prompt row waits behind at most one
+// pump's rows (16), even on a writer slower than that rate (2026-10-08:
+// under QEMU about 90 rows/s).
+bool journal_writer_bulk_ready(JournalWriter* w) {
+  const mx5::runtime::JournalRing::Stats s=w->ring.stats();
+  return !s.oldest_push_ns && !s.bulk_used;
+}
 void journal_writer_request_flush(JournalWriter* w) {
   const uint64_t next=w->ring.stats().next_seq;
   if(next>w->flush_target.load(std::memory_order_acquire)) {
@@ -668,6 +714,9 @@ void journal_writer_request_flush(JournalWriter* w) {
 // kernel: queued, popped and being written, or handed to stdio but not yet
 // fflush'ed (2026-10-07; before, rows in the stdio buffer were not counted
 // and the lag read up to about 1 s young), or the start of a running fflush.
+// Only rows that must be durable promptly are timed (2026-10-08): BULK rows
+// (the paced persistent RAW window) are not; a prompt row queued behind
+// them is timed from its own push, so a writer stall still shows.
 JournalLag journal_writer_lag(JournalWriter* w,uint64_t now) {
   JournalLag lag=JournalLag();
   if(!w)return lag;
@@ -1291,7 +1340,10 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   Journal j(root);
   // Journal file I/O on its own thread; without one (allocation or thread
   // failure) rows stay synchronous as before, and the boot row says so.
-  const bool journal_thread=j.start_writer();
+  // The persistent profile adds a 128 KiB BULK ring for its paced RAW
+  // window rows (2026-10-08).
+  const bool journal_thread=config.log_profile==mx5::runtime::LOG_PROFILE_PERSISTENT?
+      j.start_writer(524288,262144,131072):j.start_writer();
   // log_profile=persistent (validation/PERSISTENT_LOGGING_2026-10-06.md):
   // digest rows and an in-memory RAW window instead of every raw row. The
   // window storage is allocated once here; without it the profile still
@@ -1588,9 +1640,13 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
           A::mode()!=A::BETA?"adapter_mode_changed":
           !shadow?"model_disabled":0;
       now=clock_ns(0);
+      // A POSITION or SEND gap above 3 s (reconnect) ends the session
+      // evidence: the BETA anchor state must be qualified again.
+      if(!fault && beta.cadence_fence(j,now))navigation.fence_beta();
       beta.tick(j,now,navigation,model_session.available() && model_bus.available(),
                 navigation.status().last_received_ns,model_bus.epoch(),fault);
     }
+    j.pump(clock_ns(0));
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;
       j.tick(now);

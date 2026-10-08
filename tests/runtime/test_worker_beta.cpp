@@ -185,7 +185,7 @@ int main(int argc,char** argv) {
     assert(argc==2);const std::string scenario=argv[1];
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
-           scenario=="nofix_rearm");
+           scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed");
     alarm(scenario=="budget"?80:scenario=="main"?80:60);
     if(scenario=="budget")kmh=59;
     char root[]="/tmp/mx5dr-worker-beta-XXXXXX";assert(mkdtemp(root));
@@ -241,10 +241,12 @@ int main(int argc,char** argv) {
     // PRELUDE ms inserted before t=0 and, for main, a second one after the
     // GPS return at t=7500 (the former 3 s / 2.5 s fix phases are too short).
     const unsigned PRELUDE=8000,PRELUDE2=10000; // >= 1 s margin over the 10 s rule
-    const bool nofix=scenario=="nofix" || scenario=="nofix_rearm";
-    const bool shifted=!nofix && scenario!="no_anchor";
+    const bool nofix=scenario=="nofix" || scenario=="nofix_rearm" || scenario=="cadence_gap_speed";
+    const bool cadence=scenario=="cadence_gap" || scenario=="cadence_gap_speed";
+    const bool shifted=!nofix && !cadence && scenario!="no_anchor";
     const unsigned scenario_end=scenario=="budget"?20000:scenario=="main"?9600:
-                                scenario=="nofix_rearm"?17000:6400;
+                                scenario=="nofix_rearm"?17000:scenario=="cadence_gap"?30400:
+                                scenario=="cadence_gap_speed"?16000:6400;
     const unsigned end_ms=scenario_end+(shifted?PRELUDE:0)+(scenario=="main"?PRELUDE2:0);
     const uint64_t start=clock_ns(0);
     bool motion=true;
@@ -256,6 +258,11 @@ int main(int argc,char** argv) {
     // nofix_rearm: overlays per phase (before the hold, held/cooldown,
     // re-armed, storage settle, re-armed after the storage change).
     unsigned rearm_phase[5]={0,0,0,0,0};unsigned overlay_failed=0;
+    // cadence_gap: replaced sends right after the 4 s gap (must be none) and
+    // after a new 11.5 s fix phase (re-qualified); overlays per phase for
+    // cadence_gap_speed (before, right after, after the 5 s settle).
+    unsigned cadence_before=0,cadence_after_gap=0,cadence_requalified=0;
+    unsigned cadence_phase[3]={0,0,0};
     for(unsigned ms=0;ms<=end_ms;ms+=20) {
         until(start+uint64_t(ms)*1000000ULL);
         const uint64_t now=clock_ns(0);
@@ -297,6 +304,38 @@ int main(int argc,char** argv) {
         }
         // GPS mode per scenario.
         int mode=-1;
+        if(scenario=="cadence_gap") {
+            // 2 Hz fixes for 11 s (a gated anchor), GPS lost at 11.2 s
+            // (replaced), then no POSITION and no SEND for 4 s (a dongle
+            // reconnect; motion continues), GPS still lost: the old anchor
+            // must not be used. Fixes again for 11.5 s, then lost: replaced.
+            unsigned period=0;int m=-1;
+            if(ms<=11000) { period=500;m=1; }
+            else if(ms<12000) { period=200;m=0; }
+            else if(ms<16000) continue;                     // the gap
+            else if(ms<18000) { period=200;m=0; }
+            else if(ms<=29500) { period=500;m=1; }
+            else if(ms<30200) { period=200;m=0; }
+            else { period=200;m=1; }                        // a fix ends the outage
+            if(ms%period)continue;
+            const bool replaced=oem_call(ms,m);
+            if(replaced) {
+                last_replaced_ms=ms;
+                assert(m==0);
+                if(ms<12000)++cadence_before;else if(ms<18000)++cadence_after_gap;else ++cadence_requalified;
+            }
+            continue;
+        }
+        if(scenario=="cadence_gap_speed") {
+            // The stored no-fix value (speed overlay) with a 4 s POSITION/SEND
+            // gap at 3-7 s: overlays stop, re-arm after the 5 s settle.
+            if(ms>=3000 && ms<7000)continue;
+            if(ms%200==0) {
+                const bool replaced=oem_call(ms,1,ms<15600);   // a real fix at the end
+                if(replaced) { last_replaced_ms=ms;++cadence_phase[ms<3000?0:ms<10800?1:2]; }
+            }
+            continue;
+        }
         if(scenario=="nofix_rearm") {
             // BETA_DECISIONS F2: NO_FIX withdrawals re-arm. A failed overlay
             // at 2 s (hold: the next ORIGINAL 0 clears it, + 2 s), a session
@@ -430,9 +469,21 @@ int main(int argc,char** argv) {
     }
     printf("anchor rows: accepted=%u settling=%u bad_fix=%u\n",anchor_accepted,anchor_settling,anchor_bad_fix);
     if(nofix)assert(anchor_bad_fix>=5 && !anchor_accepted);
+    else if(cadence)assert(anchor_accepted>=2);
     else if(scenario=="no_anchor")assert(!anchor_accepted);
     else assert(anchor_accepted>=1 && anchor_settling>=5);
     if(!nofix)assert(!overlay_total);
+    unsigned fence_position=0,fence_send=0;
+    for(size_t i=0;i<rows.lines.size();++i) if(rows.lines[i].find("\"kind\":\"beta_cadence_fence\"")!=std::string::npos) {
+        assert(rows.lines[i].find("\"assist_ready\":false")!=std::string::npos &&
+               rows.lines[i].find("\"limit_ms\":3000,")!=std::string::npos);
+        if(rows.lines[i].find("\"stream\":\"position\"")!=std::string::npos)++fence_position;
+        if(rows.lines[i].find("\"stream\":\"send\"")!=std::string::npos)++fence_send;
+    }
+    printf("cadence fence rows: position=%u send=%u\n",fence_position,fence_send);
+    // Only the cadence scenarios have a POSITION/SEND gap above 3 s.
+    if(!cadence)assert(!fence_position && !fence_send);
+    else assert(fence_position==1 && fence_send==1);
     assert(!replaced_after_stop);
     assert(rows.storage_rows>=1 && rows.summaries>=2);
     if(scenario=="main") {
@@ -521,6 +572,39 @@ int main(int argc,char** argv) {
         }
         assert(cleared_ns && rearm_hold_ns>=cleared_ns+2000000000ULL);
         assert(storage_ns && rearm_storage_ns>=storage_ns+5000000000ULL);
+    } else if(scenario=="cadence_gap") {
+        // The storage pointer did not change (as on the drive); the cadence
+        // fence alone withdraws and resets the anchor: no replacement after
+        // the gap until a new gated anchor.
+        printf("cadence: before=%u after_gap=%u requalified=%u\n",cadence_before,cadence_after_gap,
+               cadence_requalified);
+        assert(cadence_before>=2 && !cadence_after_gap && cadence_requalified>=2);
+        assert(rows.storage_rows==1);
+        std::vector<std::string> expected;
+        expected.push_back("DISABLED>ARMED:enabled");
+        expected.push_back("ARMED>GPS_LOST:gps_lost");
+        expected.push_back("GPS_LOST>ENGAGED:published");
+        expected.push_back("ENGAGED>WITHDRAWN:cadence_gap");
+        expected.push_back("WITHDRAWN>ARMED:gps_returned");
+        expected.push_back("ARMED>GPS_LOST:gps_lost");
+        expected.push_back("GPS_LOST>ENGAGED:published");
+        expected.push_back("ENGAGED>ARMED:gps_returned");
+        expected.push_back("ARMED>DISABLED:capture_stop");
+        assert(ordered(rows,expected) && rows.transitions.size()==expected.size());
+    } else if(scenario=="cadence_gap_speed") {
+        printf("cadence speed phases: %u %u %u\n",cadence_phase[0],cadence_phase[1],cadence_phase[2]);
+        assert(!replaced_total && cadence_phase[0]>=3 && !cadence_phase[1] && cadence_phase[2]>=3);
+        std::vector<std::string> expected;
+        expected.push_back("DISABLED>ARMED:enabled");
+        expected.push_back("ARMED>NO_FIX:no_fix");
+        expected.push_back("NO_FIX>SPEED_ENGAGED:speed_published");
+        expected.push_back("SPEED_ENGAGED>WITHDRAWN:cadence_gap");
+        expected.push_back("WITHDRAWN>ARMED:rearm_after_cadence_gap");
+        expected.push_back("ARMED>NO_FIX:no_fix");
+        expected.push_back("NO_FIX>SPEED_ENGAGED:speed_published");
+        expected.push_back("SPEED_ENGAGED>ARMED:gps_returned");
+        expected.push_back("ARMED>DISABLED:capture_stop");
+        assert(ordered(rows,expected) && rows.transitions.size()==expected.size());
     } else if(scenario=="withdrawn_class") {
         // BETA_DECISIONS F2: WITHDRAWN ends only with FIX or NATIVE_DR. The
         // UNDECODED callback (its ORIGINAL 0 also clears the adapter hold)

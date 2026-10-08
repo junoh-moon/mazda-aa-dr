@@ -857,6 +857,13 @@ bool Pipeline::enable_beta(const runtime::BetaProfile& p) {
     beta_=p; beta_enabled_=true; reset_beta(context());
     return beta_core_.configured!=0;
 }
+void Pipeline::fence_beta() {
+    if (!beta_enabled_) return;
+    // Next generation of the BETA core's own context (identity only grows).
+    mx5_dr_context x=beta_core_.configured?beta_core_.estimate.context:context();
+    if (x.generation<UINT64_MAX) ++x.generation;
+    reset_beta(x);
+}
 void Pipeline::reset_beta(mx5_dr_context x) {
     beta_have_prev_=false; beta_prev_=adapter::Observation(); beta_mode_=-1; beta_core_failure_=MX5_DR_OK;
     beta_position_seq_=0; beta_conflict_since_=0; beta_rotation_rad_=0; beta_rotation_budget_m_=0;

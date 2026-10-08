@@ -298,7 +298,7 @@ def bundle_with_checkout(args):
 def refusal(run, code, reason, label):
     before, _ = run.snapshot()
     tmp_before = run.tmpfs_leftovers()
-    rc, screen = run.menu('6\n', label)
+    rc, screen = run.menu('6\n6\n', label)
     after, _ = run.snapshot()
     run.check(f'{label}: exit {code}', rc == code, f'rc={rc}')
     run.check(f'{label}: reason shown', 'Refused, nothing deleted: ' + reason in screen, reason)
@@ -353,12 +353,25 @@ def lifecycle(run, reference, upgrade):
     with open(mount_lock, 'rb') as held:
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
         before, _ = run.snapshot()
-        rc, screen = run.menu('6\n', 'menu 6 while another installer holds the mount lock')
+        rc, screen = run.menu('6\n6\n', 'menu 6 while another installer holds the mount lock')
         run.check('live installer: refused', rc != 0 and 'Another installer or USB export is active' in screen,
                   f'rc={rc}')
         run.check('live installer: tree unchanged', before == run.snapshot()[0])
     # Stale leftovers of an interrupted run in this boot.
     persist = run.root / 'tmp/mnt/data_persist'
+    # A stale lock with a name only the ..?* glob matches is not ours to
+    # reclaim (2026-10-08 menu 6 re-review, LOW).
+    (persist / '.mx5dr-install-lock').mkdir()
+    (persist / '.mx5dr-install-lock/..stale').write_text('not ours\n')
+    refusal(run, 6, 'install lock holds unexpected entries', 'menu 6 with a ..name in the stale lock')
+    (persist / '.mx5dr-install-lock/..stale').unlink()
+    (persist / '.mx5dr-install-lock').rmdir()
+    # Any second line other than exactly 6 cancels with nothing changed.
+    before, _ = run.snapshot()
+    rc, screen = run.menu('6\n7\n0\n', 'menu 6 cancelled by 7')
+    run.check('cancel: confirmation statement shown', 'Menu 6 deletes the collected logs too.' in screen)
+    run.check('cancel: nothing deleted', rc == 0 and 'Cancelled; nothing deleted.' in screen and
+              before == run.snapshot()[0], f'rc={rc}')
     (persist / '.mx5dr-install-lock').mkdir()
     (persist / '.mx5dr-install-lock/pid').write_text('4242\n')
     (run.root / 'tmp/mx5dr-hash.Zx9Qw1').mkdir()
@@ -387,7 +400,7 @@ def lifecycle(run, reference, upgrade):
     deleted_files = sum(1 for p in run.base.rglob('*') if p.is_file() and not p.is_symlink())
     deleted_files += 1  # the stale /tmp hash helper copy
     deleted_bytes += (run.root / 'tmp/mx5dr-hash.Zx9Qw1/hash').stat().st_size
-    rc, screen = run.menu('6\n', 'menu 6 delete everything')
+    rc, screen = run.menu('6\n6\n', 'menu 6 delete everything')
     run.check('menu 6 rc 0', rc == 0, f'rc={rc}')
     run.check('screen: package directory absent', 'Package directory absent' in screen)
     run.check('screen: deleted totals', f'Deleted {deleted_files} files, {deleted_bytes} bytes' in screen,
@@ -428,7 +441,7 @@ def lifecycle(run, reference, upgrade):
     run.check('tmpfs: only the mount lock inode remains (by design)', left == ['.mx5dr-mount.lock'], str(left))
     after, after_m = run.snapshot()
     files, dirs = run.compare('after menu 6', reference['tree'], after, reference['mtimes'], after_m)
-    rc, screen = run.menu('6\n', 'menu 6 second run')
+    rc, screen = run.menu('6\n6\n', 'menu 6 second run')
     run.check('second run rc 0 and nothing to delete', rc == 0 and 'Nothing to delete' in screen, f'rc={rc}')
     again, _ = run.snapshot()
     run.check('second run changes nothing', again == after)

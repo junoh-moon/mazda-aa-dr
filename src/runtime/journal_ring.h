@@ -21,6 +21,12 @@
 //    diagnostics) make room by dropping the OLDEST diagnostic rows. The
 //    writer sees the resulting sequence gap and journals one counter row at
 //    the exact place of the loss.
+//  * BULK rows (2026-10-08: the persistent profile's RAW window, written
+//    around an event at a paced rate) use a third ring with the diagnostic
+//    drop policy. They are not timed for the journal lag: the lag means how
+//    long a row that must be durable promptly (evidence and normal-rate
+//    rows) has waited, and a bulk row has no such deadline. A prompt row
+//    queued behind bulk rows is still timed from its own push.
 // The writer pops in global sequence order, so the order of rows in the file
 // equals the order of push() calls.
 //
@@ -51,8 +57,10 @@ public:
     static const size_t MAX_ROW=8192;
     static const size_t HEADER=20;  // u32 length, u64 sequence, u64 push ns
     enum Result { PUSHED=0, PUSHED_AFTER_DROP, FULL, TOO_LARGE };
+    enum Class { DIAGNOSTIC=0, EVIDENCE=1, BULK=2 };
     JournalRing(unsigned char* diagnostic,size_t diagnostic_bytes,
-                unsigned char* evidence,size_t evidence_bytes)
+                unsigned char* evidence,size_t evidence_bytes,
+                unsigned char* bulk=0,size_t bulk_bytes=0)
         : next_seq_(0),dropped_rows_(0),dropped_bytes_(0),held_push_ns_(0),unflushed_push_ns_(0),
           high_water_(0) {
         pthread_mutex_init(&mutex_,0);
@@ -63,11 +71,18 @@ public:
             pthread_condattr_destroy(&attr);
         }
         ring_[0].init(diagnostic,diagnostic_bytes);ring_[1].init(evidence,evidence_bytes);
+        ring_[2].init(bulk,bulk_bytes);
     }
     ~JournalRing() { if(cond_ok_)pthread_cond_destroy(&cond_);pthread_mutex_destroy(&mutex_); }
     // Producer. n excludes any terminator. FULL only for an evidence row.
     Result push(const char* row,size_t n,bool evidence,uint64_t now_ns=0) {
-        Ring& r=ring_[evidence?1:0];
+        return push_class(row,n,evidence?EVIDENCE:DIAGNOSTIC,now_ns);
+    }
+    // A BULK row without a bulk ring is queued as a diagnostic row.
+    Result push_class(const char* row,size_t n,Class c,uint64_t now_ns=0) {
+        if(c==BULK && !ring_[2].cap)c=DIAGNOSTIC;
+        const bool evidence=c==EVIDENCE;
+        Ring& r=ring_[c];
         const size_t total=HEADER+n;
         if(n>MAX_ROW || total>r.cap)return TOO_LARGE;
         pthread_mutex_lock(&mutex_);
@@ -85,7 +100,7 @@ public:
         const uint32_t len=uint32_t(n);const uint64_t seq=next_seq_++;
         memcpy(header,&len,4);memcpy(header+4,&seq,8);memcpy(header+12,&now_ns,8);
         r.put(header,HEADER);r.put(row,n);
-        const size_t used=ring_[0].used+ring_[1].used;
+        const size_t used=ring_[0].used+ring_[1].used+ring_[2].used;
         if(used>high_water_)high_water_=used;
         if(cond_ok_)pthread_cond_signal(&cond_);
         pthread_mutex_unlock(&mutex_);
@@ -105,7 +120,7 @@ public:
     typedef bool (*Pending)(void* context);
     void wait(uint64_t timeout_ns,Pending pending=0,void* context=0) {
         pthread_mutex_lock(&mutex_);
-        if(!ring_[0].used && !ring_[1].used && !(pending && pending(context))) {
+        if(!ring_[0].used && !ring_[1].used && !ring_[2].used && !(pending && pending(context))) {
             if(cond_ok_) {
                 struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);
                 const uint64_t ns=uint64_t(t.tv_nsec)+timeout_ns%1000000000ULL;
@@ -123,11 +138,13 @@ public:
     // >= MAX_ROW+1, NUL-terminated). false when both rings are empty.
     // push_ns: the row's push time (optional). The row stays counted as
     // held (stats().held_push_ns) until row_written(); a row still held from
-    // an earlier pop is then counted as written but not flushed.
-    bool pop(char* out,size_t capacity,size_t* n,uint64_t* seq,bool* evidence,uint64_t* push_ns=0) {
+    // an earlier pop is then counted as written but not flushed. A BULK row
+    // is never counted (bulk, optional: whether it was one).
+    bool pop(char* out,size_t capacity,size_t* n,uint64_t* seq,bool* evidence,uint64_t* push_ns=0,
+             bool* bulk=0) {
         pthread_mutex_lock(&mutex_);
         int pick=-1;Header best=Header();
-        for(int i=0;i<2;++i) {
+        for(int i=0;i<3;++i) {
             if(!ring_[i].used)continue;
             Header h;ring_[i].header(&h);
             if(pick<0 || h.seq<best.seq) { pick=i;best=h; }
@@ -137,10 +154,11 @@ public:
         r.get((r.head+HEADER)%r.cap,out,best.len);out[best.len]=0;
         r.head=(r.head+HEADER+best.len)%r.cap;r.used-=HEADER+best.len;
         fold_held();
-        held_push_ns_=best.push_ns;
+        held_push_ns_=pick==2?0:best.push_ns;
         pthread_mutex_unlock(&mutex_);
         *n=best.len;*seq=best.seq;*evidence=pick==1;
         if(push_ns)*push_ns=best.push_ns;
+        if(bulk)*bulk=pick==2;
         return true;
     }
     // Consumer: the held row was handed to stdio (written, not flushed).
@@ -156,11 +174,13 @@ public:
         unflushed_push_ns_=0;
         pthread_mutex_unlock(&mutex_);
     }
-    // oldest_push_ns: push time of the oldest row still queued (0: empty).
-    // held_push_ns: the popped row not yet written (0: none).
-    // unflushed_push_ns: oldest row written since the last flushed() (0: none).
+    // oldest_push_ns: push time of the oldest prompt (evidence or
+    // diagnostic) row still queued (0: none; BULK rows are not timed).
+    // held_push_ns: the popped prompt row not yet written (0: none).
+    // unflushed_push_ns: oldest prompt row written since the last flushed().
+    // bulk_used: bytes queued in the BULK ring (included in used).
     struct Stats { uint64_t next_seq,dropped_rows,dropped_bytes,oldest_push_ns,held_push_ns,unflushed_push_ns;
-                   size_t used,high_water; };
+                   size_t used,high_water,bulk_used; };
     Stats stats() {
         pthread_mutex_lock(&mutex_);
         uint64_t oldest=0;
@@ -170,7 +190,7 @@ public:
             if(h.push_ns && (!oldest || h.push_ns<oldest))oldest=h.push_ns;
         }
         const Stats s={next_seq_,dropped_rows_,dropped_bytes_,oldest,held_push_ns_,unflushed_push_ns_,
-                       ring_[0].used+ring_[1].used,high_water_};
+                       ring_[0].used+ring_[1].used+ring_[2].used,high_water_,ring_[2].used};
         pthread_mutex_unlock(&mutex_);
         return s;
     }
@@ -204,7 +224,7 @@ private:
     pthread_mutex_t mutex_;
     pthread_cond_t cond_;
     bool cond_ok_;
-    Ring ring_[2];
+    Ring ring_[3];
     uint64_t next_seq_,dropped_rows_,dropped_bytes_,held_push_ns_,unflushed_push_ns_;
     size_t high_water_;
     JournalRing(const JournalRing&);

@@ -292,7 +292,10 @@ static void anchor_gate() {
     CHECK(gate_case(G(36,41,36,0,0))==BETA_GATE_WHEEL);
     CHECK(gate_case(G(36,39.5,36,0,0))==BETA_GATE_ACCEPTED);
     { GateCase c=G(36,36,36,0,0); c.reverse=1; CHECK(gate_case(c)==BETA_GATE_REVERSE); }    // forward only
-    { GateCase c=G(36,36,36,0,0); c.prev_ms=ANCHOR_MS-2200; CHECK(gate_case(c)==BETA_GATE_PREVIOUS); } // 2.2 s
+    // Pair limit 2.5 s on the receipt clock (2026-10-08, was 2.0 s): 2.6 s
+    // is too far apart; 2.2 s with a 2 s utc step is a pair now.
+    { GateCase c=G(36,36,36,0,0); c.prev_ms=ANCHOR_MS-2600; CHECK(gate_case(c)==BETA_GATE_PREVIOUS); } // 2.6 s
+    { GateCase c=G(36,36,36,0,0); c.prev_ms=ANCHOR_MS-2200; CHECK(gate_case(c)==BETA_GATE_ACCEPTED); } // 2.2 s
     // 3.1: the same utc second is not a pair (it formerly passed: 2410/2510 ms).
     { GateCase c=G(36,36,36,0,0); c.fix_ms=ANCHOR_MS-900; c.prev_ms=ANCHOR_MS-1000;
       CHECK(utc_at(c.fix_ms)==utc_at(c.prev_ms)); CHECK(gate_case(c)==BETA_GATE_UTC); }
@@ -328,6 +331,87 @@ static void anchor_gate() {
       CHECK(p.beta_anchor_record(2,&r) && r.gate==BETA_GATE_SETTLING);
       CHECK(!p.beta_anchor_record(0,&r) && !p.beta_anchor_record(last+1,&r));
       CHECK(std::strcmp(beta_anchor_gate_name(BETA_GATE_REVERSE_UNPROVEN),"REVERSE_UNPROVEN")==0); }
+}
+// The OEM POSITION cadence the hook saw on the first persistent BETA drive
+// (beta.3, mono 1852-1878 s): polls about every 1.0 s, the fix utc on its
+// own 1 Hz phase, so a poll repeats the previous second and the next jumps
+// by 2 s (deltas 1,0,2,0,2,1,1,0,2,...). Synthetic rows built from that
+// pattern with 1005 ms poll intervals: a repeat-then-jump pair spans 2010 ms.
+struct CadenceRun { unsigned accepted, previous, utc_mono, settling, utc; bool utc_kept_streak; };
+static CadenceRun oem_cadence_run(const BetaProfile& profile,const std::vector<int>& deltas,
+                                  unsigned interval_ms=1005) {
+    Pipeline p; mx5_dr_context x={1,1,1};
+    CHECK(p.init_model(research_model_profile(),mx5_dr_default_config(),x,false,false,true));
+    CHECK(p.enable_beta(profile));
+    Plan plan; plan.boot_reverse();
+    uint64_t utc=1700000000ULL; double lat=35;
+    unsigned ms=410;
+    for(size_t k=0;k<deltas.size();++k) {
+        if(k) { utc+=uint64_t(deltas[k]); lat+=36/3.6*deltas[k]/111320; ms+=interval_ms; }
+        Fix f=fix(ms); f.utc=utc; f.lat=lat;   // the position belongs to its utc second
+        plan.fixes.push_back(f);
+    }
+    plan.end_ms=ms+300;
+    CadenceRun r=CadenceRun(); r.utc_kept_streak=true;
+    double last_streak=-1;
+    uint64_t seen=0;
+    plan.each=[&](Pipeline& q,unsigned){
+        for(uint64_t seq=seen+1;seq<=q.beta_anchor_sequence();++seq) {
+            BetaAnchorRecord a; CHECK(q.beta_anchor_record(seq,&a));
+            if(seq>1) {
+                if(a.gate==BETA_GATE_ACCEPTED)++r.accepted;
+                if(a.gate==BETA_GATE_PREVIOUS)++r.previous;
+                if(a.gate==BETA_GATE_UTC_MONO)++r.utc_mono;
+                if(a.gate==BETA_GATE_SETTLING)++r.settling;
+            }
+            if(a.gate==BETA_GATE_UTC) {
+                ++r.utc;
+                // A repeated second neither resets nor restarts the streak.
+                if(!(std::isfinite(a.streak_s) && a.streak_s>last_streak)) r.utc_kept_streak=false;
+            }
+            if(std::isfinite(a.streak_s)) last_streak=a.streak_s;
+            seen=seq;
+        }
+    };
+    run(p,plan);
+    CHECK(!p.status().resets);
+    return r;
+}
+static void anchor_gate_oem_cadence() {
+    const int pattern[]={0,1,0,2,0,2,1,1,0,2,0,2,1,0,2,1,1,0,2,0,2,1,0,2,1,0,2,1};
+    const std::vector<int> deltas(pattern,pattern+sizeof pattern/sizeof pattern[0]);
+    // The product profile: one run from the first fix, settled after 10 s on
+    // both clocks; every later non-repeated fix is an anchor.
+    const CadenceRun now=oem_cadence_run(runtime::beta_profile(),deltas);
+    std::printf("OEM cadence (2.5 s pair): accepted=%u previous=%u utc_mono=%u settling=%u utc=%u\n",
+                now.accepted,now.previous,now.utc_mono,now.settling,now.utc);
+    CHECK(now.previous==0 && now.utc_mono==0 && now.utc_kept_streak);
+    CHECK(now.utc==9 && now.accepted>=9 && now.settling<=9);
+    // The beta.3/beta.4 rule (2.0 s) on the same rows: every repeat-then-jump
+    // pair (2010 ms) failed as PREVIOUS and restarted the settle: no anchor.
+    BetaProfile old=runtime::beta_profile(); old.fix_pair_max_ns=2000000000ULL;
+    const CadenceRun before=oem_cadence_run(old,deltas);
+    std::printf("OEM cadence (2.0 s pair, beta.4): accepted=%u previous=%u settling=%u\n",
+                before.accepted,before.previous,before.settling);
+    CHECK(before.accepted==0 && before.previous==9);
+    // A real utc stall still breaks the run: two repeats (3015 ms to the
+    // baseline) fail as PREVIOUS and restart the 10 s settle.
+    std::vector<int> stall(deltas.begin(),deltas.begin()+13);
+    const CadenceRun head=oem_cadence_run(runtime::beta_profile(),stall);
+    stall.push_back(0); stall.push_back(0); stall.push_back(3);
+    for(int k=0;k<6;++k) stall.push_back(1);
+    const CadenceRun stalled=oem_cadence_run(runtime::beta_profile(),stall);
+    std::printf("OEM cadence utc stall: accepted %u -> %u, previous=%u settling %u -> %u\n",
+                head.accepted,stalled.accepted,stalled.previous,head.settling,stalled.settling);
+    CHECK(stalled.previous==1 && stalled.utc==head.utc+2);
+    // Nothing after the stall is an anchor: the 6 later fixes settle again.
+    CHECK(stalled.accepted==head.accepted && stalled.settling==head.settling+6);
+    // A 2 s utc step after only one poll interval (980 ms, as at mono
+    // 1144.9 s of the drive) still disagrees with the receipt clock
+    // (|2 - 0.98| > 1.0): UTC_MONO, unchanged.
+    std::vector<int> skip(deltas.begin(),deltas.begin()+13); skip.push_back(2);
+    const CadenceRun skipped=oem_cadence_run(runtime::beta_profile(),skip,980);
+    CHECK(skipped.utc_mono==1 && skipped.previous==0);
 }
 static void anchor_records_ring() {
     // More than the ring capacity of evaluations: old records are reported
@@ -708,6 +792,7 @@ int main() {
     unknown_reverse_never_seeds();
     epoch_change_and_lost_reverse_unseed();
     anchor_gate();
+    anchor_gate_oem_cadence();
     anchor_records_ring();
     no_reanchor_from_bad_fix();
     budget_formula_and_limit();

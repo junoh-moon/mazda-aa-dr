@@ -276,7 +276,9 @@ int main(int argc,char** argv) {
         if(now-last_shadow>=100000000ULL) {
             last_shadow=now;journal_shadow(j,now,navigation,model_session,model_bus,drain_calls);
         }
+        if(beta.cadence_fence(j,now))navigation.fence_beta();
         beta.tick(j,now,navigation,true,navigation.status().last_received_ns,1,0);
+        j.pump(now);   // paced RAW window drain (runtime worker turn)
         if(now-last_health>=1000000000ULL) {
             last_health=now;j.tick(now);journal_health(j,now,true,true);j.flush();
         }

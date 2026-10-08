@@ -17,6 +17,8 @@ import test_synthetic_install
 
 BOOT = '12345678-1234-1234-1234-123456789abc\n'
 MENU6 = '6 Delete everything this package left on the CMU (run 4, then 5, first)'
+CONFIRM = ('Menu 6 deletes the collected logs too.\nRun 3 first to save them to this USB.\n'
+           'Enter 6 again to delete everything,\nanything else cancels.\n')
 
 
 def tree(root, skip):
@@ -108,8 +110,9 @@ class PurgeTests(unittest.TestCase):
         result = self.menu('0\n')
         self.assertIn(MENU6, result.stdout)
         self.install_and_uninstall('--mode=SHADOW')
-        result = self.menu('6\n')
+        result = self.menu('6\n6\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(CONFIRM, result.stdout)
         self.assertIn('Package directory absent', result.stdout)
         self.assertIn('OEM files: identical to pre-install', result.stdout)
         for line in result.stdout[result.stdout.index('---- DELETE RESULT ----'):].splitlines():
@@ -122,11 +125,60 @@ class PurgeTests(unittest.TestCase):
         self.assertIn('after_package_directory=absent', report)
         self.assertIn('/data_persist/mx5-aa-dr/logs/trace.0.jsonl', report)
         # Idempotent: the second run has nothing to delete and changes nothing.
-        again = self.menu('6\n')
+        again = self.menu('6\n6\n')
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertIn('Nothing to delete', again.stdout)
         self.assertEqual((self.usb / 'purge-result.txt').read_text(), report)
         self.assertEqual(tree(self.root, self.skip), clean)
+
+    def test_menu_six_needs_a_second_six(self):
+        # Only a second line that is exactly 6 deletes. Anything else (another
+        # digit, an empty line, a word, 6 with a space, end of input) cancels
+        # with nothing deleted and no report.
+        self.install_and_uninstall('--mode=BETA')
+        before = tree(self.root, self.skip)
+        for keys in ('6\n7\n0\n', '6\n\n0\n', '6\nsix\n0\n', '6\n6 \n0\n', '6\n 6\n0\n', '6\n66\n0\n',
+                     '6\n3\n0\n', '6\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(CONFIRM, result.stdout)
+                self.assertIn('Cancelled; nothing deleted.', result.stdout)
+                self.assertNotIn('DELETE RESULT', result.stdout)
+                self.assertEqual(tree(self.root, self.skip), before)
+                self.assertFalse((self.usb / 'purge-result.txt').exists())
+        # The statement comes before the second prompt, and every line fits
+        # the 40-column screen.
+        result = self.menu('6\n0\n')
+        self.assertLess(result.stdout.index(CONFIRM), result.stdout.rindex('Number, then Enter: '))
+        for line in CONFIRM.splitlines():
+            self.assertLessEqual(len(line), 40, line)
+        result = self.menu('6\n6\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.base.exists())
+
+    def test_unexpected_entry_in_the_lock_is_reported_not_aborted(self):
+        # The final rmdir of the install lock fails when something else put a
+        # file into it; set -e must not abort before the result (2026-10-08
+        # menu 6 re-review, LOW).
+        self.install_and_uninstall()
+        lock = self.root / 'data_persist/.mx5dr-install-lock'
+        hook = self.root.parent / 'after-lock-extra.sh'
+        hook.write_text(f": > '{lock}/..extra'\n")
+        result = subprocess.run(['sh', str(self.usb / 'purge.sh'), str(self.usb)], text=True, capture_output=True,
+                                env=dict(self.env, MX5DR_FIXTURE_AFTER_LOCK=str(hook)), cwd=self.root, timeout=60)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('---- DELETE RESULT ----', result.stdout)
+        self.assertIn('Package directory absent', result.stdout)
+        self.assertIn('Install lock STILL PRESENT', result.stdout)
+        self.assertIn('Deletion incomplete; see purge-result.txt', result.stderr)
+        self.assertFalse(self.base.exists())
+        self.assertTrue((lock / '..extra').exists())
+        self.assertFalse((lock / 'pid').exists())
+        report = (self.usb / 'purge-result.txt').read_text()
+        self.assertTrue(report.startswith('purge_schema=1\nstatus=incomplete\n'), report[:80])
+        self.assertIn('after_install_lock=present', report)
+        self.assertIn('result=incomplete', report)
 
     def test_totals_match_the_deleted_files(self):
         self.install_and_uninstall('--mode=BETA')

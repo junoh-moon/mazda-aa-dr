@@ -133,6 +133,52 @@ static void wait_requests() {
            missed/1e6,seen/1e6,N,worst/1e6,join/1e6);
     assert(worst<2000000000ULL && join<2000000000ULL);
 }
+// BULK class (2026-10-08): the paced persistent RAW window. Global order
+// with the other classes, drop-oldest within its own ring, never timed for
+// the journal lag (queued, held or unflushed), while a prompt row queued
+// behind bulk rows is timed from its own push. Without a bulk ring a BULK
+// row is queued as diagnostic.
+static void bulk_class() {
+    static unsigned char d[4096],e[4096],b[1024];
+    JournalRing r(d,sizeof d,e,sizeof e,b,sizeof b);
+    char out[JournalRing::MAX_ROW+1];size_t n;uint64_t seq,push;bool evidence,bulk;
+    for(unsigned i=0;i<3;++i) {
+        const std::string x=row("motion_batch",i);
+        assert(r.push_class(x.data(),x.size(),JournalRing::BULK,100+i)==JournalRing::PUSHED);
+    }
+    JournalRing::Stats st=r.stats();
+    assert(!st.oldest_push_ns && st.bulk_used>0 && st.used==st.bulk_used);
+    const std::string p=row("position",9);
+    assert(r.push(p.data(),p.size(),true,200)==JournalRing::PUSHED);
+    st=r.stats();
+    assert(st.oldest_push_ns==200);                 // the prompt row behind the bulk rows
+    // Pop order is the push order; a popped bulk row is not held.
+    assert(r.pop(out,sizeof out,&n,&seq,&evidence,&push,&bulk) && seq==0 && bulk && !evidence && push==100);
+    st=r.stats();assert(!st.held_push_ns && st.oldest_push_ns==200);
+    r.row_written();assert(!r.stats().unflushed_push_ns);
+    assert(r.pop(out,sizeof out,&n,&seq,&evidence,&push,&bulk) && seq==1 && bulk);r.row_written();
+    assert(r.pop(out,sizeof out,&n,&seq,&evidence,&push,&bulk) && seq==2 && bulk);r.row_written();
+    assert(!r.stats().unflushed_push_ns);
+    assert(r.pop(out,sizeof out,&n,&seq,&evidence,&push,&bulk) && seq==3 && !bulk && evidence);
+    assert(r.stats().held_push_ns==200);r.row_written();
+    assert(r.stats().unflushed_push_ns==200);r.flushed();
+    // Overflow drops the oldest bulk rows only (counted), never prompt rows.
+    unsigned pushed=0;
+    for(unsigned i=0;i<40;++i) {
+        const std::string x=row("motion_batch",100+i,40);
+        const JournalRing::Result res=r.push_class(x.data(),x.size(),JournalRing::BULK,300+i);
+        assert(res==JournalRing::PUSHED || res==JournalRing::PUSHED_AFTER_DROP);++pushed;
+    }
+    st=r.stats();assert(st.dropped_rows>0 && st.bulk_used<=sizeof b && !st.oldest_push_ns);
+    // No bulk ring: BULK rows are diagnostic (and timed).
+    static unsigned char d2[1024],e2[1024];
+    JournalRing plain(d2,sizeof d2,e2,sizeof e2);
+    const std::string x=row("motion_batch",1);
+    assert(plain.push_class(x.data(),x.size(),JournalRing::BULK,500)==JournalRing::PUSHED);
+    assert(plain.stats().oldest_push_ns==500 && !plain.stats().bulk_used);
+    assert(plain.pop(out,sizeof out,&n,&seq,&evidence,&push,&bulk) && !bulk && !evidence);
+    puts("journal ring: BULK rows keep the global order, drop oldest, and are never timed as lag");
+}
 int main() {
     classification();
     static unsigned char d[600],e[400];
@@ -210,6 +256,7 @@ int main() {
     std::string big(700,'x');   // larger than the diagnostic ring itself
     assert(ring.push(big.data(),big.size(),false)==JournalRing::TOO_LARGE);
     held_and_unflushed();
+    bulk_class();
     wait_requests();
     puts("journal ring: push order across classes, wrap-around, drop-oldest diagnostic, evidence FULL passed");
     return 0;

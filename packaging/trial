@@ -335,7 +335,17 @@ while :; do
         3) finish_and_export; exit 0;;
         4) sh "$HERE/uninstall.sh"; exit 0;;
         5) require_usb; sh "$HERE/reboot_cmu.sh"; exit 0;;
-        6) require_usb; sh "$HERE/purge.sh" "$HERE"; exit 0;;
+        6) require_usb
+           # Menu 6 deletes the collected logs too: a second explicit 6 is
+           # required (any other line, an empty line or EOF cancels).
+           printf '%s\n' 'Menu 6 deletes the collected logs too.' \
+               'Run 3 first to save them to this USB.' \
+               'Enter 6 again to delete everything,' \
+               'anything else cancels.'
+           printf 'Number, then Enter: '
+           if ! IFS= read -r confirm; then echo 'Cancelled; nothing deleted.'; exit "$last_rc"; fi
+           if [ "$confirm" != 6 ]; then echo 'Cancelled; nothing deleted.'; continue; fi
+           sh "$HERE/purge.sh" "$HERE"; exit 0;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac
