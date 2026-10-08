@@ -599,6 +599,15 @@ void* journal_writer_main(void* argument) {
         // (stdio may also have written it earlier; the lag then over-, never
         // under-states).
         w.ring.row_written();
+        // End the batch when a prompt row in the stdio buffer is due for
+        // its age flush (2026-10-08): with a slow writer 64 rows can take
+        // longer than the whole lag limit (QEMU: about 22 ms per row).
+        const uint64_t age_limit=w.flush_max_age_ns.load(std::memory_order_acquire);
+        if(age_limit) {
+          const uint64_t oldest=w.ring.stats().unflushed_push_ns;
+          const uint64_t at=oldest?clock_ns(0):0;
+          if(oldest && at>oldest && at-oldest>=age_limit)break;
+        }
       }
       if(file.failed)w.ok.store(0,std::memory_order_release);
       const uint64_t target=w.flush_target.load(std::memory_order_acquire);
