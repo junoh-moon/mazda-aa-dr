@@ -1,0 +1,498 @@
+location 35.1710163 129.0255766 5 NAN 0 311.6
+sleep 0.5
+tap 200 50
+sleep 10
+tap 345 145
+sleep 3
+location 35.1710163 129.0255766 5 NAN 0 311.6
+sleep 1
+location 35.1710163 129.0255766 5 NAN 0 311.6
+sleep 1
+location 35.1710163 129.0255766 5 NAN 0 311.6
+sleep 1
+location 35.1710163 129.0255766 5 NAN 0 311.6
+sleep 1
+location 35.1710163 129.0255766 5 NAN 0 311.6
+sleep 1
+sleep 2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-setup-guidance.png
+location 35.1710163 129.0255766 5.000 NAN 4.722 311.6
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-000.png
+sleep 0.8
+location 35.1710445 129.0255377 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1710726 129.0254988 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1711008 129.0254599 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1711290 129.0254210 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1711571 129.0253822 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1711853 129.0253433 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1712135 129.0253044 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1712417 129.0252655 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1712698 129.0252266 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1712980 129.0251878 5.000 NAN 4.722 311.6
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-010.png
+sleep 0.8
+location 35.1713262 129.0251489 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1713543 129.0251100 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1713825 129.0250711 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1714107 129.0250322 5.000 NAN 4.722 311.6
+sleep 1
+location 35.1714385 129.0249931 5.000 NAN 4.722 309.4
+sleep 1
+location 35.1714655 129.0249529 5.000 NAN 4.722 309.4
+sleep 1
+location 35.1714925 129.0249128 5.000 NAN 4.722 309.4
+sleep 1
+location 35.1715195 129.0248727 5.000 NAN 4.722 309.4
+sleep 1
+location 35.1715464 129.0248325 5.000 NAN 4.722 309.4
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-020.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-030.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-040.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-050.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-060.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-070.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-080.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-090.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-100.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-110.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-120.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-130.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-140.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-150.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-160.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-170.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-180.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-190.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-200.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-210.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-220.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-230.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-240.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-250.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-260.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-270.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-280.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-290.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-300.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-310.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+location 35.1853574 129.0042637 5.000 NAN 8.333 298.5
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-318.png
+sleep 0.8
+location 35.1853931 129.0041831 5.000 NAN 8.333 298.5
+sleep 1
+location 35.1854289 129.0041025 5.000 NAN 8.333 298.5
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-320.png
+sleep 0.8
+location 35.1854645 129.0040218 5.000 NAN 8.333 296.9
+sleep 1
+location 35.1854984 129.0039400 5.000 NAN 8.333 296.9
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-322.png
+sleep 0.8
+location 35.1855323 129.0038583 5.000 NAN 8.333 296.9
+sleep 1
+location 35.1855662 129.0037765 5.000 NAN 8.333 296.9
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-324.png
+sleep 0.8
+location 35.1856000 129.0036947 5.000 NAN 8.333 296.9
+sleep 1
+location 35.1856339 129.0036129 5.000 NAN 8.333 296.9
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-326.png
+sleep 0.8
+location 35.1856653 129.0035298 5.000 NAN 8.333 289.3
+sleep 1
+location 35.1856901 129.0034432 5.000 NAN 8.333 289.3
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-328.png
+sleep 0.8
+location 35.1857149 129.0033567 5.000 NAN 8.333 289.3
+sleep 1
+location 35.1857397 129.0032702 5.000 NAN 8.333 289.3
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-330.png
+sleep 0.8
+location 35.1857645 129.0031836 5.000 NAN 8.333 289.3
+sleep 1
+location 35.1857892 129.0030971 5.000 NAN 8.333 289.2
+sleep 1
+location 35.1858138 129.0030105 5.000 NAN 8.333 289.2
+sleep 1
+location 35.1858384 129.0029238 5.000 NAN 8.333 289.2
+sleep 1
+location 35.1858630 129.0028372 5.000 NAN 8.333 289.2
+sleep 1
+location 35.1858876 129.0027506 5.000 NAN 8.333 289.2
+sleep 1
+location 35.1859122 129.0026640 5.000 NAN 8.333 289.2
+sleep 1
+location 35.1859368 129.0025774 5.000 NAN 8.333 289.2
+sleep 1
+location 35.1859497 129.0024872 5.000 NAN 8.333 278.7
+sleep 1
+location 35.1859610 129.0023966 5.000 NAN 8.333 278.7
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-340.png
+sleep 0.8
+location 35.1859724 129.0023059 5.000 NAN 8.333 278.7
+sleep 1
+location 35.1859837 129.0022153 5.000 NAN 8.333 278.7
+sleep 1
+location 35.1859951 129.0021246 5.000 NAN 8.333 278.7
+sleep 1
+location 35.1860026 129.0020336 5.000 NAN 8.333 271.4
+sleep 1
+location 35.1860044 129.0019419 5.000 NAN 8.333 271.4
+sleep 1
+location 35.1860062 129.0018502 5.000 NAN 8.333 271.4
+sleep 1
+location 35.1860080 129.0017586 5.000 NAN 8.333 271.4
+sleep 0.2
+screenshot ../../../../experiment6/T8C-control-noinput-slow-r1-347.png
+sleep 0.8

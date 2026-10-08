@@ -1,0 +1,348 @@
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 0.5
+tap 200 50
+sleep 10
+tap 345 145
+sleep 3
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+sleep 2
+screenshot ../../../../experiment6/T0-control-noinput-r1-setup-guidance.png
+location 35.1697679 129.0267566 5.000 NAN 14.000 328.9
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-000.png
+sleep 0.8
+location 35.1698757 129.0266770 5.000 NAN 14.000 328.9
+sleep 1
+location 35.1699834 129.0265973 5.000 NAN 14.000 328.9
+sleep 1
+location 35.1700899 129.0265152 5.000 NAN 14.000 327.5
+sleep 1
+location 35.1701962 129.0264325 5.000 NAN 14.000 327.5
+sleep 1
+location 35.1703003 129.0263463 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1703984 129.0262498 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1704965 129.0261532 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1705946 129.0260567 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1706928 129.0259602 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1707909 129.0258636 5.000 NAN 14.000 321.2
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-010.png
+sleep 0.8
+location 35.1708834 129.0257600 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1709669 129.0256447 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1710504 129.0255294 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1711340 129.0254142 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1712175 129.0252989 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1713010 129.0251836 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1713845 129.0250684 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1714665 129.0249515 5.000 NAN 14.000 309.4
+sleep 1
+location 35.1715464 129.0248325 5.000 NAN 14.000 309.4
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-020.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-030.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-040.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-050.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-060.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-070.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-080.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-090.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-100.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-110.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-120.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-130.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-140.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-150.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-160.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-170.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-180.png
+sleep 0.8
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 1
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-190.png
+sleep 0.8
+sleep 1
+location 35.1853683 129.0042390 5.000 NAN 14.000 298.5
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-192.png
+sleep 0.8
+location 35.1854285 129.0041036 5.000 NAN 14.000 298.5
+sleep 1
+location 35.1854871 129.0039673 5.000 NAN 14.000 296.9
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-194.png
+sleep 0.8
+location 35.1855440 129.0038299 5.000 NAN 14.000 296.9
+sleep 1
+location 35.1856009 129.0036925 5.000 NAN 14.000 296.9
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-196.png
+sleep 0.8
+location 35.1856579 129.0035551 5.000 NAN 14.000 296.9
+sleep 1
+location 35.1856997 129.0034098 5.000 NAN 14.000 289.3
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-198.png
+sleep 0.8
+location 35.1857413 129.0032644 5.000 NAN 14.000 289.3
+sleep 1
+location 35.1857830 129.0031190 5.000 NAN 14.000 289.2
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-200.png
+sleep 0.8
+location 35.1858243 129.0029735 5.000 NAN 14.000 289.2
+sleep 1
+location 35.1858656 129.0028280 5.000 NAN 14.000 289.2
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-202.png
+sleep 0.8
+location 35.1859069 129.0026825 5.000 NAN 14.000 289.2
+sleep 1
+location 35.1859436 129.0025355 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1859627 129.0023833 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1859818 129.0022310 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1860008 129.0020787 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1860047 129.0019248 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860077 129.0017708 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860107 129.0016168 5.000 NAN 14.000 271.4
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-210.png
+sleep 0.8
+location 35.1860137 129.0014628 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860137 129.0013089 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859998 129.0011558 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859860 129.0010027 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859721 129.0008496 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859583 129.0006965 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859444 129.0005434 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859305 129.0003902 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859167 129.0002371 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859029 129.0000840 5.000 NAN 14.000 268.3
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-220.png
+sleep 0.8
+location 35.1858990 128.9999300 5.000 NAN 14.000 268.3
+sleep 0.2
+screenshot ../../../../experiment6/T0-control-noinput-r1-221.png
+sleep 0.8
