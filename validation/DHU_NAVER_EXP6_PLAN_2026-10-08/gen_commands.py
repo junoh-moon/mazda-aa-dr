@@ -37,6 +37,8 @@ PROFILES = {
 
 # tag -> parameters. cross: perpendicular metres to the RIGHT of travel; along: metres ahead (+) / behind (-).
 RUNS = {
+    "T0M-stockmode0-fast": dict(profile="fast", stock0=True),
+    "T0MS-stockmode0-slow": dict(profile="slow", stock0=True),
     "T0-control-noinput": dict(profile="fast", inject=False),
     "T1-ideal-a40": dict(profile="fast", acc=40.0),
     "T2-cross50-a40": dict(profile="fast", acc=40.0, cross=("ramp", 50.0)),
@@ -50,9 +52,9 @@ RUNS = {
     "T9-ideal-nobearing-a40": dict(profile="fast", acc=40.0, nobearing=True),
 }
 # Round 1: controls first, then the short (fast-profile) runs, the long slow-profile pair last.
-ROUND1 = ["T0-control-noinput", "T1-ideal-a40", "T7-ideal-a100", "T2-cross50-a40", "T3-cross150-a40",
+ROUND1 = ["T0M-stockmode0-fast", "T0-control-noinput", "T1-ideal-a40", "T7-ideal-a100", "T2-cross50-a40", "T3-cross150-a40",
           "T4-crossgrow300-a40", "T5-along-plus100-a40", "T6-along-minus100-a40", "T9-ideal-nobearing-a40",
-          "T8C-control-noinput-slow", "T8-realspeed-a40"]
+          "T8C-control-noinput-slow", "T0MS-stockmode0-slow", "T8-realspeed-a40"]
 
 
 def hav(a, b):
@@ -112,7 +114,8 @@ def shift(lat, lon, brg, cross_m):
 
 def fmt(lat, lon, acc, spd, brg):
     b = "NAN" if brg is None else f"{brg:.1f}"
-    return f"location {lat:.7f} {lon:.7f} {acc:.3f} NAN {spd:.3f} {b}"
+    a = "NAN" if acc is None else f"{acc:.3f}"
+    return f"location {lat:.7f} {lon:.7f} {a} NAN {spd:.3f} {b}"
 
 
 def offset_value(spec, u, frac):
@@ -156,12 +159,20 @@ def build_run(route, tag, params):
     shots.add(t_end)
 
     tunnel_len = route.exit - d_start_tun
+    # The real CMU in a GPS-lost tunnel (owner drive 2026-10-08, photo + log): the OEM mode-0 form = the LAST approach
+    # position frozen, accuracy removed, the last speed and bearing frozen. `stock0` replays exactly that form.
+    last_app = [x for x in timeline if x[1] == "approach"][-1]
+    frozen = route.at(last_app[2])
     for t, phase, d, v in timeline:
         rec = dict(t=t, phase=phase, truth_from_entrance_m=round(d - route.entrance, 1),
                    truth_to_exit_m=round(route.exit - d, 1),
                    truth_progress_m=round(d - timeline[0][2], 1))
         if phase == "tunnel":
-            if not params.get("inject", True):
+            if params.get("stock0"):
+                line = fmt(frozen[0], frozen[1], None, last_app[3], frozen[2])
+                rec.update(injected=True, accuracy_m=None, along_error_m=round(last_app[2] - d, 1),
+                           cross_track_m=0.0, form="stock_mode0_frozen")
+            elif not params.get("inject", True):
                 line = None
                 rec.update(injected=False)
             else:

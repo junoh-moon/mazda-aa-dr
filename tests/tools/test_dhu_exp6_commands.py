@@ -127,6 +127,22 @@ class Exp6Commands(unittest.TestCase):
         along, _ = tunnel_frame((float(approach[-1][1]), float(approach[-1][2])))
         self.assertAlmostEqual(along, 20.0, delta=0.5)
 
+    def test_stock_mode0_form_replays_the_real_cmu_tunnel_output(self):
+        """The real CMU in a GPS-lost tunnel (owner drive 2026-10-08): the last position frozen, accuracy removed,
+        the last speed and bearing frozen."""
+        for tag, speed in (("T0M-stockmode0-fast-r1", 14.0), ("T0MS-stockmode0-slow-r1", 17 / 3.6)):
+            approach = self.phase_fixes(tag, "approach")
+            tunnel = self.phase_fixes(tag, "tunnel")
+            last = approach[-1]
+            self.assertTrue(tunnel)
+            for f in tunnel:
+                self.assertEqual((f[1], f[2]), (last[1], last[2]))  # position frozen
+                self.assertEqual(f[3], "NAN")  # accuracy removed
+                self.assertAlmostEqual(float(f[5]), speed, delta=0.01)  # last speed kept
+                self.assertEqual(f[6], last[6])  # last bearing kept
+            exit_fix = self.phase_fixes(tag, "exit")[0]
+            self.assertEqual(exit_fix[3], "5.000")  # normal fixes resume at the exit
+
 
 if __name__ == "__main__":
     unittest.main()
