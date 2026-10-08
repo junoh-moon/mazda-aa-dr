@@ -125,12 +125,52 @@ fence가 났습니다(그 밖의 재생 fence는 persistent 기록에 POSITION/S
 - 재생: replay_beta를 이 주행(RAW 창 행만 있는 입력)과 trip2(collector 폴링)에서 수정 전후로
   돌렸습니다(출력은 비공개 작업 디렉터리에만).
 
+## 독립 재검토 후속 수정 (2026-10-08, 같은 날)
+
+위 절들은 첫 판 그대로 둡니다. 독립 재검토가 지적한 세 가지를 고쳤습니다. 차량에서 실행된 적은
+없습니다.
+
+- **M1(중간, 릴리즈 차단):** 첫 판의 `raw()`는 배출 중이면 현재 raw 행(BETA live일 때의 FIX
+  POSITION 등 증거 등급 행 포함)을 창 뒤에 붙였습니다. 그 행들은 journal 링 밖(프로파일 메모리)에
+  약 7 s 머물러 지연 guard에 보이지 않았고, 재시작 때 잃거나 창 넘침으로 버려질 수 있었으며,
+  `raw_window` 표시가 붙어 분석기가 과거 행으로 다뤘습니다(gap을 닫지 않고 GPS 복귀 측정에서
+  빠짐). 재검토 probe: t=1 s/2 s의 현재 POSITION이 t=2.72/2.74 s에 표시를 달고 나왔습니다. 이제
+  raw 기간 안의 현재 행은 배출 중에도 바로 씁니다(증거 행은 증거 등급, 그 밖은 진단 등급, 표시
+  없음). 창에서 나오는 행만 BULK 등급과 표시를 가집니다. 같은 probe에서 현재 POSITION은 같은
+  호출 안에서 기록됐고, window_burst에서 배출 중 현재 raw 행이 journal 링에 들어가기까지 최대
+  0.055-0.061 ms였습니다.
+- **L1(낮음):** BULK 행은 pop 뒤 held 시각이 0이어서, writer가 BULK 행을 쓰다 막히면 다음 즉시 행이
+  1.5 s 묵을 때까지 드러나지 않았습니다. writer가 BULK 행을 pop한 시각부터 쓸 때까지를
+  `busy_since`로 셉니다. 배출 중 1.6 s writer 정지(즉시 행은 초당 1개뿐): 수정 전 guard가 내려가지
+  않음(정지가 다음 즉시 행이 1.5 s 묵기 전에 끝남), 수정 후 정지 시작 뒤 1522 ms에 내려감. 정상
+  배출에서는 내려가지 않습니다.
+- M1 수정 뒤 분석기: 현재 motion batch와 표시된 과거 창 batch가 섞이므로 두 흐름의 순번·수신 시각
+  연속성을 따로 검사합니다(합성 주행 `test_log_profile.py`가 `motion_sequence_replayed`/
+  `motion_clock_regressed`로 실패해 드러남).
+- **L2(표시):** `journal_dropped`의 `class`가 링의 버림 카운터에 따라 `diagnostic`, `bulk`,
+  `mixed`가 됩니다. 분석기는 세 값을 받습니다.
+- 재실행(이 후속 커밋들): 호스트 직렬 `make -k test` 종료 0, Python 787개 통과, 생략 4개(릴리즈 묶음
+  미빌드). exact-ARM(`release_verified=true`, guard `248a3ef5…` 그대로): `run_arm_all.sh` 종료 0
+  (SKIP 2: 비공개 `MX5DR_LDS_STOCK` 미설정, 내장 AA probe는 별도 실행), `run_arm.sh` PASS 109,
+  AA install probe(libpatch 0.9.1) PASS 4. QEMU window_burst: 현재 행 링 진입 최대 0.107 ms, 정상
+  배출 262 ms(writer 초당 90행 385 ms) 하강 없음, 배출 중 1.6 s 정지 1468 ms에 하강. packaging은
+  바뀌지 않아 복제 루트는 다시 돌리지 않았습니다.
+- 시험: test_log_profile(배출 중 현재 raw 행·BETA live FIX POSITION이 같은 호출에서 표시 없이
+  자기 등급으로 기록됨), test_journal --writer window_burst(현재 raw 행이 즉시 링에 들어가고 파일에
+  표시 없이 기록됨, 배출 중 writer 정지), test_analyze_beta(배출 중 표시 없는 현재 worker 행이 gap을
+  닫고, 표시된 창 fix는 건너뛰며 현재 fix로 GPS 복귀를 측정).
+
 ## 남은 위험
 
 - 모든 수치는 호스트 측정과 기록 재계산입니다. CMU eMMC의 실제 writer 속도와 배출 중 지연,
   fence의 실제 재연결 동작, 새 앵커의 정확도는 차량에서 검증되지 않았습니다.
-- 배출 중 사건이 겹치면 창의 끝부분은 사건 뒤 최대 약 7 s 늦게 기록되고, 그 사이 CMU가 꺼지면
-  남은 창 행은 잃습니다(예전에는 링에 들어간 뒤 잃음). capture 종료는 즉시 기록합니다.
+- 창 행(사건 이전의 과거 맥락)은 사건 뒤 약 7 s(writer가 느리면 그 이상)에 걸쳐 기록되고, 그 전에는
+  프로파일 메모리에 있어 CMU 재시작·프로세스 종료 때 잃습니다. capture 종료는 나머지를 즉시
+  기록합니다. 현재 행은 배출 중에도 바로 journal 링으로 갑니다(아래 재검토 절, M1). 처음 판에서
+  "배출 중 들어온 raw 행은 창 뒤에 붙는다"고 적은 동작은 결함이었고 고쳤습니다.
+- BULK 행은 push 시각으로 세지 않습니다. writer가 BULK 행을 쓰는 동안은 pop 시각부터, fflush
+  중에는 그 시작부터 지연으로 셉니다. stdio에 넘어간 뒤 아직 flush되지 않은 BULK 행만 있는 상태는
+  지연이 아닙니다(즉시 기록 의무가 없는 행).
 - 0.97 s 만에 utc가 2 s 뛰는 쌍(이 주행 9행)은 여전히 `UTC_MONO`로 streak를 끊습니다. 허용
   오차를 1.1 s로 넓히면 15행이 더 뒤쪽 게이트에 도달하지만, 근거 없이 바꾸지 않았습니다.
 - 3 s fence는 AA가 연결된 상태의 폴링 주기를 전제로 합니다. 연결 해제(주차) 때마다 한 번
