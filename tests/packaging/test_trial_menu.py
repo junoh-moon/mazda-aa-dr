@@ -74,6 +74,27 @@ class TrialMenuTests(unittest.TestCase):
                              self.fixture.original_autostart)
             self.assertFalse((self.root / 'unexpected').exists())
 
+    def test_menu_six_runs_purge_only_after_a_second_six(self):
+        # purge.sh replaced by a recorder: the menu itself must not start it
+        # unless the second line is exactly 6 (2026-10-08 owner request).
+        ran = self.root / 'purge-ran'
+        (self.usb / 'purge.sh').write_text(f": > '{ran}'\n")
+        for keys in ('6\n0\n', '6\n\n0\n', '6\nyes\n0\n', '6\n06\n0\n', '6\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('Menu 6 deletes the collected logs too.', result.stdout)
+                self.assertIn('Run 3 first to save them to this USB.', result.stdout)
+                self.assertIn('Cancelled; nothing deleted.', result.stdout)
+                self.assertFalse(ran.exists())
+        cancelled = self.menu('6\n1x\n0\n')
+        # A cancel returns to the menu (the full list is shown again).
+        self.assertEqual(cancelled.stdout.count('6 Delete everything this package left on the CMU'), 2)
+        result = self.menu('6\n6\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(ran.exists())
+        self.assertNotIn('Cancelled', result.stdout)
+
     def test_install_uses_bundle_mode_without_more_typed_commands(self):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         result = self.menu('1\n')

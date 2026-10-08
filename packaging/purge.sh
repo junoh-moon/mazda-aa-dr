@@ -135,7 +135,7 @@ check_lock() {
     # until it has removed this directory. Holding that lock ourselves proves
     # the directory is left over from an interrupted run (e.g. power loss).
     [ -z "$ROOT" ] && [ "$MOUNT_LOCKED" = 1 ] || refuse 6 'install lock is held; another installer may be active'
-    for entry in "$LOCK"/* "$LOCK"/.[!.]*; do
+    for entry in "$LOCK"/* "$LOCK"/.[!.]* "$LOCK"/..?*; do
         [ -e "$entry" ] || [ -L "$entry" ] || continue
         [ "$entry" = "$LOCK/pid" ] && [ -f "$entry" ] && [ ! -L "$entry" ] ||
             refuse 6 'install lock holds unexpected entries; inspect it'
@@ -419,8 +419,10 @@ fi
 absent=absent
 if [ -e "$BASE" ] || [ -L "$BASE" ]; then absent=present; fi
 remaining=$(external_pass remaining)
-rm -f "$LOCK/pid"
-rmdir "$LOCK"
+# Under set -e an unexpected entry in the lock directory must not abort here,
+# before the result: lock_left=present below reports it (status incomplete).
+rm -f "$LOCK/pid" || :
+rmdir "$LOCK" 2>/dev/null || :
 LOCKED=0
 sync
 lock_left=absent
@@ -432,6 +434,7 @@ printf '%s\n' '---- DELETE RESULT ----'
 echo "Deleted $PLANNED_FILES files, $PLANNED_BYTES bytes"
 if [ "$absent" = absent ]; then echo 'Package directory absent'; else echo 'Package directory STILL PRESENT'; fi
 [ -z "$remaining" ] || echo "Still present:$remaining"
+[ "$lock_left" = absent ] || echo 'Install lock STILL PRESENT'
 if [ "$COMPLETE" = 0 ]; then
     echo 'OEM files: no pre-install record'
 elif [ "$AGREE" = no ]; then
