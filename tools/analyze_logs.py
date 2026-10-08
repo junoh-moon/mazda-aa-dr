@@ -900,15 +900,18 @@ class Auditor:
             return
         if self.session is None and not collector:
             self.new_session()
-        if not collector and kind != "journal_dropped" and integer(row.get("mono_ns")):
-            # Rows written from a RAW window (count from its marker) carry
-            # their older buffered times: they never close a gap.
-            window_row = self.session.get("raw_flush_left", 0) > 0
-            if window_row:
-                self.session["raw_flush_left"] -= 1
-            self.note_time(row["mono_ns"], closes=not window_row and kind not in GAP_NON_CLOSING_KINDS)
-        elif not collector and kind != "journal_dropped" and self.session.get("raw_flush_left", 0) > 0:
+        # Rows written from a RAW window carry their older buffered times.
+        # Since 2026-10-08 they are tagged "raw_window": true and may be
+        # interleaved with current rows (paced drain); before, they were the
+        # `rows` rows right after their marker (counted from it).
+        window_row = not collector and row.get("raw_window") is True
+        if not collector and kind != "journal_dropped" and not window_row and \
+                self.session.get("raw_flush_left", 0) > 0:
+            window_row = True
             self.session["raw_flush_left"] -= 1
+        if not collector and kind != "journal_dropped" and integer(row.get("mono_ns")):
+            # Window rows never close a gap.
+            self.note_time(row["mono_ns"], closes=not window_row and kind not in GAP_NON_CLOSING_KINDS)
         if (not collector and self.session.get("capture_end_ns") is not None and
                 kind not in ("health", "capture_end")):
             self.issue("record_after_capture_end", source, kind)
@@ -943,7 +946,10 @@ class Auditor:
                            "POSITION context unavailable; pool capacity or nesting depth exceeded")
             else:
                 self.lds.position(row, request_valid, source)
-            self.beta_position(row, source)
+            # A window row is older context written after current rows; it
+            # is not the first fix after a replacement (GPS return check).
+            if not window_row:
+                self.beta_position(row, source)
         elif kind in BETA_KINDS:
             self.beta(row, source)
         elif kind == 'lds_sideband':
@@ -1182,7 +1188,9 @@ class Auditor:
         p["raw_window_rows"] += row["rows"]
         p["raw_window_triggers"][row["trigger"]] += 1
         self.session["motion_epoch"] = None
-        self.session["raw_flush_left"] = row["rows"]
+        # Tagged window rows (drain paced/immediate, 2026-10-08) identify
+        # themselves; older markers announce `rows` contiguous rows.
+        self.session["raw_flush_left"] = 0 if isinstance(row.get("drain"), str) else row["rows"]
 
     def journal_lag_row(self, row, source):
         """The worker withheld BETA provenance because the journal writer was

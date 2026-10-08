@@ -27,6 +27,21 @@
 //    Each such raw period starts with a raw_window marker row whose span_ms
 //    is how far back the written rows really reach. Without an event (CMU
 //    reset, process death) the window in memory is lost.
+//    Paced drain (2026-10-08): the first persistent BETA drive flushed the
+//    ~400 KiB window (about 1100 rows) in one burst at every GPS loss and
+//    return; the writer drained it at about 350-630 rows/s, so the journal
+//    lag guard withdrew BETA provenance exactly when BETA should engage.
+//    Now the marker is written at the event and the window rows follow at
+//    most DRAIN_ROWS_PER_S (token bucket, DRAIN_BURST rows) from pump(),
+//    which the worker calls every turn and which waits while the journal
+//    still has prompt rows queued. Raw rows arriving during the drain are
+//    appended to the window so the raw stream stays in order; a capture
+//    stop writes the rest at once. Each row written from the window carries
+//    "raw_window":true right after its kind (the analyzer then knows it is
+//    older context, interleaved with current rows) and is queued in the
+//    journal ring's BULK class, which the journal lag does not time; window
+//    POSITION rows that are evidence (BETA live, journal current) keep the
+//    evidence class.
 // Worker thread only. No allocation after init(), no I/O except through the
 // emit callback, bounded work per row. OEM threads never reach this code.
 #include "adapter/adapter.h"
@@ -40,9 +55,15 @@ namespace mx5 { namespace runtime {
 
 class PersistentLog {
 public:
-    // raw: the row is RAW context (window or post-event raw period), never
-    // replacement evidence, so the journal ring may treat it as diagnostic.
-    typedef void (*Emit)(void* context,const char* row,bool raw);
+    // How the journal queues a row: KEEP by its kind (evidence or
+    // diagnostic, journal_evidence_row), RAW as diagnostic (RAW context:
+    // window or post-event raw period, never replacement evidence), BULK in
+    // the low-priority class that the journal lag does not time (paced
+    // window rows).
+    enum RowClass { ROW_KEEP=0, ROW_RAW=1, ROW_BULK=2 };
+    typedef void (*Emit)(void* context,const char* row,unsigned row_class);
+    // pump(): false while rows that must be durable promptly still wait.
+    typedef bool (*Ready)(void* context);
     static const uint64_t DIGEST_NS=10000000000ULL;
     static const uint64_t PERIODIC_NS=10000000000ULL;   // health, shadow, calibration
     static const uint64_t SUMMARY_LIVE_NS=1000000000ULL;
@@ -57,8 +78,19 @@ public:
     // ring's diagnostic capacity (512 KiB) so a whole flush can be queued.
     static const size_t WINDOW_BYTES=409600;
     static const size_t ROW_BYTES=8193;
+    // Paced window drain (2026-10-08): well below the 350-630 rows/s the
+    // vehicle writer reached in the burst, so prompt rows never queue behind
+    // more than DRAIN_BURST window rows. 1100 rows take about 7.3 s.
+    static const unsigned DRAIN_ROWS_PER_S=150;
+    static const unsigned DRAIN_BURST=16;
+    // ,"raw_window":true after the kind of a row written from the window.
+    static const size_t WINDOW_TAG_BYTES=18;
 
-    PersistentLog():window_(0),cap_(0),scratch_(0) { reset_all(); }
+    PersistentLog():window_(0),cap_(0),scratch_(0),paced_(DRAIN_ROWS_PER_S) { reset_all(); }
+    // Rows per second of the window drain; 0 writes the whole window at the
+    // event (the behaviour before 2026-10-08; unit tests of window contents).
+    void set_paced(unsigned rows_per_s) { paced_=rows_per_s; }
+    bool draining() const { return draining_; }
     // storage: WINDOW_BYTES + ROW_BYTES bytes owned by the caller for the
     // lifetime of this object. Without storage the RAW window is unavailable
     // (raw rows are then only counted in the digest).
@@ -122,7 +154,7 @@ public:
             }
             trigger(kind_name(s),now,emit,context);keep(s,emit,context);return;
         case K_CAPTURE_END:
-            trigger("capture_end",now,emit,context);
+            trigger("capture_end",now,emit,context,true);
             digest(now,"final",emit,context);
             keep(s,emit,context);
             return;
@@ -186,6 +218,20 @@ public:
     }
     // Worker tick: the digest stays on its 10 s cadence even without rows.
     void tick(uint64_t now,Emit emit,void* context) { digest_due(now,emit,context); }
+    // Every worker turn: write window rows of a paced drain, at most the
+    // token bucket allows, and none while ready() reports prompt rows still
+    // queued in the journal. Bounded work: at most DRAIN_BURST rows.
+    void pump(uint64_t now,Emit emit,void* context,Ready ready=0,void* ready_context=0) {
+        if(!draining_)return;
+        if(now>drain_last_ns_) {
+            const uint64_t add=(now-drain_last_ns_)/1000000ULL*paced_;   // milli-rows
+            drain_tokens_=drain_tokens_+add>DRAIN_BURST*1000ULL?DRAIN_BURST*1000ULL:drain_tokens_+add;
+            drain_last_ns_=now;
+        }
+        if(ready && !ready(ready_context))return;
+        while(rows_ && drain_tokens_>=1000ULL) { drain_tokens_-=1000ULL;emit_window_row(emit,context,ROW_BULK); }
+        if(!rows_) { draining_=false;++drains_done_; }
+    }
 
 private:
     enum Kind { K_OTHER=0, K_MOTION_BATCH, K_HEALTH, K_SHADOW, K_SHADOW_CALIBRATION, K_SHADOW_HOLDOUT,
@@ -236,7 +282,28 @@ private:
         trigger_[n]=0;
         return trigger_;
     }
-    static void keep(const char* s,Emit emit,void* context) { emit(context,s,false); }
+    static void keep(const char* s,Emit emit,void* context) { emit(context,s,ROW_KEEP); }
+    // The oldest window row, tagged "raw_window":true after its kind. An
+    // evidence row (BETA live, journal current at write time) keeps its
+    // class; any other goes as `other` (RAW: diagnostic, BULK: paced).
+    void emit_window_row(Emit emit,void* context,unsigned other) {
+        uint32_t len;uint64_t at;bool evidence;header(&len,&at,&evidence);
+        get((head_+HEADER)%cap_,scratch_,len);scratch_[len]=0;
+        consume(len);
+        static const char prefix[]="{\"kind\":\"";
+        static const char tag[]=",\"raw_window\":true";
+        const size_t p=sizeof prefix-1;
+        if(len>p && !memcmp(scratch_,prefix,p) && len+WINDOW_TAG_BYTES<ROW_BYTES) {
+            const char* end=static_cast<const char*>(memchr(scratch_+p,'"',len-p));
+            if(end) {
+                const size_t at_tag=size_t(end-scratch_)+1;
+                memmove(scratch_+at_tag+WINDOW_TAG_BYTES,scratch_+at_tag,len-at_tag+1);
+                memcpy(scratch_+at_tag,tag,WINDOW_TAG_BYTES);
+            }
+        }
+        ++window_written_;
+        emit(context,scratch_,evidence && journal_current_?unsigned(ROW_KEEP):other);
+    }
     bool periodic(uint64_t* last,uint64_t now) {
         if(*last && now>=*last && now-*last<PERIODIC_NS)return false;
         *last=now?now:1;return true;
@@ -253,37 +320,48 @@ private:
     // evidence: written in the journal ring's evidence class (POSITION rows
     // while BETA is live); otherwise RAW context is diagnostic class.
     void raw(const char* s,uint64_t now,Emit emit,void* context,bool evidence=false) {
-        if(now<raw_until_) { ++raw_direct_;emit(context,s,!(evidence && journal_current_));return; }
+        // During a paced drain raw rows queue behind the window rows.
+        if(now<raw_until_ && !draining_) {
+            ++raw_direct_;emit(context,s,evidence && journal_current_?ROW_KEEP:ROW_RAW);return;
+        }
         if(!cap_) { ++suppressed_[S_RAW_DROPPED];return; }
         const size_t n=strlen(s),total=HEADER+n;
-        if(n>=ROW_BYTES || total>cap_) { ++suppressed_[S_RAW_DROPPED];return; }
-        expire(now);
+        if(n+WINDOW_TAG_BYTES>=ROW_BYTES || total>cap_) { ++suppressed_[S_RAW_DROPPED];return; }
+        if(!draining_)expire(now);   // rows being drained are older than 60 s by design
         while(cap_-used_<total)drop_oldest();
         unsigned char h[HEADER];const uint32_t len=uint32_t(n)|(evidence?EVIDENCE_BIT:0);
         memcpy(h,&len,4);memcpy(h+4,&now,8);
         put(h,HEADER);put(s,n);++rows_;
     }
-    // Event: write the window (oldest first) behind a raw_window marker and
-    // keep writing raw rows directly for RAW_POST_NS.
-    void trigger(const char* why,uint64_t now,Emit emit,void* context) {
+    // Event: a raw_window marker, then the window (oldest first): paced by
+    // pump(), or at once when not paced or `immediate` (capture stop); raw
+    // rows are then written directly for RAW_POST_NS. An event during a
+    // paced drain extends the raw period (and finishes the drain at once
+    // when immediate); its rows were already announced by the marker.
+    void trigger(const char* why,uint64_t now,Emit emit,void* context,bool immediate=false) {
+        if(draining_) {
+            if(immediate) { while(rows_)emit_window_row(emit,context,ROW_RAW);draining_=false;++drains_done_; }
+            const uint64_t until=now>UINT64_MAX-RAW_POST_NS?UINT64_MAX:now+RAW_POST_NS;
+            if(until>raw_until_)raw_until_=until;
+            return;
+        }
         expire(now);
         const bool new_period=now>=raw_until_;
+        const bool paced=paced_ && !immediate && rows_;
         if(new_period || rows_) {
             char line[400];
             const int n=snprintf(line,sizeof line,
                 "{\"kind\":\"raw_window\",\"schema\":1,\"mono_ns\":%llu,\"profile\":\"persistent\","
                 "\"trigger\":\"%s\",\"rows\":%llu,\"bytes\":%llu,\"overwritten_rows\":%llu,"
-                "\"span_ms\":%llu,\"pre_limit_ms\":%llu,\"post_ms\":%llu,\"window\":\"%s\"}",
+                "\"span_ms\":%llu,\"pre_limit_ms\":%llu,\"post_ms\":%llu,\"window\":\"%s\","
+                "\"drain\":\"%s\",\"drain_rows_per_s\":%u}",
                 (unsigned long long)now,why,(unsigned long long)rows_,(unsigned long long)used_,
                 (unsigned long long)overwritten_,(unsigned long long)span_ms(now),(unsigned long long)(RAW_PRE_NS/1000000ULL),
-                (unsigned long long)(RAW_POST_NS/1000000ULL),cap_?"available":"unavailable");
-            if(n>0 && size_t(n)<sizeof line)emit(context,line,false);
-            while(rows_) {
-                uint32_t len;uint64_t at;bool evidence;header(&len,&at,&evidence);
-                get((head_+HEADER)%cap_,scratch_,len);scratch_[len]=0;
-                consume(len);
-                emit(context,scratch_,!(evidence && journal_current_));
-            }
+                (unsigned long long)(RAW_POST_NS/1000000ULL),cap_?"available":"unavailable",
+                paced?"paced":"immediate",paced?paced_:0U);
+            if(n>0 && size_t(n)<sizeof line)emit(context,line,ROW_KEEP);
+            if(paced) { draining_=true;drain_last_ns_=now;drain_tokens_=DRAIN_BURST*1000ULL; }
+            else while(rows_)emit_window_row(emit,context,ROW_RAW);
             overwritten_=0;++flushes_;
         }
         const uint64_t until=now>UINT64_MAX-RAW_POST_NS?UINT64_MAX:now+RAW_POST_NS;
@@ -352,7 +430,8 @@ private:
             "\"send_types\":%s,\"positions\":%llu,\"position_modes\":[%llu,%llu,%llu,%llu],"
             "\"position_classes\":%s,\"suppressed\":%s,"
             "\"raw_window_rows\":%llu,\"raw_window_bytes\":%llu,\"raw_window_overwritten\":%llu,"
-            "\"raw_window_flushes\":%llu,\"raw_direct_rows\":%llu}",
+            "\"raw_window_flushes\":%llu,\"raw_direct_rows\":%llu,\"raw_window_draining\":%s,"
+            "\"raw_window_written\":%llu}",
             what,(unsigned long long)now,(unsigned long long)since_,
             (unsigned long long)period_events_,(unsigned long long)kind_events_[0],
             (unsigned long long)kind_events_[1],(unsigned long long)kind_events_[2],
@@ -365,8 +444,9 @@ private:
             (unsigned long long)position_modes_[0],(unsigned long long)position_modes_[1],
             (unsigned long long)position_modes_[2],(unsigned long long)position_modes_[3],classes,suppressed,
             (unsigned long long)rows_,(unsigned long long)used_,(unsigned long long)overwritten_,
-            (unsigned long long)flushes_,(unsigned long long)raw_direct_);
-        if(n>0 && size_t(n)<sizeof line)emit(context,line,false);
+            (unsigned long long)flushes_,(unsigned long long)raw_direct_,draining_?"true":"false",
+            (unsigned long long)window_written_);
+        if(n>0 && size_t(n)<sizeof line)emit(context,line,ROW_KEEP);
         reset_period(now);
     }
     void reset_period(uint64_t now) {
@@ -383,6 +463,7 @@ private:
     }
     void reset_all() {
         head_=used_=0;rows_=overwritten_=flushes_=0;raw_until_=0;
+        draining_=false;drain_last_ns_=drain_tokens_=0;drains_done_=window_written_=0;
         last_health_=last_shadow_=last_calibration_=last_summary_=0;
         for(unsigned i=0;i<S_COUNT;++i) { fault_since_[i]=0;fault_rows_[i]=0; }
         have_class_=false;last_class_=0;beta_live_=false;journal_current_=true;have_motion_=false;epoch_=last_seq_=last_motion_ns_=0;total_events_=0;
@@ -425,6 +506,9 @@ private:
     }
 
     unsigned char* window_;size_t cap_;char* scratch_;
+    unsigned paced_;
+    bool draining_;
+    uint64_t drain_last_ns_,drain_tokens_,drains_done_,window_written_;   // tokens in milli-rows
     navigation::ModelProfile model_;
     size_t head_,used_;
     uint64_t rows_,overwritten_,flushes_,raw_until_,raw_direct_;

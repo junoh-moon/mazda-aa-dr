@@ -521,6 +521,43 @@ class BetaAnalyzeTests(unittest.TestCase):
         self.assertIn("unexpected_reverse_latch_domain", self.codes(self.audit(rows), "violation"))
 
 
+    def test_paced_window_rows_are_older_context_not_a_gps_return(self):
+        # 2026-10-08: a paced RAW window drain writes older FIX rows after
+        # the GPS loss and the first replacements. Tagged "raw_window": true
+        # they are context (no GPS return, no gap closing); the same rows
+        # untagged would read as a GPS fix before the replacements.
+        def with_window(tag, drain="paced"):
+            rows = drive()
+            index = next(i for i, r in enumerate(rows) if r.get("call") == 3 and r["kind"] == "send") + 1
+            marker = dict(kind="raw_window", schema=1, mono_ns=2_000_000_300, profile="persistent",
+                          trigger="beta_state", rows=2, bytes=900, overwritten_rows=0, span_ms=1100,
+                          pre_limit_ms=60000, post_ms=30000, window="available")
+            if drain:
+                marker.update(drain=drain, drain_rows_per_s=150)
+            old_fix = position(90, 900_000_000, 1)
+            old_send = send(90, 900_000_100, 1, original_payload())
+            if tag:
+                old_fix = dict(old_fix, raw_window=True)
+                old_send = dict(old_send, raw_window=True)
+            rows[index:index] = [old_fix, old_send]
+            rows.insert(index - 2, marker)
+            return rows
+        report = self.audit(with_window(True))
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["beta"]["replaced_sends"], 2)
+        report = self.audit(with_window(False))
+        self.assertIn("beta_replacement_after_gps_return", self.codes(report, "violation"))
+        # An older (beta.3/beta.4) marker announces its rows by count; they
+        # follow it contiguously and are context too.
+        rows = drive()
+        index = next(i for i, r in enumerate(rows) if r.get("call") == 3 and r["kind"] == "send") + 1
+        marker = dict(kind="raw_window", schema=1, mono_ns=3_000_000_200, profile="persistent",
+                      trigger="beta_hold", rows=2, bytes=900, overwritten_rows=0, span_ms=2100,
+                      pre_limit_ms=60000, post_ms=30000, window="available")
+        rows[index:index] = [marker, position(90, 900_000_000, 1), send(90, 900_000_100, 1, original_payload())]
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+
     def test_cadence_fence_rows_are_counted(self):
         # 2026-10-08: a POSITION/SEND gap above 3 s (reconnect) is journaled
         # by the worker; it is BETA evidence, counted per stream.

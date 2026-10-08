@@ -896,6 +896,120 @@ static void route_general_worker(const char* root,const std::string& logs) {
 // boot row names the profile, the first POSITION (a class transition) opens
 // a raw period behind a raw_window marker, and the capture stop writes the
 // final digest before capture_end and its acknowledgement.
+// RAW window burst at an event (2026-10-08, first persistent BETA drive):
+// about 1100 window rows (400 KiB) written at one GPS loss/return while the
+// vehicle writer managed about 350-630 rows/s; the oldest unwritten row
+// passed the 1.5 s guard and BETA provenance was withdrawn exactly when BETA
+// should engage. Replayed here with the product Journal, writer thread and
+// PersistentLog, the writer slowed to 350 rows/s (a sleep before every row),
+// worker turns every 20 ms (pump, lag guard, 1 s flush) and evidence rows
+// flowing (LOST POSITION, replaced SEND and beta_summary every second, a raw
+// batch every 100 ms). paced 0 is the beta.3/beta.4 behaviour (the whole
+// window at the event); paced 150 is the product now.
+struct BurstResult { uint64_t max_lag_ns; unsigned lowered,evidence_rows,window_rows,unwritten_max; };
+static BurstResult window_burst(const char* root,const std::string& logs,unsigned paced,uint64_t stall_ns=0,
+                                uint64_t* lowered_after=0) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=8388608;
+  journal_current.store(1);
+  BurstResult r=BurstResult();
+  static unsigned char storage[mx5::runtime::PersistentLog::WINDOW_BYTES+mx5::runtime::PersistentLog::ROW_BYTES];
+  mx5::runtime::PersistentLog quiet;quiet.init(storage,N::research_model_profile());quiet.set_paced(paced);
+  {
+    Journal j(root);assert(j.start_writer(524288,262144,131072));
+    j.filter=&quiet;
+    j.line("{\"kind\":\"boot\",\"schema\":1}");assert(j.flush_wait());
+    // 1100 raw batches of about 370 bytes: a full window, as on the drive.
+    std::string pad(320,'p');
+    for(unsigned i=0;i<1100;++i) {
+      char head[64];snprintf(head,sizeof head,"{\"kind\":\"motion_batch\",\"n\":%u,\"p\":\"",i);
+      j.line((head+pad+"\"}").c_str());
+    }
+    assert(j.flush_wait());
+    j.writer->inject_row_delay_ns.store(1000000000ULL/350);
+    // The event: GPS lost while BETA is armed.
+    j.line("{\"kind\":\"beta_state\",\"mono_ns\":1,\"domain\":\"beta\",\"assist_ready\":false,"
+           "\"from\":\"ARMED\",\"to\":\"GPS_LOST\",\"reason\":\"gps_lost\"}");
+    A::Observation lost=A::Observation();lost.kind=A::Observation::POSITION;
+    lost.position_class=A::POSITION_LOST;lost.original_mode=0;
+    A::Observation replaced=A::Observation();replaced.kind=A::Observation::SEND;replaced.type=1;
+    replaced.choice=A::BETA_REPLACEMENT;
+    const uint64_t begin=clock_ns(0);uint64_t last_flush=begin,last_second=0;unsigned call=0,batch=0;
+    bool stalled=false;
+    while(clock_ns(0)-begin<12000000000ULL) {
+      const uint64_t now=clock_ns(0);
+      if(now-begin>=uint64_t(batch)*100000000ULL) {
+        char b[64];snprintf(b,sizeof b,"{\"kind\":\"motion_batch\",\"live\":%u}",batch++);j.line(b);
+      }
+      if(!last_second || now-last_second>=1000000000ULL) {
+        last_second=now;++call;char row[200];
+        snprintf(row,sizeof row,"{\"kind\":\"position\",\"call\":%u,\"mode\":0,\"class\":3}",call);
+        lost.call_sequence=call;j.observation_line(row,lost);
+        snprintf(row,sizeof row,"{\"kind\":\"send\",\"call\":%u,\"type\":1,\"choice\":3,\"reason\":0}",call);
+        replaced.call_sequence=call;j.observation_line(row,replaced);
+        snprintf(row,sizeof row,"{\"kind\":\"beta_summary\",\"mono_ns\":%llu,\"domain\":\"beta\","
+                 "\"assist_ready\":false,\"state\":\"ENGAGED\",\"n\":%u}",(unsigned long long)now,call);
+        j.line(row);
+        r.evidence_rows+=3;
+      }
+      // A real writer stall in the middle (once), after the window drained.
+      if(stall_ns && !stalled && now-begin>=9000000000ULL) { stalled=true;j.writer->inject_stall_ns.store(stall_ns); }
+      j.pump(now);
+      if(now-last_flush>=1000000000ULL) { last_flush=now;j.flush(); }
+      const JournalLag lag=journal_writer_lag(j.writer,now);
+      if(lag.oldest_ns>r.max_lag_ns && !(stall_ns && stalled))r.max_lag_ns=lag.oldest_ns;
+      if(lag.unwritten_rows>r.unwritten_max)r.unwritten_max=unsigned(lag.unwritten_rows);
+      const bool before=journal_current.load()!=0;
+      journal_lag_guard(j,now);
+      if(before && !journal_current.load()) {
+        ++r.lowered;
+        if(lowered_after && stalled && !*lowered_after)*lowered_after=now-begin-9000000000ULL;
+      }
+      usleep(20000);
+    }
+    j.writer->inject_row_delay_ns.store(0);
+    assert(j.flush_wait() && !j.failed);
+    j.filter=0;
+  }
+  journal_current.store(1);
+  const std::vector<std::string> rows=trace_rows(logs);
+  unsigned tagged=0,positions=0;
+  for(size_t i=0;i<rows.size();++i) {
+    if(rows[i].find("{\"kind\":\"motion_batch\",\"raw_window\":true,\"n\":")==0)++tagged;
+    if(rows[i].find("{\"kind\":\"position\",\"call\":")==0)++positions;
+  }
+  r.window_rows=tagged;
+  assert(positions*3==r.evidence_rows);   // every evidence row reached the file
+  arm_test_mode();clear_traces(logs);
+  return r;
+}
+static void window_burst_lag(const char* root,const std::string& logs) {
+  const BurstResult before=window_burst(root,logs,0);
+  printf("Window burst, whole window at the event (beta.4): max lag %.0f ms, %u unwritten rows at most, "
+         "journal_current lowered %u times, %u evidence rows, %u window rows\n",
+         before.max_lag_ns/1e6,before.unwritten_max,before.lowered,before.evidence_rows,before.window_rows);
+  fflush(stdout);
+  const BurstResult after=window_burst(root,logs,mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S);
+  printf("Window burst, paced %u rows/s (BULK, untimed): max lag %.0f ms, %u unwritten rows at most, "
+         "journal_current lowered %u times, %u evidence rows, %u window rows\n",
+         mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S,after.max_lag_ns/1e6,after.unwritten_max,after.lowered,
+         after.evidence_rows,after.window_rows);
+  fflush(stdout);
+  // The defect reproduces with the whole-window burst (the guard is right
+  // to trip on it: prompt rows really waited behind 1100 rows)...
+  assert(before.lowered>=1 && before.max_lag_ns>JOURNAL_LAG_LIMIT_NS && before.window_rows==1100);
+  // ...and the paced drain keeps every prompt row prompt.
+  assert(!after.lowered && after.max_lag_ns<JOURNAL_LAG_CLEAR_NS && after.window_rows==1100);
+  assert(after.evidence_rows>=33);
+  // A real writer stall (1.6 s) during the same traffic still trips it.
+  uint64_t lowered_after=0;
+  const BurstResult stall=window_burst(root,logs,mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S,1600000000ULL,
+                                       &lowered_after);
+  printf("Window burst then a 1.6 s writer stall: journal_current lowered %u times, %llu ms after the stall began\n",
+         stall.lowered,(unsigned long long)(lowered_after/1000000ULL));
+  fflush(stdout);
+  assert(stall.lowered==1 && lowered_after>=1000000000ULL && lowered_after<=1700000000ULL);
+  puts("Window burst: paced drain keeps journal_current while evidence flows; a 1.6 s stall still trips the guard");
+}
 static void persistent_worker(const char* root,const std::string& logs) {
   clear_traces(logs);
   arm_test_mode();config.mode=1;config.max_log_bytes=65536;
@@ -1325,6 +1439,7 @@ int main(int argc,char** argv) {
     writer_lag_and_wakeups(root,logs);
     writer_age_flush(root,logs);
     writer_lagging_fix_rows(root,logs);
+    window_burst_lag(root,logs);
     persistent_worker(root,logs);
     clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));
     return 0;

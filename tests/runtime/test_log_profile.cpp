@@ -14,8 +14,11 @@ namespace A=mx5::adapter;
 namespace N=mx5::navigation;
 
 static std::vector<std::string> out;
-static std::vector<bool> raw_flags;
-static void emit(void*,const char* row,bool raw) { out.push_back(row);raw_flags.push_back(raw); }
+static std::vector<bool> raw_flags;        // not queued by its kind (RAW or BULK)
+static std::vector<unsigned> classes;
+static void emit(void*,const char* row,unsigned cls) {
+    out.push_back(row);raw_flags.push_back(cls!=PersistentLog::ROW_KEEP);classes.push_back(cls);
+}
 static const uint64_t S=1000000000ULL;
 static N::ModelProfile model() {
     N::ModelProfile p={2047.0,-0.000658615,0.01,-100.0,0,1,100000000ULL,10.0,0.15};
@@ -91,7 +94,9 @@ static void rate_limits() {
 
 static void window_and_events() {
     static unsigned char storage[PersistentLog::WINDOW_BYTES+PersistentLog::ROW_BYTES];
-    PersistentLog log;log.init(storage,model());out.clear();
+    // Window contents at the event (immediate drain; the paced product
+    // drain writes the same rows later, see paced_window()).
+    PersistentLog log;log.init(storage,model());log.set_paced(0);out.clear();
     // First POSITION is a class transition: a (empty) raw period starts.
     observe(log,position(A::POSITION_FIX,1,1),1*S,"first_fix");
     assert(count("raw_window")==1 && count("position")==1);
@@ -207,7 +212,7 @@ static void digest_contents() {
 
 static void window_bounds() {
     static unsigned char storage[PersistentLog::WINDOW_BYTES+PersistentLog::ROW_BYTES];
-    PersistentLog log;log.init(storage,model());out.clear();
+    PersistentLog log;log.init(storage,model());log.set_paced(0);out.clear();
     // 1000 rows of 1 KiB within 10 s: more than the window holds.
     std::string pad(1000,'x');
     for(unsigned i=0;i<1000;++i) {
@@ -240,7 +245,7 @@ static void window_bounds() {
 // live, both written directly and from the window; evidence again after.
 static void lag_guard_classes() {
     static unsigned char storage[PersistentLog::WINDOW_BYTES+PersistentLog::ROW_BYTES];
-    PersistentLog log;log.init(storage,model());out.clear();raw_flags.clear();
+    PersistentLog log;log.init(storage,model());log.set_paced(0);out.clear();raw_flags.clear();
     observe(log,position(A::POSITION_FIX,1,1),1*S,"first");          // transition: raw period to 31 s
     log.row(row("beta_state",",\"to\":\"GPS_LOST\"").c_str(),2*S,emit,0);
     assert(log.beta_live());
@@ -279,12 +284,119 @@ static void lag_guard_classes() {
     puts("persistent log: FIX POSITION rows are diagnostic while the journal lag guard is engaged");
 }
 
+// Paced window drain (2026-10-08, the product default): the marker at the
+// event, then the window rows at most DRAIN_ROWS_PER_S from pump(), tagged
+// "raw_window":true, in the BULK class (evidence POSITION rows keep theirs);
+// nothing while prompt rows wait; raw rows during the drain queue behind the
+// window; a capture stop writes the rest at once.
+static bool prompt_idle=true;
+static bool ready(void*) { return prompt_idle; }
+static void paced_window() {
+    static unsigned char storage[PersistentLog::WINDOW_BYTES+PersistentLog::ROW_BYTES];
+    PersistentLog log;log.init(storage,model());out.clear();classes.clear();raw_flags.clear();
+    assert(PersistentLog::DRAIN_ROWS_PER_S==150 && PersistentLog::DRAIN_BURST==16);
+    // 1100 rows of about 370 bytes in the last 55 s, as on the drive.
+    std::string pad(320,'p');
+    for(unsigned i=0;i<1100;++i) {
+        char head[64];snprintf(head,sizeof head,"{\"kind\":\"motion_batch\",\"n\":%u,\"p\":\"",i);
+        log.row((head+pad+"\"}").c_str(),100*S+i*50000000ULL,emit,0);
+    }
+    log.tick(156*S,emit,0);
+    out.clear();classes.clear();
+    const uint64_t event=156*S;
+    log.row(row("beta_state",",\"to\":\"GPS_LOST\"").c_str(),event,emit,0);
+    // Only the marker and the event row at the event.
+    assert(out.size()==2 && out[0].find("\"kind\":\"raw_window\"")==1 &&
+           out[0].find("\"rows\":1100,")!=std::string::npos &&
+           out[0].find("\"drain\":\"paced\",\"drain_rows_per_s\":150}")!=std::string::npos);
+    assert(out[1].find("\"kind\":\"beta_state\"")==1 && log.draining());
+    // Worker turns every 20 ms; a LOST POSITION (kept, evidence) every 1 s;
+    // a raw batch every 100 ms while draining. Count window rows per second.
+    unsigned per_second[16]={0};unsigned window_rows=0,max_burst=0,live_rows=0;
+    unsigned next_window=0,next_live=0;bool order_ok=true,tags_ok=true;
+    for(unsigned turn=1;turn<=750 && log.draining();++turn) {
+        const uint64_t now=event+uint64_t(turn)*20000000ULL;
+        if(turn%5==0) {
+            char live[80];snprintf(live,sizeof live,"{\"kind\":\"motion_batch\",\"live\":%u}",next_live++);
+            log.row(live,now,emit,0);
+        }
+        if(turn%50==0)observe(log,position(A::POSITION_LOST,0,turn),now,"lost");
+        // Prompt rows still queued (e.g. the POSITION just written): no drain.
+        prompt_idle=turn%7!=0;
+        const size_t before=out.size();
+        log.pump(now,emit,0,ready,0);
+        if(!prompt_idle)assert(out.size()==before);
+        unsigned burst=0;
+        for(size_t i=before;i<out.size();++i) {
+            if(out[i].find("\"n\":")==std::string::npos)continue;
+            ++burst;++window_rows;++per_second[(turn*20)/1000];
+            const unsigned n=unsigned(atoi(out[i].c_str()+out[i].find("\"n\":")+4));
+            if(n!=next_window++)order_ok=false;
+            if(out[i].find("{\"kind\":\"motion_batch\",\"raw_window\":true,\"n\":")!=0)tags_ok=false;
+            assert(classes[i]==PersistentLog::ROW_BULK);
+        }
+        if(burst>max_burst)max_burst=burst;
+    }
+    // The rows queued behind the window come out after it, in order.
+    for(size_t i=0;i<out.size();++i)if(out[i].find("\"live\":")!=std::string::npos) {
+        ++live_rows;
+        assert(out[i].find("{\"kind\":\"motion_batch\",\"raw_window\":true,\"live\":")==0);
+    }
+    printf("persistent log paced drain: %u window rows, max %u per turn, per second:",window_rows,max_burst);
+    for(unsigned i=0;i<10;++i)printf(" %u",per_second[i]);
+    printf("; %u live rows queued behind it\n",live_rows);
+    assert(order_ok && tags_ok && window_rows==1100 && !log.draining());
+    assert(max_burst<=PersistentLog::DRAIN_BURST);
+    for(unsigned i=1;i<9;++i)assert(per_second[i]<=PersistentLog::DRAIN_ROWS_PER_S+PersistentLog::DRAIN_BURST);
+    assert(live_rows>=30 && count("position")==7);
+    // After the drain, inside the post period, raw rows are direct again.
+    out.clear();classes.clear();
+    log.row("{\"kind\":\"motion_batch\",\"after\":1}",event+9*S,emit,0);
+    assert(out.size()==1 && out[0]=="{\"kind\":\"motion_batch\",\"after\":1}" && classes[0]==PersistentLog::ROW_RAW);
+    // A second event during a drain extends the raw period without a new
+    // marker; a capture stop writes the remaining rows at once (RAW class).
+    PersistentLog second;second.init(storage,model());out.clear();classes.clear();
+    for(unsigned i=0;i<100;++i) {
+        char r[64];snprintf(r,sizeof r,"{\"kind\":\"motion_batch\",\"n\":%u}",i);
+        second.row(r,100*S+i*10000000ULL,emit,0);
+    }
+    second.row(row("beta_hold").c_str(),102*S,emit,0);
+    second.pump(102*S,emit,0,ready,0);
+    assert(second.draining() && count("motion_batch")==16);
+    second.row(row("beta_state",",\"to\":\"ENGAGED\"").c_str(),102*S+1,emit,0);
+    assert(count("raw_window")==1);
+    second.row(row("capture_end").c_str(),102*S+2,emit,0);
+    assert(!second.draining() && count("motion_batch")==100 && out.back()=="{\"kind\":\"capture_end\"}");
+    for(size_t i=0,k=0;i<out.size();++i)
+        if(out[i].find("\"n\":")!=std::string::npos) {
+            assert(out[i].find("\"raw_window\":true")!=std::string::npos &&
+                   classes[i]==(k<16?unsigned(PersistentLog::ROW_BULK):unsigned(PersistentLog::ROW_RAW)));
+            assert(atoi(out[i].c_str()+out[i].find("\"n\":")+4)==int(k));++k;
+        }
+    // Window POSITION rows that are evidence (BETA live, journal current)
+    // keep the evidence class even when paced.
+    PersistentLog live;live.init(storage,model());out.clear();classes.clear();
+    observe(live,position(A::POSITION_FIX,1,1),1*S,"first");
+    live.row(row("beta_state",",\"to\":\"ARMED\"").c_str(),2*S,emit,0);
+    for(unsigned i=0;i<3;++i)observe(live,position(A::POSITION_FIX,1,10+i),(50+i)*S,"window");
+    out.clear();classes.clear();
+    live.row(row("beta_hold").c_str(),56*S,emit,0);
+    live.pump(56*S,emit,0,ready,0);
+    assert(count("position")==3);
+    for(size_t i=0;i<out.size();++i)if(out[i].find("\"kind\":\"position\"")==1) {
+        assert(out[i].find("{\"kind\":\"position\",\"raw_window\":true,\"call\":")==0);
+        assert(classes[i]==PersistentLog::ROW_KEEP);
+    }
+    puts("persistent log: paced window drain, tags, classes, order and capture stop passed");
+}
+
 int main() {
     rate_limits();
     window_and_events();
     digest_contents();
     window_bounds();
     lag_guard_classes();
+    paced_window();
     puts("persistent log profile tests passed");
     return 0;
 }
