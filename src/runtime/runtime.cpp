@@ -304,7 +304,7 @@ void journal_writer_request_flush(JournalWriter*);
 bool journal_writer_flush_wait(JournalWriter*,uint64_t timeout_ns);
 JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes,
                                     size_t bulk_bytes);
-bool journal_writer_prompt_idle(JournalWriter*);
+bool journal_writer_bulk_ready(JournalWriter*);
 struct JournalLag { bool thread; uint64_t unwritten_rows,oldest_ns,dropped_rows; size_t high_water; };
 JournalLag journal_writer_lag(JournalWriter*,uint64_t now);
 
@@ -419,11 +419,11 @@ struct Journal {
   // Every worker turn: the quiet profile's paced RAW window drain. It
   // waits while rows that must be durable promptly are still queued.
   void pump(uint64_t now) {
-    if (filter && !failed && filter->draining()) { sync_filter(); filter->pump(now, emit_to, this, prompt_idle, this); }
+    if (filter && !failed && filter->draining()) { sync_filter(); filter->pump(now, emit_to, this, bulk_ready, this); }
   }
-  static bool prompt_idle(void* journal) {
+  static bool bulk_ready(void* journal) {
     Journal& j = *static_cast<Journal*>(journal);
-    return !j.writer || journal_writer_prompt_idle(j.writer);
+    return !j.writer || journal_writer_bulk_ready(j.writer);
   }
   void sync_filter() { filter->set_journal_current(journal_current.load(std::memory_order_acquire) != 0); }
   static void emit_to(void* journal, const char* s, unsigned row_class) {
@@ -683,9 +683,16 @@ bool journal_writer_push(JournalWriter* w,const char* s,size_t n,mx5::runtime::J
   return r==mx5::runtime::JournalRing::PUSHED || r==mx5::runtime::JournalRing::PUSHED_AFTER_DROP;
 }
 bool journal_writer_ok(JournalWriter* w) { return w->ok.load(std::memory_order_acquire)!=0; }
-// No prompt (evidence or diagnostic) row waits in the ring: the paced RAW
-// window drain may add its next rows behind them without delaying any.
-bool journal_writer_prompt_idle(JournalWriter* w) { return !w->ring.stats().oldest_push_ns; }
+// The paced RAW window drain may add its next rows: no prompt (evidence or
+// diagnostic) row waits and the previous bulk rows were all taken by the
+// writer. The drain then follows the writer's own pace (at most the
+// PersistentLog rate), so a later prompt row waits behind at most one
+// pump's rows (16), even on a writer slower than that rate (2026-10-08:
+// under QEMU about 90 rows/s).
+bool journal_writer_bulk_ready(JournalWriter* w) {
+  const mx5::runtime::JournalRing::Stats s=w->ring.stats();
+  return !s.oldest_push_ns && !s.bulk_used;
+}
 void journal_writer_request_flush(JournalWriter* w) {
   const uint64_t next=w->ring.stats().next_seq;
   if(next>w->flush_target.load(std::memory_order_acquire)) {

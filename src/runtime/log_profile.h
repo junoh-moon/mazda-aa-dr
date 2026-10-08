@@ -34,7 +34,8 @@
 //    Now the marker is written at the event and the window rows follow at
 //    most DRAIN_ROWS_PER_S (token bucket, DRAIN_BURST rows) from pump(),
 //    which the worker calls every turn and which waits while the journal
-//    still has prompt rows queued. Raw rows arriving during the drain are
+//    still has prompt rows or earlier window rows queued (so the drain
+//    also follows a slower writer). Raw rows arriving during the drain are
 //    appended to the window so the raw stream stays in order; a capture
 //    stop writes the rest at once. Each row written from the window carries
 //    "raw_window":true right after its kind (the analyzer then knows it is
@@ -62,7 +63,8 @@ public:
     // window rows).
     enum RowClass { ROW_KEEP=0, ROW_RAW=1, ROW_BULK=2 };
     typedef void (*Emit)(void* context,const char* row,unsigned row_class);
-    // pump(): false while rows that must be durable promptly still wait.
+    // pump(): false while rows that must be durable promptly, or window rows
+    // of an earlier pump, still wait in the journal.
     typedef bool (*Ready)(void* context);
     static const uint64_t DIGEST_NS=10000000000ULL;
     static const uint64_t PERIODIC_NS=10000000000ULL;   // health, shadow, calibration
@@ -219,8 +221,8 @@ public:
     // Worker tick: the digest stays on its 10 s cadence even without rows.
     void tick(uint64_t now,Emit emit,void* context) { digest_due(now,emit,context); }
     // Every worker turn: write window rows of a paced drain, at most the
-    // token bucket allows, and none while ready() reports prompt rows still
-    // queued in the journal. Bounded work: at most DRAIN_BURST rows.
+    // token bucket allows, and none while ready() reports rows still queued
+    // in the journal. Bounded work: at most DRAIN_BURST rows.
     void pump(uint64_t now,Emit emit,void* context,Ready ready=0,void* ready_context=0) {
         if(!draining_)return;
         if(now>drain_last_ns_) {

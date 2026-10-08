@@ -908,7 +908,7 @@ static void route_general_worker(const char* root,const std::string& logs) {
 // window at the event); paced 150 is the product now.
 struct BurstResult { uint64_t max_lag_ns; unsigned lowered,evidence_rows,window_rows,unwritten_max; };
 static BurstResult window_burst(const char* root,const std::string& logs,unsigned paced,uint64_t stall_ns=0,
-                                uint64_t* lowered_after=0) {
+                                uint64_t* lowered_after=0,unsigned writer_rows_per_s=350) {
   arm_test_mode();clear_traces(logs);config.max_log_bytes=8388608;
   journal_current.store(1);
   BurstResult r=BurstResult();
@@ -925,7 +925,7 @@ static BurstResult window_burst(const char* root,const std::string& logs,unsigne
       j.line((head+pad+"\"}").c_str());
     }
     assert(j.flush_wait());
-    j.writer->inject_row_delay_ns.store(1000000000ULL/350);
+    j.writer->inject_row_delay_ns.store(1000000000ULL/writer_rows_per_s);
     // The event: GPS lost while BETA is armed.
     j.line("{\"kind\":\"beta_state\",\"mono_ns\":1,\"domain\":\"beta\",\"assist_ready\":false,"
            "\"from\":\"ARMED\",\"to\":\"GPS_LOST\",\"reason\":\"gps_lost\"}");
@@ -966,6 +966,10 @@ static BurstResult window_burst(const char* root,const std::string& logs,unsigne
       }
       usleep(20000);
     }
+    // The rest of the window (a writer slower than the drain rate, e.g.
+    // under emulation) without further traffic.
+    for(unsigned turn=0;turn<6000 && quiet.draining();++turn) { j.pump(clock_ns(0));usleep(20000); }
+    assert(!quiet.draining());
     j.writer->inject_row_delay_ns.store(0);
     assert(j.flush_wait() && !j.failed);
     j.filter=0;
@@ -997,9 +1001,18 @@ static void window_burst_lag(const char* root,const std::string& logs) {
   // The defect reproduces with the whole-window burst (the guard is right
   // to trip on it: prompt rows really waited behind 1100 rows)...
   assert(before.lowered>=1 && before.max_lag_ns>JOURNAL_LAG_LIMIT_NS && before.window_rows==1100);
-  // ...and the paced drain keeps every prompt row prompt.
-  assert(!after.lowered && after.max_lag_ns<JOURNAL_LAG_CLEAR_NS && after.window_rows==1100);
+  // ...and the paced drain keeps every prompt row prompt (host: within the
+  // 250 ms age flush; at most one pump of window rows ahead of any row).
+  assert(!after.lowered && after.max_lag_ns<1000000000ULL && after.window_rows==1100);
   assert(after.evidence_rows>=33);
+  // A writer slower than the drain rate (90 rows/s, as under QEMU): the
+  // drain follows the writer (no new window rows while earlier ones wait).
+  const BurstResult slow=window_burst(root,logs,mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S,0,0,90);
+  printf("Window burst, paced, writer at 90 rows/s: max lag %.0f ms, %u unwritten rows at most, "
+         "journal_current lowered %u times, %u window rows\n",
+         slow.max_lag_ns/1e6,slow.unwritten_max,slow.lowered,slow.window_rows);
+  fflush(stdout);
+  assert(!slow.lowered && slow.max_lag_ns<1000000000ULL && slow.window_rows==1100);
   // A real writer stall (1.6 s) during the same traffic still trips it.
   uint64_t lowered_after=0;
   const BurstResult stall=window_burst(root,logs,mx5::runtime::PersistentLog::DRAIN_ROWS_PER_S,1600000000ULL,
