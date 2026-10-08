@@ -542,15 +542,25 @@ struct JournalWriter {
 const size_t JOURNAL_ROW_BUFFER=mx5::runtime::JournalRing::MAX_ROW+1;
 // dropped_total: rows lost up to and including this gap (the writer's own
 // count of sequence gaps), not the ring's later total at write time.
-void journal_dropped(Journal& file,uint64_t first,uint64_t next,uint64_t dropped_total) {
+// row_class: "diagnostic", "bulk" (paced RAW window rows) or "mixed", from
+// the ring's drop counters since the previous gap (2026-10-08 review L2).
+void journal_dropped(Journal& file,uint64_t first,uint64_t next,uint64_t dropped_total,
+                     const char* row_class="diagnostic") {
   char line[400];
   const int n=snprintf(line,sizeof line,
-      "{\"kind\":\"journal_dropped\",\"schema\":1,\"mono_ns\":%llu,\"class\":\"diagnostic\","
+      "{\"kind\":\"journal_dropped\",\"schema\":1,\"mono_ns\":%llu,\"class\":\"%s\","
       "\"rows\":%llu,\"first_seq\":%llu,\"last_seq\":%llu,\"dropped_total\":%llu,"
       "\"reason\":\"writer_backlog\"}",
-      (unsigned long long)clock_ns(0),(unsigned long long)(next-first),(unsigned long long)first,
+      (unsigned long long)clock_ns(0),row_class,(unsigned long long)(next-first),(unsigned long long)first,
       (unsigned long long)(next-1),(unsigned long long)dropped_total);
   if(n>0 && size_t(n)<sizeof line)file.line(line);else file.fail();
+}
+// Which ring lost the rows of a gap: the drop counters since the last gap.
+const char* drop_class(JournalWriter& w,uint64_t* drops_seen,uint64_t* bulk_seen) {
+  const mx5::runtime::JournalRing::Stats s=w.ring.stats();
+  const uint64_t all=s.dropped_rows-*drops_seen,bulk=s.dropped_bulk_rows-*bulk_seen;
+  *drops_seen=s.dropped_rows;*bulk_seen=s.dropped_bulk_rows;
+  return !bulk?"diagnostic":bulk>=all?"bulk":"mixed";
 }
 // Writer's wait predicate, evaluated under the ring mutex: a stop or a flush
 // it can complete now. Both are stored before the requester's notify(), so
@@ -570,16 +580,20 @@ void* journal_writer_main(void* argument) {
   char* buffer=w.row_buffer;
   {
     Journal file(w.root);
-    uint64_t expected=0,dropped_seen=0;
+    uint64_t expected=0,dropped_seen=0,drops_seen=0,bulk_drops_seen=0;
     for(;;) {
       // Read stop BEFORE draining: every row pushed before stop() is written.
       const bool stop=w.stopping.load(std::memory_order_acquire)!=0;
 #ifdef MX5DR_JOURNAL_TEST_HOOKS
       w.loops.fetch_add(1,std::memory_order_relaxed);
 #endif
-      unsigned batch=0;size_t n;uint64_t seq,push_ns;bool evidence;
-      while(batch<64 && w.ring.pop(buffer,JOURNAL_ROW_BUFFER,&n,&seq,&evidence,&push_ns)) {
+      unsigned batch=0;size_t n;uint64_t seq,push_ns;bool evidence,bulk;
+      while(batch<64 && w.ring.pop(buffer,JOURNAL_ROW_BUFFER,&n,&seq,&evidence,&push_ns,&bulk)) {
         ++batch;
+        // A BULK row is not timed by its push (review L1): time the write
+        // itself from the pop, so a writer blocked in write() during a
+        // window drain still shows as journal lag.
+        if(bulk)w.busy_since.store(clock_ns(0),std::memory_order_release);
         // The popped row is already timed by the ring (held), from inside
         // pop()'s critical section: no window in which the lag reads 0.
 #ifdef MX5DR_JOURNAL_TEST_HOOKS
@@ -590,7 +604,7 @@ void* journal_writer_main(void* argument) {
 #endif
         if(seq!=expected) {
           dropped_seen+=seq-expected;
-          if(!file.failed)journal_dropped(file,expected,seq,dropped_seen);
+          if(!file.failed)journal_dropped(file,expected,seq,dropped_seen,drop_class(w,&drops_seen,&bulk_drops_seen));
         }
         expected=seq+1;
         if(!file.failed)file.line(buffer);
@@ -599,6 +613,7 @@ void* journal_writer_main(void* argument) {
         // (stdio may also have written it earlier; the lag then over-, never
         // under-states).
         w.ring.row_written();
+        if(bulk)w.busy_since.store(0,std::memory_order_release);
         // End the batch when a prompt row in the stdio buffer is due for
         // its age flush (2026-10-08): with a slow writer 64 rows can take
         // longer than the whole lag limit (QEMU: about 22 ms per row).
@@ -635,7 +650,8 @@ void* journal_writer_main(void* argument) {
         const mx5::runtime::JournalRing::Stats stats=w.ring.stats();
         if(expected<stats.next_seq) {
           dropped_seen+=stats.next_seq-expected;
-          if(!file.failed)journal_dropped(file,expected,stats.next_seq,dropped_seen);
+          if(!file.failed)journal_dropped(file,expected,stats.next_seq,dropped_seen,
+                                          drop_class(w,&drops_seen,&bulk_drops_seen));
         }
         file.flush();
         bool ok=!file.failed;

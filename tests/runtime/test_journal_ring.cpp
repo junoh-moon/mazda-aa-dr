@@ -169,7 +169,7 @@ static void bulk_class() {
         const JournalRing::Result res=r.push_class(x.data(),x.size(),JournalRing::BULK,300+i);
         assert(res==JournalRing::PUSHED || res==JournalRing::PUSHED_AFTER_DROP);++pushed;
     }
-    st=r.stats();assert(st.dropped_rows>0 && st.bulk_used<=sizeof b && !st.oldest_push_ns);
+    st=r.stats();assert(st.dropped_rows>0 && st.dropped_bulk_rows==st.dropped_rows && st.bulk_used<=sizeof b && !st.oldest_push_ns);
     // No bulk ring: BULK rows are diagnostic (and timed).
     static unsigned char d2[1024],e2[1024];
     JournalRing plain(d2,sizeof d2,e2,sizeof e2);

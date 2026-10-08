@@ -61,7 +61,7 @@ public:
     JournalRing(unsigned char* diagnostic,size_t diagnostic_bytes,
                 unsigned char* evidence,size_t evidence_bytes,
                 unsigned char* bulk=0,size_t bulk_bytes=0)
-        : next_seq_(0),dropped_rows_(0),dropped_bytes_(0),held_push_ns_(0),unflushed_push_ns_(0),
+        : next_seq_(0),dropped_rows_(0),dropped_bytes_(0),dropped_bulk_rows_(0),held_push_ns_(0),unflushed_push_ns_(0),
           high_water_(0) {
         pthread_mutex_init(&mutex_,0);
         pthread_condattr_t attr;
@@ -92,7 +92,7 @@ public:
             while(r.cap-r.used<total) {           // drop oldest diagnostic rows
                 Header h;r.header(&h);
                 r.head=(r.head+HEADER+h.len)%r.cap;r.used-=HEADER+h.len;
-                ++dropped_rows_;dropped_bytes_+=h.len;
+                ++dropped_rows_;dropped_bytes_+=h.len;if(c==BULK)++dropped_bulk_rows_;
             }
             result=PUSHED_AFTER_DROP;
         }
@@ -179,8 +179,9 @@ public:
     // held_push_ns: the popped prompt row not yet written (0: none).
     // unflushed_push_ns: oldest prompt row written since the last flushed().
     // bulk_used: bytes queued in the BULK ring (included in used).
+    // dropped_bulk_rows: the part of dropped_rows that were BULK rows.
     struct Stats { uint64_t next_seq,dropped_rows,dropped_bytes,oldest_push_ns,held_push_ns,unflushed_push_ns;
-                   size_t used,high_water,bulk_used; };
+                   size_t used,high_water,bulk_used; uint64_t dropped_bulk_rows; };
     Stats stats() {
         pthread_mutex_lock(&mutex_);
         uint64_t oldest=0;
@@ -190,7 +191,7 @@ public:
             if(h.push_ns && (!oldest || h.push_ns<oldest))oldest=h.push_ns;
         }
         const Stats s={next_seq_,dropped_rows_,dropped_bytes_,oldest,held_push_ns_,unflushed_push_ns_,
-                       ring_[0].used+ring_[1].used+ring_[2].used,high_water_,ring_[2].used};
+                       ring_[0].used+ring_[1].used+ring_[2].used,high_water_,ring_[2].used,dropped_bulk_rows_};
         pthread_mutex_unlock(&mutex_);
         return s;
     }
@@ -225,7 +226,7 @@ private:
     pthread_cond_t cond_;
     bool cond_ok_;
     Ring ring_[3];
-    uint64_t next_seq_,dropped_rows_,dropped_bytes_,held_push_ns_,unflushed_push_ns_;
+    uint64_t next_seq_,dropped_rows_,dropped_bytes_,dropped_bulk_rows_,held_push_ns_,unflushed_push_ns_;
     size_t high_water_;
     JournalRing(const JournalRing&);
     JournalRing& operator=(const JournalRing&);

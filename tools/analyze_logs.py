@@ -1234,7 +1234,9 @@ class Auditor:
         """The journal writer dropped the oldest DIAGNOSTIC rows under a write
         backlog (evidence rows are never dropped). The loss is real: count it
         and restart motion continuity at this point."""
-        if not bounded_int(row.get("rows"), 1, 2**64-1) or row.get("class") != "diagnostic":
+        # class: diagnostic, or (2026-10-08) bulk / mixed when paced RAW window
+        # rows of the persistent profile were dropped too.
+        if not bounded_int(row.get("rows"), 1, 2**64-1) or row.get("class") not in ("diagnostic", "bulk", "mixed"):
             self.issue("malformed_journal_dropped", source, "Invalid dropped-row counter")
             return
         self.journal_dropped["counter_rows"] += 1
