@@ -63,6 +63,23 @@ double cycle_kmh(double c) {
     if(c<570)return 0;                       // another stop
     return 4*(c-570)<40?4*(c-570):40;
 }
+// --drive stopgo (2026-10-09, yaw data rows): permanent stop-and-go, an
+// 8 s cycle of a 2 s standstill and 6 s at up to 12 km/h (one standstill
+// every 8 s: faster than the yaw_stop rate limit of one per 10 s).
+bool stopgo=false;
+double stopgo_kmh(double c) {
+    if(c<2)return 0;
+    if(c<4)return 6*(c-2);
+    if(c<6)return 12;
+    return 12-6*(c-6);
+}
+double drive_kmh(double t) { return stopgo?stopgo_kmh(fmod(t,8.0)):cycle_kmh(fmod(t,600.0)); }
+// --yaw-count N / --yaw-noise 1 (2026-10-09): N samples per yaw window sum
+// as on the vehicle (mostly 5) and a deterministic +-3 count sample noise,
+// so the yaw digest fields have vehicle-like widths. Defaults (1, 0) keep
+// the original drive byte for byte.
+unsigned yaw_count=1;bool yaw_noise=false;uint32_t noise_state=12345;
+int noise() { noise_state=noise_state*1103515245U+12345U;return int((noise_state>>16)%7U)-3; }
 double cycle_yaw(double c) {                  // rad/s, clockwise positive
     if(c>=100 && c<110)return PI/2/10;        // 90 deg right
     if(c>=300 && c<312)return -PI/2/12;       // 90 deg left
@@ -74,13 +91,13 @@ struct Drive {
     double north,east,heading,t;
     Drive():north(0),east(0),heading(PI/2),t(0) {}
     void step(double dt) {
-        const double c=fmod(t,600.0),v=cycle_kmh(c)/3.6,r=cycle_yaw(c);
+        const double c=fmod(t,600.0),v=drive_kmh(t)/3.6,r=cycle_yaw(c);
         const double mid=heading+r*dt/2;
         north+=v*cos(mid)*dt;east+=v*sin(mid)*dt;heading+=r*dt;t+=dt;
     }
     Truth truth() const {
         Truth x;x.lat=35+north/111000.0;x.lon=135+east/(111000.0*cos(35*PI/180));
-        double h=fmod(heading*180/PI,360.0);if(h<0)h+=360;x.heading=h;x.kmh=cycle_kmh(fmod(t,600.0));
+        double h=fmod(heading*180/PI,360.0);if(h<0)h+=360;x.heading=h;x.kmh=drive_kmh(t);
         return x;
     }
 };
@@ -134,7 +151,7 @@ int main(int argc,char** argv) {
     // motion_ms: wheels and yaw each every motion_ms (vehicle 2026-10-05:
     // about 100 ms each); turn_ms: worker receive turn (the real worker wakes
     // per datagram, so a turn per datagram is turn_ms = motion_ms/2).
-    unsigned motion_ms=100,turn_ms=50;
+    unsigned motion_ms=100,turn_ms=50;bool yaw_rows=true;
     for(int i=1;i+1<argc;i+=2) {
         const std::string k=argv[i],v=argv[i+1];
         if(k=="--profile")profile=v;else if(k=="--seconds")seconds=unsigned(atoi(v.c_str()));
@@ -144,12 +161,17 @@ int main(int argc,char** argv) {
         else if(k=="--motion-ms")motion_ms=unsigned(atoi(v.c_str()));
         else if(k=="--turn-ms")turn_ms=unsigned(atoi(v.c_str()));
         else if(k=="--out")out=v;
+        else if(k=="--drive" && (v=="normal" || v=="stopgo"))stopgo=v=="stopgo";
+        else if(k=="--yaw-rows" && (v=="on" || v=="off"))yaw_rows=v=="on";
+        else if(k=="--yaw-count" && atoi(v.c_str())>=1 && atoi(v.c_str())<=15)yaw_count=unsigned(atoi(v.c_str()));
+        else if(k=="--yaw-noise")yaw_noise=atoi(v.c_str())!=0;
         else { fprintf(stderr,"unknown option %s\n",k.c_str());return 64; }
     }
     if(out.empty() || (profile!="full" && profile!="persistent") || !motion_ms || motion_ms%20 ||
        !turn_ms || turn_ms%10) {
         fprintf(stderr,"usage: log_rate --profile full|persistent --out DIR [--seconds N] "
-                       "[--event-every S] [--nofix S] [--outage S] [--motion-ms 20k] [--turn-ms 10k]\n");return 64;
+                       "[--event-every S] [--nofix S] [--outage S] [--motion-ms 20k] [--turn-ms 10k] [--drive normal|stopgo] "
+                       "[--yaw-rows on|off] [--yaw-count 1-15] [--yaw-noise 0|1]\n");return 64;
     }
     const std::string logs=out+"/logs";
     if(mkdir(out.c_str(),0700) && errno!=EEXIST)return 73;
@@ -173,7 +195,7 @@ int main(int argc,char** argv) {
     mx5::runtime::PersistentLog quiet;
     if(quiet_profile) {
         window=new unsigned char[mx5::runtime::PersistentLog::WINDOW_BYTES+mx5::runtime::PersistentLog::ROW_BYTES];
-        quiet.init(window,N::research_model_profile());j.filter=&quiet;
+        quiet.init(window,N::research_model_profile());quiet.set_yaw_rows(yaw_rows);j.filter=&quiet;
     }
     char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
     char boot_id[37];mx5::runtime::read_boot_id(boot_id);
@@ -222,8 +244,10 @@ int main(int argc,char** argv) {
                 e.kind=N::WHEELS;
                 for(unsigned i=0;i<4;++i)e.raw[i]=uint16_t(lround(x.kmh*100+10000));
             } else {
-                e.kind=N::YAW;e.count=1;
-                e.raw[0]=uint16_t(lround(2048-cycle_yaw(fmod(drive.t,600.0))/0.000658615));
+                e.kind=N::YAW;e.count=uint16_t(yaw_count);
+                const long sample=lround(2048-cycle_yaw(fmod(drive.t,600.0))/0.000658615);
+                long sum=0;for(unsigned k=0;k<yaw_count;++k)sum+=sample+(yaw_noise?noise():0);
+                e.raw[0]=uint16_t(sum);
             }
             receiver.pending.push_back(e);
         }
@@ -307,10 +331,10 @@ int main(int argc,char** argv) {
             KindStat& k=kinds[kind];++k.rows;k.bytes+=row.size()+1;
         }
     }
-    printf("{\"profile\":\"%s\",\"seconds\":%u,\"event_every_s\":%u,\"outages\":%u,\"nofix_s\":%u,"
+    printf("{\"profile\":\"%s\",\"drive\":\"%s\",\"yaw_rows\":%s,\"seconds\":%u,\"event_every_s\":%u,\"outages\":%u,\"nofix_s\":%u,"
            "\"total_bytes\":%llu,\"file_bytes\":%llu,\"bytes_per_s\":%.1f,\"bytes_per_hour\":%.0f,"
            "\"journal_failed\":%s,\"beta_state\":\"%s\",\"kinds\":{",
-           profile.c_str(),seconds,event_every,outages,nofix_s,(unsigned long long)total,
+           profile.c_str(),stopgo?"stopgo":"normal",yaw_rows?"true":"false",seconds,event_every,outages,nofix_s,(unsigned long long)total,
            (unsigned long long)file_bytes,double(total)/seconds,double(total)/seconds*3600.0,
            j.failed?"true":"false",mx5::runtime::beta_state_name(beta.state()));
     bool first=true;

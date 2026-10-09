@@ -66,7 +66,13 @@ $(BUILD)/test_request_status: tests/runtime/test_request_status.cpp src/runtime/
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
 $(BUILD)/test_journal_ring: tests/runtime/test_journal_ring.cpp src/runtime/journal_ring.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
-$(BUILD)/test_log_profile: tests/runtime/test_log_profile.cpp src/runtime/log_profile.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+$(BUILD)/test_log_profile: tests/runtime/test_log_profile.cpp src/runtime/log_profile.h src/runtime/yaw_study_log.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $< -o $@
+$(BUILD)/test_yaw_rows: tests/runtime/test_yaw_rows.cpp src/runtime/log_profile.h src/runtime/journal_ring.h src/runtime/yaw_study_log.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $< -o $@
+# Offline replay of recorded wheel/yaw/POSITION values through PersistentLog
+# (yaw data rows on private recordings; tests/tools/test_analyze_yaw.py).
+$(BUILD)/yaw_replay: tests/runtime/yaw_replay.cpp src/runtime/log_profile.h src/runtime/yaw_study_log.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
 $(BUILD)/test_journal_queue: tests/runtime/test_journal_queue.cpp src/runtime/journal_queue.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
@@ -78,9 +84,9 @@ $(BUILD)/test_worker_beta: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runt
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_worker_beta.cpp -ldl -lpthread -lrt -lm -o $@
 # Journal byte-rate harness (full vs persistent profile, synthetic drive in
 # simulated time; validation/PERSISTENT_LOGGING_2026-10-06.md).
-$(BUILD)/log_rate: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/log_rate.cpp tests/runtime/model_bus_fixture.h src/runtime/model_bus.h $(ADAPTER) src/runtime/loader.cpp $(STORAGE_HEADERS) $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/journal_ring.h src/runtime/log_profile.h | $(BUILD)
+$(BUILD)/log_rate: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/log_rate.cpp tests/runtime/model_bus_fixture.h src/runtime/model_bus.h $(ADAPTER) src/runtime/loader.cpp $(STORAGE_HEADERS) $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/log_rate.cpp -ldl -lpthread -lrt -lm -o $@
-$(BUILD)/writer_lag: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/writer_lag.cpp tests/runtime/model_bus_fixture.h src/runtime/model_bus.h $(ADAPTER) src/runtime/loader.cpp $(STORAGE_HEADERS) $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/journal_ring.h src/runtime/log_profile.h | $(BUILD)
+$(BUILD)/writer_lag: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/writer_lag.cpp tests/runtime/model_bus_fixture.h src/runtime/model_bus.h $(ADAPTER) src/runtime/loader.cpp $(STORAGE_HEADERS) $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/writer_lag.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_reset: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_reset.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
@@ -139,7 +145,7 @@ test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_po
 	@set -e; for case in normal position_source position_sources_concurrent signal signal_reuse failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed prediction_entry_create prediction_entry_connect prediction_entry_disconnect prediction_entry_free prediction_entry_closed prediction_entry_signal prediction_exit_create prediction_exit_connect prediction_exit_disconnect prediction_exit_free prediction_exit_closed prediction_exit_signal; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
 $(BUILD)/test_worker_thread: tests/runtime/test_worker_thread.cpp src/runtime/worker_thread.h | $(BUILD)
 	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_worker_thread.cpp -pthread -o $@
-test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta test-request-publication test-journal-boundaries
 	$(BUILD)/test_worker_thread
 	@set -e; for scenario in adopted freeze audit journal_failure pre_stopped fork journal bounds drain_bus drain_session; do $(BUILD)/test_runtime_lds_association $$scenario; done
 	$(BUILD)/test_assist_worker
@@ -152,6 +158,7 @@ test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association 
 	$(BUILD)/test_journal_queue
 	$(BUILD)/test_journal_ring
 	$(BUILD)/test_log_profile
+	$(BUILD)/test_yaw_rows
 	$(BUILD)/test_journal
 	$(BUILD)/test_journal --adapter-fault
 	$(BUILD)/test_journal --late-adapter-fault
@@ -172,8 +179,8 @@ test-request-publication:
 	@CXX="$(CXX)" MX5DR_PUBLICATION_BUILD="$(abspath $(BUILD))/request-publication" sh tests/runtime/run_request_publication.sh; result=$$?; test $$result -eq 0 -o $$result -eq 77
 test-packaging: $(BUILD)/test_collector
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/packaging -v
-test-tools:
-	$(PYTHON) -m unittest discover -s tests/tools -v
+test-tools: $(BUILD)/yaw_replay
+	MX5DR_YAW_REPLAY=$(abspath $(BUILD)/yaw_replay) $(PYTHON) -m unittest discover -s tests/tools -v
 test-build-deps:
 	$(PYTHON) -m unittest discover -s tests/build -v
 test-integration: $(BUILD)/test_pipeline $(BUILD)/test_assist_publication
@@ -319,7 +326,7 @@ $(BUILD)/test_journal $(BUILD)/test_collector_journal: tests/runtime/storage_fix
 $(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_collector $(BUILD)/test_collector_journal $(BUILD)/mx5dr-collector-host: $(STORAGE_HEADERS)
 $(BUILD)/test_journal: src/runtime/request_log.h src/adapter/request_hooks.h
 $(BUILD)/test_journal: src/runtime/worker_tick.h src/runtime/journal_queue.h
-$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist $(BUILD)/test_worker_lds $(BUILD)/test_worker_lds_source $(BUILD)/test_runtime_lds_association: src/runtime/journal_ring.h src/runtime/log_profile.h
+$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist $(BUILD)/test_worker_lds $(BUILD)/test_worker_lds_source $(BUILD)/test_runtime_lds_association: src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/cold_patch.h src/adapter/request_hooks.h src/runtime/request_observer.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/adapter.h src/runtime/request_trace.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/session_hooks.h src/runtime/session_trace.h

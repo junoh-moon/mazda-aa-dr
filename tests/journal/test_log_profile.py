@@ -26,9 +26,9 @@ spec.loader.exec_module(audit)
 EVIDENCE_KINDS = ('beta_state', 'beta_anchor', 'beta_hold', 'beta_session_storage', 'beta_reverse_latch')
 
 
-def run(profile, directory, seconds=3600, every=600):
+def run(profile, directory, seconds=3600, every=600, extra=()):
     result = subprocess.run([str(TOOL), '--profile', profile, '--seconds', str(seconds),
-                             '--event-every', str(every), '--out', directory],
+                             '--event-every', str(every), '--out', directory] + list(extra),
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout)
@@ -79,6 +79,9 @@ class PersistentProfile(unittest.TestCase):
         # the quiet one stays under about 2 KB/s with one GPS outage per 10 min.
         self.assertGreater(self.full['bytes_per_s'], 20000)
         self.assertLess(self.quiet['bytes_per_s'], 2048)
+        # At least 3 % margin below the budget with the yaw data rows
+        # (validation/YAW_DATA_COLLECTION_2026-10-09.md; 1942.0 B/s before).
+        self.assertLess(self.quiet['bytes_per_s'], 2048 * 0.97)
         self.assertEqual(self.full['outages'], self.quiet['outages'])
         self.assertGreaterEqual(self.quiet['outages'], 1)
 
@@ -138,6 +141,117 @@ class PersistentProfile(unittest.TestCase):
         self.assertEqual(report['issue_counts'].get('violation', 0), 0)
         self.assertNotIn('unknown_record_kind', [i['code'] for i in report['issues']])
         self.assertEqual(report['persistent_profile']['digest_kinds'].get('log_digest:future_kind'), 1)
+
+
+# Yaw-zero data rows (2026-10-09, src/runtime/yaw_study_log.h,
+# validation/YAW_DATA_COLLECTION_2026-10-09.md): logging only. With the rows
+# off the profile is the previous one; with them on, every other row is byte
+# for byte the same and log_digest only gains fields.
+YAW_DIGEST_KEYS = ('y1', 'y1n', 'yst', 'ystn', 'gc', 'gq', 'gv', 'gc_more', 'dw01', 'dw23')
+YAW_KINDS = ('yaw_stop', 'yaw_edge', 'yaw_reinit')
+VEHICLE_YAW = ('--yaw-count', '5', '--yaw-noise', '1')
+
+
+def without_yaw(rows):
+    out = []
+    for r in rows:
+        if r['kind'] in YAW_KINDS:
+            continue
+        if r['kind'] == 'boot':
+            r = {k: v for k, v in r.items() if k != 'pid'}   # the harness's process id
+        if r['kind'] == 'log_digest':
+            r = {k: v for k, v in r.items() if k not in YAW_DIGEST_KEYS}
+            if isinstance(r.get('suppressed'), dict):
+                r['suppressed'] = {k: v for k, v in r['suppressed'].items() if k not in YAW_KINDS}
+        out.append(json.dumps(r, sort_keys=True))
+    return out
+
+
+@unittest.skipUnless(TOOL.exists(), 'build/log_rate not built')
+class YawDataRows(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='mx5dr-yaw-rows-')
+        cls.runs = {}
+        scenarios = dict(drive=(3600, VEHICLE_YAW), stopgo=(3600, VEHICLE_YAW + ('--drive', 'stopgo')),
+                         long=(14400, VEHICLE_YAW), stopgo_long=(14400, VEHICLE_YAW + ('--drive', 'stopgo')))
+        for name, (seconds, extra) in scenarios.items():
+            for state in ('on', 'off'):
+                directory = os.path.join(cls.tmp.name, '%s-%s' % (name, state))
+                cls.runs[(name, state)] = run('persistent', directory, seconds,
+                                              extra=extra + ('--yaw-rows', state)) + (directory,)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_logic_and_other_rows_unchanged(self):
+        for name in ('drive', 'stopgo', 'long', 'stopgo_long'):
+            (on, on_rows, _), (off, off_rows, _) = self.runs[(name, 'on')], self.runs[(name, 'off')]
+            self.assertEqual(evidence(on_rows), evidence(off_rows), name)
+            self.assertEqual(without_yaw(on_rows), without_yaw(off_rows), name)
+            self.assertFalse([r for r in off_rows if r['kind'] in YAW_KINDS or 'y1' in r])
+            self.assertEqual(on['beta_state'], off['beta_state'])
+
+    def test_rate_increase_within_budget(self):
+        rates = {}
+        for name in ('drive', 'stopgo', 'long'):
+            on, off = self.runs[(name, 'on')][0], self.runs[(name, 'off')][0]
+            added = on['bytes_per_s'] - off['bytes_per_s']
+            rates[name] = (off['bytes_per_s'], on['bytes_per_s'], added)
+            self.assertGreater(added, 10, name)       # the rows are really written
+            self.assertLess(added, 60, name)          # hard cap of the design
+        print('yaw rows log rate (before, after, added B/s): %s' % rates)
+        self.assertLess(rates['drive'][1], 2048 * 0.97)
+        self.assertLess(rates['long'][1], 2048 * 0.97)
+        self.assertLess(rates['stopgo'][1], 2048)
+        self.assertLess(rates['drive'][2], 35)
+
+    def test_steady_state_and_fixed_burst(self):
+        # A run's average is a steady rate plus a fixed burst (boot raw
+        # period and the capture-stop RAW-window flush, about 830 KB), so
+        # short runs read high (30 min: about 2190 B/s with or without the
+        # yaw rows). Judge the 3 % margin on the steady state (from the 1 h
+        # and 4 h runs) and require the burst unchanged by the yaw rows.
+        found = {}
+        for short, long_ in (('drive', 'long'), ('stopgo', 'stopgo_long')):
+            for state in ('on', 'off'):
+                a, b = self.runs[(short, state)][0], self.runs[(long_, state)][0]
+                steady = (b['total_bytes'] - a['total_bytes']) / float(b['seconds'] - a['seconds'])
+                burst = a['total_bytes'] - steady * a['seconds']
+                found[(short, state)] = (round(steady, 1), round(burst))
+            self.assertLess(found[(short, 'on')][0], 2048 * 0.97, short)
+            self.assertLess(found[(short, 'on')][0] - found[(short, 'off')][0], 60, short)
+            self.assertLess(abs(found[(short, 'on')][1] - found[(short, 'off')][1]), 5000, short)
+        print('yaw rows steady B/s and fixed burst B: %s' % found)
+
+    def test_rows_and_rate_limit(self):
+        on_rows = self.runs[('stopgo', 'on')][1]
+        stops = [r for r in on_rows if r['kind'] == 'yaw_stop']
+        suppressed = sum(r.get('suppressed', {}).get('yaw_stop', 0) for r in on_rows if r['kind'] == 'log_digest')
+        # One 2 s standstill every 8 s for an hour (450), rate limited to
+        # a burst of 3 and one per 10 s; the rest counted in the digests.
+        self.assertLessEqual(len(stops), 3 + 3600 // 10 + 1)
+        self.assertGreater(suppressed, 50)
+        self.assertGreaterEqual(len(stops) + suppressed, 440)
+        drive = self.runs[('drive', 'on')][1]
+        kinds = collections.Counter(r['kind'] for r in drive)
+        self.assertEqual(kinds['yaw_stop'], 18)     # 3 standstills per 10 min cycle
+        self.assertEqual(kinds['yaw_edge'], 13)     # NO_FIX return, 6 tunnel losses and returns
+        self.assertEqual(kinds['yaw_reinit'], 0)
+        digests = [r for r in drive if r['kind'] == 'log_digest']
+        self.assertTrue(all(len(r['y1']) == 10 and len(r['y1n']) == 10 for r in digests))
+
+    def test_analyzer_reads_the_rows(self):
+        report, codes = analyze(os.path.join(self.runs[('drive', 'on')][2]))
+        self.assertFalse([c for (_, c) in codes if c in ('malformed_yaw_row', 'malformed_digest_yaw')])
+        yaw = report['yaw_data']
+        self.assertEqual((yaw['summary']['stops'], yaw['summary']['edges']), (18, 13))
+        # The synthetic drive integrates exactly zero 2048 with no GPS delay:
+        # the digest-based fit finds it on the fitted windows at lag 0.
+        fits = [f['lag_0_0']['zero'] for f in yaw['driving_zero_fits'] if f['lag_0_0']]
+        self.assertGreater(len(fits), 20)
+        self.assertLess(max(abs(z - 2048) for z in fits), 0.5)
 
 
 if __name__ == '__main__':

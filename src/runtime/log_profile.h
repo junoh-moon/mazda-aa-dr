@@ -46,10 +46,18 @@
 //    journal ring's BULK class, which the journal lag does not time; window
 //    POSITION rows that are evidence (BETA live, journal current) keep the
 //    evidence class.
+//  * yaw-zero data collection (2026-10-09, yaw_study_log.h and
+//    validation/YAW_DATA_COLLECTION_2026-10-09.md): yaw_stop, yaw_edge and
+//    yaw_reinit rows and extra log_digest fields. Logging only; written as
+//    diagnostic rows (ROW_RAW, never evidence and never into the RAW window),
+//    rate-limited per kind with the rest counted in the digest's suppressed
+//    map. set_yaw_rows(false) turns them off (tests: everything else is
+//    then byte-identical).
 // Worker thread only. No allocation after init(), no I/O except through the
 // emit callback, bounded work per row. OEM threads never reach this code.
 #include "adapter/adapter.h"
 #include "navigation/pipeline.h"
+#include "runtime/yaw_study_log.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -91,11 +99,26 @@ public:
     // ,"raw_window":true after the kind of a row written from the window.
     static const size_t WINDOW_TAG_BYTES=18;
 
-    PersistentLog():window_(0),cap_(0),scratch_(0),paced_(DRAIN_ROWS_PER_S) { reset_all(); }
+    PersistentLog():window_(0),cap_(0),scratch_(0),paced_(DRAIN_ROWS_PER_S),yaw_rows_(true) { reset_all(); }
+    // Yaw-zero data rows and digest fields (default on).
+    void set_yaw_rows(bool on) { yaw_rows_=on; }
     // Rows per second of the window drain; 0 writes the whole window at the
     // event (the behaviour before 2026-10-08; unit tests of window contents).
     void set_paced(unsigned rows_per_s) { paced_=rows_per_s; }
     bool draining() const { return draining_; }
+    // Appends the yaw digest fields and the closing brace to a formatted
+    // digest of length n. The yaw fields give way first: when they do not
+    // fit, ",\"yaw_dropped\":1" (or nothing) is written instead, so the
+    // digest itself is never lost to them. 0: the digest alone does not fit.
+    static size_t close_digest(char* line,size_t capacity,size_t n,const char* fields) {
+        static const char dropped[]=",\"yaw_dropped\":1";
+        if(n+2>capacity)return 0;
+        const size_t f=strlen(fields);
+        if(n+f+2<=capacity) { memcpy(line+n,fields,f);n+=f; }
+        else if(f && n+sizeof dropped-1+2<=capacity) { memcpy(line+n,dropped,sizeof dropped-1);n+=sizeof dropped-1; }
+        line[n++]='}';line[n]=0;
+        return n;
+    }
     // storage: WINDOW_BYTES + ROW_BYTES bytes owned by the caller for the
     // lifetime of this object. Without storage the RAW window is unavailable
     // (raw rows are then only counted in the digest).
@@ -160,6 +183,7 @@ public:
             trigger(kind_name(s),now,emit,context);keep(s,emit,context);return;
         case K_CAPTURE_END:
             trigger("capture_end",now,emit,context,true);
+            if(yaw_rows_) { YawThunk t={emit,context};yaw_.flush(now,yaw_sink,&t); }
             digest(now,"final",emit,context);
             keep(s,emit,context);
             return;
@@ -178,6 +202,7 @@ public:
             return;
         }
         ++positions_;
+        if(yaw_rows_)yaw_.position(o);
         const unsigned mode=o.original_mode>=0 && o.original_mode<3?unsigned(o.original_mode):3;
         ++position_modes_[mode];
         const unsigned cls=unsigned(o.position_class)<CLASS_SLOTS?unsigned(o.position_class):0;
@@ -201,6 +226,7 @@ public:
     // Every accepted motion event, for the digest statistics.
     void motion(const navigation::RawEvent& e) {
         if(total_events_!=UINT64_MAX)++total_events_;
+        if(yaw_rows_)yaw_.motion(e,model_);
         if(e.kind>=navigation::WHEELS && e.kind<=navigation::REVERSE) {
             ++kind_events_[e.kind-1];last_received_[e.kind-1]=e.received_ns;
         }
@@ -375,8 +401,14 @@ private:
         if(until>raw_until_)raw_until_=until;
     }
     void digest_due(uint64_t now,Emit emit,void* context) {
-        if(!since_) { since_=now?now:1;return; }
+        if(!since_) { since_=now?now:1;yaw_.period(since_);return; }
         if(now>=since_ && now-since_>=DIGEST_NS)digest(now,"periodic",emit,context);
+        if(yaw_rows_) { YawThunk t={emit,context};yaw_.poll(now,yaw_sink,&t); }
+    }
+    struct YawThunk { Emit emit;void* context; };
+    // Yaw rows are diagnostic class whatever their kind (ROW_RAW).
+    static void yaw_sink(void* thunk,const char* row) {
+        const YawThunk* t=static_cast<const YawThunk*>(thunk);t->emit(t->context,row,ROW_RAW);
     }
     static void number(char out[32],const Stat& s,int which) {
         if(!s.n) { strcpy(out,"null");return; }
@@ -390,7 +422,7 @@ private:
         if(yaw_raw_.n) { snprintf(rate,sizeof rate,"%.6g",yaw_rate_sum_/double(yaw_raw_.n));
                          snprintf(rate_max,sizeof rate_max,"%.6g",yaw_rate_abs_max_); }
         else { strcpy(rate,"null");strcpy(rate_max,"null"); }
-        char types[400],suppressed[700],classes[200];
+        char types[400],suppressed[800],classes[200];
         size_t t=0;types[t++]='{';
         for(unsigned i=0;i<TYPE_SLOTS;++i) if(send_types_[i]) {
             char key[16];
@@ -405,6 +437,12 @@ private:
         for(unsigned i=0;i<S_COUNT;++i) if(suppressed_[i]) {
             const int n=snprintf(suppressed+u,sizeof suppressed-u,"%s\"%s\":%llu",u>1?",":"",
                                  suppressed_name(i),(unsigned long long)suppressed_[i]);
+            if(n<0 || size_t(n)>=sizeof suppressed-u)break;
+            u+=size_t(n);
+        }
+        if(yaw_rows_) for(unsigned i=0;i<YawStudyLog::ROWS;++i) if(yaw_.suppressed(i)) {
+            const int n=snprintf(suppressed+u,sizeof suppressed-u,"%s\"%s\":%llu",u>1?",":"",
+                                 YawStudyLog::name(i),(unsigned long long)yaw_.suppressed(i));
             if(n<0 || size_t(n)>=sizeof suppressed-u)break;
             u+=size_t(n);
         }
@@ -423,7 +461,9 @@ private:
             if(last_received_[i])snprintf(last[i],sizeof last[i],"%llu",(unsigned long long)last_received_[i]);
             else strcpy(last[i],"null");
         }
-        char line[2400];
+        char yaw[YawStudyLog::DIGEST_CAPACITY];yaw[0]=0;
+        if(yaw_rows_ && !yaw_.digest_fields(yaw,sizeof yaw))yaw[0]=0;
+        char line[2400+YawStudyLog::DIGEST_CAPACITY];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"log_digest\",\"schema\":1,\"digest\":\"%s\",\"profile\":\"persistent\","
             "\"mono_ns\":%llu,\"since_ns\":%llu,\"domain\":\"model\",\"assist_ready\":false,"
@@ -438,7 +478,7 @@ private:
             "\"position_classes\":%s,\"suppressed\":%s,"
             "\"raw_window_rows\":%llu,\"raw_window_bytes\":%llu,\"raw_window_overwritten\":%llu,"
             "\"raw_window_flushes\":%llu,\"raw_direct_rows\":%llu,\"raw_window_draining\":%s,"
-            "\"raw_window_written\":%llu}",
+            "\"raw_window_written\":%llu",
             what,(unsigned long long)now,(unsigned long long)since_,
             (unsigned long long)period_events_,(unsigned long long)kind_events_[0],
             (unsigned long long)kind_events_[1],(unsigned long long)kind_events_[2],
@@ -453,7 +493,7 @@ private:
             (unsigned long long)rows_,(unsigned long long)used_,(unsigned long long)overwritten_,
             (unsigned long long)flushes_,(unsigned long long)raw_direct_,draining_?"true":"false",
             (unsigned long long)window_written_);
-        if(n>0 && size_t(n)<sizeof line)emit(context,line,ROW_KEEP);
+        if(n>0 && close_digest(line,sizeof line,size_t(n),yaw))emit(context,line,ROW_KEEP);
         reset_period(now);
     }
     void reset_period(uint64_t now) {
@@ -467,6 +507,7 @@ private:
         for(unsigned i=0;i<CLASS_SLOTS;++i)position_classes_[i]=0;
         for(unsigned i=0;i<S_COUNT;++i)suppressed_[i]=0;
         raw_direct_=0;
+        yaw_.period(since_);yaw_.clear_suppressed();
     }
     void reset_all() {
         head_=used_=0;rows_=overwritten_=flushes_=0;raw_until_=0;
@@ -476,6 +517,7 @@ private:
         have_class_=false;last_class_=0;beta_live_=false;journal_current_=true;have_motion_=false;epoch_=last_seq_=last_motion_ns_=0;total_events_=0;
         for(unsigned i=0;i<3;++i)last_received_[i]=0;
         reverse_value_=-1;trigger_[0]=0;
+        yaw_.reset();
         reset_period(0);since_=0;
     }
     // ---- RAW window: rows [u32 length|evidence bit][u64 mono_ns][bytes], oldest first ----
@@ -530,6 +572,8 @@ private:
     uint64_t sends_,send_location_,send_changed_,send_nonzero_,send_types_[TYPE_SLOTS];
     uint64_t positions_,position_modes_[4],position_classes_[CLASS_SLOTS];
     char trigger_[40];
+    bool yaw_rows_;
+    YawStudyLog yaw_;
     PersistentLog(const PersistentLog&);
     PersistentLog& operator=(const PersistentLog&);
 };

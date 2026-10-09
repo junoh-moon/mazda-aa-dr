@@ -190,6 +190,10 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
    터치 모드 등 다른 도구가 설치 뒤 `sm.conf`를 바꿨다면 `OEM files differ from pre-install:`과 `sm.conf (kept as it is)`가 나옵니다. 오류가 아니며 되돌리지 않습니다. 설치 사이에 다른 도구가 파일을 바꿔 설치 전 기록끼리 다르면 `Pre-install records disagree.`와 현재 파일이 맞는 기록 이름(없으면 `none`)이 나옵니다. `Refused, nothing deleted: …`이면 아무것도 지우지 않았습니다. 한 줄 사유대로 `4` 또는 `5`를 먼저 하고 다시 `6`을 누르십시오. 같은 내용과 지운 파일 목록이 USB의 `purge-result.txt`에 저장됩니다.
 5. 시동을 꺼도 됩니다. 다음을 비공개로 보관하고 알려 주십시오: `mx5dr-logs-….tar`와 `.sha256`, `trial-result.txt`, `startup-result.txt`, `reboot-request.txt`, 2번의 사진, 동승자 메모가 있으면 그것도.
 
+## 요 센서 영점 자료 (2026-10-09, 로그 전용)
+
+이 변경을 포함한 빌드부터 persistent 로그가 요(yaw) 센서 영점 질문에 쓸 작은 행을 함께 남깁니다: 정차마다 `yaw_stop` 1행(네 바퀴 모두 0인 1초 이상 정차, 5초 안에 이어진 정차는 합침), GPS 끊김·복귀마다 `yaw_edge`, 요 신호가 1초 넘게 끊기거나 4095 표지가 오면 `yaw_reinit`, 그리고 10초 요약(`log_digest`)의 1초 단위 요 합과 GPS 침로. 소유자가 할 일은 **없습니다**. 주행 중 조작도 새 메뉴도 없으며, 주차 후 지금처럼 3절의 `3`(메뉴 3)으로 회수하면 같은 `mx5dr-logs-….tar`에 들어갑니다. 기록량은 합성 주행에서 초당 약 21 B(상시 정체 주행 약 36 B) 늘어납니다. BETA 판단, 송신, 위치 출력은 바뀌지 않습니다. 이미 설치된 v1.0.0-beta.6에는 이 행이 없습니다. 근거와 한계는 validation/YAW_DATA_COLLECTION_2026-10-09.md에 있습니다.
+
 ## 회수 뒤 분석 (PC)
 
 `python3 analyze_logs.py mx5dr-logs-….tar`가 BETA 행을 검사합니다. 위치를 바꾼 송신(choice 3)마다 원본 mode 0, 정확도 0 초과 40 m 이하(터널 모드에서는 40 m로 고정된 값이며 GPS 복귀 점프는 기록의 `accuracy_honest_m`과 비교합니다), 0~7·24~31바이트 원본 유지, `hasAccuracy=1`, 앞선 `ENGAGED`/`GPS_LOST` 상태, GPS 복귀 뒤 치환 없음을 확인합니다.
@@ -202,6 +206,7 @@ BETA GPS return: last DR vs first GPS fix 31.6 m (time-aligned 30.0 m, gap 1.0 s
 ```
 
 GPS는 참값이 아니며, 하위 송신 결과 0은 폰이 그 값을 채택했다는 뜻이 아닙니다.
+요 영점 자료가 있으면 같은 출력 끝에 `Yaw zero data (diagnostic; …)` 절이 나옵니다: 정차 표(평균, 직전 정차 대비 변화, 부팅 뒤 시각), 10초 요약으로 맞춘 주행 중 영점(GPS 지연 0초와 1.3초), GPS 끊김·복귀 전후 비교, 재초기화 사건. 진단 자료이며 센서 검증이 아닙니다.
 
 ## 이 절차가 검증하지 못한 것
 

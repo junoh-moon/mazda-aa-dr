@@ -16,7 +16,11 @@ namespace N=mx5::navigation;
 static std::vector<std::string> out;
 static std::vector<bool> raw_flags;        // not queued by its kind (RAW or BULK)
 static std::vector<unsigned> classes;
+// Yaw-zero data rows (tests/runtime/test_yaw_rows.cpp) are left out of
+// tests that count rows exactly.
+static bool drop_yaw=false;
 static void emit(void*,const char* row,unsigned cls) {
+    if(drop_yaw && !strncmp(row,"{\"kind\":\"yaw_",13))return;
     out.push_back(row);raw_flags.push_back(cls!=PersistentLog::ROW_KEEP);classes.push_back(cls);
 }
 static const uint64_t S=1000000000ULL;
@@ -246,6 +250,7 @@ static void window_bounds() {
 static void lag_guard_classes() {
     static unsigned char storage[PersistentLog::WINDOW_BYTES+PersistentLog::ROW_BYTES];
     PersistentLog log;log.init(storage,model());log.set_paced(0);out.clear();raw_flags.clear();
+    drop_yaw=true;   // exact row counts: yaw rows (on, the default) are filtered by kind
     observe(log,position(A::POSITION_FIX,1,1),1*S,"first");          // transition: raw period to 31 s
     log.row(row("beta_state",",\"to\":\"GPS_LOST\"").c_str(),2*S,emit,0);
     assert(log.beta_live());
@@ -281,6 +286,7 @@ static void lag_guard_classes() {
     out.clear();raw_flags.clear();
     observe(log,position(A::POSITION_FIX,1,30),96*S,"not_live");
     assert(out.size()==1 && raw_flags[0]);
+    drop_yaw=false;
     puts("persistent log: FIX POSITION rows are diagnostic while the journal lag guard is engaged");
 }
 

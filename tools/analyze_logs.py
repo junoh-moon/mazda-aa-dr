@@ -59,6 +59,8 @@ LOWER_BOUNDS = {
     "motion_rejected.total_including_suppressed": "written rejection rows plus digest counters; both can be dropped",
     "journal_lag.not_durable": "the journal_not_durable row is diagnostic class and is written while the journal "
                                "is already behind",
+    "yaw_data": "yaw_stop/yaw_edge/yaw_reinit rows are rate-limited (the rest in persistent_profile.suppressed) and, "
+                "like the digests, diagnostic class (droppable); an open standstill is lost on a reset",
 }
 # Adapter PositionClass numbers carried as the send/position "class" field.
 POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
@@ -668,6 +670,9 @@ class Auditor:
                                digested_sends=0, unpaired_original_sends=0, suppressed=Counter())
         self.journal_dropped = dict(counter_rows=0, rows=0)
         self.journal_lag = Counter()
+        # Yaw-zero data rows (2026-10-09): per session, in journal order.
+        self.yaw_rows = []      # (session index, row)
+        self.yaw_digests = []   # (session index, digest yaw fields)
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
@@ -1062,6 +1067,8 @@ class Auditor:
             self.digest(row, source)
         elif kind == "raw_window":
             self.raw_window(row, source)
+        elif kind in ("yaw_stop", "yaw_edge", "yaw_reinit"):
+            self.yaw_row(row, source)
         elif kind == "journal_dropped":
             self.dropped_rows(row, source)
         elif kind == "beta_journal_lag":
@@ -1167,6 +1174,13 @@ class Auditor:
                 ("assist_ready" in row and row["assist_ready"] is not False)):
             self.issue("malformed_digest", source, "Invalid digest envelope")
             return
+        try:
+            fields = yaw_digest_fields(row)
+        except ValueError as exc:
+            self.issue("malformed_digest_yaw", source, str(exc))
+            fields = None
+        if fields is not None:
+            self.yaw_digests.append((len(self.sessions), fields))
         p = self.persistent
         p["digests"] += 1
         p["digest_kinds"][row["kind"] + ":" + str(row.get("digest", "unspecified"))] += 1
@@ -1200,6 +1214,85 @@ class Auditor:
         # Tagged window rows (drain paced/immediate, 2026-10-08) identify
         # themselves; older markers announce `rows` contiguous rows.
         self.session["raw_flush_left"] = 0 if isinstance(row.get("drain"), str) else row["rows"]
+
+    def yaw_row(self, row, source):
+        """Yaw-zero data rows (diagnostic, MODEL statistics; never evidence)."""
+        if not yaw_row_valid(row):
+            self.issue("malformed_yaw_row", source, "Invalid %s row" % row["kind"])
+            return
+        self.yaw_rows.append((len(self.sessions), row))
+
+    def yaw_report(self):
+        stops, edges, reinits, fits = [], [], [], []
+        previous = {}
+        for session, row in self.yaw_rows:
+            kind = row["kind"]
+            if kind == "yaw_stop":
+                mean = round(2048 + row["ys"] / row["yn"], 2) if row["yn"] else None
+                entry = dict(session=session, boot_s=row["boot_s"], dur_s=round(row["dur_ms"] / 1000.0, 1),
+                             mean=mean, sd=None if row["sd"] is None else row["sd"] / 100.0,
+                             first=None if row["first"] is None else round(2048 + row["first"] / 100.0, 2),
+                             last=None if row["last"] is None else round(2048 + row["last"] / 100.0, 2),
+                             pre=None if row["pre"] is None else round(2048 + row["pre"] / 100.0, 2),
+                             pre_kmh=row["pre_kmh"], bad=row.get("bad", 0), merged=row.get("merged", 1),
+                             open=bool(row.get("open", 0)), pre_bad=row.get("pre_bad", 0),
+                             step=None, since_prev_s=None)
+                last = previous.get(session)
+                if last is not None:
+                    if mean is not None and last["mean"] is not None:
+                        entry["step"] = round(mean - last["mean"], 2)
+                    entry["since_prev_s"] = round(row["boot_s"] - (last["boot_s"] + last["dur_s"]), 1)
+                previous[session] = entry
+                stops.append(entry)
+            elif kind == "yaw_edge":
+                def side(y, v, c, n):
+                    course = None if c is None else dict(first=c[0], last=c[1], span_s=c[2] / 10.0, fixes=c[3])
+                    zero = None
+                    # Course-rate zero (rough: the yaw window and the fix span differ).
+                    if (c is not None and c[3] >= 2 and c[2] > 0 and y is not None and v is not None and
+                            v >= YAW_FIT_MIN_GV):
+                        rate = math.radians(_wrap_deg(c[1] - c[0])) / (c[2] / 10.0)
+                        zero = round(2048 + y / 100.0 + rate / YAW_RAD_PER_COUNT, 2)
+                    return dict(yaw=None if y is None else round(2048 + y / 100.0, 2), samples=n, kmh=v,
+                                course=course, course_rate_zero=zero)
+                before = side(row["yb"], row["vb"], row["cb"], row["nb"])
+                after = side(row["ya"], row["va"], row["ca"], row["na"])
+                edges.append(dict(session=session, at_s=row["at_s"], ev=row["ev"], transition="%s->%s" % (row["from"], row["to"]),
+                                  before=before, after=after, cut=bool(row["cut"]),
+                                  history_lost=bool(row.get("hist_lost", 0)),
+                                  yaw_step=None if before["yaw"] is None or after["yaw"] is None
+                                  else round(after["yaw"] - before["yaw"], 2)))
+            else:
+                before = None if row["before"] is None else round(2048 + row["before"] / 100.0, 2)
+                after = None if row["after"] is None else round(2048 + row["after"] / 100.0, 2)
+                reinits.append(dict(session=session, at_s=row["at_s"], cause=YAW_CAUSES[row["cause"]],
+                                    triggers=row["n"], gap_ms=row["gap_ms"], stationary=bool(row["still"]),
+                                    before=before, before_age_s=row["before_age_s"], after=after,
+                                    after_delay_s=row["after_delay_s"],
+                                    step=None if before is None or after is None else round(after - before, 2)))
+        rates = {}
+        for session in sorted({s for s, _ in self.yaw_digests}):
+            session_fits, rate = yaw_driving_zero_fits([d for s, d in self.yaw_digests if s == session])
+            if rate:
+                rates[str(session)] = round(rate, 2)
+            for fit in session_fits:
+                fits.append(dict(fit, session=session))
+        stationary = [d for _, d in self.yaw_digests if d["ystn"]]
+        summary = dict(stops=len(stops), edges=len(edges), reinits=len(reinits), digests=len(self.yaw_digests),
+                       driving_fits=len(fits),
+                       stop_mean_range=[min(s["mean"] for s in stops if s["mean"] is not None),
+                                        max(s["mean"] for s in stops if s["mean"] is not None)]
+                       if any(s["mean"] is not None for s in stops) else None,
+                       digest_stationary_mean=round(2048 + sum(d["yst"] for d in stationary) /
+                                                    sum(d["ystn"] for d in stationary), 2) if stationary else None)
+        for lag in YAW_FIT_LAGS:
+            key = "lag_%s" % ("%.1f" % lag).replace(".", "_")
+            zeros = [f[key]["zero"] for f in fits if f.get(key)]
+            summary["driving_zero_median_" + key] = _median(zeros)
+        return dict(summary=summary, stops=stops, edges=edges, reinits=reinits, driving_zero_fits=fits,
+                    samples_per_second=rates, yaw_rad_per_count=YAW_RAD_PER_COUNT, lags_s=list(YAW_FIT_LAGS),
+                    units="yaw in counts (2048 nominal zero); course in degrees",
+                    gps_is_ground_truth=False, scope="diagnostic_yaw_zero_data_not_sensor_qualification")
 
     def journal_lag_row(self, row, source):
         """The worker withheld BETA provenance because the journal writer was
@@ -2685,6 +2778,7 @@ class Auditor:
                                             suppressed_counts="lower_bound",
                                             scope="digest_counts_not_raw_evidence"),
                     journal_dropped=dict(self.journal_dropped, scope="diagnostic_rows_only"),
+                    yaw_data=self.yaw_report(),
                     journal_lag=dict(self.journal_lag),
                     lower_bounds=dict(LOWER_BOUNDS),
                     motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
@@ -2788,6 +2882,222 @@ class Auditor:
                     omitted_issue_details=max(0, sum(self.issue_counts.values()) - len(self.issues)))
 
 
+# ---- yaw-zero data rows (validation/YAW_DATA_COLLECTION_2026-10-09.md) ----
+# yaw_stop / yaw_edge / yaw_reinit rows and the log_digest yaw fields of the
+# persistent profile. Diagnostic data for the yaw-zero question only: MODEL
+# statistics of receipt-time samples, GPS courses are not ground truth, and
+# nothing here qualifies a sensor or feeds a decision.
+YAW_RAD_PER_COUNT = 0.000658615   # |research_model_profile().yaw_rad_per_count|
+YAW_FIT_LAGS = (0.0, 1.3)         # GPS delay brackets of the 2026-10-09 study
+YAW_FIT_DIGESTS = 6               # fit windows of at most 60 s
+YAW_FIT_MIN_FIXES = 6
+YAW_FIT_MAX_GQ = 5                # digest gate: worst fix accuracy (m)
+YAW_FIT_MIN_GV = 12               # digest gate: slowest fix speed (km/h)
+YAW_CAUSES = {1: "gap", 2: "invalid", 3: "gap+invalid"}
+
+
+def _int_or_none(value, low=-2**63, high=2**63-1):
+    return value is None or bounded_int(value, low, high)
+
+
+def _num_or_none(value, low=-1e12, high=1e12):
+    return value is None or bounded_number(value, low, high)
+
+
+def _course_list(value):
+    return value is None or (isinstance(value, list) and len(value) == 4 and
+                             all(bounded_int(v, -1, 2**31-1) for v in value))
+
+
+def yaw_row_valid(row):
+    kind = row.get("kind")
+    if not bounded_int(row.get("schema"), 1, 1) or not bounded_int(row.get("mono_ns"), 0, 2**64-1):
+        return False
+    if kind == "yaw_stop":
+        return (bounded_number(row.get("boot_s"), 0, 1e12) and bounded_int(row.get("dur_ms"), 0, 2**63-1) and
+                bounded_int(row.get("ys"), -2**63, 2**63-1) and bounded_int(row.get("yn"), 0, 2**63-1) and
+                all(_int_or_none(row.get(k)) for k in ("sd", "first", "last", "pre")) and
+                _num_or_none(row.get("pre_kmh")) and
+                all(bounded_int(row.get(k, 1), 0, 2**32-1) for k in ("bad", "merged", "open", "pre_bad")))
+    if kind == "yaw_edge":
+        return (bounded_number(row.get("at_s"), 0, 1e12) and row.get("ev") in ("loss", "return") and
+                isinstance(row.get("from"), str) and isinstance(row.get("to"), str) and
+                all(_int_or_none(row.get(k)) for k in ("yb", "ya")) and
+                all(bounded_int(row.get(k), 0, 2**63-1) for k in ("nb", "na")) and
+                all(_num_or_none(row.get(k)) for k in ("vb", "va")) and
+                _course_list(row.get("cb")) and _course_list(row.get("ca")) and row.get("cut") in (0, 1) and
+                row.get("hist_lost", 0) in (0, 1))
+    if kind == "yaw_reinit":
+        return (bounded_number(row.get("at_s"), 0, 1e12) and bounded_int(row.get("cause"), 1, 3) and
+                bounded_int(row.get("n"), 1, 2**32-1) and bounded_int(row.get("gap_ms"), 0, 2**63-1) and
+                row.get("still") in (0, 1) and all(_int_or_none(row.get(k)) for k in ("before", "after")) and
+                all(_num_or_none(row.get(k)) for k in ("before_age_s", "after_delay_s")))
+    return False
+
+
+def yaw_digest_fields(row):
+    """The digest's yaw fields, or None when absent; raises ValueError when malformed."""
+    if "y1" not in row and "y1n" not in row:
+        return None
+    y1, y1n, gc = row.get("y1"), row.get("y1n"), row.get("gc")
+    if (not isinstance(y1, list) or len(y1) != 10 or not all(bounded_int(v, -2**63, 2**63-1) for v in y1) or
+            not isinstance(y1n, list) or len(y1n) != 10 or not all(bounded_int(v, 0, 2**63-1) for v in y1n) or
+            not bounded_int(row.get("yst"), -2**63, 2**63-1) or not bounded_int(row.get("ystn"), 0, 2**63-1) or
+            not isinstance(gc, list) or len(gc) > 12 or
+            not all(bounded_int(v, 0, 99359) and v % 1000 < 360 for v in gc) or
+            not bounded_int(row.get("since_ns"), 0, 2**64-1) or row["since_ns"] > row["mono_ns"] or
+            (gc and (not bounded_int(row.get("gq"), 0, 999) or not bounded_int(row.get("gv"), 0, 999))) or
+            not all(_num_or_none(row.get(k)) for k in ("dw01", "dw23"))):
+        raise ValueError("Invalid yaw digest fields")
+    return dict(since_ns=row["since_ns"], mono_ns=row["mono_ns"], y1=list(y1), y1n=list(y1n),
+                yst=row["yst"], ystn=row["ystn"], gc=list(gc), gq=row.get("gq"), gv=row.get("gv"),
+                gap_ms=row.get("max_receipt_gap_ms") if bounded_int(row.get("max_receipt_gap_ms"), 0, 2**63-1) else None,
+                dw01=row.get("dw01"), dw23=row.get("dw23"))
+
+
+def _median(values):
+    values = sorted(values)
+    if not values:
+        return None
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2.0
+
+
+def _wrap_deg(value):
+    return (value + 540.0) % 360.0 - 180.0
+
+
+def _least_squares(xs, ys):
+    """y = a + b*x: (a, b, standard error of b, residual rms) or None."""
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx <= 0:
+        return None
+    b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    a = my - b * mx
+    residuals = [y - a - b * x for x, y in zip(xs, ys)]
+    s2 = sum(r * r for r in residuals) / max(1, n - 2)
+    return a, b, math.sqrt(s2 / sxx), math.sqrt(sum(r * r for r in residuals) / n)
+
+
+def yaw_driving_zero_fits(digests):
+    """Driving yaw zero from the 10 s digests, as in the 2026-10-09 study:
+    course(t) = c0 - K*(D(t-lag) - (z-2048)*T(t-lag)), D the integral of
+    the moving yaw deviation from 2048 and T the moving time, both from the
+    1 s moving bins, fixes from the digest's new-fix courses, lag 0 and 1.3 s.
+    Fit windows: consecutive digests (at most 60 s) whose fixes are all at
+    >= 12 km/h with accuracy <= 5 m; the sample rate per second is the
+    session median of digests without a > 1 s receipt gap."""
+    rates = [(sum(d["y1n"]) + d["ystn"]) / ((d["mono_ns"] - d["since_ns"]) / 1e9) for d in digests
+             if d["mono_ns"] > d["since_ns"] and (d["gap_ms"] is None or d["gap_ms"] <= 1000) and
+             sum(d["y1n"]) + d["ystn"] > 0]
+    rate = _median(rates)
+    if not rate:
+        return [], None
+    windows, current = [], []
+    for d in digests:
+        ok = d["gc"] and d["gq"] is not None and d["gq"] <= YAW_FIT_MAX_GQ and d["gv"] >= YAW_FIT_MIN_GV
+        contiguous = current and abs(d["since_ns"] - current[-1]["mono_ns"]) <= 200000000
+        if not ok or not contiguous or len(current) >= YAW_FIT_DIGESTS:
+            if len(current) >= 2:
+                windows.append(current)
+            current = []
+        if ok:
+            current.append(d)
+    if len(current) >= 2:
+        windows.append(current)
+    fits = []
+    for window in windows:
+        # Cumulative moving deviation (count*s) and moving time (s) at bin edges.
+        edges, cum_d, cum_t = [window[0]["since_ns"] / 1e9], [0.0], [0.0]
+        fixes = []
+        for d in window:
+            since, end = d["since_ns"] / 1e9, d["mono_ns"] / 1e9
+            for j in range(10):
+                stop = end if j == 9 else min(end, since + j + 1)
+                edges.append(max(stop, edges[-1]))
+                cum_d.append(cum_d[-1] + d["y1"][j] / rate)
+                cum_t.append(cum_t[-1] + d["y1n"][j] / rate)
+            for code in d["gc"]:
+                fixes.append((since + (code // 1000) / 10.0, float(code % 1000)))
+        if len(fixes) < YAW_FIT_MIN_FIXES:
+            continue
+
+        def at(series, t):
+            if t <= edges[0]:
+                return series[0]
+            i = bisect.bisect_right(edges, t)
+            if i >= len(edges):
+                return series[-1]
+            span = edges[i] - edges[i - 1]
+            f = (t - edges[i - 1]) / span if span > 0 else 1.0
+            return series[i - 1] + f * (series[i] - series[i - 1])
+        unwrapped, previous = [], None
+        for _, course in fixes:
+            unwrapped.append(course if previous is None else unwrapped[-1] + _wrap_deg(course - previous))
+            previous = course
+        result = dict(start_s=round(window[0]["since_ns"] / 1e9, 1), digests=len(window), fixes=len(fixes),
+                      turn_deg=round(unwrapped[-1] - unwrapped[0], 1))
+        for lag in YAW_FIT_LAGS:
+            ts = [at(cum_t, t - lag) for t, _ in fixes]
+            ys = [math.radians(c) + YAW_RAD_PER_COUNT * at(cum_d, t - lag) for (t, _), c in zip(fixes, unwrapped)]
+            solved = _least_squares(ts, ys)
+            key = "lag_%s" % ("%.1f" % lag).replace(".", "_")
+            result["moving_s"] = round(ts[-1] - ts[0], 1)
+            if solved is None or ts[-1] - ts[0] < 10:
+                result[key] = None
+                continue
+            _, slope, se, rms = solved
+            result[key] = dict(zero=round(2048 + slope / YAW_RAD_PER_COUNT, 2),
+                               se=round(se / YAW_RAD_PER_COUNT, 2), rms_deg=round(math.degrees(rms), 2))
+        fits.append(result)
+    return fits, rate
+
+def print_yaw_data(yaw, limit=40):
+    """Text section: yaw-zero data rows (diagnostic; GPS is not ground truth)."""
+    summary = yaw["summary"]
+    if not (summary["stops"] or summary["edges"] or summary["reinits"] or summary["driving_fits"]):
+        return
+    def f(value, fmt="%.2f"):
+        return "-" if value is None else fmt % value
+    print("Yaw zero data (diagnostic; counts, 2048 nominal; GPS not ground truth): %d standstills, %d GPS edges, "
+          "%d reinits, %d driving fits; digest stationary mean %s" %
+          (summary["stops"], summary["edges"], summary["reinits"], summary["driving_fits"],
+           f(summary["digest_stationary_mean"])))
+    if yaw["stops"]:
+        print("  standstills: boot_s dur_s mean sd first last pre pre_kmh step since_prev_s bad merged")
+        for s in yaw["stops"][:limit]:
+            print("   %8.1f %6.1f %8s %5s %8s %8s %8s %5s %6s %7s %d %d%s" %
+                  (s["boot_s"], s["dur_s"], f(s["mean"]), f(s["sd"]), f(s["first"]), f(s["last"]), f(s["pre"]),
+                   f(s["pre_kmh"], "%.1f"), f(s["step"]), f(s["since_prev_s"], "%.0f"), s["bad"], s["merged"],
+                   " open" if s["open"] else ""))
+    if yaw["driving_zero_fits"]:
+        print("  driving zero fits (10 s digests, <= 60 s windows): start_s fixes moving_s turn_deg "
+              "zero/se lag 0 s, zero/se lag 1.3 s")
+        for w in yaw["driving_zero_fits"][:limit]:
+            def z(key):
+                return "-" if not w.get(key) else "%.2f/%.2f" % (w[key]["zero"], w[key]["se"])
+            print("   %8.1f %3d %6.1f %7.1f %14s %14s" % (w["start_s"], w["fixes"], w["moving_s"], w["turn_deg"],
+                                                       z("lag_0_0"), z("lag_1_3")))
+    if yaw["edges"]:
+        print("  GPS edges: at_s event transition yaw_before -> yaw_after (step), kmh before/after, "
+              "course-rate zero before/after")
+        for e in yaw["edges"][:limit]:
+            print("   %8.1f %-6s %-12s %8s -> %8s (%s) %s/%s %s/%s%s" %
+                  (e["at_s"], e["ev"], e["transition"], f(e["before"]["yaw"]), f(e["after"]["yaw"]), f(e["yaw_step"]),
+                   f(e["before"]["kmh"], "%.1f"), f(e["after"]["kmh"], "%.1f"),
+                   f(e["before"]["course_rate_zero"]), f(e["after"]["course_rate_zero"]), " cut" if e["cut"] else ""))
+    if yaw["reinits"]:
+        print("  reinits: at_s cause triggers gap_ms stationary before -> after (step)")
+        for r in yaw["reinits"][:limit]:
+            print("   %8.1f %-11s %3d %7d %d %8s -> %8s (%s)" %
+                  (r["at_s"], r["cause"], r["triggers"], r["gap_ms"], r["stationary"], f(r["before"]),
+                   f(r["after"]), f(r["step"])))
+
+
 def analyze(paths):
     auditor = Auditor()
     for path in paths:
@@ -2857,6 +3167,7 @@ def main(argv=None):
                   "itself is diagnostic class)" % report["journal_lag"]["not_durable"])
         if report["persistent_profile"]["suppressed"]:
             print("Persistent-profile suppressed rows (lower bound): %s" % report["persistent_profile"]["suppressed"])
+        print_yaw_data(report["yaw_data"])
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")
