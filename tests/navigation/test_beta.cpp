@@ -43,7 +43,8 @@ struct Plan {
     std::vector<Fix> fixes;
     std::function<void(Pipeline&,unsigned)> each;
     uint64_t epoch;
-    Plan():end_ms(0),epoch(1) {
+    unsigned yaw_count;                       // samples per yaw window (raw[0] is their sum)
+    Plan():end_ms(0),epoch(1),yaw_count(1) {
         wheel=[](unsigned){return 36.0;};
         yaw=[](unsigned){return STRAIGHT;};
     }
@@ -88,7 +89,7 @@ static void run(Pipeline& p,const Plan& plan,unsigned from=0) {
         RawEvent w=raw(WHEELS,ms,++seq,plan.epoch);
         for(unsigned i=0;i<4;++i) w.raw[i]=uint16_t(wheel_raw(plan.wheel(ms)));
         CHECK(p.enqueue_raw(w)==PIPELINE_OK);
-        RawEvent y=raw(YAW,ms,++seq,plan.epoch); y.raw[0]=uint16_t(plan.yaw(ms));
+        RawEvent y=raw(YAW,ms,++seq,plan.epoch); y.raw[0]=uint16_t(plan.yaw(ms)); y.count=uint16_t(plan.yaw_count);
         const PipelineResult yr=p.enqueue_raw(y);
         CHECK(yr==PIPELINE_OK||yr==PIPELINE_WAITING);
         for(size_t j=0;j<plan.fixes.size();++j)
@@ -635,6 +636,25 @@ static void standstill_in_a_tunnel_episode_keeps_a_bearing() {
     // The stop-confirmation wait (speed 0, not yet stopped) and the stopped state both publish.
     CHECK(moving>0 && still>0 && dropped==0);
 }
+// G2 investigation 2026-10-09: the yaw window mean is the exact sum/count, not
+// the integer-truncated value (a 2048.5 mean must turn the heading).
+static void yaw_window_mean_is_exact() {
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan=straight(ANCHOR_MS+9000);
+    plan.yaw_count=2; plan.yaw=[](unsigned){return 4097u;};   // mean 2048.5, truncated 2048
+    double heading=-1;
+    plan.each=[&](Pipeline& q,unsigned ms) {
+        if(ms<ANCHOR_MS+8000 || heading>=0) return;
+        adapter::DrSnapshot s; BetaModelInput in;
+        CHECK(publish(q,ms,&s,&in)==runtime::CORE_BRIDGE_OK);
+        heading=in.snapshot.body_heading_rad;
+    };
+    run(p,plan);
+    const double expected=0.5*0.000658615*(8.0+0.01);   // 0.5 count * rad/s per count * ~8 s
+    // Positive yaw counts turn the heading negative (wraps to just below 2 pi).
+    const double turned=std::fabs(heading>3.14159265358979?heading-6.28318530717959:heading);
+    CHECK(turned>0.95*expected && turned<1.05*expected);
+}
 static void reverse_latch_contradiction_withdraws() {
     // 3.4: after a forward anchor the latch reads reverse while the wheels
     // keep 36 km/h: after more than 2 s the BETA core is disabled.
@@ -871,6 +891,7 @@ int main() {
     unbounded_profile_clamps_reported_accuracy();
     stale_anchor_does_not_start_a_tunnel_episode();
     standstill_in_a_tunnel_episode_keeps_a_bearing();
+    yaw_window_mean_is_exact();
     reverse_latch_contradiction_withdraws();
     pending_gps_caps_and_hides();
     shadow_diagnostic_unchanged_by_beta();

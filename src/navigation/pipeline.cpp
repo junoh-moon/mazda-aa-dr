@@ -378,10 +378,14 @@ PipelineResult Pipeline::enqueue_raw_event(const RawEvent& r) {
         if (!last_yaw_time_) { last_yaw_time_=time; return PIPELINE_WAITING; }
         if (time==last_yaw_time_) return PIPELINE_WAITING;
         if (time-last_yaw_time_>core_.config.sample_age_max_ns) return fault(PIPELINE_MISSING_SENSOR);
-        gyro_bias_.yaw(last_yaw_time_,time,r.received_ns,r.source_mono_ms!=0,double(mean));
+        // Integer division truncates up to (count-1)/count of a count; with a
+        // noisy sensor that is a ~0.4-count zero shift, with a constant input a
+        // rate-dependent bias. Keep the exact mean for every rate.
+        const double exact=double(r.raw[0])/double(r.count);
+        gyro_bias_.yaw(last_yaw_time_,time,r.received_ns,r.source_mono_ms!=0,exact);
         e.kind=YAW_EVENT; e.time=last_yaw_time_; e.window_end=time;
-        e.value=(double(mean)-profile_.yaw_zero)*profile_.yaw_rad_per_count;
-        e.raw=uint16_t(mean); e.count=r.count; last_yaw_time_=time;
+        e.value=(exact-profile_.yaw_zero)*profile_.yaw_rad_per_count;
+        e.raw=uint16_t(mean); e.mean_counts=exact; e.count=r.count; last_yaw_time_=time;
         status_.uncertainties|=YAW_WINDOW_MODEL;
     }
     return insert(e);
@@ -473,7 +477,7 @@ PipelineResult Pipeline::enqueue_yaw(const mx5_dr_evidence& v,double yaw,uint16_
         if (queue_[j].kind==YAW_EVENT&&begin<queue_[j].window_end&&end>queue_[j].time)
             return fault(PIPELINE_BAD_INPUT);
     Event e=Event(); e.kind=YAW_EVENT; e.time=begin; e.received=v.received_ns;
-    e.evidence=v; e.value=yaw; e.raw=raw; e.count=count; e.window_end=end;
+    e.evidence=v; e.value=yaw; e.raw=raw; e.mean_counts=double(raw); e.count=count; e.window_end=end;
     return insert(e);
 }
 PipelineResult Pipeline::enqueue_reverse(const mx5_dr_evidence& v,int reverse) {
@@ -746,10 +750,10 @@ PipelineResult Pipeline::advance(uint64_t end) {
         if (beta_only) { beta_control(MX5_DR_DISABLE); return PIPELINE_OK; }
         return PIPELINE_WAITING;
     }
-    const double yaw_rate=model_?(double(yaw_.raw)-gyro_bias_.status().active_zero)*
+    const double yaw_rate=model_?(yaw_.mean_counts-gyro_bias_.status().active_zero)*
         profile_.yaw_rad_per_count:yaw_.value;
     // BETA rule 4: the fixed profile zero, never the stationary auto-bias.
-    const double beta_rate=(double(yaw_.raw)-beta_.yaw_zero)*profile_.yaw_rad_per_count;
+    const double beta_rate=(yaw_.mean_counts-beta_.yaw_zero)*profile_.yaw_rad_per_count;
     // Do not apply the straight GPS-training wheel-spread gate to cornering.
     // This narrower MODEL contradiction needs exactly one stopped wheel, three
     // agreeing moving wheels, and the yaw window for this integration interval.
@@ -1174,12 +1178,12 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
             if(beta_enabled_) {
                 YawRecord& y=beta_yaw_[beta_yaw_next_];
                 y.begin=e.time; y.end=e.window_end;
-                y.rate=(double(e.raw)-beta_.yaw_zero)*profile_.yaw_rad_per_count;
+                y.rate=(e.mean_counts-beta_.yaw_zero)*profile_.yaw_rad_per_count;
                 beta_yaw_next_=(beta_yaw_next_+1)%HISTORY_CAPACITY;
                 if(beta_yaw_size_<HISTORY_CAPACITY)++beta_yaw_size_;
             }
             gps_wheel_.yaw(e.time,e.window_end,e.received,
-                (double(e.raw)-gyro_bias_.status().active_zero)*profile_.yaw_rad_per_count); break;
+                (e.mean_counts-gyro_bias_.status().active_zero)*profile_.yaw_rad_per_count); break;
         case ANCHOR_EVENT:
             if (core_.estimate.state==MX5_DR_ACTIVE||core_.estimate.state==MX5_DR_NATIVE||
                 e.anchor.context.generation>context().generation) {

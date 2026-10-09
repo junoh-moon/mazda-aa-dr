@@ -47,6 +47,17 @@ UNEXPLAINED: heading error accumulates with turns in the synthetic runs (about 0
 creep cycle), independent of quantization of the fixture yaw; needs follow-up for G2.
 Not tested: vehicle, phone, DHU, exact ARM, QEMU, sensor noise or bias, wheel scale error, reverse, cadence gaps, real OEM timing, threads.
 
+## G2 heading accumulation (root cause found, fixed)
+A third agent bisected the heading drift seen in the stress test: dr_core integrates exactly (error 2e-11 deg); the pipeline truncated the yaw
+window mean with an integer division (pipeline.cpp, `unsigned mean=raw/count`). With a noisy real sensor that is a nearly constant zero
+shift of about -0.39 count (already absorbed in the fixed zero 2048); with the noise-free synthetic fixture it appears as a rate-dependent bias per
+turn (34 deg after 3600 s of creep cycles, 0.6 deg after the fix). The yaw scale is correct (0.000658615 rad/s/count). Fix: the exact
+sum/count mean is used for every rate (Event.mean_counts); the integer stays only for the core's raw guard. Effective BETA zero moves by
++0.39 count (0.015 deg/s) toward the fitted real-data zero (2048.1 +- 0.45 from trip4); the profile zero stays 2048. Real-data fit of
+trip4 (3 usable stretches, 89 samples): scale 1.000 +- 0.006, no measurable gain from a scale correction. G2 outlook: the dominant error is the
+per-drive zero (about 4 counts 1-sigma, TRIP_BETA3): garage heading within a few degrees for about 30 s, no 10 degree guarantee beyond about
+120 s. Not tested: vehicle, low-speed garage turns against GPS (no data), zero 2048.4 variant.
+
 ## DHU experiment 6 final (27 trials, 855 photos, S25 + Google DHU + Naver Map; private data, summary only)
 Operational labels from screen reading (not Naver internals). Repeats r1/r2 (+ approved T4 r3):
 | Condition | Result |

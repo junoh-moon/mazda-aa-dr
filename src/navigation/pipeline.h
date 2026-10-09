@@ -250,6 +250,9 @@ private:
         double value, wheel_spread, wheel_max;
         bool wheel_zero_conflict;
         uint16_t raw, count;
+        // Exact window mean (sum/count). raw is the truncated integer kept
+        // only for the core's raw-encoding guard; rates use mean_counts.
+        double mean_counts;
         mx5_dr_anchor anchor;
         uint64_t anchor_call_sequence;
         adapter::Observation observation;
