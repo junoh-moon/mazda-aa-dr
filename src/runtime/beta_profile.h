@@ -11,6 +11,35 @@ namespace mx5 { namespace runtime {
 // validation/ASSIST_BETA_DESIGN_2026-10-05.md decisions 3, 4 and 7. They are
 // replay-calibrated values from one drive, not worst-case bounds and not a
 // physical sensor qualification. BETA output stays MODEL evidence.
+// Continuous tunnel tracking (MODEL only; validation/TUNNEL_UNBOUNDED_2026-10-09.md
+// and validation/ENGAGEMENT_POLICY_M_2026-10-09.md). Every data-valid fix that
+// passes the pair, displacement, HDOP and reverse checks refreshes the
+// position (no speed gate, no settling period). A GPS course is used only
+// when the GPS displacement over at least BETA_HEADING_BASELINE_M points the
+// same way (within BETA_COURSE_CHORD_MAX_DEG): this is the first-heading seed
+// condition and filters course-only multipath. A carried heading is blended
+// with the GPS course only while the course change since the reference fix
+// matches the closed yaw integral (BETA_COURSE_TURN_MAX_DEG +
+// BETA_COURSE_TURN_FRACTION x |turn|). A carried heading that disagrees by
+// more than BETA_RESYNC_MIN_DEG with BETA_RESYNC_FIXES consecutive
+// chord-confirmed courses whose disagreement stays within
+// BETA_RESYNC_CONSISTENT_DEG (so the course turns with the yaw) is reseeded
+// from the GPS course. An outage starts FRESH from a position at most
+// BETA_POSITION_MAX_AGE_NS old, or as a FALLBACK from the dead-reckoned
+// estimate inside the bounded envelope of beta_profile_bounded() (60 s since
+// the last accepted position, honest budget <= 40 m) when every rejected
+// data-valid fix since then agreed with the estimate within the honest
+// budget + position_slack_m; otherwise the outage stays stock.
+static const double BETA_HEADING_BASELINE_M=3.0;
+static const double BETA_COURSE_CHORD_MAX_DEG=30.0;
+static const double BETA_COURSE_TURN_MAX_DEG=8.0;
+static const double BETA_COURSE_TURN_FRACTION=0.5;
+static const double BETA_RESYNC_MIN_DEG=20.0;
+static const double BETA_RESYNC_CONSISTENT_DEG=10.0;
+static const unsigned BETA_RESYNC_FIXES=5;
+static const uint64_t BETA_RESYNC_GAP_NS=2500000000ULL;
+static const uint64_t BETA_POSITION_MAX_AGE_NS=3000000000ULL;
+
 struct BetaProfile {
     // Rule 1 / decision 3: reported accuracy =
     //   e0 + sv*t + h0*D + k*integral(v*tau) (the core budget with these inputs).
@@ -20,7 +49,11 @@ struct BetaProfile {
     double speed_error_mps;       // sv
     // Core limits. Exceeding error_max_m is a core LIMIT failure (no clamp).
     double error_max_m, duration_max_s, distance_max_m;
-    // Rule 3 anchor gate (only the BETA core uses it).
+    // Legacy bounded anchor gate (accuracy rule 3; beta_profile() and the
+    // replay-only --engagement legacy counterfactual). The continuous tunnel
+    // policy reuses only the pair, HDOP, yaw-quiet, wheel/GPS speed and
+    // reverse fields (Pipeline::evaluate_beta_tracking); it has no speed,
+    // course-step or settling gate.
     double anchor_speed_min_kmh;  // GPS speed of the anchor fix
     double anchor_speed_max_kmh;  // rule 2 validated range upper end
     double previous_speed_min_kmh;
@@ -29,7 +62,7 @@ struct BetaProfile {
     uint64_t yaw_quiet_window_ns;
     double wheel_gps_speed_max_diff_kmh;
     uint64_t fix_pair_max_ns;     // a pair (repeated-utc polls skipped): at most this far apart
-    // BETA_DECISIONS_2026-10-05.md 3.1-3.2 (pair and settling rules).
+    // BETA_DECISIONS_2026-10-05.md 3.1-3.2 (pair rules; settling: legacy gate only).
     uint64_t utc_step_max_s;      // strictly increasing utc pair: at most this step
     double utc_mono_tolerance_s;  // |utc step - receipt mono step| (integer utc seconds)
     double anchor_hdop_max;       // HDOP (position horizontal) of the anchor fix
@@ -53,6 +86,14 @@ struct BetaProfile {
     // accuracy is min(honest budget, accuracy_max_m). Only GPS return, sensor
     // silence, a latch/session fault or a core fault end the replacement.
     bool unbounded;
+    // Continuous BETA position/heading maintenance, independent of the legacy
+    // bounded anchor gates. Speed weights course confidence; it never vetoes
+    // an entry. These are MODEL heuristics, not qualified error bounds.
+    // unbounded && !continuous_anchor is a replay-only counterfactual
+    // (replay_beta --engagement legacy); no product profile selects it.
+    bool continuous_anchor;
+    double course_weight_kmh, course_innovation_rad, course_correction_rad;
+    double position_slack_m;
 };
 
 inline BetaProfile beta_profile() {
@@ -86,6 +127,11 @@ inline BetaProfile beta_profile() {
     p.heading_budget_max_rad=20.0*3.14159265358979323846/180.0;
     p.lease_ns=500000000ULL; p.accuracy_max_m=40.0;
     p.unbounded=false;
+    p.continuous_anchor=false;
+    p.course_weight_kmh=10.0;
+    p.course_innovation_rad=5.0*3.14159265358979323846/180.0;
+    p.course_correction_rad=10.0*3.14159265358979323846/180.0;
+    p.position_slack_m=20.0;
     return p;
 }
 
@@ -97,6 +143,7 @@ inline BetaProfile beta_profile_bounded() { return beta_profile(); }
 inline BetaProfile beta_profile_tunnel() {
     BetaProfile p=beta_profile();
     p.unbounded=true;
+    p.continuous_anchor=true;
     p.error_max_m=1000000.0; p.duration_max_s=21600.0; p.distance_max_m=1000000.0;
     return p;
 }

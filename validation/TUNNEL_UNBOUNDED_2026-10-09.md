@@ -2,6 +2,13 @@
 
 Status: implemented and host-tested; NOT run on the vehicle; DHU only. Target: v1.0.0-beta.6 (not published by this record).
 
+Update 2026-10-09 (later the same day): the episode START rule of this record is SUPERSEDED for the tunnel profile by the continuous
+engagement policy M and its review fixes, validation/ENGAGEMENT_POLICY_M_2026-10-09.md. An episode no longer needs a "gated anchor" (10 s
+settled fixes, 20-60 km/h, quiet yaw); every fix passing the pair/displacement/HDOP/reverse checks refreshes the position, and at the GPS loss
+the entry is FRESH (last accepted position <= 3 s old) or FALLBACK (inside the 60 s / 40 m bounded envelope with agreeing rejected fixes) or
+REFUSED. The in-outage behaviour below (no budget withdrawal, accuracy clamp, ending conditions) is unchanged. The text below is kept as
+the record of that time.
+
 ## Problem and decision
 The first real BETA drive (validation/TRIP_BETA3_2026-10-08.md) showed that the stock mode-0 resend stops Naver navigation in a tunnel, and
 that honest dead reckoning (reported accuracy <= 40 m, rejected by Naver at >= 50 m) ends after ~15-30 s while Korean tunnels last minutes.
@@ -15,7 +22,8 @@ rejects >= 50 m) is unchanged and is why the REPORTED accuracy is clamped at 40 
 - Reported accuracy = min(honest budget, 40 m). The honest budget is journaled as accuracy_honest_m in beta_state / beta_summary rows
   (the analyzer must treat accuracy_m == 40 with accuracy_honest_m > 40 as CLAMPED, not as a claim of 40 m accuracy).
 - Still ends the replacement: GPS return (mode != 0), sensor silence, reverse-latch suspicion, send-result hold, session/storage change,
-  cadence gap, core fault, DISABLE. A missing anchor still means stock behavior (no replacement).
+  cadence gap, core fault, DISABLE. A missing anchor still means stock behavior (no replacement). [2026-10-09 update: "anchor" is now the
+  continuous position/heading estimate of policy M, not a gated anchor; see ENGAGEMENT_POLICY_M_2026-10-09.md.]
 - Limits of honesty: after the honest budget passes 40 m the reported position may be hundreds of metres off the true position
   (measured 77/280/311 m at the exits of the real tunnels with the yaw-zero shift). Naver is expected to map-match onto the route; this is
   DHU evidence, not vehicle evidence.
@@ -26,9 +34,12 @@ an anchor that integrated for minutes through a GPS-present stretch above the an
 km-scale honest error at the first send; (medium) a standstill was sent without bearing (DHU T9: rejected), (medium) a stale
 accuracy_honest_m from an earlier episode could excuse a return jump after a short outage in the analyzer; (low) struct padding of
 mx5_dr_config. Fixes: pipeline.cpp applies the bounded envelope (60 s, 40 m honest budget) at the moment the GPS goes (otherwise DISABLE, the
-outage stays stock); tunnel mode sends speed 0 with the held body heading while the car stands; the controller resets accuracy_honest_m at
+outage stays stock) [SUPERSEDED 2026-10-09 for the tunnel profile: this envelope now applies only to the replay-only legacy counterfactual;
+policy M starts FRESH from a position <= 3 s old, or as a FALLBACK inside the same 60 s / 40 m envelope with agreeing rejected fixes;
+ENGAGEMENT_POLICY_M_2026-10-09.md]; tunnel mode sends speed 0 with the held body heading while the car stands; the controller resets accuracy_honest_m at
 GPS_LOST and the analyzer clears it there and only treats accuracy >= 40 m as clamped; mx5_dr_config.extended_limits moved to the end, zero
-padding. Tests: stale_anchor_does_not_start_a_tunnel_episode, standstill_in_a_tunnel_episode_keeps_a_bearing, analyzer stale-honest case,
+padding. Tests: stale_anchor_does_not_start_a_tunnel_episode (now stale_position_does_not_start_a_tunnel_episode, rewritten for the
+FRESH/FALLBACK/REFUSED entry), standstill_in_a_tunnel_episode_keeps_a_bearing, analyzer stale-honest case,
 core reserved field. The standstill form (speed 0 + bearing) has NOT been tested in the DHU.
 
 ## Long-outage stress test (synthetic, offline replay of the product path; second agent, ASan+UBSan build)

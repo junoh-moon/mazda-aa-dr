@@ -12,6 +12,17 @@ uint64_t add(uint64_t a,uint64_t b) {
     return UINT64_MAX-a<b?UINT64_MAX:a+b;
 }
 bool finite(double x) { return std::isfinite(x); }
+// Local-plane distance (m) and its course (rad, [0,2pi)) from q to p.
+double fix_distance(const adapter::PositionInput& p,const adapter::PositionInput& q,double* course) {
+    double dlon=p.longitude_deg-q.longitude_deg;
+    if (dlon>180) dlon-=360;
+    if (dlon< -180) dlon+=360;
+    const double north=(p.latitude_deg-q.latitude_deg)*111320;
+    const double east=dlon*111320*std::cos((p.latitude_deg+q.latitude_deg)*0.5*PI/180);
+    double c=std::atan2(east,north); if (c<0) c+=2*PI;
+    *course=c;
+    return std::sqrt(north*north+east*east);
+}
 }
 ModelProfile research_model_profile() {
     ModelProfile p={2047.0,-0.000658615,0.01,-100.0,0,1,
@@ -32,6 +43,8 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     beta_enabled_(false), beta_have_prev_(false), beta_gate_(BETA_GATE_DISABLED),
     beta_core_result_(MX5_DR_E_CONFIG), beta_core_failure_(MX5_DR_OK), beta_mode_(-1), beta_position_seq_(0),
     beta_conflict_since_(0), beta_rotation_rad_(0), beta_rotation_budget_m_(0),
+    beta_have_heading_ref_(false), beta_resync_count_(0), beta_resync_innovation_(0), beta_resync_ns_(0),
+    beta_fix_ns_(0), beta_fix_agrees_(false),
     beta_streak_(false), beta_streak_mono_(0), beta_streak_utc_(0),
     reverse_exit_seen_(false), beta_reverse_suspect_(false), reverse_any_seen_(false),
     keep_latch_on_reset_(false), last_latch_clear_(LATCH_CLEAR_RESET), beta_reverse_fast_since_(0),
@@ -848,13 +861,17 @@ bool Pipeline::enable_beta(const runtime::BetaProfile& p) {
         p.anchor_speed_min_kmh,p.anchor_speed_max_kmh,p.previous_speed_min_kmh,p.course_step_max_deg,
         p.yaw_quiet_max_rad_s,p.wheel_gps_speed_max_diff_kmh,p.yaw_zero,p.rotation_budget_per_rad,
         p.heading_budget_max_rad,p.accuracy_max_m,p.utc_mono_tolerance_s,p.anchor_hdop_max,
-        p.displacement_ratio_min,p.displacement_ratio_max,p.reverse_suspect_kmh};
+        p.displacement_ratio_min,p.displacement_ratio_max,p.reverse_suspect_kmh,
+        p.course_weight_kmh,p.course_innovation_rad,p.course_correction_rad,p.position_slack_m};
     for (size_t j=0;j<sizeof values/sizeof values[0];++j)
         if (!finite(values[j])||values[j]<0) return false;
     if (p.anchor_speed_min_kmh<1.8||p.anchor_speed_max_kmh<p.anchor_speed_min_kmh||
         !p.yaw_quiet_window_ns||!p.fix_pair_max_ns||!p.lease_ns||!p.utc_step_max_s||
         !(p.anchor_hdop_max>0)||!(p.displacement_ratio_min>0)||
-        p.displacement_ratio_max<p.displacement_ratio_min||!p.reverse_suspect_ns) return false;
+        p.displacement_ratio_max<p.displacement_ratio_min||!p.reverse_suspect_ns||
+        !(p.course_weight_kmh>0)||!(p.course_innovation_rad>0)||
+        !(p.course_correction_rad>0)||!(p.position_slack_m>0)||
+        (p.continuous_anchor&&!(p.wheel_gps_speed_max_diff_kmh>0))) return false;
     const mx5_dr_config c=runtime::beta_core_config(p);
     mx5_dr_core probe;
     if (mx5_dr_init_model(&probe,&c,context())!=MX5_DR_OK) return false;
@@ -874,6 +891,8 @@ void Pipeline::reset_beta(mx5_dr_context x) {
     beta_streak_=false; beta_streak_mono_=beta_streak_utc_=0;
     beta_reverse_suspect_=false; beta_reverse_fast_since_=0;
     beta_yaw_size_=beta_yaw_next_=0;
+    beta_have_heading_ref_=false; beta_resync_count_=0; beta_resync_innovation_=0; beta_resync_ns_=0;
+    beta_fix_ns_=0; beta_fix_agrees_=false;
     if (!beta_enabled_) return;
     const mx5_dr_config c=runtime::beta_core_config(beta_);
     beta_core_result_=mx5_dr_init_model(&beta_core_,&c,x);
@@ -894,7 +913,7 @@ mx5_dr_result Pipeline::beta_control(mx5_dr_control_kind kind) {
 void Pipeline::beta_step(const mx5_dr_interval& base,double rate) {
     if (!beta_enabled_||!beta_core_.seeded) return;
     // 3.4: a latched reverse while the wheels exceed 15 km/h for more than
-    // 2 s contradicts the latch. Withdraw until a new gated anchor.
+    // 2 s contradicts the latch. Withdraw until a new accepted fix reseeds.
     if (base.reverse_active==1&&speed_.value*3.6>beta_.reverse_suspect_kmh) {
         if (!beta_reverse_fast_since_) beta_reverse_fast_since_=base.start_ns;
         if (base.end_ns>beta_reverse_fast_since_&&
@@ -928,11 +947,23 @@ bool Pipeline::beta_pair_continues(const adapter::Observation& o) const {
     const double mono_step=double(o.mono_ns-q.mono_ns)/1e9;
     return std::fabs(utc_step-mono_step)<=beta_.utc_mono_tolerance_s;
 }
-void Pipeline::beta_record(const adapter::Observation& o,BetaAnchorGate gate,double ratio) {
+void Pipeline::beta_record(const adapter::Observation& o,BetaAnchorGate gate,double ratio,
+                          double weight,const char* source) {
     BetaAnchorRecord& r=beta_records_[beta_record_seq_%BETA_RECORD_CAPACITY];
     r.seq=++beta_record_seq_; r.mono_ns=o.mono_ns; r.utc_s=o.position.utc_seconds;
     r.mode=o.position.mode; r.gate=gate; r.hdop=o.position.horizontal;
     r.kmh=o.position.velocity_kmh; r.displacement_ratio=ratio;
+    r.continuous=beta_.continuous_anchor;
+    r.heading_deg=r.heading_error_rad=r.course_weight=std::numeric_limits<double>::quiet_NaN();
+    r.heading_source="none";
+    r.entry_age_s=r.entry_budget_m=std::numeric_limits<double>::quiet_NaN();
+    r.entry_reason=0;
+    if(gate==BETA_GATE_ACCEPTED) {
+        r.heading_deg=beta_core_.anchor.body_heading_rad*180/PI;
+        r.heading_error_rad=beta_core_.anchor.heading_error_rad;
+        r.course_weight=beta_.continuous_anchor?weight:1;
+        r.heading_source=!beta_.continuous_anchor?"legacy":source;
+    }
     r.streak_s=beta_streak_&&o.mono_ns>=beta_streak_mono_?double(o.mono_ns-beta_streak_mono_)/1e9:
         std::numeric_limits<double>::quiet_NaN();
 }
@@ -960,6 +991,131 @@ uint64_t Pipeline::latch_clears_total() const {
 const char* latch_clear_name(LatchClear why) {
     static const char* const names[]={"reset","source_epoch","rejected_reverse","excluded_reverse","input_gap"};
     return unsigned(why)<sizeof names/sizeof names[0]?names[why]:"unknown";
+}
+// Integrated BETA yaw (rad, fixed zero) over [begin,end]; false unless the
+// closed yaw windows cover the interval without a gap.
+bool Pipeline::beta_yaw_turn(uint64_t begin,uint64_t end,double* turn) const {
+    *turn=0;
+    uint64_t covered=end;
+    for(size_t j=0;j<beta_yaw_size_&&covered>begin;++j) {
+        const YawRecord& y=beta_yaw_[(beta_yaw_next_+HISTORY_CAPACITY-1-j)%HISTORY_CAPACITY];
+        if(y.begin>=covered) continue;
+        if(y.end<covered||!finite(y.rate)) return false;
+        const uint64_t from=max64(begin,y.begin);
+        *turn+=y.rate*double(covered-from)/1e9; covered=from;
+    }
+    return covered<=begin;
+}
+BetaAnchorGate Pipeline::evaluate_beta_tracking(const adapter::Observation& o,
+        const mx5_dr_snapshot* carried,double* heading,double* error,double* ratio,double* applied_weight,
+        CourseCheck* check) const {
+    const adapter::PositionInput& p=o.position;
+    *ratio=std::numeric_limits<double>::quiet_NaN();
+    check->chord=check->agrees=check->candidate=check->consistent=check->resync=check->reversing=false;
+    check->innovation=0;
+    if (!valid_gps_position(o)) return BETA_GATE_BAD_FIX;
+    if (!beta_have_prev_) return BETA_GATE_PREVIOUS;
+    const adapter::PositionInput& q=beta_prev_.position;
+    if (p.utc_seconds==q.utc_seconds) return BETA_GATE_UTC;
+    if (o.mono_ns<=beta_prev_.mono_ns||o.mono_ns-beta_prev_.mono_ns>beta_.fix_pair_max_ns||
+        p.utc_seconds<q.utc_seconds||p.utc_seconds-q.utc_seconds>beta_.utc_step_max_s)
+        return BETA_GATE_PREVIOUS;
+    if (!beta_pair_continues(o)) return BETA_GATE_UTC_MONO;
+    if (!finite(p.horizontal)||p.horizontal<=0||p.horizontal>beta_.anchor_hdop_max)
+        return BETA_GATE_HDOP;
+    const SensorRecord* wheel=causal(wheel_history_,o.mono_ns);
+    if (!wheel||!finite(wheel->value)) return BETA_GATE_WHEEL;
+    SensorRecord latched;
+    const SensorRecord* reverse=reverse_at(o.mono_ns,&latched);
+    // Reversing (e.g. into a garage) keeps refreshing the position of a
+    // carried estimate; the course is not a body heading then.
+    if (!reverse||(reverse->value!=0&&!carried)) return BETA_GATE_REVERSE;
+    check->reversing=reverse->value!=0;
+    if (!reverse_exit_seen_) return BETA_GATE_REVERSE_UNPROVEN;
+    // Absolute slack avoids turning GPS jitter / v*dt at a crawl into an
+    // implicit minimum-speed gate. Reject gross jumps, not ordinary braking.
+    double dlon=p.longitude_deg-q.longitude_deg;
+    if (dlon>180) dlon-=360;
+    if (dlon< -180) dlon+=360;
+    const double north=(p.latitude_deg-q.latitude_deg)*111320;
+    const double east=dlon*111320*std::cos((p.latitude_deg+q.latitude_deg)*0.5*PI/180);
+    const double distance=std::sqrt(north*north+east*east);
+    const double expected=(p.velocity_kmh+q.velocity_kmh)/7.2*
+        double(p.utc_seconds-q.utc_seconds);
+    *ratio=expected>0?distance/expected:std::numeric_limits<double>::quiet_NaN();
+    if (std::fabs(distance-expected)>beta_.position_slack_m+0.5*expected)
+        return BETA_GATE_DISPLACEMENT;
+    const bool course=!check->reversing&&finite(p.heading_deg)&&p.heading_deg>=0&&p.heading_deg<360;
+    if (course&&beta_have_heading_ref_&&wheel->value>0) {
+        double chord;
+        if (fix_distance(p,beta_heading_ref_.position,&chord)>=runtime::BETA_HEADING_BASELINE_M) {
+            check->chord=true;
+            check->agrees=std::fabs(::remainder(p.heading_deg*PI/180-chord,2*PI))<=
+                runtime::BETA_COURSE_CHORD_MAX_DEG*PI/180;
+        }
+    }
+    // A stationary cold start has no observable body heading, and the first
+    // heading needs a GPS displacement that confirms the course (a wrong
+    // first course would otherwise be carried). Once seeded, stationary fixes
+    // can refresh position without resetting heading/error.
+    if (!carried&&(!course||p.velocity_kmh==0||wheel->value==0||!check->agrees)) return BETA_GATE_COURSE;
+    const double v=p.velocity_kmh;
+    const double confidence=v*v/(v*v+beta_.course_weight_kmh*beta_.course_weight_kmh);
+    const double gps_error=beta_.heading_error_rad+(1-confidence)*PI/2;
+    if (!carried) {
+        *heading=p.heading_deg*PI/180; *error=gps_error;
+        *applied_weight=1;
+    } else {
+        *heading=carried->body_heading_rad;
+        *error=carried->heading_budget_rad+beta_.rotation_budget_per_rad*beta_rotation_rad_;
+        // The GPS course lags the body in a turn (trip2/4 reference delay
+        // ~1.3 s): while the yaw says turning, or cannot say, carry the yaw.
+        double turn=0;
+        const double pair_s=double(o.mono_ns-beta_prev_.mono_ns)/1e9;
+        const bool quiet=beta_yaw_turn(beta_prev_.mono_ns,o.mono_ns,&turn)&&pair_s>0&&
+            std::fabs(turn)/pair_s<=beta_.yaw_quiet_max_rad_s;
+        // Review M1 (2026-10-09, candidate C's check, adopted after the
+        // replay/synthetic comparison in validation/ENGAGEMENT_POLICY_M_2026-10-09.md):
+        // the GPS course change since the reference fix must match the closed
+        // yaw integral within BETA_COURSE_TURN_MAX_DEG + BETA_COURSE_TURN_FRACTION
+        // x |turn|; an abrupt course change the yaw does not show (multipath)
+        // neither blends nor counts towards a resync.
+        double since_ref=0;
+        const double ref_course=beta_heading_ref_.position.heading_deg*PI/180;
+        const bool motion=beta_have_heading_ref_&&finite(ref_course)&&
+            beta_yaw_turn(beta_heading_ref_.mono_ns,o.mono_ns,&since_ref)&&
+            std::fabs(::remainder(p.heading_deg*PI/180-ref_course,2*PI)-since_ref)<=
+                runtime::BETA_COURSE_TURN_MAX_DEG*PI/180+runtime::BETA_COURSE_TURN_FRACTION*std::fabs(since_ref);
+        if (quiet&&course&&motion&&wheel->value>0&&(!check->chord||check->agrees)) {
+            const double innovation=::remainder(p.heading_deg*PI/180-*heading,2*PI);
+            // The robust weight below ignores a large disagreement, so a wrong
+            // carried heading would never recover. A run of chord-confirmed
+            // courses with a stable disagreement (the course turns with the
+            // yaw) is evidence against the carried heading: reseed from it.
+            if (check->chord&&std::fabs(innovation)>runtime::BETA_RESYNC_MIN_DEG*PI/180) {
+                check->candidate=true; check->innovation=innovation;
+                check->consistent=beta_resync_count_>0&&o.mono_ns>beta_resync_ns_&&
+                    o.mono_ns-beta_resync_ns_<=runtime::BETA_RESYNC_GAP_NS&&
+                    std::fabs(::remainder(innovation-beta_resync_innovation_,2*PI))<=
+                        runtime::BETA_RESYNC_CONSISTENT_DEG*PI/180;
+                if (check->consistent&&beta_resync_count_+1>=runtime::BETA_RESYNC_FIXES) {
+                    check->resync=true; *heading=p.heading_deg*PI/180; *error=gps_error;
+                    *applied_weight=1; return BETA_GATE_ACCEPTED;
+                }
+            }
+            const double residual=innovation/beta_.course_innovation_rad;
+            const double mismatch=std::fabs(v-wheel->value*3.6)/beta_.wheel_gps_speed_max_diff_kmh;
+            const double weight=confidence/((1+residual*residual)*(1+mismatch*mismatch));
+            *applied_weight=weight;
+            const double correction=::fmax(-beta_.course_correction_rad,
+                ::fmin(beta_.course_correction_rad,innovation));
+            *heading=std::fmod(*heading+weight*correction+2*PI,2*PI);
+            // Position refresh must not silently reset carried heading error.
+            // Disagreement contributes even when the correction is clipped.
+            *error=(1-weight)*(*error)+weight*(gps_error+std::fabs(innovation-correction));
+        }
+    }
+    return BETA_GATE_ACCEPTED;
 }
 BetaAnchorGate Pipeline::evaluate_beta_gate(const adapter::Observation& o,double* ratio) const {
     const adapter::PositionInput& p=o.position;
@@ -1030,39 +1186,147 @@ BetaAnchorGate Pipeline::evaluate_beta_gate(const adapter::Observation& o,double
     if (!reverse_exit_seen_) return BETA_GATE_REVERSE_UNPROVEN;
     return BETA_GATE_ACCEPTED;
 }
+// Review M3: the continuous policy's decision when the GPS goes (mode 0).
+// FRESH: the last accepted position is at most BETA_POSITION_MAX_AGE_NS old.
+// FALLBACK: older, but the seeded estimate has not failed, the last accepted
+// position is at most the bounded duration (60 s) old, the honest budget is
+// within the bounded accuracy (40 m) and every rejected data-valid fix since
+// then agreed with the estimate. Positions are still refreshed only from
+// fixes passing every check (HDOP <= 3 among them); the fallback only lets an
+// outage start from the dead-reckoned estimate. Returns false to refuse.
+bool Pipeline::beta_entry(const adapter::Observation& o) {
+    const runtime::BetaProfile bounded=runtime::beta_profile_bounded();
+    const mx5_dr_snapshot& e=beta_core_.estimate;
+    const bool have_fix=beta_fix_ns_&&o.mono_ns>=beta_fix_ns_;
+    const double age=have_fix?double(o.mono_ns-beta_fix_ns_)/1e9:std::numeric_limits<double>::quiet_NaN();
+    const double honest=beta_core_.seeded?e.error_budget_m+beta_rotation_budget_m_:
+        std::numeric_limits<double>::quiet_NaN();
+    BetaAnchorGate gate=BETA_GATE_ENTRY_REFUSED;
+    const char* why="unseeded";
+    if (!beta_core_.seeded) why="unseeded";
+    else if (!have_fix) why="age";
+    else if (o.mono_ns-beta_fix_ns_<=runtime::BETA_POSITION_MAX_AGE_NS) { gate=BETA_GATE_ENTRY_FRESH; why="fresh"; }
+    else if (e.reason!=MX5_DR_OK||e.state!=MX5_DR_READY||e.frontier_ns!=o.mono_ns) why="state";
+    else if (!(age<=bounded.duration_max_s)) why="age";
+    else if (!(honest<=bounded.accuracy_max_m)) why="budget";
+    else if (!beta_fix_agrees_) why="disagree";
+    else { gate=BETA_GATE_ENTRY_FALLBACK; why="fallback"; }
+    beta_record(o,gate,std::numeric_limits<double>::quiet_NaN());
+    BetaAnchorRecord& r=beta_records_[(beta_record_seq_-1)%BETA_RECORD_CAPACITY];
+    r.entry_age_s=age; r.entry_budget_m=honest; r.entry_reason=why;
+    // An unseeded core keeps the historical GAP control (it reports NO_SEED).
+    return gate!=BETA_GATE_ENTRY_REFUSED||!beta_core_.seeded;
+}
+// Review M2: reseed the core at its own dead-reckoned estimate when the GPS
+// returns, with the carried heading and the honest position/heading budgets
+// (not a GPS anchor, so beta_fix_ns_ and the rotation budget stay as they
+// are). The next fix that passes the pair, displacement, HDOP and reverse
+// checks refreshes only the position (the reverse-case approach); a second
+// outage before then must pass beta_entry() on the unchanged evidence.
+bool Pipeline::beta_carry_across_return(const adapter::Observation& o,const mx5_dr_snapshot& carried,
+                                        double stop_dwell) {
+    if (beta_core_result_!=MX5_DR_OK||beta_position_seq_==UINT64_MAX||!carried.derived_utc_ns) return false;
+    mx5_dr_anchor a=mx5_dr_anchor(); a.context=beta_core_.estimate.context;
+    a.anchor_id=a.position_seq=++beta_position_seq_; a.measured_ns=o.mono_ns;
+    a.utc_ns=carried.derived_utc_ns;
+    a.latitude_deg=carried.latitude_deg; a.longitude_deg=carried.longitude_deg;
+    a.body_heading_rad=carried.body_heading_rad;
+    a.position_error_m=carried.error_budget_m; a.heading_error_rad=carried.heading_budget_rad;
+    a.quality=MX5_DR_MODEL;
+    beta_core_result_=mx5_dr_seed(&beta_core_,&a);
+    if (beta_core_result_!=MX5_DR_OK) { beta_core_failure_=beta_core_result_; return false; }
+    beta_core_.stop_dwell_s=stop_dwell; beta_core_.estimate.stopped=carried.stopped;
+    return true;
+}
 void Pipeline::beta_position(const adapter::Observation& o) {
     if (!beta_enabled_||!beta_core_.configured) return;
     const int mode=o.position.mode;
     if (mode==0||mode==3) {
         if (beta_mode_!=mode) {
-            // Tunnel mode lifts the in-outage limits only. An anchor that has
-            // been integrating through a long GPS-present stretch (no new gated
-            // anchor, e.g. above the anchor speed ceiling) must not start an
-            // episode: apply the bounded envelope at the moment the GPS goes.
-            if (mode==0 && beta_.unbounded && beta_core_.seeded) {
+            bool refuse=false;
+            if (mode==0 && beta_.unbounded && beta_.continuous_anchor) refuse=!beta_entry(o);
+            else if (mode==0 && beta_.unbounded && beta_core_.seeded) {
+                // Legacy (unbounded && !continuous_anchor): replay-only
+                // counterfactual (replay_beta --engagement legacy), never a
+                // product profile. Tunnel mode lifted only the in-outage
+                // limits, so an anchor that integrated through a long
+                // GPS-present stretch must not start an episode: the bounded
+                // envelope applies at the moment the GPS goes.
                 const runtime::BetaProfile bounded=runtime::beta_profile_bounded();
                 const mx5_dr_snapshot& e=beta_core_.estimate;
-                if (e.elapsed_s>bounded.duration_max_s ||
-                    e.error_budget_m+beta_rotation_budget_m_>bounded.accuracy_max_m) {
-                    beta_control(MX5_DR_DISABLE);
-                    beta_mode_=mode; beta_have_prev_=false; beta_streak_=false; return;
-                }
+                refuse=e.elapsed_s>bounded.duration_max_s ||
+                    e.error_budget_m+beta_rotation_budget_m_>bounded.accuracy_max_m;
+            }
+            if (refuse) {
+                beta_control(MX5_DR_DISABLE);
+                beta_mode_=mode; beta_have_prev_=false; beta_streak_=false;
+                beta_have_heading_ref_=false; beta_resync_count_=0; return;
             }
             beta_control(mode==0?MX5_DR_GAP:MX5_DR_NATIVE_POSITION);
         }
-        beta_mode_=mode; beta_have_prev_=false; beta_streak_=false; return;
+        beta_mode_=mode; beta_have_prev_=false; beta_streak_=false;
+        beta_have_heading_ref_=false; beta_resync_count_=0; return;
     }
     if (mode!=1&&mode!=2) {
         beta_control(MX5_DR_DISABLE); beta_gate_=BETA_GATE_BAD_FIX;
         beta_mode_=mode; beta_have_prev_=false; beta_streak_=false;
+        beta_have_heading_ref_=false; beta_resync_count_=0;
         beta_record(o,beta_gate_,std::numeric_limits<double>::quiet_NaN()); return;
     }
+    const mx5_dr_snapshot carried=beta_core_.estimate;
+    const double carried_stop_dwell=beta_core_.stop_dwell_s;
+    const bool have_heading=beta_core_.seeded&&carried.frontier_ns==o.mono_ns&&
+        carried.reason==MX5_DR_OK;
+    const bool returned=beta_mode_==0;
     if (beta_mode_==0||beta_mode_==3) beta_control(MX5_DR_GPS_RETURN);
+    // Back-to-back tunnels (review M2): an unseeded core needs PREVIOUS ->
+    // COURSE -> seed (>= 3 fixes) before a second outage could start. Carry the
+    // yaw heading and the honest budgets across the return instead; the next
+    // fix that passes every check refreshes only the position.
+    if (returned&&beta_.continuous_anchor&&have_heading&&carried.state==MX5_DR_ACTIVE)
+        beta_carry_across_return(o,carried,carried_stop_dwell);
     beta_mode_=mode;
-    // Rule 3: only a gated fix anchors. A failing fix leaves the previous
-    // anchor and its clock untouched; it never re-anchors or disables it.
-    double ratio;
-    beta_gate_=evaluate_beta_gate(o,&ratio);
+    // Only a fix passing the selected policy refreshes position. A failing fix
+    // leaves the previous position, heading and clock untouched; it never
+    // reseeds or disables the estimate.
+    double ratio,heading=o.position.heading_deg*PI/180,heading_error=beta_.heading_error_rad,weight=0;
+    CourseCheck check=CourseCheck();
+    beta_gate_=beta_.continuous_anchor?
+        evaluate_beta_tracking(o,have_heading?&carried:0,&heading,&heading_error,&ratio,&weight,&check):
+        evaluate_beta_gate(o,&ratio);
+    if (beta_.continuous_anchor&&(beta_gate_==BETA_GATE_ACCEPTED||beta_gate_==BETA_GATE_COURSE)) {
+        // A data-valid fix: advance the course baseline and the resync run.
+        if (check.reversing) { beta_have_heading_ref_=false; beta_resync_count_=0; }
+        else if (!beta_have_heading_ref_||check.chord) { beta_heading_ref_=o; beta_have_heading_ref_=true; }
+        if (check.resync||!check.candidate) { if (check.chord||check.resync) beta_resync_count_=0; }
+        else {
+            beta_resync_count_=check.consistent?beta_resync_count_+1:1;
+            beta_resync_innovation_=check.innovation; beta_resync_ns_=o.mono_ns;
+        }
+    }
+    if (beta_.continuous_anchor) {
+        // Review H1: a GPS course chord must never span a reverse manoeuvre,
+        // whatever the gate (an unseeded core rejects reverse fixes as
+        // REVERSE before the bookkeeping above): after a reverse then forward
+        // drive the chord from a pre-reverse reference points backwards and
+        // would seed a heading 180 deg wrong.
+        SensorRecord latched;
+        const SensorRecord* reverse=reverse_at(o.mono_ns,&latched);
+        if (!reverse||reverse->value!=0) { beta_have_heading_ref_=false; beta_resync_count_=0; }
+        // Review M3 entry evidence: a rejected data-valid fix must agree with
+        // the dead-reckoned estimate (honest budget + slack) for a later
+        // fallback entry. A fix that cannot be compared counts as disagreeing.
+        if (valid_gps_position(o)&&beta_gate_!=BETA_GATE_ACCEPTED&&beta_core_.seeded) {
+            const mx5_dr_snapshot& e=beta_core_.estimate;
+            adapter::PositionInput at=o.position;
+            at.latitude_deg=e.latitude_deg; at.longitude_deg=e.longitude_deg;
+            double course;
+            if (e.frontier_ns!=o.mono_ns||e.reason!=MX5_DR_OK||
+                !(fix_distance(o.position,at,&course)<=
+                  e.error_budget_m+beta_rotation_budget_m_+beta_.position_slack_m))
+                beta_fix_agrees_=false;
+        }
+    }
     // 3.1-3.2 bookkeeping: a no-fix value (utc 0) ends the run; the same utc
     // second keeps the baseline; any other valid fix becomes the baseline and
     // either continues the run or starts a new one.
@@ -1073,23 +1337,35 @@ void Pipeline::beta_position(const adapter::Observation& o) {
         }
         beta_prev_=o; beta_have_prev_=true;
     }
-    beta_record(o,beta_gate_,ratio);
-    if (beta_gate_!=BETA_GATE_ACCEPTED) return;
-    if (beta_position_seq_==UINT64_MAX) { beta_gate_=BETA_GATE_CORE; return; }
+    if (beta_gate_!=BETA_GATE_ACCEPTED) { beta_record(o,beta_gate_,ratio); return; }
+    if (beta_position_seq_==UINT64_MAX) {
+        beta_gate_=BETA_GATE_CORE; beta_record(o,beta_gate_,ratio); return;
+    }
     mx5_dr_anchor a=mx5_dr_anchor(); a.context=beta_core_.estimate.context;
     a.anchor_id=a.position_seq=++beta_position_seq_; a.measured_ns=o.mono_ns;
     a.utc_ns=o.position.utc_seconds*1000000000ULL;
     a.latitude_deg=o.position.latitude_deg; a.longitude_deg=o.position.longitude_deg;
-    a.body_heading_rad=o.position.heading_deg*PI/180;
-    a.position_error_m=beta_.anchor_error_m; a.heading_error_rad=beta_.heading_error_rad;
+    a.body_heading_rad=heading;
+    a.position_error_m=beta_.anchor_error_m; a.heading_error_rad=heading_error;
     a.quality=MX5_DR_MODEL;
     beta_core_result_=mx5_dr_seed(&beta_core_,&a);
     if (beta_core_result_==MX5_DR_OK) {
+        if(beta_.continuous_anchor&&have_heading) {
+            // 1 Hz stationary position refreshes must not restart the 1.5 s
+            // stop confirmation forever and integrate gyro bias while parked.
+            beta_core_.stop_dwell_s=carried_stop_dwell;
+            beta_core_.estimate.stopped=carried.stopped;
+        }
         beta_core_failure_=MX5_DR_OK;
         beta_rotation_rad_=0; beta_rotation_budget_m_=0; beta_conflict_since_=0;
-        beta_reverse_suspect_=false; beta_reverse_fast_since_=0;
+        beta_reverse_suspect_=false;
+        beta_fix_ns_=o.mono_ns; beta_fix_agrees_=true;
+        // A reverse position refresh must not restart the sustained
+        // reverse-contradiction timer (3.4).
+        if (!(beta_.continuous_anchor&&check.reversing)) beta_reverse_fast_since_=0;
     }
     else beta_gate_=BETA_GATE_CORE;
+    beta_record(o,beta_gate_,ratio,weight,check.reversing?"reverse":!have_heading?"seed":check.resync?"resync":weight>0?"blend":"yaw");
 }
 PipelineResult Pipeline::drain(uint64_t watermark) {
     if (!configured_) return PIPELINE_BAD_INPUT;
@@ -1334,8 +1610,15 @@ SpeedPublication Pipeline::speed_publication(uint64_t now) const {
 const char* beta_anchor_gate_name(BetaAnchorGate gate) {
     static const char* const names[]={"DISABLED","WAITING","ACCEPTED","BAD_FIX","SPEED",
         "PREVIOUS","COURSE","YAW","WHEEL","REVERSE","CORE","UTC","UTC_MONO","HDOP","SETTLING",
-        "DISPLACEMENT","REVERSE_UNPROVEN"};
+        "DISPLACEMENT","REVERSE_UNPROVEN","ENTRY_FRESH","ENTRY_FALLBACK","ENTRY_REFUSED"};
     return unsigned(gate)<sizeof names/sizeof names[0]?names[gate]:"UNKNOWN";
+}
+unsigned beta_heading_source_code(const char* source) {
+    static const char* const names[]={"seed","blend","yaw","reverse","resync"};
+    if (!source) return 0;
+    for (unsigned i=0;i<sizeof names/sizeof names[0];++i)
+        if (std::strcmp(source,names[i])==0) return i+1;
+    return std::strcmp(source,"legacy")==0?9:0;
 }
 const char* pipeline_result_name(PipelineResult r) {
     static const char* const names[]={"OK","WAITING","BAD_INPUT","LATE","CLOCK_RESET",

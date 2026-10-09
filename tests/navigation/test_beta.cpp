@@ -27,14 +27,14 @@ using mx5::runtime::BetaModelInput;
 static unsigned checks;
 #define CHECK(x) do { ++checks; if(!(x)) { std::fprintf(stderr,"line %d: %s\n",__LINE__,#x); std::exit(1); } } while(0)
 static uint64_t T(unsigned ms) { return 1000000000ULL+uint64_t(ms)*1000000ULL; }
-static unsigned wheel_raw(double kmh) { return unsigned(std::lround(kmh*100+10000)); }
+static unsigned wheel_raw(double kmh) { return unsigned(::lround(kmh*100+10000)); }
 // BETA rate = (mean-2048) * -0.000658615 rad/s (fixed BETA zero, rule 3.5).
 static const unsigned STRAIGHT=2048;
-static unsigned yaw_raw(double rad_s) { return unsigned(std::lround(2048-rad_s/0.000658615)); }
+static unsigned yaw_raw(double rad_s) { return unsigned(::lround(2048-rad_s/0.000658615)); }
 // The straight plans: 1 Hz fixes 410..11410 ms, GPS lost at 11620 ms.
 static const unsigned ANCHOR_MS=11410, LOST_MS=11620;
 
-struct Fix { unsigned ms; int mode; double kmh, heading, lat, hdop; uint64_t utc; };
+struct Fix { unsigned ms; int mode; double kmh, heading, lat, hdop; uint64_t utc; double lon; };
 struct Plan {
     unsigned end_ms;
     std::function<double(unsigned)> wheel;      // km/h at ms
@@ -53,7 +53,7 @@ struct Plan {
 };
 static uint64_t utc_at(unsigned ms) { return 1700000000ULL+ms/1000; }
 static Fix fix(unsigned ms,int mode=1,double kmh=36,double heading=0) {
-    Fix f; f.ms=ms; f.mode=mode; f.kmh=kmh; f.heading=heading; f.hdop=1.0; f.utc=utc_at(ms);
+    Fix f; f.ms=ms; f.mode=mode; f.kmh=kmh; f.heading=heading; f.hdop=1.0; f.utc=utc_at(ms); f.lon=135;
     f.lat=35+kmh/3.6*(ms/1000.0)/111320; return f;
 }
 static Fix fix_at(unsigned ms,double lat,double kmh=36,double heading=0) {
@@ -68,7 +68,7 @@ static adapter::Observation position(const Fix& f,unsigned seq) {
     adapter::Observation o=adapter::Observation(); o.kind=adapter::Observation::POSITION;
     o.call_sequence=seq; o.mono_ns=T(f.ms); o.original_mode=f.mode;
     o.position.mode=f.mode; o.position.utc_seconds=f.utc;
-    o.position.latitude_deg=f.lat; o.position.longitude_deg=135;
+    o.position.latitude_deg=f.lat; o.position.longitude_deg=f.lon;
     o.position.heading_deg=f.heading; o.position.velocity_kmh=f.kmh;
     o.position.horizontal=f.hdop; o.position.vertical=f.hdop;
     return o;
@@ -519,7 +519,7 @@ static void accuracy_boundary_and_heading_withdrawal() {
       CHECK(std::fabs(s.accuracy_m-(20+5+lease_term+10*b.rotation_budget_per_rad*1.0*(0.1+0.5)))<1e-9);
       in.rotation_budget_m=40-20-lease_term-10*0.1*0.6+1e-6;
       CHECK(runtime::map_model_publication(in,b,&s)==runtime::CORE_BRIDGE_LIMIT && !s.ready);
-      in.rotation_rad=std::nan("");
+      in.rotation_rad=::nan("");
       CHECK(runtime::map_model_publication(in,b,&s)==runtime::CORE_BRIDGE_NUMERIC); }
     // Not ACTIVE (GPS still present), qualified-domain or expired: never ready.
     BetaModelInput in=synthetic(25,0.1); in.snapshot.state=MX5_DR_READY;
@@ -584,7 +584,7 @@ static void unbounded_profile_clamps_reported_accuracy() {
     // Non-finite and non-model inputs are still refused in tunnel mode.
     BetaModelInput in=synthetic(25,0.1); in.snapshot.domain=MX5_DR_QUALIFIED_DOMAIN;
     CHECK(runtime::map_model_publication(in,t,&s,&honest)==runtime::CORE_BRIDGE_UNQUALIFIED && !s.ready);
-    in=synthetic(25,0.1); in.rotation_rad=std::nan("");
+    in=synthetic(25,0.1); in.rotation_rad=::nan("");
     CHECK(runtime::map_model_publication(in,t,&s,&honest)==runtime::CORE_BRIDGE_NUMERIC);
     // The sanity caps are not behavioural limits but still exist.
     BetaProfile bad=t; bad.duration_max_s=21601.0;
@@ -592,29 +592,339 @@ static void unbounded_profile_clamps_reported_accuracy() {
     // Core configuration: tunnel mode requests the extended limits.
     CHECK(runtime::beta_core_config(t).extended_limits==1 && runtime::beta_core_config(b).extended_limits==0);
 }
-// Review finding (b1ec29a): tunnel mode lifts the in-outage limits only. An
-// anchor that integrated through a long GPS-present stretch must not start an
-// episode, and a standstill inside a tunnel episode keeps a bearing.
-static void stale_anchor_does_not_start_a_tunnel_episode() {
-    const unsigned gaps[]={5000,30000,70000};
-    for(unsigned g=0;g<3;++g) {
+// The continuous policy replaces the b1ec29a stale-anchor entry veto with an
+// entry decision at the GPS loss (review M3, 2026-10-09): FRESH when the last
+// accepted position is at most BETA_POSITION_MAX_AGE_NS old; otherwise FALLBACK
+// from the dead-reckoned estimate only inside the bounded envelope (60 s since
+// that position, honest budget <= 40 m) and when every rejected data-valid fix
+// in between agreed with the estimate; otherwise REFUSED (stock outage).
+static double angle_error(double a,double b) { return std::fabs(std::remainder(a-b,360.0)); }
+static bool last_entry(const Pipeline& p,BetaAnchorRecord* out) {
+    for(uint64_t q=p.beta_anchor_sequence();q>0;--q)
+        if(p.beta_anchor_record(q,out)&&(out->gate==BETA_GATE_ENTRY_FRESH||
+           out->gate==BETA_GATE_ENTRY_FALLBACK||out->gate==BETA_GATE_ENTRY_REFUSED)) return true;
+    return false;
+}
+static void stale_position_does_not_start_a_tunnel_episode() {
+    struct Case { unsigned gap; double offset_m; BetaAnchorGate want; const char* why; };
+    const Case cases[]={
+        {2000,0,BETA_GATE_ENTRY_FRESH,"fresh"},
+        {5000,0,BETA_GATE_ENTRY_FALLBACK,"fallback"},     // HDOP 5 fixes agree with the estimate
+        {5000,100,BETA_GATE_ENTRY_REFUSED,"disagree"},    // ... or are 100 m off it
+        {30000,0,BETA_GATE_ENTRY_REFUSED,"budget"},       // honest budget > 40 m
+        {70000,0,BETA_GATE_ENTRY_REFUSED,"age"}};         // older than 60 s
+    for(unsigned g=0;g<sizeof cases/sizeof cases[0];++g) {
+        const Case& c=cases[g];
         Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
         Plan plan; plan.boot_reverse();
         for(unsigned ms=410;ms<=ANCHOR_MS;ms+=1000) plan.fixes.push_back(fix(ms,1,36));
-        for(unsigned ms=ANCHOR_MS+1000;ms<=ANCHOR_MS+gaps[g];ms+=1000) {
-            Fix f=fix(ms,1,36); f.hdop=5.0; plan.fixes.push_back(f); // fails the HDOP gate: anchor ages
+        for(unsigned ms=ANCHOR_MS+1000;ms<=ANCHOR_MS+c.gap;ms+=1000) {
+            Fix f=fix(ms,1,36); f.hdop=5.0; // fails the HDOP check: position ages
+            f.lon+=c.offset_m/(111320*std::cos(35*3.14159265358979/180));
+            plan.fixes.push_back(f);
         }
-        const unsigned lost=ANCHOR_MS+gaps[g]+210;
+        const unsigned lost=ANCHOR_MS+c.gap+210;
         plan.fixes.push_back(fix(lost,0,36));
         plan.end_ms=lost+1600;
         unsigned published=0;
         plan.each=[&](Pipeline& q,unsigned ms) {
             if(ms<lost+200) return;
             adapter::DrSnapshot s;
-            if(publish(q,ms,&s,0)==runtime::CORE_BRIDGE_OK) ++published;
+            if(runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK) ++published;
         };
         run(p,plan);
-        if(gaps[g]<=5000) CHECK(published>0); else CHECK(published==0);
+        BetaAnchorRecord r; CHECK(last_entry(p,&r));
+        if(r.gate!=c.want||std::strcmp(r.entry_reason,c.why)!=0)
+            std::fprintf(stderr,"gap %u offset %.0f: %s/%s age %.1f budget %.1f\n",c.gap,c.offset_m,
+                         beta_anchor_gate_name(r.gate),r.entry_reason,r.entry_age_s,r.entry_budget_m);
+        CHECK(r.gate==c.want && std::strcmp(r.entry_reason,c.why)==0);
+        CHECK(std::fabs(r.entry_age_s-(c.gap+210)/1000.0)<0.05);
+        CHECK((published>0)==(c.want!=BETA_GATE_ENTRY_REFUSED));
+    }
+    // A cold outage (never seeded) is journaled as refused/unseeded and stays stock.
+    Pipeline cold; init(cold,true,false); CHECK(cold.enable_beta(runtime::beta_profile_tunnel()));
+    Plan none; none.boot_reverse(); none.end_ms=3000; none.fixes.push_back(fix(410,1,36)); none.fixes.push_back(fix(1620,0,36));
+    run(cold,none);
+    BetaAnchorRecord r; CHECK(last_entry(cold,&r) && r.gate==BETA_GATE_ENTRY_REFUSED && std::strcmp(r.entry_reason,"unseeded")==0);
+}
+// Review M2 (2026-10-09): back-to-back tunnels. The yaw heading and the honest
+// budgets are carried across the GPS return, so the first fix that passes the
+// pair/displacement/HDOP checks after the return refreshes only the position
+// (source "yaw"/"blend", never a new "seed" from the GPS course) and a second
+// outage 2 s or more after the return starts FRESH. A 1 s exit has no such fix
+// and starts from the dead-reckoned estimate only inside the bounded envelope.
+static void back_to_back_tunnels_keep_the_heading() {
+    const unsigned exits[]={1,2,3,5};
+    for(unsigned i=0;i<4;++i) for(unsigned long_first=0;long_first<2;++long_first) {
+        const unsigned g=exits[i];
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+        Plan plan=straight();                         // first loss at 11620 ms
+        const unsigned back=long_first?71410:16410;  // a 60 s or a 5 s first tunnel
+        for(unsigned k=0;k<g;++k) plan.fixes.push_back(fix(back+1000*k,1,36));
+        const unsigned lost=back+1000*g-790;
+        plan.fixes.push_back(fix(lost,0,36));
+        plan.end_ms=lost+2500;
+        unsigned published=0, seeds_after_return=0;
+        plan.each=[&](Pipeline& q,unsigned ms) {
+            if(ms<lost+200) return;
+            adapter::DrSnapshot s;
+            if(runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK) {
+                ++published; CHECK(angle_error(s.travel_bearing_deg,0)<2.0);
+            }
+        };
+        run(p,plan);
+        BetaAnchorRecord r;
+        for(uint64_t q=1;q<=p.beta_anchor_sequence();++q)
+            if(p.beta_anchor_record(q,&r)&&r.gate==BETA_GATE_ACCEPTED&&r.mono_ns>=T(back)&&
+               std::strcmp(r.heading_source,"seed")==0) ++seeds_after_return;
+        CHECK(seeds_after_return==0);
+        CHECK(last_entry(p,&r));
+        if(g>=2) CHECK(r.gate==BETA_GATE_ENTRY_FRESH && published>0);
+        else if(!long_first) CHECK(r.gate==BETA_GATE_ENTRY_FALLBACK && published>0);
+        else CHECK(r.gate==BETA_GATE_ENTRY_REFUSED && published==0);
+    }
+}
+static void tunnel_entry_has_no_speed_gate() {
+    const double speeds[]={0.5,5,19,61,180};
+    for(unsigned i=0;i<sizeof speeds/sizeof speeds[0];++i) {
+        const double v=speeds[i];
+        // A cold start needs a GPS displacement of >= 3 m that confirms the
+        // course (observability, not a speed limit): more fixes when slow.
+        const unsigned n=3+unsigned(std::ceil(3.0/(v/3.6)));
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+        Plan plan; plan.boot_reverse();
+        plan.wheel=[v](unsigned){return v;};
+        for(unsigned k=0;k<n;++k) plan.fixes.push_back(fix(410+1000*k,1,v));
+        const unsigned lost=410+1000*(n-1)+210;
+        plan.fixes.push_back(fix(lost,0,v)); plan.end_ms=lost+1900;
+        run(p,plan);
+        adapter::DrSnapshot s;
+        CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+        CHECK(std::fabs(s.speed_mps-v/3.6)<0.001 && s.beta);
+    }
+}
+// Head-to-head finding 2026-10-09: a wrong first GPS course must not be
+// carried for minutes. The course must agree with the GPS displacement to
+// seed, and a stable chord-confirmed disagreement reseeds the heading.
+static double last_heading(const Pipeline& p) {
+    for(uint64_t q=p.beta_anchor_sequence();q>0;--q) {
+        BetaAnchorRecord r;
+        if(p.beta_anchor_record(q,&r)&&r.gate==BETA_GATE_ACCEPTED) return r.heading_deg;
+    }
+    return -1;
+}
+static void tunnel_wrong_course_does_not_stick() {
+    // Course 90 deg while the fixes move north: never seeds from it.
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+        Plan plan; plan.boot_reverse(); plan.end_ms=8000; plan.wheel=[](unsigned){return 12.0;};
+        for(unsigned ms=410;ms<=7410;ms+=1000) plan.fixes.push_back(fix(ms,1,12,90));
+        run(p,plan);
+        CHECK(p.beta_gate()==BETA_GATE_COURSE && last_heading(p)<0);
+    }
+    // A 25 deg wrong course passes the chord check and seeds; five consistent
+    // true courses reseed (C-style resync, but five fixes, not three).
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+        Plan plan; plan.boot_reverse(); plan.end_ms=30000; plan.wheel=[](unsigned){return 30.0;};
+        unsigned k=0; double at_bad=-1;
+        for(unsigned ms=410;ms<=29410;ms+=1000,++k) plan.fixes.push_back(fix(ms,1,30,k<6?25.0:0.0));
+        plan.each=[&](Pipeline& q,unsigned ms){ if(ms==6000) at_bad=last_heading(q); };
+        run(p,plan);
+        CHECK(angle_error(at_bad,25)<1.0);
+        BetaAnchorRecord r; CHECK(p.beta_anchor_record(p.beta_anchor_sequence(),&r));
+        CHECK(angle_error(r.heading_deg,0)<1.0);
+        bool resynced=false;
+        for(uint64_t q=1;q<=p.beta_anchor_sequence();++q)
+            if(p.beta_anchor_record(q,&r)&&std::strcmp(r.heading_source,"resync")==0) resynced=true;
+        CHECK(resynced);
+    }
+}
+static void tunnel_short_multipath_burst_does_not_resync() {
+    // Four fixes whose course AND positions swing 30 deg without yaw (a
+    // consistent multipath burst at a tunnel entrance), then the GPS is lost.
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan; plan.boot_reverse(); plan.wheel=[](unsigned){return 30.0;};
+    for(unsigned ms=410;ms<=20410;ms+=1000) plan.fixes.push_back(fix(ms,1,30,0));
+    double lat=fix(20410,1,30).lat, lon=135;
+    for(unsigned j=1;j<=4;++j) {
+        lat+=30/3.6*std::cos(30*3.14159265358979/180)/111320;
+        lon+=30/3.6*std::sin(30*3.14159265358979/180)/(111320*std::cos(35*3.14159265358979/180));
+        Fix f=fix_at(20410+1000*j,lat,30,30); f.lon=lon; plan.fixes.push_back(f);
+    }
+    plan.fixes.push_back(fix(24620,0,30)); plan.end_ms=26000;
+    run(p,plan);
+    adapter::DrSnapshot s;
+    CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+    CHECK(angle_error(s.travel_bearing_deg,0)<3.0);
+}
+// trip4 garage: the car reversed for 3 s before the GPS went. A carried
+// estimate keeps refreshing its position in reverse (no course use), so the
+// 3 s freshness rule does not refuse the entry; a fast latched reverse is
+// still a contradiction even though the position keeps refreshing.
+static void tunnel_reverse_refreshes_position_only() {
+    for(unsigned fast=0;fast<2;++fast) {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+        Plan plan=straight(20000); plan.fixes.pop_back();
+        const double v=fast?36.0:5.0;
+        plan.reverse.push_back(std::make_pair(12000u,1));
+        plan.wheel=[v](unsigned ms){return ms<12000?36.0:v;};
+        double lat=fix(ANCHOR_MS).lat;
+        for(unsigned ms=12410;ms<=16410;ms+=1000) {
+            lat-=v/3.6/111320; plan.fixes.push_back(fix_at(ms,lat,v,180));
+        }
+        plan.fixes.push_back(fix(16620,0,v));
+        unsigned reversed=0;
+        plan.each=[&](Pipeline& q,unsigned ms){
+            if(ms%1000!=500||ms<12000||ms>16500) return;
+            BetaAnchorRecord r;
+            if(q.beta_anchor_record(q.beta_anchor_sequence(),&r)&&r.gate==BETA_GATE_ACCEPTED&&
+               std::strcmp(r.heading_source,"reverse")==0) ++reversed;
+        };
+        run(p,plan);
+        adapter::DrSnapshot s;
+        const bool ok=runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK;
+        if(!fast) { CHECK(reversed>=3 && ok); }
+        else CHECK(p.beta_reverse_suspect() && !ok);
+    }
+}
+// Mutation guard (review 2026-10-09): a 1 Hz reverse position refresh must not
+// restart the 3.4 reverse-contradiction timer. The contradiction must fire
+// while the GPS is still present (the reverse fixes keep coming), not only
+// after the GPS is lost and the refreshes stop.
+static void tunnel_reverse_refresh_keeps_contradiction_timer() {
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan=straight(20000); plan.fixes.pop_back();
+    plan.reverse.push_back(std::make_pair(12000u,1));      // latch says reverse ...
+    plan.wheel=[](unsigned){return 36.0;};                 // ... at 36 km/h: contradiction
+    double lat=fix(ANCHOR_MS).lat;
+    for(unsigned ms=12410;ms<=18410;ms+=1000) {
+        lat-=36/3.6/111320; plan.fixes.push_back(fix_at(ms,lat,36,180));
+    }
+    bool suspect_with_gps=false; unsigned refreshed_after=0;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        if(ms==15000) suspect_with_gps=q.beta_reverse_suspect();
+        if(ms==18900) {
+            BetaAnchorRecord r;
+            for(uint64_t s=1;s<=q.beta_anchor_sequence();++s)
+                if(q.beta_anchor_record(s,&r)&&r.gate==BETA_GATE_ACCEPTED&&r.mono_ns>T(14600)) ++refreshed_after;
+        }
+    };
+    run(p,plan);
+    CHECK(suspect_with_gps);          // fired ~2 s after 12000 ms despite refreshes at 12410/13410/14410
+    CHECK(refreshed_after==0);        // a suspected latch is not refreshed again by reverse fixes
+}
+// Review H1 (2026-10-09): after boot, a reverse then forward drive must not
+// seed from a course chord spanning the reverse manoeuvre (the chord from the
+// pre-reverse reference points backwards: a heading 180 deg wrong).
+static void reverse_then_forward_does_not_seed_backwards() {
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan; plan.boot_reverse(); plan.end_ms=13000;
+    plan.reverse.push_back(std::make_pair(3000u,1)); plan.reverse.push_back(std::make_pair(8000u,0));
+    plan.wheel=[](unsigned ms){return ms<3000?0.0:7.2;};
+    const double lat0=35.0;
+    for(unsigned ms=410;ms<=2410;ms+=1000) plan.fixes.push_back(fix_at(ms,lat0,0,0));
+    double lat=lat0;
+    for(unsigned ms=3410;ms<=7410;ms+=1000){ lat-=2.0/111320; plan.fixes.push_back(fix_at(ms,lat,7.2,180)); }
+    // Forward (true heading 0); the first course still lags the reverse.
+    lat+=0.8/111320; plan.fixes.push_back(fix_at(8410,lat,7.2,180));
+    for(unsigned ms=9410;ms<=11410;ms+=1000){ lat+=2.0/111320; plan.fixes.push_back(fix_at(ms,lat,7.2,0)); }
+    plan.fixes.push_back(fix(11620,0,7.2));
+    run(p,plan);
+    BetaAnchorRecord r;
+    for(uint64_t q=1;q<=p.beta_anchor_sequence();++q)
+        if(p.beta_anchor_record(q,&r)&&r.gate==BETA_GATE_ACCEPTED) CHECK(angle_error(r.heading_deg,0)<30);
+    adapter::DrSnapshot s;
+    if(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK)
+        CHECK(angle_error(s.travel_bearing_deg,0)<30);
+}
+static void tunnel_low_speed_course_does_not_replace_carried_heading() {
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan=straight(16000);
+    plan.fixes.pop_back();
+    plan.wheel=[](unsigned ms){return ms<12000?36.0:5.0;};
+    Fix low=fix_at(12410,fix(ANCHOR_MS).lat+5.0/111320,5,150);
+    plan.fixes.push_back(low); plan.fixes.push_back(fix(12620,0,5));
+    run(p,plan);
+    adapter::DrSnapshot s;
+    CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+    CHECK(std::fabs(s.latitude_deg-low.lat)<10.0/111320); // recent position, not old fix
+    CHECK(s.travel_bearing_deg<5 || s.travel_bearing_deg>355); // reject large low-speed innovation
+}
+static void tunnel_multipath_course_step_keeps_yaw() {
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan=straight(15000); plan.fixes.pop_back();
+    plan.wheel=[](unsigned ms){return ms<12000?36.0:21.0;};
+    // Trip4-like entrance: course jumps ~18 degrees while yaw stays quiet.
+    // Position still updates, but one suspect fix must not drag heading 3 deg.
+    plan.fixes.push_back(fix_at(12410,fix(ANCHOR_MS).lat+6.0/111320,21,18));
+    plan.fixes.push_back(fix(12620,0,21)); run(p,plan);
+    adapter::DrSnapshot s;
+    CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.travel_bearing_deg<1.0);
+}
+// Review M1 (2026-10-09): a GPS course step the yaw does not show (the
+// positions stay straight, so the chord check alone accepts a 12 deg step)
+// must not be blended into the carried heading.
+static void course_step_without_yaw_turn_is_not_blended() {
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan=straight(14000); plan.fixes.pop_back();
+    plan.fixes.push_back(fix(12410,1,36,12));
+    plan.fixes.push_back(fix(12620,0,36)); run(p,plan);
+    adapter::DrSnapshot s;
+    CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+    CHECK(angle_error(s.travel_bearing_deg,0)<0.3);
+}
+static void tunnel_stationary_fixes_preserve_stop_confirmation() {
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan=straight(23000); plan.fixes.pop_back();
+    plan.wheel=[](unsigned ms){return ms<12000?36.0:0.0;};
+    plan.yaw=[](unsigned ms){return ms<12000?STRAIGHT:yaw_raw(0.01);};
+    for(unsigned ms=12410;ms<=20410;ms+=1000)
+        plan.fixes.push_back(fix_at(ms,fix(ANCHOR_MS).lat+6.0/111320,0,180));
+    plan.fixes.push_back(fix(20620,0,0));
+    double held=-1;
+    plan.each=[&](Pipeline& q,unsigned ms) {
+        if(ms==16000) {
+            BetaAnchorRecord r; CHECK(q.beta_anchor_record(q.beta_anchor_sequence(),&r));
+            CHECK(r.gate==BETA_GATE_ACCEPTED && std::strcmp(r.heading_source,"yaw")==0);
+            held=r.heading_deg;
+        }
+    };
+    run(p,plan);
+    adapter::DrSnapshot s;
+    CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.speed_mps==0 && held>=0);
+    CHECK(std::fabs(s.travel_bearing_deg-held)<0.05);
+    // A stationary cold boot has no absolute heading to carry.
+    Pipeline cold; init(cold,true,false); CHECK(cold.enable_beta(runtime::beta_profile_tunnel()));
+    Plan zero=straight(13000,0); zero.wheel=[](unsigned){return 0.0;}; run(cold,zero);
+    CHECK(cold.beta_gate()==BETA_GATE_COURSE);
+    CHECK(runtime::map_model_publication(cold.model_publication(T(zero.end_ms)),runtime::beta_profile_tunnel(),&s)!=runtime::CORE_BRIDGE_OK);
+}
+static void tunnel_keeps_data_validity_and_accepts_turns() {
+    for(unsigned c=0;c<6;++c) {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+        // A 5 km/h cold start seeds once the GPS displacement (>= 3 m since
+        // the first pair-checked fix) confirms the course: the fifth fix.
+        Plan plan; plan.boot_reverse(); plan.end_ms=6000;
+        plan.wheel=[](unsigned){return 5.0;};
+        plan.yaw=[](unsigned){return yaw_raw(0.2);}; // turning is not a veto
+        plan.fixes.push_back(fix(410,1,5,350));
+        plan.fixes.push_back(fix(1410,1,5,354));
+        plan.fixes.push_back(fix(2410,1,5,356));
+        plan.fixes.push_back(fix(3410,1,5,358));
+        Fix f=fix(4410,1,5,1);
+        if(c==1)f.utc=utc_at(3410); // no new measurement
+        if(c==2)f.lat=::nan("");
+        if(c==3)f.hdop=5;
+        if(c==4)f.lat+=0.01; // gross jump, not low-speed jitter
+        if(c==5)plan.reverse.clear();
+        plan.fixes.push_back(f); plan.fixes.push_back(fix(4620,0,5));run(p,plan);
+        adapter::DrSnapshot s;
+        const bool ok=runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK;
+        CHECK(ok==(c==0));
+        if(ok)CHECK(s.travel_bearing_deg>10 && s.travel_bearing_deg<25);
     }
 }
 static void standstill_in_a_tunnel_episode_keeps_a_bearing() {
@@ -875,6 +1185,12 @@ static void creeping_turn_is_not_a_frame_fault() {
     CHECK(c.stop_enter_mps==0.0 && c.stop_exit_mps==0.0005 && d.stop_enter_mps==0.2 && d.stop_exit_mps==0.5);
 }
 int main() {
+    tunnel_multipath_course_step_keeps_yaw();
+    course_step_without_yaw_turn_is_not_blended();
+    tunnel_keeps_data_validity_and_accepts_turns();
+    tunnel_stationary_fixes_preserve_stop_confirmation();
+    tunnel_entry_has_no_speed_gate();
+    tunnel_low_speed_course_does_not_replace_carried_heading();
     creeping_turn_is_not_a_frame_fault();
     motion_gap_rule();
     late_arrival_output_stays_bounded();
@@ -889,7 +1205,13 @@ int main() {
     budget_formula_and_limit();
     accuracy_boundary_and_heading_withdrawal();
     unbounded_profile_clamps_reported_accuracy();
-    stale_anchor_does_not_start_a_tunnel_episode();
+    stale_position_does_not_start_a_tunnel_episode();
+    tunnel_wrong_course_does_not_stick();
+    tunnel_short_multipath_burst_does_not_resync();
+    tunnel_reverse_refreshes_position_only();
+    tunnel_reverse_refresh_keeps_contradiction_timer();
+    reverse_then_forward_does_not_seed_backwards();
+    back_to_back_tunnels_keep_the_heading();
     standstill_in_a_tunnel_episode_keeps_a_bearing();
     yaw_window_mean_is_exact();
     reverse_latch_contradiction_withdraws();

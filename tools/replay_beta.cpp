@@ -386,7 +386,7 @@ bool load(const std::string& dir, const std::string& want_boot, double poll_hdop
 
 // ------------------------------------------------------------ options ----
 struct Options {
-    std::string trip, report, csv, boot_id, corrupt, journal, position_source;
+    std::string trip, report, csv, boot_id, corrupt, journal, position_source, engagement;
     std::vector<double> t0s, durations;
     double sweep_from, sweep_to, sweep_step;
     bool sweep, check, real_only;
@@ -550,8 +550,18 @@ bool start_product(uint64_t t) {
     o.sessions_declined = true;
     if (!A::configure(fake_send, o) || !A::set_mode(A::OBSERVE)) return false;
     const mx5_dr_context x = {1, 1, 1};
+    R::BetaProfile profile=R::beta_profile_tunnel();
+    // Counterfactuals are replay-only. Controller/bridge still use the same
+    // tunnel budgets; only the pipeline's engagement policy changes.
+    if (opt.engagement=="legacy") profile.continuous_anchor=false;
+    if (opt.engagement=="latest-course") {
+        profile.course_weight_kmh=0.001;
+        profile.course_innovation_rad=1e6;
+        profile.course_correction_rad=PI;
+        profile.wheel_gps_speed_max_diff_kmh=1e6;
+    }
     if (!nav.init_model(N::research_model_profile(), mx5_dr_default_config(), x, true, true, true) ||
-        !nav.enable_beta(R::beta_profile_tunnel()))
+        !nav.enable_beta(profile))
         return false;
     static R::BetaController controller(shared);
     beta = &controller;
@@ -593,7 +603,7 @@ struct SendEval {
 };
 struct WindowEval {
     int32_t id, exit_status;
-    double t0_s, d_s;
+    double t0_s, d_s, entry_kmh;
     int32_t sends, mode0_sends, replaced, with_truth, covered;
     double first_replaced_s, longest_engaged_s;
     char withdrawals[512], never[128];
@@ -778,6 +788,7 @@ bool write_all(int fd, const void* p, size_t n) {
 void child_report(int fd, const Window& w, size_t send_first, size_t line_first, const std::string& never) {
     WindowEval we = WindowEval();
     we.id = w.id; we.t0_s = w.t0 / 1e9; we.d_s = w.d / 1e9; we.first_replaced_s = NAN;
+    we.entry_kmh=outage.frozen.kmh; // last GPS known BEFORE T0, never held-out truth
     std::vector<SendEval> ev;
     for (size_t i = send_first; i < sends.size(); ++i) {
         const SendEval s = evaluate(sends[i], w.id, w.t0, w.t0 + w.d, w.t0);
@@ -971,6 +982,7 @@ void usage() {
     fprintf(stderr,
         "usage: replay_beta --trip DIR [--t0 S,S..] [--sweep FROM:TO:STEP] [--durations S,S..]\n"
         "                   [--real-only] [--cadence-ms N] [--grace-s S] [--truth-lag-ms N]\n"
+        "                   [--engagement continuous|legacy|latest-course]\n"
         "                   [--truth-gap-ms N] [--course-min-kmh K] [--coverage-min F]\n"
         "                   [--boot-id ID] [--poll-hdop H] [--position-source auto|adapter|poll] [--report FILE.json] [--csv FILE.csv] [--check]\n"
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
@@ -986,6 +998,7 @@ int main(int argc, char** argv) {
     opt.cadence_ns = 1000000000ULL; opt.grace_ns = 10000000000ULL; opt.truth_lag_ns = 0;
     opt.truth_gap_ns = 3000000000ULL; opt.course_min_kmh = 15; opt.coverage_min = 0.95;
     opt.poll_hdop = 1.0; opt.position_source = "auto";
+    opt.engagement = "continuous";
     opt.durations = parse_list("10,20,30,45,60");
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -1005,6 +1018,10 @@ int main(int argc, char** argv) {
         else if (a == "--grace-s" && more) opt.grace_ns = ns(atof(argv[++i]));
         else if (a == "--truth-lag-ms" && more) opt.truth_lag_ns = uint64_t(atof(argv[++i]) * 1e6);
         else if (a == "--truth-gap-ms" && more) opt.truth_gap_ns = uint64_t(atof(argv[++i]) * 1e6);
+        else if (a == "--engagement" && more) {
+            opt.engagement=argv[++i];
+            if(opt.engagement!="continuous"&&opt.engagement!="legacy"&&opt.engagement!="latest-course") usage();
+        }
         else if (a == "--course-min-kmh" && more) opt.course_min_kmh = atof(argv[++i]);
         else if (a == "--coverage-min" && more) opt.coverage_min = atof(argv[++i]);
         else if (a == "--poll-hdop" && more) opt.poll_hdop = atof(argv[++i]);
@@ -1185,7 +1202,7 @@ int main(int argc, char** argv) {
          ",\"position_source\":\"" + in.position_source + "\",\"motion_events\":" + std::to_string(in.motion_events) +
          ",\"input_resets\":" + std::to_string(in.input_resets) + ",\"callbacks\":" + std::to_string(in.calls.size()) +
          ",\"valid_gps_fixes\":" + std::to_string(in.truth.size()) + "},";
-    j += "\"config\":{\"durations_s\":[";
+    j += "\"config\":{\"engagement\":\""+opt.engagement+"\",\"durations_s\":[";
     for (size_t i = 0; i < opt.durations.size(); ++i) j += (i ? "," : "") + num(opt.durations[i]);
     j += "],\"cadence_ms\":" + num(opt.cadence_ns / 1e6) + ",\"grace_s\":" + num(opt.grace_ns / 1e9) +
          ",\"truth_lag_ms\":" + num(opt.truth_lag_ns / 1e6) + ",\"course_min_kmh\":" + num(opt.course_min_kmh) +
@@ -1280,16 +1297,17 @@ int main(int argc, char** argv) {
         FILE* f = fopen(opt.csv.c_str(), "w");
         if (!f) { perror(opt.csv.c_str()); return 2; }
         fprintf(f, "window,t0_s,duration_s,t_s,elapsed_s,mode,synthetic,choice,reason,result,accuracy_m,"
-                   "error_m,speed_mps,wheel_mps,gps_kmh,bearing_deg,course_deg,bearing_error_deg,payload_ok\n");
+                   "error_m,speed_mps,wheel_mps,gps_kmh,bearing_deg,course_deg,bearing_error_deg,payload_ok,entry_kmh\n");
         for (size_t i = 0; i < all.size(); ++i) {
             const SendEval& s = all[i];
             const WindowEval* w = s.window >= 0 && by_id.count(s.window) ? by_id[s.window] : 0;
-            fprintf(f, "%d,%s,%s,%.3f,%s,%d,%u,%d,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%u\n", s.window,
+            fprintf(f, "%d,%s,%s,%.3f,%s,%d,%u,%d,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%u,%s\n", s.window,
                     w ? num(w->t0_s).c_str() : "", w ? num(w->d_s).c_str() : "", s.t_s, num(s.elapsed_s).c_str(),
                     s.mode, unsigned(s.synthetic), s.choice, reason_name(s.reason), s.result,
                     num(s.accuracy_m).c_str(), num(s.error_m).c_str(), num(s.speed_mps).c_str(),
                     num(s.wheel_mps).c_str(), num(s.gps_kmh).c_str(), num(s.bearing_deg).c_str(),
-                    num(s.course_deg).c_str(), num(s.bearing_error_deg).c_str(), unsigned(s.payload_ok));
+                    num(s.course_deg).c_str(), num(s.bearing_error_deg).c_str(), unsigned(s.payload_ok),
+                    w?num(w->entry_kmh).c_str():"");
         }
         if (fclose(f)) { perror(opt.csv.c_str()); return 2; }
     }

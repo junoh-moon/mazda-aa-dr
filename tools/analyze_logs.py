@@ -64,6 +64,8 @@ LOWER_BOUNDS = {
 POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
 BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor",
               "beta_cadence_fence")
+# beta_anchor "h"[0] codes (navigation::beta_heading_source_code).
+BETA_HEADING_SOURCES = {1: "seed", 2: "blend", 3: "yaw", 4: "reverse", 5: "resync", 9: "legacy", 0: "none"}
 # beta_reverse_latch is a MODEL-domain row (also written in SHADOW mode 4).
 WHEEL_PROFILE = (0.01, -100.0)  # research_model_profile(): km/h per count, zero
 EARTH_RADIUS_M = 6371008.8
@@ -698,6 +700,8 @@ class Auditor:
         self.beta_speed_overlay_error_mps = dict(count=0, min=None, max=None, mean=None)
         self.beta_anchor_gates = Counter()
         self.beta_anchor_dropped = 0
+        self.beta_heading_sources = Counter()
+        self.beta_entry_reasons = Counter()
         self.beta_cadence_fences = Counter()  # by stream (2026-10-08)
         self.beta_reverse_latch = Counter()
 
@@ -2232,7 +2236,9 @@ class Auditor:
         kind = row["kind"]
         if not self.validate(row, source, ("mono_ns",)):
             return
-        if row.get("domain") != "beta":
+        # The compact beta_anchor row (2026-10-09) omits "domain": that kind
+        # exists only in the beta domain. Any explicit other domain is still a violation.
+        if row.get("domain", "beta" if kind == "beta_anchor" else None) != "beta":
             self.issue("unexpected_beta_domain", source, "BETA rows must stay in the beta domain", True)
         if ("assist_ready" in row or kind in ("beta_state", "beta_summary")) and row.get("assist_ready") is not False:
             self.issue("impossible_live_capability", source, "BETA cannot authorize qualified ASSIST", True)
@@ -2325,10 +2331,35 @@ class Auditor:
                 self.beta_hold_events["hold_set"] += row["count"] - beta["hold_seen"]
                 beta["hold_seen"] = row["count"]
         elif kind == "beta_anchor":
-            # One anchor gate evaluation (BETA_DECISIONS 3.2); diagnostic only.
-            if self.validate(row, source, ("seq", "mode", "utc_s", "dropped"), ("gate",)):
-                self.beta_anchor_gates[row["gate"]] += 1
-                self.beta_anchor_dropped = max(self.beta_anchor_dropped, row["dropped"])
+            # One fix evaluation or continuous-policy entry decision
+            # (BETA_DECISIONS 3.2); diagnostic only. Compact rows omit
+            # "dropped" when 0 and carry the heading as "h":[code, 0.1 deg,
+            # 0.1 deg(, weight %)]; older rows carry "dropped" and
+            # "heading":[deg, rad, weight, source].
+            if not self.validate(row, source, ("seq", "mode", "utc_s"), ("gate",)):
+                return
+            dropped = row.get("dropped", 0)
+            if not finite_number(dropped) or dropped < 0:
+                self.issue("partial_record", source, "Invalid beta_anchor dropped count")
+                return
+            self.beta_anchor_gates[row["gate"]] += 1
+            self.beta_anchor_dropped = max(self.beta_anchor_dropped, dropped)
+            compact, legacy = row.get("h"), row.get("heading")
+            if row["gate"] == "ACCEPTED" and (compact is not None or legacy is not None):
+                if isinstance(compact, list) and len(compact) in (3, 4) and \
+                        all(finite_number(v) for v in compact):
+                    name = BETA_HEADING_SOURCES.get(compact[0], "unknown")
+                elif isinstance(legacy, list) and len(legacy) == 4 and isinstance(legacy[3], str):
+                    name = legacy[3]
+                else:
+                    self.issue("partial_record", source, "Invalid beta_anchor heading")
+                    return
+                self.beta_heading_sources[name] += 1
+            if row["gate"].startswith("ENTRY_"):
+                entry = row.get("entry")
+                reason = entry[2] if isinstance(entry, list) and len(entry) == 3 and \
+                    isinstance(entry[2], str) else "unknown"
+                self.beta_entry_reasons[reason] += 1
         elif kind == "beta_cadence_fence":
             # The OEM POSITION or SEND stream stopped for longer than
             # limit_ms (e.g. a dongle reconnect): the worker revoked the
@@ -2713,6 +2744,9 @@ class Auditor:
                               speed_overlay_error_vs_wheel_mps=dict(self.beta_speed_overlay_error_mps),
                               anchor_gates=dict(self.beta_anchor_gates),
                               anchor_rows_dropped=self.beta_anchor_dropped,
+                              heading_sources=dict(self.beta_heading_sources),
+                              heading_resyncs=self.beta_heading_sources["resync"],
+                              entry_decisions=dict(self.beta_entry_reasons),
                               reverse_latch_events=dict(self.beta_reverse_latch),
                               last_state=self.beta_last_state, last_summary=self.beta_last_summary,
                               gps_return_checks=self.beta_returns,
@@ -2792,6 +2826,9 @@ def main(argv=None):
                    if beta["last_state"] else "none"))
             print("BETA exits from ENGAGED: %s; withdrawals: %s; reported accuracy (m): %s" %
                   (beta["engaged_exit_reasons"], beta["withdraw_reasons"], beta["replaced_accuracy_m"]))
+            if beta["heading_sources"] or beta["entry_decisions"]:
+                print("BETA heading sources: %s; resyncs %d; outage entries: %s" %
+                      (beta["heading_sources"], beta["heading_resyncs"], beta["entry_decisions"]))
             if beta["position_classes"]:
                 print("BETA NO_FIX: %d state rows; position classes: %s" %
                       (beta["position_classes"].get("NO_FIX", 0), beta["position_classes"]))

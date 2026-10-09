@@ -230,6 +230,48 @@ class BetaAnalyzeTests(unittest.TestCase):
         self.assertTrue(check["within_reported_accuracy"])
         self.assertFalse(beta["gps_is_ground_truth"])
 
+    def test_compact_anchor_rows_heading_sources_and_entries(self):
+        # Compact beta_anchor rows (2026-10-09): no domain, "dropped" only when
+        # nonzero, "h":[code, 0.1 deg, 0.1 deg(, weight %)], ENTRY_* decisions.
+        def anchor(seq, gate, **extra):
+            return dict(kind="beta_anchor", mono_ns=1_000_000_000 + seq, seq=seq, mode=1,
+                        utc_s=1_700_000_000 + seq, gate=gate, hdop=1, kmh=40, **extra)
+        rows = drive()
+        rows[3:3] = [
+            anchor(1, "PREVIOUS"), anchor(2, "COURSE", ratio=1.003),
+            anchor(3, "ACCEPTED", h=[1, 900, 70]), anchor(4, "ACCEPTED", h=[2, 900, 70, 94]),
+            anchor(5, "ACCEPTED", h=[3, 901, 71]), anchor(6, "ACCEPTED", h=[5, 1, 70]),
+            # A pre-2026-10-09 row with the long heading form still counts.
+            dict(anchor(7, "ACCEPTED", dropped=0, displacement_ratio=1.0, reverse_exit_seen=True),
+                 domain="beta", heading=[90.0, 0.12, 1.0, "blend"]),
+            anchor(8, "ENTRY_FALLBACK", entry=[4.2, 27.5, "fallback"]),
+            anchor(9, "ENTRY_REFUSED", entry=[70.2, 51.0, "age"], dropped=2)]
+        report = self.audit(rows)
+        self.assertNotIn("unexpected_beta_domain", self.codes(report))
+        self.assertNotIn("partial_record", self.codes(report))
+        beta = report["beta"]
+        self.assertEqual(beta["heading_sources"], {"seed": 1, "blend": 2, "yaw": 1, "resync": 1})
+        self.assertEqual(beta["heading_resyncs"], 1)
+        self.assertEqual(beta["entry_decisions"], {"fallback": 1, "age": 1})
+        self.assertEqual(beta["anchor_gates"]["ACCEPTED"], 5)
+        self.assertEqual(beta["anchor_rows_dropped"], 2)
+        out = io.StringIO()
+        self.path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        with contextlib.redirect_stdout(out):
+            module.main([str(self.path)])
+        self.assertIn("BETA heading sources:", out.getvalue())
+        self.assertIn("resyncs 1", out.getvalue())
+
+    def test_compact_anchor_row_keeps_domain_and_shape_checks(self):
+        rows = drive()
+        bad_domain = dict(kind="beta_anchor", mono_ns=1_500_000_000, domain="model", seq=1, mode=1,
+                          utc_s=1, gate="ACCEPTED", hdop=1, kmh=40, h=[1, 900, 70])
+        bad_heading = dict(bad_domain, domain="beta", seq=2, h=[1, "x"])
+        rows[3:3] = [bad_domain, bad_heading]
+        report = self.audit(rows)
+        self.assertIn("unexpected_beta_domain", self.codes(report, "violation"))
+        self.assertIn("partial_record", self.codes(report))
+
     def test_text_report_prints_the_owner_line_and_return_measurement(self):
         self.path.write_text("".join(json.dumps(row) + "\n" for row in drive()))
         out = io.StringIO()

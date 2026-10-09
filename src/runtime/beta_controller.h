@@ -14,6 +14,7 @@
 #include "runtime/beta_profile.h"
 #include "runtime/core_bridge.h"
 #include <atomic>
+#include <cstdarg>
 #include <cmath>
 #include <stdint.h>
 #include <stdio.h>
@@ -111,7 +112,7 @@ static const uint64_t BETA_NO_FIX_STORAGE_SETTLE_NS=5000000000ULL;
 // either stream (hook times, CLOCK_MONOTONIC) ends the session evidence: the
 // worker revokes the generation, withdraws, and the BETA anchor state is
 // reset, so BETA needs the normal re-qualification (a POSITION of the new
-// generation; a new gated anchor after 10 s of settled fixes).
+// generation; a new valid GPS pair and continuous motion evidence).
 static const uint64_t BETA_CADENCE_GAP_NS=3000000000ULL;
 
 // Worker-owned. J must provide line(const char*), fail() and a bool failed.
@@ -364,8 +365,20 @@ private:
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
 
-    // BETA_DECISIONS 3.2: every anchor gate evaluation, including each
-    // rejection reason, becomes one beta_anchor row (ring overrun is counted).
+    // BETA_DECISIONS 3.2: every fix evaluation, including each rejection
+    // reason, and every continuous-policy entry decision becomes one
+    // beta_anchor row (ring overrun is counted). Compact form (review M4,
+    // 2026-10-09; the 1 Hz row dominates the persistent log budget): no
+    // "domain" (the kind exists only in the beta domain); numbers with 4
+    // significant digits; "ratio" is the pair displacement ratio, omitted when
+    // not evaluated and on a continuous-policy ACCEPTED row (the check passed;
+    // every evaluated rejection and legacy row keeps it); "reverse_exit_seen" only while it is false
+    // and "dropped" only when nonzero (absent: true / 0); "streak_s" only for
+    // the legacy gate. An accepted fix carries "h":[source code, heading 0.1
+    // deg, heading uncertainty 0.1 deg] plus the GPS weight in percent for a
+    // blend (source codes: navigation::beta_heading_source_code). ENTRY_*
+    // rows carry "entry":[age of the last accepted position s, honest budget
+    // m, reason].
     template<class J> void journal_anchors(J& j,const navigation::Pipeline& nav) {
         const uint64_t latest=nav.beta_anchor_sequence();
         if(latest<seen_anchor_seq_)seen_anchor_seq_=0;
@@ -373,23 +386,56 @@ private:
             navigation::BetaAnchorRecord r;
             if(!nav.beta_anchor_record(seq,&r)) { ++anchor_rows_dropped_;continue; }
             char hdop[48],kmh[48],ratio[48],streak[48];
-            finite_or_null(r.hdop,hdop);finite_or_null(r.kmh,kmh);
-            finite_or_null(r.displacement_ratio,ratio);finite_or_null(r.streak_s,streak);
-            char line[500];
-            const int n=snprintf(line,sizeof line,
-                "{\"kind\":\"beta_anchor\",\"mono_ns\":%llu,\"domain\":\"beta\",\"seq\":%llu,"
-                "\"mode\":%d,\"utc_s\":%llu,\"gate\":\"%s\",\"hdop\":%s,\"kmh\":%s,"
-                "\"displacement_ratio\":%s,\"streak_s\":%s,\"reverse_exit_seen\":%s,"
-                "\"dropped\":%llu}",
+            compact_or_null(r.hdop,hdop);compact_or_null(r.kmh,kmh);
+            compact_or_null(r.displacement_ratio,ratio);finite_or_null(r.streak_s,streak);
+            char extra[200]={0};
+            size_t at=0;
+            if(std::isfinite(r.displacement_ratio)&&(!r.continuous||r.gate!=navigation::BETA_GATE_ACCEPTED))
+                append(extra,sizeof extra,&at,",\"ratio\":%s",ratio);
+            if(!r.continuous)
+                append(extra,sizeof extra,&at,",\"streak_s\":%s",streak);
+            if(!nav.reverse_exit_seen())
+                append(extra,sizeof extra,&at,",\"reverse_exit_seen\":false");
+            if(anchor_rows_dropped_)
+                append(extra,sizeof extra,&at,",\"dropped\":%llu",(unsigned long long)anchor_rows_dropped_);
+            if(r.gate==navigation::BETA_GATE_ACCEPTED&&std::isfinite(r.heading_deg)&&
+               std::isfinite(r.heading_error_rad)) {
+                const unsigned code=navigation::beta_heading_source_code(r.heading_source);
+                append(extra,sizeof extra,&at,",\"h\":[%u,%ld,%ld",code,
+                             ::lround(r.heading_deg*10),::lround(r.heading_error_rad*1800/3.14159265358979323846));
+                if(code==2&&std::isfinite(r.course_weight))
+                    append(extra,sizeof extra,&at,",%ld",::lround(r.course_weight*100));
+                append(extra,sizeof extra,&at,"]");
+            }
+            if(r.entry_reason) {
+                char age[48],budget[48];
+                compact_or_null(r.entry_age_s,age);compact_or_null(r.entry_budget_m,budget);
+                append(extra,sizeof extra,&at,",\"entry\":[%s,%s,\"%s\"]",age,budget,r.entry_reason);
+            }
+            char line[512];
+            const int n=at<sizeof extra?snprintf(line,sizeof line,
+                "{\"kind\":\"beta_anchor\",\"mono_ns\":%llu,\"seq\":%llu,"
+                "\"mode\":%d,\"utc_s\":%llu,\"gate\":\"%s\",\"hdop\":%s,\"kmh\":%s%s}",
                 (unsigned long long)r.mono_ns,(unsigned long long)r.seq,r.mode,
-                (unsigned long long)r.utc_s,navigation::beta_anchor_gate_name(r.gate),hdop,kmh,ratio,streak,
-                nav.reverse_exit_seen()?"true":"false",(unsigned long long)anchor_rows_dropped_);
+                (unsigned long long)r.utc_s,navigation::beta_anchor_gate_name(r.gate),hdop,kmh,extra):-1;
             if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
         }
         seen_anchor_seq_=latest;
     }
     static void finite_or_null(double v,char out[48]) {
         if(std::isfinite(v))snprintf(out,48,"%.9g",v);else strcpy(out,"null");
+    }
+    // Bounded append: a full buffer stays full (at >= cap), never overruns.
+    static void append(char* buf,size_t cap,size_t* at,const char* fmt,...)
+        __attribute__((format(printf,4,5))) {
+        if(*at>=cap)return;
+        va_list ap; va_start(ap,fmt);
+        const int n=vsnprintf(buf+*at,cap-*at,fmt,ap);
+        va_end(ap);
+        *at=n<0?cap:*at+size_t(n);
+    }
+    static void compact_or_null(double v,char out[48]) {
+        if(std::isfinite(v))snprintf(out,48,"%.4g",v);else strcpy(out,"null");
     }
 
     // Engaged -> WITHDRAWN until a FIX or NATIVE_DR position (see position()).

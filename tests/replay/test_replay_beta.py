@@ -157,6 +157,8 @@ class ReplayBetaSynthetic(unittest.TestCase):
         self.assertGreater(r["longest_engaged_s"], 60.0)
         self.assertLessEqual(r["longest_engaged_s"], 60.0 + (TUNNEL[1] - TUNNEL[0]))
         for row in sends:
+            if int(row["window"]) >= 0:
+                self.assertGreaterEqual(float(row["entry_kmh"]), 0)
             if row["choice"] == "3":
                 self.assertEqual(row["mode"], "0")
                 self.assertEqual(row["payload_ok"], "1")
@@ -244,6 +246,29 @@ class ReplayBetaSynthetic(unittest.TestCase):
         r, _, _ = self.run_tool("--t0", "1,210", "--durations", "10", "--check")
         self.assertEqual(r["windows"]["skipped_no_gps"], 2)
         self.assertEqual(r["replaced_with_gps"], 0)
+
+    def test_engagement_policy_comparison_and_heading_journal(self):
+        for policy in ("continuous", "legacy", "latest-course"):
+            journal = os.path.join(self.tmp.name, "anchors.jsonl")
+            r, _, _ = self.run_tool("--engagement", policy, "--real-only", "--journal", journal, "--check")
+            self.assertEqual(r["config"]["engagement"], policy)
+            with open(journal) as f:
+                anchors = [json.loads(line) for line in f if '"kind":"beta_anchor"' in line]
+            accepted = [a for a in anchors if a["gate"] == "ACCEPTED"]
+            self.assertTrue(accepted)
+            # Compact "h":[source code, heading 0.1 deg, uncertainty 0.1 deg(,
+            # GPS weight %)] keeps every decision within the persistent log
+            # rate budget. Codes: 1 seed, 2 blend, 3 yaw, 4 reverse, 5 resync,
+            # 9 legacy (navigation::beta_heading_source_code).
+            self.assertTrue(all("domain" not in a for a in anchors))
+            self.assertTrue(all(0 <= a["h"][1] < 3600 and a["h"][2] >= 0 for a in accepted))
+            self.assertTrue(all(len(a["h"]) == (4 if a["h"][0] == 2 else 3) for a in accepted))
+            codes = {a["h"][0] for a in accepted}
+            if policy == "legacy":
+                self.assertEqual(codes, {9})
+            else:
+                self.assertTrue(codes <= {1, 2, 3, 4, 5}, codes)
+                self.assertIn(1, codes)
 
 
 if __name__ == "__main__":

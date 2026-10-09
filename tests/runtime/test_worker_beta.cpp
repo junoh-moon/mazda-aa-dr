@@ -364,7 +364,8 @@ int main(int argc,char** argv) {
             continue;
         }
         if(scenario=="no_anchor") {
-            // GPS lost before any gated anchor (fewer than 10 s of fixes): never replaced.
+            // GPS lost before a strictly increasing UTC pair: both callbacks
+            // are in the same second. No heading/position seed, never replaced.
             if(t<1000) { if(t%500==0)mode=1; } else if(t%200==0)mode=0;
         }
         else if(t<=3000) { if(t%500==0)mode=1; }
@@ -471,7 +472,9 @@ int main(int argc,char** argv) {
     if(nofix)assert(anchor_bad_fix>=5 && !anchor_accepted);
     else if(cadence)assert(anchor_accepted>=2);
     else if(scenario=="no_anchor")assert(!anchor_accepted);
-    else assert(anchor_accepted>=1 && anchor_settling>=5);
+    // Continuous position/heading maintenance needs a fresh pair, not the
+    // historical 10 s settling period. Keep checking actual accepted rows.
+    else assert(anchor_accepted>=1 && anchor_settling==0);
     if(!nofix)assert(!overlay_total);
     unsigned fence_position=0,fence_send=0;
     for(size_t i=0;i<rows.lines.size();++i) if(rows.lines[i].find("\"kind\":\"beta_cadence_fence\"")!=std::string::npos) {

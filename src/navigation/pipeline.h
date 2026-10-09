@@ -54,29 +54,47 @@ struct Diagnostic {
     Status status;
     mx5_dr_result result;
 };
-// Why the last GPS fix did (not) become a BETA anchor (accuracy rule 3).
-// BETA_DECISIONS_2026-10-05.md 3.1-3.4 added: UTC (same utc second: not a
-// new pair, the baseline is kept), UTC_MONO (utc and receipt steps disagree),
-// HDOP, SETTLING (fewer than 10 s of consecutive increasing fixes since the
-// first fix or GPS return), DISPLACEMENT (pair distance outside
-// [0.5,1.5] x v*dt) and REVERSE_UNPROVEN (in this source epoch neither a
-// reverse 1->0 transition nor a forward first REVERSE message was seen).
+// Why the last GPS fix did (not) refresh the BETA position/heading.
+// Legacy bounded profile (accuracy rule 3, BETA_DECISIONS_2026-10-05.md
+// 3.1-3.4): UTC (same utc second: not a new pair, the baseline is kept),
+// UTC_MONO (utc and receipt steps disagree), HDOP, SETTLING (fewer than 10 s
+// of consecutive increasing fixes since the first fix or GPS return; legacy
+// gate only, the continuous tunnel policy has no settling period),
+// DISPLACEMENT (pair distance inconsistent with v*dt) and REVERSE_UNPROVEN (in
+// this source epoch neither a reverse 1->0 transition nor a forward first
+// REVERSE message was seen). The ENTRY_* values are not fix evaluations: the
+// continuous policy records its decision at each GPS loss (mode 0) once:
+// FRESH (last accepted position <= 3 s old), FALLBACK (older, but the
+// dead-reckoned estimate is inside the bounded envelope) or REFUSED.
 enum BetaAnchorGate {
     BETA_GATE_DISABLED=0, BETA_GATE_WAITING, BETA_GATE_ACCEPTED, BETA_GATE_BAD_FIX,
     BETA_GATE_SPEED, BETA_GATE_PREVIOUS, BETA_GATE_COURSE, BETA_GATE_YAW,
     BETA_GATE_WHEEL, BETA_GATE_REVERSE, BETA_GATE_CORE,
     BETA_GATE_UTC, BETA_GATE_UTC_MONO, BETA_GATE_HDOP, BETA_GATE_SETTLING,
-    BETA_GATE_DISPLACEMENT, BETA_GATE_REVERSE_UNPROVEN
+    BETA_GATE_DISPLACEMENT, BETA_GATE_REVERSE_UNPROVEN,
+    BETA_GATE_ENTRY_FRESH, BETA_GATE_ENTRY_FALLBACK, BETA_GATE_ENTRY_REFUSED
 };
-// One BETA anchor gate evaluation (every mode 1/2 POSITION drained by the
-// BETA core), kept in a small ring for the worker journal (beta_anchor rows).
+// One BETA fix evaluation (every mode 1/2 POSITION drained by the BETA core)
+// or one continuous-policy entry decision at a GPS loss, kept in a small ring
+// for the worker journal (beta_anchor rows).
 struct BetaAnchorRecord {
     uint64_t seq, mono_ns, utc_s;
     int mode;
     BetaAnchorGate gate;
     double hdop, kmh, displacement_ratio, streak_s; // NaN when not evaluated
+    double heading_deg, heading_error_rad, course_weight;
+    const char* heading_source; // see beta_heading_source_code()
+    bool continuous;
+    // ENTRY_* rows: age of the last accepted GPS position (s, NaN if none),
+    // honest budget at the loss (m, NaN if unseeded) and the reason
+    // ("fresh", "fallback", "unseeded", "age", "budget", "disagree", "state").
+    double entry_age_s, entry_budget_m;
+    const char* entry_reason;
 };
 const char* beta_anchor_gate_name(BetaAnchorGate);
+// One-digit journal code of BetaAnchorRecord::heading_source: 1 seed, 2 blend,
+// 3 yaw, 4 reverse, 5 resync, 9 legacy, 0 none/unknown.
+unsigned beta_heading_source_code(const char*);
 // Why a valid MODEL reverse latch was dropped (journaled by the BETA worker).
 enum LatchClear {
     LATCH_CLEAR_RESET=0,            // pipeline reset/fault (queued REVERSE possibly lost)
@@ -303,6 +321,19 @@ private:
     uint64_t beta_position_seq_, beta_conflict_since_;
     double beta_rotation_rad_, beta_rotation_budget_m_;
     adapter::Observation beta_prev_;
+    // Continuous tracking: the GPS course reference fix (chord baseline) and
+    // the current run of mutually consistent, chord-confirmed course
+    // disagreements with the carried heading (resync evidence).
+    adapter::Observation beta_heading_ref_;
+    bool beta_have_heading_ref_;
+    unsigned beta_resync_count_;
+    double beta_resync_innovation_;
+    uint64_t beta_resync_ns_;
+    // Continuous tracking entry evidence: receipt time of the last GPS fix that
+    // refreshed the position (0: none since reset), and whether every rejected
+    // data-valid fix since then agreed with the dead-reckoned estimate.
+    uint64_t beta_fix_ns_;
+    bool beta_fix_agrees_;
     // 3.1-3.2: start of the current run of consecutive increasing fixes.
     bool beta_streak_;
     uint64_t beta_streak_mono_, beta_streak_utc_;
@@ -327,8 +358,25 @@ private:
     mx5_dr_result beta_control(mx5_dr_control_kind);
     void beta_position(const adapter::Observation&);
     BetaAnchorGate evaluate_beta_gate(const adapter::Observation&,double* ratio) const;
+    // Continuous tracking: what one data-valid fix says about the heading.
+    struct CourseCheck {
+        bool chord;      // a >= BETA_HEADING_BASELINE_M GPS displacement since the reference fix
+        bool agrees;     // ... and the GPS course points along it
+        bool candidate;  // chord-confirmed course far from the carried heading
+        bool consistent; // ... and it continues the previous candidate run
+        bool resync;     // ... and the run is long enough: the heading is reseeded
+        bool reversing;  // a position-only refresh while reverse is latched
+        double innovation;
+    };
+    BetaAnchorGate evaluate_beta_tracking(const adapter::Observation&,const mx5_dr_snapshot*,
+                                         double* heading,double* error,double* ratio,double* weight,
+                                         CourseCheck*) const;
     bool beta_pair_continues(const adapter::Observation&) const;
-    void beta_record(const adapter::Observation&,BetaAnchorGate,double ratio);
+    bool beta_yaw_turn(uint64_t begin,uint64_t end,double* turn) const;
+    bool beta_entry(const adapter::Observation&);
+    bool beta_carry_across_return(const adapter::Observation&,const mx5_dr_snapshot&,double stop_dwell);
+    void beta_record(const adapter::Observation&,BetaAnchorGate,double ratio,
+                     double weight=0,const char* source="none");
     void beta_step(const mx5_dr_interval&,double rate);
     PipelineResult insert(const Event&);
     PipelineResult fault(PipelineResult);
