@@ -1030,7 +1030,22 @@ void Pipeline::beta_position(const adapter::Observation& o) {
     if (!beta_enabled_||!beta_core_.configured) return;
     const int mode=o.position.mode;
     if (mode==0||mode==3) {
-        if (beta_mode_!=mode) beta_control(mode==0?MX5_DR_GAP:MX5_DR_NATIVE_POSITION);
+        if (beta_mode_!=mode) {
+            // Tunnel mode lifts the in-outage limits only. An anchor that has
+            // been integrating through a long GPS-present stretch (no new gated
+            // anchor, e.g. above the anchor speed ceiling) must not start an
+            // episode: apply the bounded envelope at the moment the GPS goes.
+            if (mode==0 && beta_.unbounded && beta_core_.seeded) {
+                const runtime::BetaProfile bounded=runtime::beta_profile_bounded();
+                const mx5_dr_snapshot& e=beta_core_.estimate;
+                if (e.elapsed_s>bounded.duration_max_s ||
+                    e.error_budget_m+beta_rotation_budget_m_>bounded.accuracy_max_m) {
+                    beta_control(MX5_DR_DISABLE);
+                    beta_mode_=mode; beta_have_prev_=false; beta_streak_=false; return;
+                }
+            }
+            beta_control(mode==0?MX5_DR_GAP:MX5_DR_NATIVE_POSITION);
+        }
         beta_mode_=mode; beta_have_prev_=false; beta_streak_=false; return;
     }
     if (mode!=1&&mode!=2) {

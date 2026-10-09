@@ -92,7 +92,8 @@ static void extended_limits_are_model_only(void) {
     p.duration_max_s=21600.1; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
     p.duration_max_s=21600.0; p.distance_max_m=1000000.1; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
     p.distance_max_m=1000000.0; p.error_max_m=1000000.1; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
-    p.error_max_m=1000000.0; p.extended_limits=2; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+    p.error_max_m=1000000.0; p.extended_limits=1; p.reserved_zero=1; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+    p.reserved_zero=0; p.extended_limits=2; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
     /* Without the flag the original caps still apply to the model core. */
     p=mx5_dr_default_config(); p.duration_max_s=61.0; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
 }

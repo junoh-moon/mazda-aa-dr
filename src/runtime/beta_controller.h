@@ -128,7 +128,7 @@ public:
           counters_(),have_position_(false),position_mode_(-1),position_generation_(0),
           position_class_(adapter::POSITION_UNDECODED),
           seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
-          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_honest_accuracy_(0),last_valid_until_(0),
+          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_honest_accuracy_(-1),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
           last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
           seen_latch_clears_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
@@ -493,6 +493,7 @@ private:
             if(last_bridge_!=CORE_BRIDGE_OK)
                 withdrawn=nav.status().result==navigation::PIPELINE_MISSING_SENSOR?"sensor_silence":
                     nav.beta_reverse_suspect()?"reverse_latch_suspect":
+                    (profile_.unbounded && last_bridge_==CORE_BRIDGE_BEARING)?"bearing_unavailable":
                     budget(last_bridge_,in,nav)?"budget_limit":
                     last_bridge_==CORE_BRIDGE_TIME?"lease_expired":
                     nav.beta_core_failure()!=MX5_DR_OK?"core_rejected":"model_not_ready";
@@ -600,6 +601,8 @@ private:
             payload_,(unsigned long long)last_original_utc_,original_accuracy,speed,
             mx5_dr_result_name(last_core_),honest_acc);
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+        // A new outage starts without the previous episode's honest budget.
+        if(to==BETA_GPS_LOST)last_honest_accuracy_=-1;
     }
     // At most 1 Hz (forced rows bypass the limit once, e.g. at stop).
     template<class J> void summary(J& j,uint64_t now,bool force) {

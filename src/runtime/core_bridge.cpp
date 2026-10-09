@@ -176,8 +176,16 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
     if (heading>p.heading_budget_max_rad && !p.unbounded) return CORE_BRIDGE_BEARING;
     if ((s.stopped!=0 && s.stopped!=1) || (s.has_bearing!=0 && s.has_bearing!=1))
         return CORE_BRIDGE_BEARING;
+    // Tunnel mode keeps the episode alive through a standstill (a jam inside a
+    // tunnel): both the 1.5 s stop-confirmation wait (not stopped, speed 0, no
+    // bearing) and the stopped state are sent as speed 0 with the held body
+    // heading. Naver rejected a fix without bearing in DHU (T9), so the
+    // bearing-less stopped form is never sent. The bounded profile is unchanged.
+    const bool still=p.unbounded && (s.stopped || s.speed_mps==0.0);
     if (s.stopped) {
         if (s.speed_mps!=0.0 || s.has_bearing) return CORE_BRIDGE_BEARING;
+    } else if (still) {
+        if (s.has_bearing) return CORE_BRIDGE_BEARING;
     } else if (!s.has_bearing || s.speed_mps==0.0 || !bounded(s.travel_bearing_rad,2.0*PI) ||
                s.travel_bearing_rad==2.0*PI) return CORE_BRIDGE_BEARING;
     adapter::DrSnapshot mapped=adapter::DrSnapshot();
@@ -187,8 +195,11 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
     mapped.frontier_mono_ns=s.frontier_ns; mapped.valid_until_mono_ns=valid_until;
     mapped.derived_utc_ns=s.derived_utc_ns;
     mapped.latitude_deg=s.latitude_deg; mapped.longitude_deg=s.longitude_deg;
-    mapped.speed_mps=s.speed_mps; mapped.travel_bearing_deg=s.stopped ? 0.0 : s.travel_bearing_rad*180.0/PI;
-    mapped.ready=true; mapped.limits_ok=true; mapped.stopped=s.stopped!=0;
+    const bool hold_bearing=still;
+    mapped.speed_mps=s.speed_mps;
+    mapped.travel_bearing_deg=hold_bearing ? s.body_heading_rad*180.0/PI
+        : (s.stopped ? 0.0 : s.travel_bearing_rad*180.0/PI);
+    mapped.ready=true; mapped.limits_ok=true; mapped.stopped=hold_bearing ? false : s.stopped!=0;
     // BETA is not a qualification: these external claims stay false.
     mapped.profile_verified=false; mapped.input_quality_verified=false;
     mapped.accuracy_m=accuracy>p.accuracy_max_m?p.accuracy_max_m:accuracy; mapped.beta=true;

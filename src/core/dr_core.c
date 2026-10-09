@@ -36,6 +36,7 @@ static mx5_dr_result fail(mx5_dr_core *c, mx5_dr_result why) {
 }
 mx5_dr_config mx5_dr_default_config(void) {
     mx5_dr_config p;
+    memset(&p, 0, sizeof p);
     p.duration_max_s = 60.0; p.distance_max_m = 1500.0; p.error_max_m = 100.0;
     p.extended_limits = 0;
     p.integration_step_s = 0.05; p.speed_error_mps = 0.3; p.yaw_error_rad_s = 0.002;
@@ -53,7 +54,7 @@ mx5_dr_config mx5_dr_default_config(void) {
 #define EXT_ERROR_MAX_M 1000000.0
 static int valid_config(const mx5_dr_config *p, int allow_extended) {
     const int ext = p && p->extended_limits == 1;
-    if (p && p->extended_limits > 1) return 0;
+    if (p && (p->extended_limits > 1 || p->reserved_zero)) return 0;
     if (ext && !allow_extended) return 0;
     return p && finite_value(p->duration_max_s) && p->duration_max_s > 0.0 && p->duration_max_s <= (ext ? EXT_DURATION_MAX_S : 60.0) &&
         finite_value(p->distance_max_m) && p->distance_max_m > 0.0 && p->distance_max_m <= (ext ? EXT_DISTANCE_MAX_M : 1500.0) &&

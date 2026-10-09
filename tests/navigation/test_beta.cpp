@@ -591,6 +591,50 @@ static void unbounded_profile_clamps_reported_accuracy() {
     // Core configuration: tunnel mode requests the extended limits.
     CHECK(runtime::beta_core_config(t).extended_limits==1 && runtime::beta_core_config(b).extended_limits==0);
 }
+// Review finding (b1ec29a): tunnel mode lifts the in-outage limits only. An
+// anchor that integrated through a long GPS-present stretch must not start an
+// episode, and a standstill inside a tunnel episode keeps a bearing.
+static void stale_anchor_does_not_start_a_tunnel_episode() {
+    const unsigned gaps[]={5000,30000,70000};
+    for(unsigned g=0;g<3;++g) {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+        Plan plan; plan.boot_reverse();
+        for(unsigned ms=410;ms<=ANCHOR_MS;ms+=1000) plan.fixes.push_back(fix(ms,1,36));
+        for(unsigned ms=ANCHOR_MS+1000;ms<=ANCHOR_MS+gaps[g];ms+=1000) {
+            Fix f=fix(ms,1,36); f.hdop=5.0; plan.fixes.push_back(f); // fails the HDOP gate: anchor ages
+        }
+        const unsigned lost=ANCHOR_MS+gaps[g]+210;
+        plan.fixes.push_back(fix(lost,0,36));
+        plan.end_ms=lost+1600;
+        unsigned published=0;
+        plan.each=[&](Pipeline& q,unsigned ms) {
+            if(ms<lost+200) return;
+            adapter::DrSnapshot s;
+            if(publish(q,ms,&s,0)==runtime::CORE_BRIDGE_OK) ++published;
+        };
+        run(p,plan);
+        if(gaps[g]<=5000) CHECK(published>0); else CHECK(published==0);
+    }
+}
+static void standstill_in_a_tunnel_episode_keeps_a_bearing() {
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    Plan plan=straight(ANCHOR_MS+9000);
+    plan.wheel=[](unsigned ms){return ms<ANCHOR_MS+3000?36.0:0.0;};
+    unsigned moving=0,still=0,dropped=0;
+    plan.each=[&](Pipeline& q,unsigned ms) {
+        if(ms<LOST_MS+200) return;
+        adapter::DrSnapshot s;
+        if(runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s)!=
+           runtime::CORE_BRIDGE_OK) { if(ms>ANCHOR_MS+3000+300) ++dropped; return; }
+        uint8_t out[48];
+        CHECK(adapter::encode_location(s,out));
+        CHECK(out[40]==1);                       // bearing present, also at standstill
+        if(s.speed_mps>0.0) ++moving; else { ++still; CHECK(s.accuracy_m>0 && s.accuracy_m<=40.0); }
+    };
+    run(p,plan);
+    // The stop-confirmation wait (speed 0, not yet stopped) and the stopped state both publish.
+    CHECK(moving>0 && still>0 && dropped==0);
+}
 static void reverse_latch_contradiction_withdraws() {
     // 3.4: after a forward anchor the latch reads reverse while the wheels
     // keep 36 km/h: after more than 2 s the BETA core is disabled.
@@ -825,6 +869,8 @@ int main() {
     budget_formula_and_limit();
     accuracy_boundary_and_heading_withdrawal();
     unbounded_profile_clamps_reported_accuracy();
+    stale_anchor_does_not_start_a_tunnel_episode();
+    standstill_in_a_tunnel_episode_keeps_a_bearing();
     reverse_latch_contradiction_withdraws();
     pending_gps_caps_and_hides();
     shadow_diagnostic_unchanged_by_beta();

@@ -2300,6 +2300,8 @@ class Auditor:
                 if now >= beta["speed_engaged_ns"]:
                     add_difference(self.beta_speed_engaged_seconds, (now - beta["speed_engaged_ns"]) / 1e9)
                 beta["speed_engaged_ns"] = None
+            if new == "GPS_LOST":
+                beta["honest_m"] = None  # a new outage never inherits the last episode's budget
             beta["state"] = new
         elif kind == "beta_summary":
             if finite_number(row.get("accuracy_honest_m")) and row["accuracy_honest_m"] >= 0:
@@ -2494,7 +2496,7 @@ class Auditor:
         # honest budget (beta_summary accuracy_honest_m) keeps growing. The
         # honest budget, not the clamp, is what a GPS return can contradict.
         honest = beta.get("honest_m")
-        clamped = finite_number(honest) and honest > accuracy + 0.01
+        clamped = finite_number(honest) and honest > accuracy + 0.01 and accuracy >= BETA_MAX_ACCURACY_E3 / 1000.0 - 0.01
         limit = honest if clamped else accuracy
         check = dict(dr_send=last["source"], gps_position=source, gap_s=round(gap, 3),
                      distance_m=round(raw, 2), time_aligned_distance_m=round(aligned, 2),

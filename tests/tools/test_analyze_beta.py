@@ -260,6 +260,11 @@ class BetaAnalyzeTests(unittest.TestCase):
         report = self.audit(drive(gps_offset_m=320.0, accuracy_e3=40000, honest_m=300.0))
         self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
         self.assertFalse(report["beta"]["gps_return_checks"][0]["within_honest_budget"])
+        # A stale honest value from an earlier episode cannot excuse a jump after
+        # a short outage that reported its own small accuracy (12 m, not clamped).
+        report = self.audit(drive(gps_offset_m=100.0, accuracy_e3=12000, honest_m=600.0))
+        self.assertFalse(report["beta"]["gps_return_checks"][0]["reported_accuracy_clamped"])
+        self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
         # Without the honest field (older logs) the reported accuracy is the limit.
         report = self.audit(drive(gps_offset_m=120.0, accuracy_e3=40000))
         self.assertFalse(report["beta"]["gps_return_checks"][0]["reported_accuracy_clamped"])
