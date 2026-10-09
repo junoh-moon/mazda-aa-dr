@@ -151,7 +151,11 @@ class ReplayBetaSynthetic(unittest.TestCase):
         self.assertLess(r["speed_error_vs_wheel_mps"]["max"], 0.6)
         # G2: travel bearing from the anchor course and yaw.
         self.assertLess(r["bearing_error_deg"]["all"]["p90"], 3.0)
-        self.assertLessEqual(r["longest_engaged_s"], 60.0)
+        # Tunnel mode (v1.0.0-beta.6): the 60 s limit no longer ends an outage;
+        # a pseudo outage (at most 60 s) can run into the recorded tunnel, so the
+        # longest engaged window is bounded by their union, not by 60 s.
+        self.assertGreater(r["longest_engaged_s"], 60.0)
+        self.assertLessEqual(r["longest_engaged_s"], 60.0 + (TUNNEL[1] - TUNNEL[0]))
         for row in sends:
             if row["choice"] == "3":
                 self.assertEqual(row["mode"], "0")
@@ -194,10 +198,11 @@ class ReplayBetaSynthetic(unittest.TestCase):
             self.assertLess(abs(float(row["speed_mps"]) - float(row["wheel_mps"])), 0.6, row)
         after = [row for row in sends if float(row["t_s"]) >= TUNNEL[1]]
         self.assertTrue(after and all(row["choice"] == "0" for row in after))
-        # The 40 m budget withdrew BETA before the GPS return, so no replaced
-        # send is followed directly by the fix: no return jump (null).
-        self.assertIn(("ENGAGED", "WITHDRAWN"), transitions)
-        self.assertIsNone(real["return_jump_m"])
+        # Tunnel mode (v1.0.0-beta.6): no budget withdrawal; the replacement
+        # runs until the GPS return and a return jump is measured and reported.
+        self.assertNotIn(("ENGAGED", "WITHDRAWN"), transitions)
+        self.assertIn(("ENGAGED", "ARMED"), transitions)
+        self.assertIsNotNone(real["return_jump_m"])
 
     def test_no_replacement_reports_no_return_jump(self):
         # NO_FIX overlays then FIX, no mode 0: a speed-only send before the

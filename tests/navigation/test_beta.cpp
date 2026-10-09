@@ -564,6 +564,33 @@ static void accuracy_boundary_and_heading_withdrawal() {
     CHECK(withdrawn>ANCHOR_MS+9000 && withdrawn<ANCHOR_MS+11000);
     CHECK(rotation_budget>5);
 }
+// Tunnel mode (v1.0.0-beta.6): the honest budget and heading are computed and
+// reported separately, the sent accuracy is clamped at accuracy_max_m and the
+// bounded profile still refuses.
+static void unbounded_profile_clamps_reported_accuracy() {
+    const BetaProfile t=runtime::beta_profile_tunnel(),b=runtime::beta_profile();
+    CHECK(t.unbounded && !b.unbounded && t.accuracy_max_m==40.0);
+    const double lease_term=(10+t.speed_error_mps)*0.5;
+    adapter::DrSnapshot s; double honest=-1;
+    // Honest budget 400 m, heading 1.0 rad (57 deg): published at 40 m.
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.ready && s.beta && s.accuracy_m==40.0 && std::fabs(honest-400.0)<1e-9);
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),b,&s,&honest)==runtime::CORE_BRIDGE_LIMIT);
+    CHECK(!s.ready && s.accuracy_m==0 && std::fabs(honest-400.0)<1e-9);
+    // Below the clamp the honest value is reported unchanged (never raised).
+    CHECK(runtime::map_model_publication(synthetic(12-lease_term,0.1),t,&s,&honest)==runtime::CORE_BRIDGE_OK);
+    CHECK(std::fabs(s.accuracy_m-12.0)<1e-9 && std::fabs(honest-12.0)<1e-9);
+    // Non-finite and non-model inputs are still refused in tunnel mode.
+    BetaModelInput in=synthetic(25,0.1); in.snapshot.domain=MX5_DR_QUALIFIED_DOMAIN;
+    CHECK(runtime::map_model_publication(in,t,&s,&honest)==runtime::CORE_BRIDGE_UNQUALIFIED && !s.ready);
+    in=synthetic(25,0.1); in.rotation_rad=std::nan("");
+    CHECK(runtime::map_model_publication(in,t,&s,&honest)==runtime::CORE_BRIDGE_NUMERIC);
+    // The sanity caps are not behavioural limits but still exist.
+    BetaProfile bad=t; bad.duration_max_s=21601.0;
+    CHECK(runtime::map_model_publication(synthetic(25,0.1),bad,&s)==runtime::CORE_BRIDGE_LIMIT);
+    // Core configuration: tunnel mode requests the extended limits.
+    CHECK(runtime::beta_core_config(t).extended_limits==1 && runtime::beta_core_config(b).extended_limits==0);
+}
 static void reverse_latch_contradiction_withdraws() {
     // 3.4: after a forward anchor the latch reads reverse while the wheels
     // keep 36 km/h: after more than 2 s the BETA core is disabled.
@@ -797,6 +824,7 @@ int main() {
     no_reanchor_from_bad_fix();
     budget_formula_and_limit();
     accuracy_boundary_and_heading_withdrawal();
+    unbounded_profile_clamps_reported_accuracy();
     reverse_latch_contradiction_withdraws();
     pending_gps_caps_and_hides();
     shadow_diagnostic_unchanged_by_beta();

@@ -551,7 +551,7 @@ bool start_product(uint64_t t) {
     if (!A::configure(fake_send, o) || !A::set_mode(A::OBSERVE)) return false;
     const mx5_dr_context x = {1, 1, 1};
     if (!nav.init_model(N::research_model_profile(), mx5_dr_default_config(), x, true, true, true) ||
-        !nav.enable_beta(R::beta_profile()))
+        !nav.enable_beta(R::beta_profile_tunnel()))
         return false;
     static R::BetaController controller(shared);
     beta = &controller;

@@ -1446,7 +1446,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   bool shadow=capture && hook_installed &&
       navigation.init_model(model,mx5_dr_default_config(),nav_context,true,true,beta_requested) &&
       holdout.init_model(model,mx5_dr_default_config(),nav_context);
-  const bool beta_core=shadow && beta_requested && navigation.enable_beta(mx5::runtime::beta_profile());
+  const bool beta_core=shadow && beta_requested && navigation.enable_beta(mx5::runtime::beta_profile_tunnel());
   mx5::runtime::BetaController beta(beta_shared);
   if(config.mode==4 || beta_requested) {
     snprintf(line,sizeof line,

@@ -198,7 +198,7 @@ int main(int argc,char** argv) {
     const mx5_dr_context context={1,1,1};
     if(!navigation.init_model(model,mx5_dr_default_config(),context,true,true,true) ||
        !holdout.init_model(model,mx5_dr_default_config(),context) ||
-       !navigation.enable_beta(mx5::runtime::beta_profile()))return 70;
+       !navigation.enable_beta(mx5::runtime::beta_profile_tunnel()))return 70;
     mx5::runtime::BetaController beta(beta_shared);
     mx5::runtime::ModelSession model_session;mx5::runtime::ModelBus model_bus;
     if(!beta.enable(j,clock_ns(0),0) || A::mode()!=A::BETA)return 70;

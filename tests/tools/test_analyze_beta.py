@@ -81,7 +81,7 @@ def health(mono_ns):
     return dict(kind="health", mono_ns=mono_ns, dropped=0, hook_installed=True, assist_ready=False)
 
 
-def drive(gps_offset_m=5.0, accuracy_e3=12000):
+def drive(gps_offset_m=5.0, accuracy_e3=12000, honest_m=None):
     """GPS fix -> loss -> ENGAGED with two replaced sends -> GPS return."""
     stale = original_payload()
     gps = original_payload()
@@ -105,7 +105,8 @@ def drive(gps_offset_m=5.0, accuracy_e3=12000):
              publish_skipped=0, last_skip="none", withdrawals=0, replaced_sends=2,
              replaced_nonzero=0, original_mode0_sends=1, transitions=3, bridge="OK",
              accuracy_m=11.5, frontier_ns=4_000_000_000, valid_until_ns=4_500_000_000,
-             source_epoch=1, session_epoch=1, generation=1),
+             source_epoch=1, session_epoch=1, generation=1,
+             **({} if honest_m is None else dict(accuracy_honest_m=honest_m))),
         position(5, 5_000_000_100, 1, fix_lat, fix_lon),
         state(5_000_000_300, "ENGAGED", "ARMED", "gps_returned"),
         send(5, 5_000_000_200, 1, original_payload(fix_lat, fix_lon)),
@@ -245,6 +246,24 @@ class BetaAnalyzeTests(unittest.TestCase):
         report = self.audit(drive(gps_offset_m=30.0))
         self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
         self.assertFalse(report["beta"]["gps_return_checks"][0]["within_reported_accuracy"])
+
+    def test_clamped_reported_accuracy_is_judged_against_the_honest_budget(self):
+        # Tunnel mode (beta.6): 40 m is sent while the honest budget is 300 m.
+        report = self.audit(drive(gps_offset_m=120.0, accuracy_e3=40000, honest_m=300.0))
+        check = report["beta"]["gps_return_checks"][0]
+        self.assertTrue(check["reported_accuracy_clamped"])
+        self.assertEqual(check["honest_accuracy_m"], 300.0)
+        self.assertFalse(check["within_reported_accuracy"])
+        self.assertTrue(check["within_honest_budget"])
+        self.assertNotIn("beta_return_exceeds_accuracy", self.codes(report))
+        # A jump beyond the honest budget is still flagged, not hidden.
+        report = self.audit(drive(gps_offset_m=320.0, accuracy_e3=40000, honest_m=300.0))
+        self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
+        self.assertFalse(report["beta"]["gps_return_checks"][0]["within_honest_budget"])
+        # Without the honest field (older logs) the reported accuracy is the limit.
+        report = self.audit(drive(gps_offset_m=120.0, accuracy_e3=40000))
+        self.assertFalse(report["beta"]["gps_return_checks"][0]["reported_accuracy_clamped"])
+        self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
 
     def replace_send(self, rows, call, **changes):
         for row in rows:

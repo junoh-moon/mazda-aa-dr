@@ -71,7 +71,11 @@ struct BetaModelInput {
 // the result; profile/input verification claims stay false.
 CoreBridgeResult map_model_publication(const BetaModelInput& input,
                                       const BetaProfile& profile,
-                                      adapter::DrSnapshot* out);
+                                      adapter::DrSnapshot* out,
+                                      double* honest_accuracy_m=0);
+// profile.unbounded (tunnel mode, v1.0.0-beta.6): the accuracy and heading
+// limits above do not refuse; the reported accuracy is min(honest, max) and
+// *honest_accuracy_m (when given) always carries the honest budget.
 
 } }
 #endif

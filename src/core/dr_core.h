@@ -38,6 +38,9 @@ typedef struct {
 
 typedef struct {
     double duration_max_s, distance_max_m, error_max_m;
+    // Nonzero lifts the 60 s / 1500 m / 100 m caps to the extended sanity caps
+    // (see dr_core.c). Accepted only by mx5_dr_init_model (never QUALIFIED).
+    uint32_t extended_limits;
     double integration_step_s, speed_error_mps, yaw_error_rad_s;
     double stop_enter_mps, stop_exit_mps, stop_hold_s, stop_yaw_max_rad_s;
     double physical_speed_max_mps, physical_yaw_max_rad_s;

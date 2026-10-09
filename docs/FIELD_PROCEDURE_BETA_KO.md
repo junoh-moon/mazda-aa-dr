@@ -10,7 +10,7 @@
 [문제 정의](PROBLEM_DEFINITION_KO.md)의 G1(터널에서 속도), G2(지하주차장에서 방위)를 실제로 확인하는 첫 시험입니다.
 BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 세 가지로 나눠 다룹니다([설계](../validation/ASSIST_BETA_DESIGN_2026-10-05.md), [결정 갱신](../validation/BETA_DECISIONS_2026-10-05.md)).
 
-- **GPS 끊김(LOST, 순정 mode 0)**: 그 LOCATION의 위경도·정확도·속도·방위를 차량 센서로 계산한 값으로 바꿔 보냅니다(상태 `GPS_LOST` → `ENGAGED`). 보고하는 정확도는 40 m를 넘지 않으며, 넘으면 순정으로 돌아갑니다.
+- **GPS 끊김(LOST, 순정 mode 0)**: 그 LOCATION의 위경도·정확도·속도·방위를 차량 센서로 계산한 값으로 바꿔 보냅니다(상태 `GPS_LOST` → `ENGAGED`). **터널 모드(v1.0.0-beta.6부터)**: GPS가 돌아올 때까지 시간·거리 제한 없이 계속 바꿔 보냅니다. 보고하는 정확도는 `min(실제 예산, 40 m)`이며, 실제 예산이 40 m를 넘은 뒤에는 보고 위치가 실제와 수백 m 어긋날 수 있습니다(실제 예산은 기록의 `accuracy_honest_m`). 센서 끊김, 후진 의심, 세션·저장소 변경, 연결 끊김은 여전히 순정으로 돌아갑니다.
 - **부팅 후 fix 없음(NO_FIX, 순정 mode 1/2이고 시각 utc 0)**: 순정이 저장해 둔 옛 위치를 보내는 구간입니다. 위치·방위·정확도는 순정 그대로 두고 **속도만** 바퀴 속도로 덮어씁니다(상태 `NO_FIX` → `SPEED_ENGAGED`). 이 구간에서 방위(G2)는 고칠 수 없습니다.
 - **GPS 정상(FIX)과 그 밖**: 순정을 그대로 보냅니다. GPS가 돌아오면 즉시 순정입니다.
 
@@ -192,7 +192,7 @@ BETA는 SHADOW 기록을 그대로 하면서 순정 위치를 송신 시점에 �
 
 ## 회수 뒤 분석 (PC)
 
-`python3 analyze_logs.py mx5dr-logs-….tar`가 BETA 행을 검사합니다. 위치를 바꾼 송신(choice 3)마다 원본 mode 0, 정확도 0 초과 40 m 이하, 0~7·24~31바이트 원본 유지, `hasAccuracy=1`, 앞선 `ENGAGED`/`GPS_LOST` 상태, GPS 복귀 뒤 치환 없음을 확인합니다.
+`python3 analyze_logs.py mx5dr-logs-….tar`가 BETA 행을 검사합니다. 위치를 바꾼 송신(choice 3)마다 원본 mode 0, 정확도 0 초과 40 m 이하(터널 모드에서는 40 m로 고정된 값이며 GPS 복귀 점프는 기록의 `accuracy_honest_m`과 비교합니다), 0~7·24~31바이트 원본 유지, `hasAccuracy=1`, 앞선 `ENGAGED`/`GPS_LOST` 상태, GPS 복귀 뒤 치환 없음을 확인합니다.
 속도만 바꾼 송신(choice 4)마다 원본 mode 1/2이고 위치 시각 utc 0(NO_FIX), 바뀐 바이트가 32와 36~39뿐, `hasSpeed=1`, 앞선 `NO_FIX`/`SPEED_ENGAGED` 상태, 속도가 송신 전 0.5초 안에 기록된 바퀴 속도 중 하나와 1 mm/s 안에서 같은지(바퀴 기록이 없으면 0~100 m/s 범위만)를 확인합니다. 다른 위치 상태에서 바꾼 송신은 모두 `violation`입니다.
 요약에는 `speed_overlay_sends`, 그중 결과가 0이 아닌 수, `NO_FIX`/`SPEED_ENGAGED` 상태별 시간이 나옵니다.
 핵심 측정은 다음 줄입니다. GPS 복귀 때 마지막으로 보낸 DR 위치와 첫 GPS 위치의 거리(시간 차를 속도·방위로 맞춘 값 포함)를 그때 보고한 정확도와 비교합니다.

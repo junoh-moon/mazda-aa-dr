@@ -124,11 +124,11 @@ public:
                  original_nofix_sends;
     };
     explicit BetaController(BetaShared& shared)
-        : shared_(shared),profile_(beta_profile()),state_(BETA_DISABLED),reason_("not_enabled"),
+        : shared_(shared),profile_(beta_profile_tunnel()),state_(BETA_DISABLED),reason_("not_enabled"),
           counters_(),have_position_(false),position_mode_(-1),position_generation_(0),
           position_class_(adapter::POSITION_UNDECODED),
           seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
-          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_valid_until_(0),
+          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_honest_accuracy_(0),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
           last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
           seen_latch_clears_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
@@ -279,6 +279,7 @@ private:
     uint64_t last_summary_;
     CoreBridgeResult last_bridge_;
     double last_accuracy_;
+    double last_honest_accuracy_; // honest budget at lease end; last_accuracy_ may be clamped to 40 m
     uint64_t last_valid_until_,last_frontier_;
     const char* last_skip_;
     const char* payload_;          // "dr", "speed_only" or "none": what the candidate is
@@ -483,9 +484,10 @@ private:
         else if(!last_motion_ns || now<last_motion_ns || now-last_motion_ns>BETA_SENSOR_SILENCE_NS)
             withdrawn="sensor_silence";
         adapter::DrSnapshot s=adapter::DrSnapshot();
+        double honest=0.0;
         if(!withdrawn) {
             const BetaModelInput in=nav.model_publication(now);
-            last_bridge_=map_model_publication(in,profile_,&s);
+            last_bridge_=map_model_publication(in,profile_,&s,&honest);
             // The MODEL sample-age guard (250 ms of the frontier) can fire
             // before the 300 ms receipt silence; both mean sensor silence.
             if(last_bridge_!=CORE_BRIDGE_OK)
@@ -520,6 +522,7 @@ private:
         if(skip) { last_skip_=skip;++counters_.publish_skipped;return; }
         ++counters_.publications;last_skip_="none";payload_="dr";
         last_accuracy_=s.accuracy_m;last_valid_until_=s.valid_until_mono_ns;
+        last_honest_accuracy_=honest;
         last_frontier_=s.frontier_mono_ns;
         if(state_==BETA_GPS_LOST)transition(j,now,BETA_ENGAGED,"published");
     }
@@ -576,16 +579,18 @@ private:
         char accuracy[48];
         if(std::isfinite(last_accuracy_))snprintf(accuracy,sizeof accuracy,"%.17g",last_accuracy_);
         else strcpy(accuracy,"null");
-        char original_accuracy[48],speed[48];
+        char original_accuracy[48],speed[48],honest_acc[48];
         number_or_null(last_original_accuracy_,original_accuracy);number_or_null(last_speed_,speed);
-        char line[800];
+        number_or_null(last_honest_accuracy_,honest_acc);
+        char line[900];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"beta_state\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
             "\"from\":\"%s\",\"to\":\"%s\",\"reason\":\"%s\",\"adapter_mode\":%u,"
             "\"generation\":%u,\"source_epoch\":%u,\"session_epoch\":%u,\"held\":%s,"
             "\"bridge\":\"%s\",\"accuracy_m\":%s,\"valid_until_ns\":%llu,"
             "\"position_class\":\"%s\",\"payload\":\"%s\",\"original_utc_s\":%llu,"
-            "\"original_accuracy_m\":%s,\"speed_mps\":%s,\"core_result\":\"%s\"}",
+            "\"original_accuracy_m\":%s,\"speed_mps\":%s,\"core_result\":\"%s\","
+            "\"accuracy_honest_m\":%s}",
             (unsigned long long)now,beta_state_name(from),beta_state_name(to),reason,
             unsigned(adapter::mode()),adapter::generation(),
             shared_.source_epoch.load(std::memory_order_acquire),
@@ -593,7 +598,7 @@ private:
             adapter::beta_held()?"true":"false",core_bridge_result_name(last_bridge_),accuracy,
             (unsigned long long)last_valid_until_,adapter::position_class_name(position_class_),
             payload_,(unsigned long long)last_original_utc_,original_accuracy,speed,
-            mx5_dr_result_name(last_core_));
+            mx5_dr_result_name(last_core_),honest_acc);
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
     // At most 1 Hz (forced rows bypass the limit once, e.g. at stop).
@@ -603,9 +608,10 @@ private:
         char accuracy[48];
         if(std::isfinite(last_accuracy_))snprintf(accuracy,sizeof accuracy,"%.17g",last_accuracy_);
         else strcpy(accuracy,"null");
-        char original_accuracy[48],speed[48];
+        char original_accuracy[48],speed[48],honest_acc[48];
         number_or_null(last_original_accuracy_,original_accuracy);number_or_null(last_speed_,speed);
-        char line[1200];
+        number_or_null(last_honest_accuracy_,honest_acc);
+        char line[1300];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"beta_summary\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
             "\"state\":\"%s\",\"reason\":\"%s\",\"adapter_mode\":%u,\"held\":%s,"
@@ -616,7 +622,8 @@ private:
             "\"source_epoch\":%u,\"session_epoch\":%u,\"generation\":%u,"
             "\"position_class\":\"%s\",\"payload\":\"%s\",\"original_utc_s\":%llu,"
             "\"original_accuracy_m\":%s,\"speed_mps\":%s,\"speed_publications\":%llu,"
-            "\"speed_overlay_sends\":%llu,\"speed_overlay_nonzero\":%llu,\"original_nofix_sends\":%llu}",
+            "\"speed_overlay_sends\":%llu,\"speed_overlay_nonzero\":%llu,\"original_nofix_sends\":%llu,"
+            "\"accuracy_honest_m\":%s}",
             (unsigned long long)now,beta_state_name(state_),reason_,unsigned(adapter::mode()),
             adapter::beta_held()?"true":"false",
             (unsigned long long)counters_.publications,(unsigned long long)counters_.publish_skipped,
@@ -631,7 +638,7 @@ private:
             original_accuracy,speed,(unsigned long long)counters_.speed_publications,
             (unsigned long long)counters_.speed_overlay_sends,
             (unsigned long long)counters_.speed_overlay_nonzero,
-            (unsigned long long)counters_.original_nofix_sends);
+            (unsigned long long)counters_.original_nofix_sends,honest_acc);
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
 };

@@ -37,6 +37,7 @@ static mx5_dr_result fail(mx5_dr_core *c, mx5_dr_result why) {
 mx5_dr_config mx5_dr_default_config(void) {
     mx5_dr_config p;
     p.duration_max_s = 60.0; p.distance_max_m = 1500.0; p.error_max_m = 100.0;
+    p.extended_limits = 0;
     p.integration_step_s = 0.05; p.speed_error_mps = 0.3; p.yaw_error_rad_s = 0.002;
     p.stop_enter_mps = 0.2; p.stop_exit_mps = 0.5; p.stop_hold_s = 1.5;
     p.stop_yaw_max_rad_s = 0.02;
@@ -45,10 +46,18 @@ mx5_dr_config mx5_dr_default_config(void) {
     p.snapshot_age_max_ns = 150000000; p.time_uncertainty_max_ns = 100000000;
     return p;
 }
-static int valid_config(const mx5_dr_config *p) {
-    return p && finite_value(p->duration_max_s) && p->duration_max_s > 0.0 && p->duration_max_s <= 60.0 &&
-        finite_value(p->distance_max_m) && p->distance_max_m > 0.0 && p->distance_max_m <= 1500.0 &&
-        finite_value(p->error_max_m) && p->error_max_m > 0.0 && p->error_max_m <= 100.0 &&
+/* Extended caps (BETA tunnel mode, MODEL domain only): numeric sanity bounds,
+ * not behavioural limits - 6 h, 1000 km, 1000 km of budget. */
+#define EXT_DURATION_MAX_S 21600.0
+#define EXT_DISTANCE_MAX_M 1000000.0
+#define EXT_ERROR_MAX_M 1000000.0
+static int valid_config(const mx5_dr_config *p, int allow_extended) {
+    const int ext = p && p->extended_limits == 1;
+    if (p && p->extended_limits > 1) return 0;
+    if (ext && !allow_extended) return 0;
+    return p && finite_value(p->duration_max_s) && p->duration_max_s > 0.0 && p->duration_max_s <= (ext ? EXT_DURATION_MAX_S : 60.0) &&
+        finite_value(p->distance_max_m) && p->distance_max_m > 0.0 && p->distance_max_m <= (ext ? EXT_DISTANCE_MAX_M : 1500.0) &&
+        finite_value(p->error_max_m) && p->error_max_m > 0.0 && p->error_max_m <= (ext ? EXT_ERROR_MAX_M : 100.0) &&
         finite_value(p->integration_step_s) && p->integration_step_s >= 0.001 && p->integration_step_s <= 0.05 &&
         finite_value(p->speed_error_mps) && p->speed_error_mps >= 0.0 &&
         finite_value(p->yaw_error_rad_s) && p->yaw_error_rad_s >= 0.0 &&
@@ -63,17 +72,20 @@ static int valid_config(const mx5_dr_config *p) {
         p->snapshot_age_max_ns > 0 && p->snapshot_age_max_ns <= 150000000 &&
         p->time_uncertainty_max_ns <= p->sample_age_max_ns;
 }
-mx5_dr_result mx5_dr_init(mx5_dr_core *c, const mx5_dr_config *p, mx5_dr_context x) {
+static mx5_dr_result init_common(mx5_dr_core *c, const mx5_dr_config *p, mx5_dr_context x, int allow_extended) {
     if (!c) return MX5_DR_E_CONFIG;
     memset(c, 0, sizeof(*c));
-    if (!valid_config(p) || !context_valid(x)) return fail(c, MX5_DR_E_CONFIG);
+    if (!valid_config(p, allow_extended) || !context_valid(x)) return fail(c, MX5_DR_E_CONFIG);
     c->config = *p; c->configured = 1;
     c->estimate.context = x; c->estimate.state = MX5_DR_UNSEEDED;
     c->estimate.reason = MX5_DR_E_NO_SEED;
     return MX5_DR_OK;
 }
+mx5_dr_result mx5_dr_init(mx5_dr_core *c, const mx5_dr_config *p, mx5_dr_context x) {
+    return init_common(c, p, x, 0);
+}
 mx5_dr_result mx5_dr_init_model(mx5_dr_core *c, const mx5_dr_config *p, mx5_dr_context x) {
-    mx5_dr_result r=mx5_dr_init(c,p,x);
+    mx5_dr_result r=init_common(c,p,x,1);
     if (c) { c->domain=MX5_DR_MODEL_DOMAIN; c->estimate.domain=MX5_DR_MODEL_DOMAIN; }
     return r;
 }

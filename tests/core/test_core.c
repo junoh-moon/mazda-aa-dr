@@ -82,6 +82,20 @@ static void invalid_inputs(void) {
     CHECK(mx5_dr_seed(&c,&a)==MX5_DR_E_NUMERIC);
     p.integration_step_s=NAN; CHECK(mx5_dr_init(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
 }
+static void extended_limits_are_model_only(void) {
+    mx5_dr_core c; mx5_dr_config p=mx5_dr_default_config();
+    CHECK(p.extended_limits==0);
+    p.extended_limits=1; p.duration_max_s=21600.0; p.distance_max_m=1000000.0; p.error_max_m=1000000.0;
+    CHECK(mx5_dr_init(&c,&p,ctx(1))==MX5_DR_E_CONFIG);        /* qualified: never */
+    CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_OK);
+    CHECK(mx5_dr_reset(&c,ctx(2))==MX5_DR_OK && c.config.extended_limits==1);
+    p.duration_max_s=21600.1; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+    p.duration_max_s=21600.0; p.distance_max_m=1000000.1; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+    p.distance_max_m=1000000.0; p.error_max_m=1000000.1; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+    p.error_max_m=1000000.0; p.extended_limits=2; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+    /* Without the flag the original caps still apply to the model core. */
+    p=mx5_dr_default_config(); p.duration_max_s=61.0; CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+}
 static void timing_and_identity(void) {
     mx5_dr_core c; mx5_dr_interval i,old; mx5_dr_snapshot s,before;
     setup(&c,0); i=interval(&c,20,0,0); CHECK(mx5_dr_step(&c,&i)==MX5_DR_OK);
@@ -175,6 +189,6 @@ static void reacquisition_and_replay(void) {
     CHECK(mx5_dr_get_snapshot(&c,T0,ctx(6),&s)==MX5_DR_E_NO_SEED);
 }
 int main(void) {
-    geometry(); invalid_inputs(); timing_and_identity(); mean_intervals(); stops_and_limits(); reacquisition_and_replay();
+    geometry(); invalid_inputs(); extended_limits_are_model_only(); timing_and_identity(); mean_intervals(); stops_and_limits(); reacquisition_and_replay();
     printf("core tests: %u checks passed (synthetic fixtures; no vehicle claims)\n",checks); return 0;
 }

@@ -40,7 +40,7 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     std::memset(latch_clears_,0,sizeof latch_clears_);
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
     std::memset(&beta_core_,0,sizeof beta_core_);
-    beta_=runtime::beta_profile(); beta_prev_=adapter::Observation();
+    beta_=runtime::beta_profile_tunnel(); beta_prev_=adapter::Observation();
     fault_calibration_=FaultCalibration();
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;

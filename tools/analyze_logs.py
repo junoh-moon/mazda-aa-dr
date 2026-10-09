@@ -2302,6 +2302,8 @@ class Auditor:
                 beta["speed_engaged_ns"] = None
             beta["state"] = new
         elif kind == "beta_summary":
+            if finite_number(row.get("accuracy_honest_m")) and row["accuracy_honest_m"] >= 0:
+                beta["honest_m"] = row["accuracy_honest_m"]
             if self.validate(row, source, ("replaced_sends", "replaced_nonzero", "publications", "withdrawals"),
                              ("state", "reason")):
                 self.beta_last_summary = {k: row[k] for k in (
@@ -2488,19 +2490,27 @@ class Auditor:
             alat, alon = advance(last["lat"], last["lon"], last["bearing_deg"], last["speed_mps"] * gap)
             aligned = distance_m(alat, alon, lat, lon)
         accuracy = last["accuracy_e3"] / 1000.0
+        # Tunnel mode (beta.6): the SENT accuracy is clamped at 40 m while the
+        # honest budget (beta_summary accuracy_honest_m) keeps growing. The
+        # honest budget, not the clamp, is what a GPS return can contradict.
+        honest = beta.get("honest_m")
+        clamped = finite_number(honest) and honest > accuracy + 0.01
+        limit = honest if clamped else accuracy
         check = dict(dr_send=last["source"], gps_position=source, gap_s=round(gap, 3),
                      distance_m=round(raw, 2), time_aligned_distance_m=round(aligned, 2),
                      reported_accuracy_m=accuracy, within_reported_accuracy=aligned <= accuracy,
+                     honest_accuracy_m=honest if clamped else None, reported_accuracy_clamped=bool(clamped),
+                     within_honest_budget=aligned <= limit,
                      dr_speed_mps=last["speed_mps"], gps_mode=row["mode"], gps_horizontal=row.get("horizontal"))
         self.beta_returns_total += 1
         if len(self.beta_returns) < 100:
             self.beta_returns.append(check)
         if gap < 0:
             self.issue("beta_clock_regressed", source, "GPS fix precedes the last replaced send")
-        elif aligned > accuracy:
+        elif aligned > limit:
             self.issue("beta_return_exceeds_accuracy", source,
-                       "First GPS fix %.1f m from the time-aligned last BETA LOCATION; reported %.1f m"
-                       % (aligned, accuracy))
+                       "First GPS fix %.1f m from the time-aligned last BETA LOCATION; %s %.1f m"
+                       % (aligned, "honest budget" if clamped else "reported", limit))
 
     def close_beta_session(self, s=None):
         s = self.session if s is None else s

@@ -624,15 +624,17 @@ int main(int argc,char** argv) {
         assert(!replaced_total && has(rows,"ARMED>GPS_LOST:gps_lost") && !has(rows,"GPS_LOST>ENGAGED:published"));
         assert(has(rows,"GPS_LOST>DISABLED:capture_stop"));
     } else {
-        // Budget: replaced while the reported accuracy stays <= 40 m, then the
-        // outage stays withdrawn; accuracy is never lowered to stay engaged.
-        assert(replaced_total>=5 && has(rows,"ENGAGED>WITHDRAWN:budget_limit"));
+        // Tunnel mode (v1.0.0-beta.6, owner decision 2026-10-09): the honest
+        // budget passing 40 m no longer withdraws the outage; the replacement
+        // continues and the REPORTED accuracy is clamped at 40 m (the honest
+        // budget is journaled as accuracy_honest_m).
+        assert(replaced_total>=5 && !has(rows,"ENGAGED>WITHDRAWN:budget_limit"));
         uint32_t previous=0;
         for(size_t i=0;i<calls.size();++i)if(calls[i].replaced) {
             assert(calls[i].accuracy_e3<=40000 && calls[i].accuracy_e3+500>=previous);
             previous=calls[i].accuracy_e3;
         }
-        assert(previous>30000);
+        assert(previous==40000);
     }
     unlink((logs+"/capture.done").c_str());rmdir((logs+"/capture.stop").c_str());
     for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());

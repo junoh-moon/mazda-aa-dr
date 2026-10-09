@@ -120,8 +120,9 @@ CoreBridgeResult prepare_core_publication(const mx5_dr_core& core,
     return CORE_BRIDGE_OK;
 }
 CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfile& p,
-                                      adapter::DrSnapshot* out) {
+                                      adapter::DrSnapshot* out,double* honest_accuracy_m) {
     if (!out) return CORE_BRIDGE_NO_OUTPUT;
+    if (honest_accuracy_m) *honest_accuracy_m=0.0;
     *out=adapter::DrSnapshot();
     const mx5_dr_snapshot& s=in.snapshot;
     if (in.result!=MX5_DR_OK || s.domain!=MX5_DR_MODEL_DOMAIN || !s.model_valid || s.valid ||
@@ -133,11 +134,14 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
         !representable(s.context.generation)) return CORE_BRIDGE_OVERFLOW;
     if (!s.anchor_id || !s.solution_seq || !s.processed_position_seq)
         return CORE_BRIDGE_UNQUALIFIED;
+    // Unbounded tunnel profile: the same numeric sanity caps as the core's
+    // extended limits (dr_core.c), not behavioural limits.
+    const double duration_cap=p.unbounded?21600.0:60.0, distance_cap=p.unbounded?1000000.0:1500.0;
     if (!p.lease_ns || p.lease_ns>1000000000ULL || !(p.accuracy_max_m>0.0) ||
         !std::isfinite(p.accuracy_max_m) || !nonnegative(p.speed_error_mps) ||
         !nonnegative(p.yaw_error_rad_s) || !(p.heading_budget_max_rad>0.0) ||
-        !std::isfinite(p.heading_budget_max_rad) || !bounded(p.duration_max_s,60.0) ||
-        p.duration_max_s==0.0 || !bounded(p.distance_max_m,1500.0) || p.distance_max_m==0.0)
+        !std::isfinite(p.heading_budget_max_rad) || !bounded(p.duration_max_s,duration_cap) ||
+        p.duration_max_s==0.0 || !bounded(p.distance_max_m,distance_cap) || p.distance_max_m==0.0)
         return CORE_BRIDGE_LIMIT;
     if (!s.frontier_ns || !s.derived_utc_ns || in.query_mono_ns<s.frontier_ns ||
         in.now_mono_ns<s.frontier_ns) return CORE_BRIDGE_TIME;
@@ -162,11 +166,14 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
     const double accuracy=s.error_budget_m+in.rotation_budget_m+(s.speed_mps+p.speed_error_mps)*lease_s+
         s.speed_mps*p.rotation_budget_per_rad*in.rotation_rad*(age_s+lease_s);
     if (!std::isfinite(accuracy)) return CORE_BRIDGE_NUMERIC;
-    if (accuracy>p.accuracy_max_m) return CORE_BRIDGE_LIMIT;
+    if (honest_accuracy_m) *honest_accuracy_m=accuracy;
+    // Unbounded tunnel mode reports min(honest budget, accuracy_max_m); the
+    // honest value above is journaled by the caller. Bounded mode refuses.
+    if (accuracy>p.accuracy_max_m && !p.unbounded) return CORE_BRIDGE_LIMIT;
     // Rule 5: a withdrawn bearing withdraws the whole first-beta snapshot.
     const double heading=in.heading_budget_rad+p.yaw_error_rad_s*lease_s;
     if (!std::isfinite(heading) || heading<0.0) return CORE_BRIDGE_NUMERIC;
-    if (heading>p.heading_budget_max_rad) return CORE_BRIDGE_BEARING;
+    if (heading>p.heading_budget_max_rad && !p.unbounded) return CORE_BRIDGE_BEARING;
     if ((s.stopped!=0 && s.stopped!=1) || (s.has_bearing!=0 && s.has_bearing!=1))
         return CORE_BRIDGE_BEARING;
     if (s.stopped) {
@@ -184,7 +191,7 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
     mapped.ready=true; mapped.limits_ok=true; mapped.stopped=s.stopped!=0;
     // BETA is not a qualification: these external claims stay false.
     mapped.profile_verified=false; mapped.input_quality_verified=false;
-    mapped.accuracy_m=accuracy; mapped.beta=true;
+    mapped.accuracy_m=accuracy>p.accuracy_max_m?p.accuracy_max_m:accuracy; mapped.beta=true;
     uint8_t bytes[48];
     if (!adapter::encode_location(mapped,bytes)) return CORE_BRIDGE_NUMERIC;
     *out=mapped;

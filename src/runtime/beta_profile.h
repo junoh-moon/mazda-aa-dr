@@ -47,6 +47,12 @@ struct BetaProfile {
     // Decision 4: accuracy = budget + (v+sv)*lease, valid_until = frontier+lease.
     uint64_t lease_ns;
     double accuracy_max_m;
+    // Owner decision 2026-10-09 (validation/TUNNEL_UNBOUNDED_2026-10-09.md):
+    // the LOST episode is not ended by the time/distance/error/heading budget.
+    // The honest budget keeps being computed and journaled; the REPORTED
+    // accuracy is min(honest budget, accuracy_max_m). Only GPS return, sensor
+    // silence, a latch/session fault or a core fault end the replacement.
+    bool unbounded;
 };
 
 inline BetaProfile beta_profile() {
@@ -79,6 +85,19 @@ inline BetaProfile beta_profile() {
     p.rotation_budget_per_rad=0.10;
     p.heading_budget_max_rad=20.0*3.14159265358979323846/180.0;
     p.lease_ns=500000000ULL; p.accuracy_max_m=40.0;
+    p.unbounded=false;
+    return p;
+}
+
+// Previous (v1.0.0-beta.5) behaviour: the 40 m honest budget ends the window.
+inline BetaProfile beta_profile_bounded() { return beta_profile(); }
+
+// Production BETA profile since v1.0.0-beta.6: unbounded tunnel mode. The
+// numeric sanity caps (6 h, 1000 km) are far beyond any real outage.
+inline BetaProfile beta_profile_tunnel() {
+    BetaProfile p=beta_profile();
+    p.unbounded=true;
+    p.error_max_m=1000000.0; p.duration_max_s=21600.0; p.distance_max_m=1000000.0;
     return p;
 }
 
@@ -88,7 +107,7 @@ inline mx5_dr_config beta_core_config(const BetaProfile& p) {
     mx5_dr_config c=mx5_dr_default_config();
     c.speed_error_mps=p.speed_error_mps; c.yaw_error_rad_s=p.yaw_error_rad_s;
     c.error_max_m=p.error_max_m; c.duration_max_s=p.duration_max_s;
-    c.distance_max_m=p.distance_max_m;
+    c.distance_max_m=p.distance_max_m; c.extended_limits=p.unbounded?1:0;
     // Coordinator decision F (2026-10-05): the strict stationary freeze (a
     // stopped estimate fails E_FRAME on |yaw| > stop_yaw_max) applies only
     // while all four wheels read zero. Any wheel movement (one count of one
