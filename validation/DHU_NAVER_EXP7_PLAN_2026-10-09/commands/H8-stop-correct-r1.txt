@@ -1,0 +1,602 @@
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 0.5
+tap 200 50
+sleep 10
+tap 345 145
+sleep 3
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+sleep 2
+screenshot ../../../../experiment7/H8-stop-correct-r1-setup-guidance.png
+location 35.1697679 129.0267566 5.000 NAN 14.000 328.9
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-000.png
+sleep 0.8
+location 35.1698757 129.0266770 5.000 NAN 14.000 328.9
+sleep 1
+location 35.1699834 129.0265973 5.000 NAN 14.000 328.9
+sleep 1
+location 35.1700899 129.0265152 5.000 NAN 14.000 327.5
+sleep 1
+location 35.1701962 129.0264325 5.000 NAN 14.000 327.5
+sleep 1
+location 35.1703003 129.0263463 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1703984 129.0262498 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1704965 129.0261532 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1705946 129.0260567 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1706928 129.0259602 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1707909 129.0258636 5.000 NAN 14.000 321.2
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-010.png
+sleep 0.8
+location 35.1708834 129.0257600 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1709669 129.0256447 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1710504 129.0255294 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1711340 129.0254142 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1712175 129.0252989 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1713010 129.0251836 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1713845 129.0250684 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1714665 129.0249515 5.000 NAN 14.000 309.4
+sleep 1
+location 35.1715464 129.0248325 5.000 NAN 14.000 309.4
+sleep 1
+location 35.1716264 129.0247136 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-020.png
+sleep 0.8
+location 35.1717064 129.0245946 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1717863 129.0244756 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-022.png
+sleep 0.8
+location 35.1718663 129.0243566 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1719463 129.0242376 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-024.png
+sleep 0.8
+location 35.1720262 129.0241187 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1721062 129.0239997 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-026.png
+sleep 0.8
+location 35.1721862 129.0238807 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1722662 129.0237617 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-028.png
+sleep 0.8
+location 35.1723461 129.0236428 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1724261 129.0235238 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-030.png
+sleep 0.8
+location 35.1725061 129.0234048 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1725860 129.0232858 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1726660 129.0231668 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1727460 129.0230479 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1728259 129.0229289 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1729059 129.0228099 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1729859 129.0226909 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1730658 129.0225720 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1731458 129.0224530 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1732258 129.0223340 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-040.png
+sleep 0.8
+location 35.1733057 129.0222150 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1733857 129.0220960 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1734657 129.0219771 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1735456 129.0218581 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1736256 129.0217391 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1737056 129.0216201 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1737855 129.0215011 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1738655 129.0213822 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1739455 129.0212632 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1740254 129.0211442 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-050.png
+sleep 0.8
+location 35.1741054 129.0210252 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1741854 129.0209063 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1742654 129.0207873 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1743453 129.0206683 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1744253 129.0205493 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1745053 129.0204303 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1745852 129.0203114 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1746652 129.0201924 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1747452 129.0200734 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1748251 129.0199544 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-060.png
+sleep 0.8
+location 35.1749051 129.0198355 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1749851 129.0197165 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1750650 129.0195975 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1751450 129.0194785 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1752250 129.0193595 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1753049 129.0192406 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1753849 129.0191216 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1754649 129.0190026 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1755448 129.0188836 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1756248 129.0187647 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-070.png
+sleep 0.8
+location 35.1757048 129.0186457 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1757847 129.0185267 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1758647 129.0184077 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1759447 129.0182887 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1760247 129.0181698 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1761046 129.0180508 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1761846 129.0179318 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1762646 129.0178128 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1763445 129.0176939 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1764245 129.0175749 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-080.png
+sleep 0.8
+location 35.1765045 129.0174559 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1765844 129.0173369 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1766644 129.0172179 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1767444 129.0170990 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1768243 129.0169800 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1769043 129.0168610 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1769843 129.0167420 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1770642 129.0166231 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1771442 129.0165041 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1772242 129.0163851 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-090.png
+sleep 0.8
+location 35.1773041 129.0162661 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1773841 129.0161471 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1774641 129.0160282 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1775440 129.0159092 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1776240 129.0157902 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1777040 129.0156712 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1777839 129.0155523 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1778639 129.0154333 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1779439 129.0153143 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1780239 129.0151953 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-100.png
+sleep 0.8
+location 35.1781038 129.0150763 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1781838 129.0149574 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1782638 129.0148384 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1783437 129.0147194 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1784237 129.0146004 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-107.png
+sleep 0.8
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-109.png
+sleep 0.8
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-110.png
+sleep 0.8
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-120.png
+sleep 0.8
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-130.png
+sleep 0.8
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 0.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-136.png
+sleep 0.8
+location 35.1785836 129.0143625 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1786636 129.0142435 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1787436 129.0141245 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-139.png
+sleep 0.8
+location 35.1788235 129.0140055 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-140.png
+sleep 0.8
+location 35.1789035 129.0138866 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1789835 129.0137676 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1790634 129.0136486 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1791434 129.0135296 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1792234 129.0134107 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1793033 129.0132917 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1793833 129.0131727 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1794633 129.0130537 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1795432 129.0129347 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1796232 129.0128158 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-150.png
+sleep 0.8
+location 35.1797032 129.0126968 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1797831 129.0125778 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1798631 129.0124588 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1799431 129.0123398 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1800231 129.0122209 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1801030 129.0121019 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1801830 129.0119829 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1802630 129.0118639 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1803429 129.0117450 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1804229 129.0116260 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-160.png
+sleep 0.8
+location 35.1805029 129.0115070 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1805828 129.0113880 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1806628 129.0112690 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1807428 129.0111501 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1808227 129.0110311 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1809027 129.0109121 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1809827 129.0107931 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1810626 129.0106742 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1811426 129.0105552 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1812226 129.0104362 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-170.png
+sleep 0.8
+location 35.1813025 129.0103172 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1813825 129.0101982 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1814625 129.0100793 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1815424 129.0099603 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1816224 129.0098413 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1817024 129.0097223 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1817823 129.0096034 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1818623 129.0094844 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1819423 129.0093654 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1820223 129.0092464 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-180.png
+sleep 0.8
+location 35.1821022 129.0091274 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1821822 129.0090085 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1822622 129.0088895 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1823421 129.0087705 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1824221 129.0086515 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1825021 129.0085326 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1825820 129.0084136 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1826620 129.0082946 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1827420 129.0081756 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1828219 129.0080566 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-190.png
+sleep 0.8
+location 35.1829019 129.0079377 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1829819 129.0078187 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1830618 129.0076997 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1831418 129.0075807 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1832218 129.0074618 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1833017 129.0073428 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1833817 129.0072238 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1834617 129.0071048 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1835416 129.0069858 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1836216 129.0068669 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-200.png
+sleep 0.8
+location 35.1837016 129.0067479 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1837816 129.0066289 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1838615 129.0065099 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1839415 129.0063910 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1840215 129.0062720 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1841014 129.0061530 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1841814 129.0060340 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1842614 129.0059150 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1843413 129.0057961 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1844213 129.0056771 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-210.png
+sleep 0.8
+location 35.1845013 129.0055581 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1845812 129.0054391 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1846612 129.0053202 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1847412 129.0052012 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1848211 129.0050822 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1849011 129.0049632 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1849811 129.0048442 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1850610 129.0047253 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1851410 129.0046063 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1852210 129.0044873 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-220.png
+sleep 0.8
+location 35.1853009 129.0043683 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1853683 129.0042390 5.000 NAN 14.000 298.5
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-222.png
+sleep 0.8
+location 35.1854285 129.0041036 5.000 NAN 14.000 298.5
+sleep 1
+location 35.1854871 129.0039673 5.000 NAN 14.000 296.9
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-224.png
+sleep 0.8
+location 35.1855440 129.0038299 5.000 NAN 14.000 296.9
+sleep 1
+location 35.1856009 129.0036925 5.000 NAN 14.000 296.9
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-226.png
+sleep 0.8
+location 35.1856579 129.0035551 5.000 NAN 14.000 296.9
+sleep 1
+location 35.1856997 129.0034098 5.000 NAN 14.000 289.3
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-228.png
+sleep 0.8
+location 35.1857413 129.0032644 5.000 NAN 14.000 289.3
+sleep 1
+location 35.1857830 129.0031190 5.000 NAN 14.000 289.2
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-230.png
+sleep 0.8
+location 35.1858243 129.0029735 5.000 NAN 14.000 289.2
+sleep 1
+location 35.1858656 129.0028280 5.000 NAN 14.000 289.2
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-232.png
+sleep 0.8
+location 35.1859069 129.0026825 5.000 NAN 14.000 289.2
+sleep 1
+location 35.1859436 129.0025355 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1859627 129.0023833 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1859818 129.0022310 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1860008 129.0020787 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1860047 129.0019248 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860077 129.0017708 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860107 129.0016168 5.000 NAN 14.000 271.4
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-240.png
+sleep 0.8
+location 35.1860137 129.0014628 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860137 129.0013089 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859998 129.0011558 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859860 129.0010027 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859721 129.0008496 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859583 129.0006965 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859444 129.0005434 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859305 129.0003902 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859167 129.0002371 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859029 129.0000840 5.000 NAN 14.000 268.3
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-250.png
+sleep 0.8
+location 35.1858990 128.9999300 5.000 NAN 14.000 268.3
+sleep 0.2
+screenshot ../../../../experiment7/H8-stop-correct-r1-251.png
+sleep 0.8
