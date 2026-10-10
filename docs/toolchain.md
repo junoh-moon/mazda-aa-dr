@@ -69,3 +69,20 @@ registers, exact-once original calls, TLS nesting, scrub selection and errno; it
 does not execute OEM code. The adapter shared object had no TEXTREL and required
 only GLIBC_2.4 symbol versions. This does not replace exact-OEM stationary loader
 validation.
+
+### Timing-class ARM tests (2026-10-10)
+
+`tests/run_arm_all.sh` runs the tests that assert real product timing
+contracts against the wall clock (`journal-test --writer`,
+`runtime-lds-association-test`, `worker-session-test`, `worker-lds-test`,
+`worker-lds-source-test` and the product-DSO `runtime-assist` suite) through `tests/run_arm_timing.sh`: at most 3
+attempts, 5 s apart, passed if any attempt passes, failed if all fail. No
+threshold changes; every other ARM test runs once. Each attempt prints
+`ARM_TIMING_ATTEMPT name=... attempt=k/3 exit=... load=... assertion=...`
+after its full output, and the run ends with a flaky report block plus
+`ARM_TIMING_RETRIES=n` (tests that passed only after a retry) and
+`ARM_TIMING_FAILED=n`. A release states `ARM_TIMING_RETRIES` in its notes
+(`docs/RELEASING_KO.md`). Under QEMU the journal writer needs a real share of
+a host CPU; with every core busy at nice 0 and the suite at nice 10 the
+throughput tests fail on every attempt, which is reported, not retried away.
+See `validation/ARM_TIMING_STABILISATION_2026-10-10.md`.

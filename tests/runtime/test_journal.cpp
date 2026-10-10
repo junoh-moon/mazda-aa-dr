@@ -578,9 +578,17 @@ static void writer_age_flush(const char* root,const std::string& logs) {
     const uint64_t flushes=j.writer->flush_count.load();
     uint64_t t0=clock_ns(0);
     j.line("{\"kind\":\"fixture\",\"n\":1}");
+    const uint64_t row=j.writer->ring.stats().next_seq;
     while(j.writer->flush_count.load()==flushes) { assert(clock_ns(0)-t0<2000000000ULL);usleep(1000); }
     first_flush_ms=(clock_ns(0)-t0)/1000000ULL;
     assert(first_flush_ms>=240 && first_flush_ms<600);
+    // flush_count counts the writer's fflush when it starts (before fflush
+    // and ring.flushed()); a running fflush is lag by design (busy_since).
+    // Check the bound after that same self-flush has completed, which the
+    // writer publishes in `flushed` (2026-10-10: under QEMU the 1 ms poll
+    // could sample inside the fflush and read the 250 ms row age).
+    while(j.writer->flushed.load()<row) { assert(clock_ns(0)-t0<2000000000ULL);usleep(1000); }
+    assert(j.writer->flush_count.load()==flushes+1);   // no request: the same self-flush
     assert(journal_writer_lag(j.writer,clock_ns(0)).oldest_ns<50000000ULL);
     // (b) Steady state: a row every 20 ms, guard every turn, worker flush
     // request every 1 s; (c) one 400 ms fflush in the middle.

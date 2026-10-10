@@ -34,6 +34,36 @@ verify_inputs() {
 }
 verify_inputs
 mkdir -p "$build"
+# Timing-class tests assert real product timing contracts (journal writer
+# age flush and 1.5 s lag guard, worker turn and idle-gate deadlines) against
+# the wall clock, which qemu-arm on a shared host can stall. They run through
+# tests/run_arm_timing.sh: at most 3 attempts, every attempt logged, passed if
+# any attempt passes. Every other test runs exactly once. The flaky report at
+# the end lists each retried test; release notes state ARM_TIMING_RETRIES
+# (docs/RELEASING_KO.md, validation/ARM_TIMING_STABILISATION_2026-10-10.md).
+timing="sh $project/tests/run_arm_timing.sh"
+MX5DR_TIMING_LEDGER=$build/timing-ledger.tsv
+export MX5DR_TIMING_LEDGER
+: >"$MX5DR_TIMING_LEDGER"
+timing_report() {
+    status=$?
+    set +e
+    retried=$(grep -c '^RETRIED' "$MX5DR_TIMING_LEDGER" 2>/dev/null)
+    failed=$(grep -c '^FAILED' "$MX5DR_TIMING_LEDGER" 2>/dev/null)
+    echo '== ARM timing-class flaky report'
+    if [ "${retried:-0}" -eq 0 ] && [ "${failed:-0}" -eq 0 ]; then
+        echo 'No timing-class test needed more than one attempt.'
+    else
+        while IFS='	' read -r kind name attempts load first; do
+            echo "$kind: $name attempts=$attempts first_failure_load=$load first_failure: $first"
+        done <"$MX5DR_TIMING_LEDGER"
+    fi
+    echo "ARM_TIMING_RETRIES=${retried:-0}"
+    echo "ARM_TIMING_FAILED=${failed:-0}"
+    [ "$status" -eq 0 ] || echo "ARM suite stopped with exit $status"
+    exit "$status"
+}
+trap timing_report EXIT
 arch='-march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=softfp -marm'
 warn='-O2 -Wall -Wextra -Werror'
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_motion_batch.cpp -o "$build/motion-batch-test"
@@ -81,11 +111,11 @@ for scenario in basic exact capacity invalidation fork stop allocation scalar_bi
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/adapter/runtime_lds_association_test.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" -ldl -pthread -lrt -lm -o "$build/runtime-lds-association-test"
 for scenario in adopted freeze audit journal_failure pre_stopped fork journal bounds drain_bus drain_session; do
-    qemu-arm -L "$QEMU_SYSROOT" "$build/runtime-lds-association-test" "$scenario"
+    $timing "runtime-lds-association-test $scenario" qemu-arm -L "$QEMU_SYSROOT" "$build/runtime-lds-association-test" "$scenario"
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_worker_lds.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" -ldl -pthread -lrt -lm -o "$build/worker-lds-test"
 for scenario in capture occupied pre_stopped bounded malformed wrong_uid; do
-    qemu-arm -L "$QEMU_SYSROOT" "$build/worker-lds-test" "$scenario"
+    $timing "worker-lds-test $scenario" qemu-arm -L "$QEMU_SYSROOT" "$build/worker-lds-test" "$scenario"
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_lds_request_source.cpp src/runtime/lds_request_source.cpp src/runtime/lds_sideband.cpp src/runtime/request_trace.cpp -pthread -lrt -o "$build/lds-request-source-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/lds-request-source-test"
@@ -93,7 +123,7 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/lds-request-source-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/lds-source-bus-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_worker_lds_source.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" -ldl -pthread -lrt -lm -o "$build/worker-lds-source-test"
 for scenario in position_first sideband_first mismatch late_conflict pre_stopped malformed_recovery first_bus startup_bus bus_reconnect; do
-    qemu-arm -L "$QEMU_SYSROOT" "$build/worker-lds-source-test" "$scenario"
+    $timing "worker-lds-source-test $scenario" qemu-arm -L "$QEMU_SYSROOT" "$build/worker-lds-source-test" "$scenario"
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/core_bridge.cpp tests/integration/test_pipeline.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -o "$build/pipeline-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/pipeline-test"
@@ -133,7 +163,7 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/yaw-rows-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/chan-rows-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
-qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test" --writer
+$timing "journal-test --writer" qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test" --writer
 for scenario in startup during query invalid healthy; do
     qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test" --storage "$scenario"
 done
@@ -143,12 +173,12 @@ for journal_suite in test_shadow_results.py test_request_log.py; do
 done
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_worker_session.cpp -ldl -pthread -lrt -lm -o "$build/worker-session-test"
 for scenario in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do
-    qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
+    $timing "worker-session-test $scenario" qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
 done
-MX5DR_TEST_STALE_RAW=1 qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" bus_reuse
-MX5DR_TEST_SLOW_YAW=1 qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" bus_reuse
+MX5DR_TEST_STALE_RAW=1 $timing "worker-session-test STALE_RAW bus_reuse" qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" bus_reuse
+MX5DR_TEST_SLOW_YAW=1 $timing "worker-session-test SLOW_YAW bus_reuse" qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" bus_reuse
 for scenario in bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do
-    MX5DR_TEST_PREGAP=1 qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
+    MX5DR_TEST_PREGAP=1 $timing "worker-session-test PREGAP $scenario" qemu-arm -L "$QEMU_SYSROOT" "$build/worker-session-test" "$scenario"
 done
 for fixture in reset input; do
     "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" "tests/runtime/test_model_session_$fixture.cpp" -ldl -pthread -lrt -lm -o "$build/model-session-$fixture-test"
@@ -236,7 +266,9 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/shadow-log-test"
 MX5DR_SHADOW_FIXTURE="qemu-arm -L $QEMU_SYSROOT $build/shadow-log-test" \
     python3 -m unittest discover -s tests/journal -p test_calibration_logs.py -v
 
-python3 tests/adapter/run_unwind_dso.py --library "$preload" \
+# The runtime-assist cases drive the real worker thread and poll its output
+# against the wall clock (80 ms per window): timing class.
+$timing "run_unwind_dso runtime-assist" python3 tests/adapter/run_unwind_dso.py --library "$preload" \
     --cross-prefix "$CROSS_COMPILE" --sysroot "$QEMU_SYSROOT" \
     --suite runtime-assist --output-dir "$build/runtime-assist-dso"
 verify_inputs

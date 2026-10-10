@@ -57,6 +57,7 @@ enum BoundaryCase { NO_BOUNDARY, BUS_BOUNDARY, SESSION_BOUNDARY };
 BoundaryCase boundary_case=NO_BOUNDARY;
 thread_local bool runtime_owner=false;
 std::atomic<unsigned> idle_gate(0),boundary_step(0);
+const unsigned IDLE_ARMED=6; // Between the test's request (1) and the park (2).
 uint64_t outer_revision,inner_revision;
 unsigned lifecycle_calls;
 int session_handle;
@@ -375,8 +376,16 @@ void formatter_bounds() {
 }
 static int scheduled_nanosleep(const timespec* delay,timespec* remaining) {
     if(runtime_owner) {
+        // Park (2) only at the idle sleep that ends a complete turn begun
+        // after the request (1 -> IDLE_ARMED here, IDLE_ARMED -> 2 at the
+        // next idle sleep). The turn that was already past its queue drain
+        // when the test asked could otherwise park with the last wait_match
+        // callback's POSITION still queued, and the boundary turn then counted
+        // two positions (2026-10-10, QEMU on a loaded host).
         unsigned pending=1;
-        if(idle_gate.compare_exchange_strong(pending,2)) {
+        unsigned armed=IDLE_ARMED;
+        if(idle_gate.compare_exchange_strong(pending,IDLE_ARMED)) {
+        } else if(idle_gate.compare_exchange_strong(armed,2)) {
             while(idle_gate.load(std::memory_order_acquire)!=3)usleep(1000);
         } else if(idle_gate.load(std::memory_order_acquire)==3&&
                   boundary_step.load(std::memory_order_acquire)==3) {
