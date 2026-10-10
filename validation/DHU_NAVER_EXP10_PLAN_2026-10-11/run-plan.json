@@ -9,8 +9,7 @@
   "after_tunnel_exit_m": 175.3
  },
  "timeline": {
-  "search_tap_t": 8,
-  "recent_tap_t": 18,
+  "t0": "first second after the passed guidance gate (guidance already started in the preparation)",
   "guidance_photo_t": 21,
   "move_t": 80,
   "ramp_s": 10,
@@ -59,6 +58,70 @@
    129
   ]
  },
+ "prep": {
+  "files": {
+   "B0": "PREP-B0.txt",
+   "B1": "PREP-B1.txt",
+   "B2": "PREP-B2.txt",
+   "B3": "PREP-B3.txt",
+   "B4": "PREP-B4.txt",
+   "B5": "PREP-B5.txt",
+   "B6": "PREP-B6.txt",
+   "B7": "PREP-B7.txt"
+  },
+  "accuracy_m": 5.0,
+  "max_s": 120,
+  "rule": "the run's own standstill fix with accuracy 5 m; RS part a uses PREP-B2; RS part b has none"
+ },
+ "tier0": {
+  "files": [
+   "T0-LPROBE.txt",
+   "PREP-B2.txt",
+   "T0-SMOKE-BODY.txt",
+   "T0-EXP9-PREP.txt"
+  ],
+  "lprobe_s": 15,
+  "smoke_s": 30,
+  "estimate_min": [
+   6.0,
+   9.0
+  ],
+  "expected_remaining_km": {
+   "p0": [
+    1.0,
+    1.9
+   ],
+   "exp9_start": [
+    3.9,
+    4.7
+   ]
+  }
+ },
+ "ui_fallback": {
+  "search": [
+   600,
+   44
+  ],
+  "recent_row_x": 230,
+  "recent_rows_y": [
+   130,
+   225,
+   318
+  ],
+  "route_start": [
+   345,
+   145
+  ],
+  "recalc_popup_dismiss": [
+   170,
+   177
+  ],
+  "naver_icon": [
+   298,
+   440
+  ]
+ },
+ "budget_min": 180,
  "order": [
   "B2-r1",
   "B3-r1",
@@ -95,8 +158,8 @@
    "input_s": 650,
    "photos": 185,
    "estimate_min": [
-    36,
-    41
+    43,
+    48
    ],
    "unattended": true
   },
@@ -111,8 +174,8 @@
    "input_s": 520,
    "photos": 148,
    "estimate_min": [
-    21,
-    25
+    27,
+    31
    ],
    "unattended": true
   },
@@ -135,16 +198,16 @@
    "input_s": 1630,
    "photos": 444,
    "estimate_min": [
-    66,
-    78
+    84,
+    96
    ],
    "unattended": true,
    "always": [
     "B2-r3"
    ],
    "per_added_run_min": [
-    5,
-    6
+    7,
+    8
    ],
    "note": "candidate list; the README rule selects the runs"
   },
@@ -157,8 +220,8 @@
    "input_s": 260,
    "photos": 74,
    "estimate_min": [
-    10,
-    12
+    13,
+    15
    ],
    "unattended": false
   }
@@ -175,10 +238,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B0",
    "move": [
     80,
     119
@@ -630,10 +690,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B0",
    "move": [
     80,
     119
@@ -1085,10 +1142,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B1",
    "move": [
     80,
     119
@@ -1540,10 +1594,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B1",
    "move": [
     80,
     119
@@ -1995,10 +2046,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B2",
    "move": [
     80,
     119
@@ -2450,10 +2498,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B2",
    "move": [
     80,
     119
@@ -2905,10 +2950,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B3",
    "move": [
     80,
     119
@@ -3360,10 +3402,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B3",
    "move": [
     80,
     119
@@ -3815,10 +3854,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B4",
    "move": [
     80,
     119
@@ -4270,10 +4306,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B4",
    "move": [
     80,
     119
@@ -4725,10 +4758,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B5",
    "move": [
     80,
     119
@@ -5220,10 +5250,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B5",
    "move": [
     80,
     119
@@ -5715,10 +5742,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B6",
    "move": [
     80,
     119
@@ -6170,10 +6194,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B6",
    "move": [
     80,
     119
@@ -6625,10 +6646,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B7",
    "move": [
     80,
     119
@@ -7120,10 +7138,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B7",
    "move": [
     80,
     119
@@ -7615,10 +7630,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B2",
    "move": [
     80,
     119
@@ -8070,10 +8082,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B1",
    "move": [
     80,
     119
@@ -8525,10 +8534,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B2",
    "move": [
     80,
     119
@@ -8980,7 +8986,7 @@
     0,
     79
    ],
-   "guidance_taps": [],
+   "prep": null,
    "move": [
     80,
     119
@@ -9432,7 +9438,7 @@
     0,
     79
    ],
-   "guidance_taps": [],
+   "prep": null,
    "move": [
     80,
     119
@@ -9884,10 +9890,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B0",
    "move": [
     80,
     119
@@ -10339,10 +10342,7 @@
     0,
     79
    ],
-   "guidance_taps": [
-    8,
-    18
-   ],
+   "prep": "PREP-B1",
    "move": [
     80,
     119
