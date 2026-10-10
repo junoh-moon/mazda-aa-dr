@@ -1,32 +1,30 @@
 #!/usr/bin/env python3
-"""Generate DHU `location` command files for experiment 10 v2 (G3: bearing shown on a FRESH Android Auto session at standstill).
+"""Generate DHU `location` command files for experiment 10 v3 (G3: bearing shown on a fresh Android Auto session at standstill).
 
-v2 (2026-10-11, after the failed v1 night, validation/DHU_NAVER_EXP10_FAILURE_2026-10-11.md): the guidance taps are no longer inside
-the run files. v1 tapped (200, 50) at t=8 and (345, 145) at t=18 blindly; no earlier experiment ever started guidance that way (exp7-9
-prepared guidance in a separate, screenshot-checked stage: search icon, the observed Mora row, route start, dismissal of the
-recalculation popup, a verified guidance screen) and all 9 v1 attempts had no guidance at t=21. v2 therefore:
-  - streams a PREPARATION file (the condition's own standstill fix at P0 with accuracy 5 m, the accuracy every working exp7-9
-    preparation used for the first synthetic fixes) from the first `location` line of the fresh session while the executing agent
-    starts guidance with taps resolved from the screen and checks a guidance gate (README "Gates"); the run file follows without a gap;
-  - run files carry no taps (t = 0 is the first second after the passed guidance gate);
-  - adds Tier 0 files: T0-LPROBE (15 m then 5 m fixes at P0 before any UI: does the first fix of a cold session move the map, and at
-    which accuracy), T0-SMOKE-BODY (30 s of the B2 run start, the path every experimental run uses) and T0-EXP9-PREP (the exp9 start
-    fix at 5 m: the proven reference when the smoke test fails).
-Every run is one fresh DHU session with a freshly started Naver process (exp7 H6 reset, no `pm clear`). Stationary fixes at P0
-(route.json, 2,950 m along the route = 175 m after the Baekyang tunnel exit on 모라로, a road segment Naver followed toward 모라역 in
-every exp7 CLEAN-EXIT run). The car stays still for 80 s with guidance, then moves off along the route with the true course (ramp to
-20 km/h in 10 s, 40 s of motion, about 197 m, all before route metre 3,195 which exp7 covered), then a neutral tail (stationary,
-bearing absent) so that every run leaves the same last-known location for the next one.
-Conditions differ ONLY in the standstill fixes (t = 0 .. MOVE_T - 1) and in the matching preparation file:
-  B0 bearing absent (NAN)          B1 bearing 0 (stock placeholder)     B2 true road bearing T
-  B3 T + 180                       B4 T - 90 (T + 90 is within 10 deg of B1 at this site)
+v3 (2026-10-11, rework after the failed v1 night and the rejected v2, validation/DHU_NAVER_EXP10_FAILURE_2026-10-11.md).
+Principle: change only the independent variable. Every run file starts with the proven guidance-start preamble of experiments 6-9
+(`setup-template.txt`, byte copy of the exp6/7/8/9 file: a 5 m fix, `tap 200 50`, `tap 345 145`, five more 5 m fixes, the guidance
+screenshot) at the exp9 start point (route metre 95.6, true road bearing 328.9 deg, D0 4.3 km in every exp9 run), run in the same
+session state as experiments 6-9 (DHU restarted for the run, Naver warm, previous guidance ended). The ONLY substitution that differs
+between conditions is @BRG@, the bearing field of the first stationary fixes of the session. After the preamble the body follows:
+  t = 0 .. 79    standstill at the start point with the condition's fixes (accuracy 5 m as the preamble; *-A15 runs: 15 m, the exp8 ST2
+                 standstill value, after the 5 m preamble)
+  t = 80 .. 119  move-off along the route with the true course, ramp to 20 km/h in 10 s, 40 s (about 197 m, before the tunnel entrance),
+                 accuracy 5 m (the exp9 approach accuracy)
+  t = 120 .. 129 neutral tail (stationary, bearing absent) so that every run leaves the same last-known location
+Conditions (standstill t = 0 .. 79; the preamble carries the condition's first bearing, speed 0, the start point):
+  B0 bearing absent (NAN)          B1 bearing 0 (stock placeholder; T + 31 deg at this site)   B2 true road bearing T
+  B3 T + 180                       B4 T - 90
   B5 trip6a/6b GPS-noise copy: random bearing 67-241 deg, speed 0.28-0.56 m/s, position wander within a 13 m span
-  B7 held heading: B5 speed and position wander (same seed) with the constant true bearing T (stock LDS CarPlay-path hold below
-     7 km/h, which the AA callback does not apply)
-  B6 stale LDS record form: accuracy 8.8 m, constant 1.111 m/s, bearing 335 (= T + 55 here), true position
-  *-A5: the same with accuracy 5 m instead of 15 m (conditional tier 3)
-  RS-*: "already navigating": part a = B2 preparation + 35 s B2 standstill in one session, DHU restart without stopping Naver, part
-        b = the condition run (no preparation, no taps)
+  B7 held heading: B5 speed and wander (same seed) with the constant bearing T
+  B6 stale LDS record form: accuracy 8.8 m, constant 1.111 m/s, bearing 335 (T + 6 deg here), true position
+  *-A15: accuracy 15 m in the standstill (conditional tier 3)    *-cold: same file, Naver force-stopped before the DHU start (only if
+  Tier 0 proves a cold start works)
+  RS-*: "already navigating": part a = preamble with B2 + 35 s B2 standstill, DHU-only restart, part b = the condition body, no preamble
+Tier 0 files: T0-PRE (the exp9 ST8 preamble with tag T0-PRE + 20 s of 5 m true-bearing fixes with 2 screenshots), T0-COLD (the same
+with tag T0-COLD, sent after a Naver force-stop), T0-LPROBE (15 m then
+5 m fixes at the start point, diagnostic only when the preamble fails), FB-<base> (the preamble's fix line for 120 s: the stream during
+the screen-resolved fallback preparation).
 Syntax: location <lat> <lon> <accuracy_m|NAN> <altitude|NAN> <speed_mps> <bearing_deg|NAN>
 Usage: gen_commands.py [out_dir [run_plan_json]]
 """
@@ -52,66 +50,70 @@ E7 = _load("dhu_exp7_for_exp10", os.path.join(EXP7_DIR, "gen_commands.py"))
 Route, fmt, offset_position = E7.Route, E7.fmt, E7.offset_position
 
 SHOT = "../../../../experiment10/"
-P0_M = 2950.0  # route metre of the standstill position
-ACC_STAND = 15.0  # CONFIRMED accepted at standstill in exp8 (ST2, 2 runs); 25 m only SINGLE, 20 m once lost the gain (exp9)
-ACC_A5 = 5.0
-ACC_MOVE = 15.0  # unchanged at move-off so that the accuracy does not switch together with the motion
+ACC_STAND = 5.0  # the preamble accuracy; exp8 ST1 (5 m standstill) CONFIRMED accepted
+ACC_A15 = 15.0  # exp8 ST2 standstill value (CONFIRMED accepted after an established synthetic position)
+ACC_MOVE = 5.0  # exp9 approach accuracy
 STALE = dict(acc=8.8, speed=1.111, bearing=335.0)  # LDS stored record as forwarded by the stock (trip2/trip3)
 NOISE = dict(seed=10, brg=(67.0, 241.0), spd=(0.28, 0.56), radius=6.5, step=2.0)
-GUIDE_SHOT_T = 21
-PREP_S = 120  # preparation file length (s); the gate must pass before it runs out (README "Gates")
-ACC_PREP = 5.0  # first synthetic fixes of every working exp7-9 preparation were 5 m; v1 sent 15 m and the map stayed at the phone
-LPROBE_S = 15  # T0-LPROBE: seconds at 15 m, then seconds at 5 m
-SMOKE_S = 30  # T0-SMOKE-BODY length
-EXP9_START = (35.1697679, 129.0267566, 328.9)  # exp9 preparation fix (route metre 96), D0 4.3 km in every exp9 run
-# Observed DHU coordinates (800x480) from the exp7 reset log / preparation deviations and the v1 environment notes. They are a
-# FALLBACK only: the executing agent resolves every tap from the current screenshot (OCR bounds), and a gate checks the result.
+FB_S = 120  # fallback stream length (s)
+LPROBE_S = 15
+T0_EXTRA_S = 20
+# Observed DHU coordinates (800x480, exp7 reset log / preparation deviations, v1 notes). FALLBACK ONLY, after the preamble's gate failed;
+# the agent resolves taps from the screen first and a gate checks the result.
 UI_FALLBACK = dict(search=(600, 44), recent_row_x=230, recent_rows_y=(130, 225, 318), route_start=(345, 145),
                    recalc_popup_dismiss=(170, 177), naver_icon=(298, 440))
-MOVE_T = 80  # first moving second (60 s of standstill after the guidance tap)
+EXPECTED_D0_KM = (3.9, 4.7)  # exp9 D0 4.3 km at this start
+MOVE_T = 80
 RAMP_S, V_MAX, MOVE_S = 10, 20 / 3.6, 40
 TAIL_S = 10
-RS_A_S = 35  # part a length (B2 standstill after the B2 preparation and the guidance gate)
+RS_A_S = 35
 
+
+def start_m(route):
+    """exp9 start: exp7 approach start = entrance + 20 m - 19 s * 14 m/s (route metre 95.6)."""
+    return route.entrance + E7.APPROACH_END_INSIDE_M - E7.SPEED * (E7.APPROACH_FIXES - 1)
 
 
 def stand_photos():
-    return {0, 6, GUIDE_SHOT_T} | set(range(23, 32, 2)) | set(range(35, MOVE_T, 4))
+    return {0, 6, 21} | set(range(23, 32, 2)) | set(range(35, MOVE_T, 4))
 
 
 def move_photos():
     return set(range(MOVE_T, MOVE_T + 21, 2)) | set(range(MOVE_T + 24, MOVE_T + MOVE_S, 4)) | {MOVE_T + MOVE_S - 1}
 
 
-T_END = MOVE_T + MOVE_S + TAIL_S  # duration in seconds
+T_END = MOVE_T + MOVE_S + TAIL_S
 PHOTOS = stand_photos() | move_photos() | {T_END - 1}
 
 BASES = ["B0", "B1", "B2", "B3", "B4", "B5", "B6", "B7"]
 RUNS = {f"{b}-r{r}": dict(base=b, acc=None, rs=False) for b in BASES for r in (1, 2)}
 RUNS["B2-r3"] = dict(base="B2", acc=None, rs=False)
-RUNS.update({"B1-A5-r1": dict(base="B1", acc=ACC_A5, rs=False), "B2-A5-r1": dict(base="B2", acc=ACC_A5, rs=False)})
+RUNS.update({"B1-A15-r1": dict(base="B1", acc=ACC_A15, rs=False), "B2-A15-r1": dict(base="B2", acc=ACC_A15, rs=False)})
 RUNS.update({"RS-B1-r1": dict(base="B1", acc=None, rs=True), "RS-B3-r1": dict(base="B3", acc=None, rs=True)})
+RUNS.update({f"{b}-cold-r1": dict(base=b, acc=None, rs=False, cold=True) for b in ("B3", "B1", "B2")})
 RUNS.update({"C1-B0-r1": dict(base="B0", acc=None, rs=False, manual=True),
              "C1-B1-r1": dict(base="B1", acc=None, rs=False, manual=True)})
 TIERS = [
     ["B2-r1", "B3-r1", "B1-r1", "B5-r1", "B7-r1"],
     ["B0-r1", "B4-r1", "B6-r1", "B2-r2"],
-    ["B3-r2", "B1-r2", "B5-r2", "B7-r2", "B0-r2", "B4-r2", "B6-r2", "B1-A5-r1", "B2-A5-r1", "RS-B3-r1", "RS-B1-r1", "B2-r3"],
+    ["B3-r2", "B1-r2", "B5-r2", "B7-r2", "B0-r2", "B4-r2", "B6-r2", "B1-A15-r1", "B2-A15-r1", "RS-B3-r1", "RS-B1-r1",
+     "B3-cold-r1", "B1-cold-r1", "B2-cold-r1", "B2-r3"],
     ["C1-B0-r1", "C1-B1-r1"],
 ]
 TIER_NAMES = ["1", "2", "3", "M"]
 ORDER = [t for tier in TIERS[:3] for t in tier]
 TIER3_ALWAYS = ("B2-r3",)
-OVERHEAD_MIN = (4.5, 5.5)  # v1 measured about 3 min per attempt (force-stop, 30 s wait, DHU restart, saving); + gated preparation
-RS_EXTRA_MIN = 1.5  # second DHU restart
+OVERHEAD_MIN = (3.0, 4.0)  # exp9: run start to run start 6.4-7.9 min for 252 s incl. DHU/guidance restart, preamble, saving
+RS_EXTRA_MIN = 1.5
+COLD_EXTRA_MIN = 1.0  # force-stop, pidof, 30 s wait
 ENV_MIN = 10.0
-TIER0_MIN = (6.0, 9.0)  # L-probe + smoke test; + 4 min if the exp9 reference session is needed
-BUDGET_MIN = 180  # whole night from the start; v1 allowed 210
+TIER0_MIN = (6.0, 9.0)
+BUDGET_MIN = 180
 
 
 def condition_fix(route, base, t, acc, rng_state):
     """(line, record) of standstill second t."""
-    lat, lon, road = route.at(P0_M)
+    lat, lon, road = route.at(start_m(route))
     acc = ACC_STAND if acc is None else acc
     if base == "B6":
         acc = STALE["acc"] if acc == ACC_STAND else acc
@@ -137,16 +139,29 @@ def condition_fix(route, base, t, acc, rng_state):
                                               bearing_sent_deg=None if brg is None else round(brg, 1))
 
 
-def build_run(route, tag, p):
-    """Command lines (without part a) and the plan dict. t = seconds since the first location line of the session."""
+def preamble_bearing(route, base):
+    """@BRG@: the condition's first standstill bearing (None = NAN)."""
+    _, rec = condition_fix(route, base, 0, None, [random.Random(NOISE["seed"]), (0.0, 0.0)])
+    return rec["bearing_sent_deg"]
+
+
+def preamble(template, route, tag, brg):
+    lat, lon, _ = route.at(start_m(route))
+    text = template.replace("@START@", f"{lat:.7f} {lon:.7f}").replace("@BRG@", "NAN" if brg is None else f"{brg:.1f}")
+    return text.replace("@SHOT@", SHOT).replace("@TAG@", tag).rstrip("\n").splitlines()
+
+
+def build_body(route, tag, p):
+    """Body lines (after the preamble) and the plan dict. t = seconds since the first body line."""
     lines, frames = [], []
     rng_state = [random.Random(NOISE["seed"]), (0.0, 0.0)]
-    d = P0_M
-    lat0, lon0, road0 = route.at(P0_M)
+    s0 = start_m(route)
+    d = s0
+    lat0, lon0, road0 = route.at(s0)
     for t in range(T_END):
         if t < MOVE_T:
             line, rec = condition_fix(route, p["base"], t, p["acc"], rng_state)
-            rec.update(phase="stand", truth_m=P0_M, speed_mps=0.0, road_bearing_deg=round(road0, 1))
+            rec.update(phase="stand", truth_m=round(s0, 1), speed_mps=0.0, road_bearing_deg=round(road0, 1))
         elif t < MOVE_T + MOVE_S:
             k = t - MOVE_T
             v = min(V_MAX, V_MAX * (k + 1) / RAMP_S)
@@ -154,8 +169,7 @@ def build_run(route, tag, p):
             lat, lon, road = route.at(d)
             line = fmt(lat, lon, ACC_MOVE, v, road)
             rec = dict(phase="move", truth_m=round(d, 1), speed_mps=round(v, 3), road_bearing_deg=round(road, 1),
-                       accuracy_m=ACC_MOVE, speed_sent_mps=round(v, 3), bearing_sent_deg=round(road, 1),
-                       moved_m=round(d - P0_M, 1))
+                       accuracy_m=ACC_MOVE, speed_sent_mps=round(v, 3), bearing_sent_deg=round(road, 1), moved_m=round(d - s0, 1))
         else:
             lat, lon, road = route.at(d)
             line = fmt(lat, lon, ACC_MOVE, 0.0, None)
@@ -170,66 +184,54 @@ def build_run(route, tag, p):
             frames.append(rec)
         else:
             lines += ["sleep 1"]
-    plan = dict(tag=tag, base=p["base"], accuracy_stand_m=(STALE["acc"] if p["base"] == "B6" and p["acc"] is None
-                                                         else (p["acc"] or ACC_STAND)),
-                reconnect=p["rs"], manual=p.get("manual", False), duration_s=T_END, stand=[0, MOVE_T - 1],
-                prep=None if p["rs"] else prep_name(p), move=[MOVE_T, MOVE_T + MOVE_S - 1],
-                tail=[MOVE_T + MOVE_S, T_END - 1], p0=[round(lat0, 7), round(lon0, 7)], true_bearing_deg=round(road0, 1),
-                end_m=round(d, 1), frames=frames)
+    acc_stand = STALE["acc"] if p["base"] == "B6" and p["acc"] is None else (p["acc"] or ACC_STAND)
+    plan = dict(tag=tag, base=p["base"], accuracy_stand_m=acc_stand, reconnect=p["rs"], cold=p.get("cold", False),
+                manual=p.get("manual", False), preamble=not p["rs"], preamble_bearing_deg=preamble_bearing(route, p["base"]),
+                setup_screenshot=None if p["rs"] else f"{tag}-setup-guidance.png", duration_s=T_END, stand=[0, MOVE_T - 1],
+                move=[MOVE_T, MOVE_T + MOVE_S - 1], tail=[MOVE_T + MOVE_S, T_END - 1], start=[round(lat0, 7), round(lon0, 7)],
+                start_route_m=round(s0, 1), true_bearing_deg=round(road0, 1), end_m=round(d, 1), fallback_stream=f"FB-{p['base']}.txt",
+                frames=frames)
     return lines, plan
 
 
-def build_part_a(route, tag):
-    lines = []
+def build_part_a(template, route, tag):
+    lines = preamble(template, route, tag + "-a", preamble_bearing(route, "B2"))
     for t in range(RS_A_S):
         line, _ = condition_fix(route, "B2", t, None, None)
         lines.append(line)
-        if t in (GUIDE_SHOT_T, RS_A_S - 1):
+        if t in (21, RS_A_S - 1):
             lines += ["sleep 0.2", f"screenshot {SHOT}{tag}-a{t:03d}.png", "sleep 0.8"]
         else:
             lines.append("sleep 1")
     return lines
 
 
-def prep_name(p):
-    return "PREP-" + p["base"]
+def fallback_stream(template, route, base):
+    """The preamble's own fix line (5 m, condition bearing, speed 0, start point) at 1 Hz, no taps, no screenshots."""
+    fix = [x for x in preamble(template, route, "FB", preamble_bearing(route, base)) if x.startswith("location ")][0]
+    return [s for _ in range(FB_S) for s in (fix, "sleep 1")]
 
 
-def prep_lines(route, base):
-    """The condition's standstill fixes at P0 with accuracy 5 m, 1 Hz, no taps, no screenshots (the agent adds UI actions)."""
-    rng_state = [random.Random(NOISE["seed"]), (0.0, 0.0)]
-    out = []
-    for t in range(PREP_S):
-        line, _ = condition_fix(route, base, t, ACC_PREP, rng_state)
-        out += [line, "sleep 1"]
-    return out
-
-
-def tier0_files(route):
-    lat, lon, road = route.at(P0_M)
+def tier0_files(template, route):
+    lat, lon, road = route.at(start_m(route))
+    pre = preamble(template, route, "T0-PRE", round(road, 1))
+    for t in range(T0_EXTRA_S):
+        pre.append(fmt(lat, lon, ACC_STAND, 0.0, road))
+        pre += ["sleep 0.2", f"screenshot {SHOT}T0-PRE-{t + 1:03d}.png", "sleep 0.8"] if t in (9, T0_EXTRA_S - 1) else ["sleep 1"]
     probe = []
-    for k, acc in enumerate((ACC_STAND, ACC_PREP)):
+    for acc in (15.0, ACC_STAND):
         for t in range(LPROBE_S):
             probe.append(fmt(lat, lon, acc, 0.0, None))
             if t == LPROBE_S - 1:
                 probe += ["sleep 0.2", f"screenshot {SHOT}T0-LPROBE-{int(acc):02d}m.png", "sleep 0.8"]
             else:
                 probe.append("sleep 1")
-    smoke = []
-    for t in range(SMOKE_S):
-        smoke.append(fmt(lat, lon, ACC_STAND, 0.0, road))
-        if t in (9, 19, SMOKE_S - 1):
-            smoke += ["sleep 0.2", f"screenshot {SHOT}T0-SMOKE-{t + 1:03d}.png", "sleep 0.8"]
-        else:
-            smoke.append("sleep 1")
-    exp9 = []
-    for _ in range(PREP_S):
-        exp9 += [fmt(EXP9_START[0], EXP9_START[1], ACC_PREP, 0.0, EXP9_START[2]), "sleep 1"]
-    return {"T0-LPROBE": probe, "T0-SMOKE-BODY": smoke, "T0-EXP9-PREP": exp9}
+    cold = [x.replace(f"{SHOT}T0-PRE", f"{SHOT}T0-COLD") for x in pre]
+    return {"T0-PRE": pre, "T0-COLD": cold, "T0-LPROBE": probe}
 
 
 def prime_lines(route):
-    lat, lon, _ = route.at(P0_M + 197.0)
+    lat, lon, _ = route.at(start_m(route) + 197.0)
     out = []
     for _ in range(TAIL_S):
         out += [fmt(lat, lon, ACC_MOVE, 0.0, None), "sleep 1"]
@@ -237,54 +239,59 @@ def prime_lines(route):
 
 
 def estimate(plans, runs, env):
-    input_s = sum(plans[t]["duration_s"] + (RS_A_S if plans[t]["reconnect"] else 0) for t in runs)
-    extra = sum(RS_EXTRA_MIN for t in runs if plans[t]["reconnect"])
+    input_s = sum(plans[t]["duration_s"] + (21 if plans[t]["preamble"] else 0) + (RS_A_S + 21 if plans[t]["reconnect"] else 0)
+                  for t in runs)
+    extra = sum(RS_EXTRA_MIN * plans[t]["reconnect"] + COLD_EXTRA_MIN * plans[t]["cold"] for t in runs)
     return input_s, [round(input_s / 60 + len(runs) * o + extra + env) for o in OVERHEAD_MIN]
 
 
 def generate(out_dir, plan_path=None):
     route = Route(os.path.join(HERE, "geometry", "route.json"))
+    with open(os.path.join(HERE, "setup-template.txt")) as f:
+        template = f.read()
     os.makedirs(out_dir, exist_ok=True)
-    plans = {}
-    for tag, p in RUNS.items():
-        lines, plan = build_run(route, tag, p)
-        with open(os.path.join(out_dir, (tag + ".b" if p["rs"] else tag) + ".txt"), "w") as f:
-            f.write("\n".join(lines) + "\n")
-        if p["rs"]:
-            with open(os.path.join(out_dir, tag + ".a.txt"), "w") as f:
-                f.write("\n".join(build_part_a(route, tag)) + "\n")
-        plans[tag] = plan
-    with open(os.path.join(out_dir, "PRIME.txt"), "w") as f:
-        f.write("\n".join(prime_lines(route)) + "\n")
-    for base in BASES:
-        with open(os.path.join(out_dir, f"PREP-{base}.txt"), "w") as f:
-            f.write("\n".join(prep_lines(route, base)) + "\n")
-    for name, lines in tier0_files(route).items():
+
+    def write(name, lines):
         with open(os.path.join(out_dir, name + ".txt"), "w") as f:
             f.write("\n".join(lines) + "\n")
+
+    plans = {}
+    for tag, p in RUNS.items():
+        body, plan = build_body(route, tag, p)
+        if p["rs"]:
+            write(tag + ".b", body)
+            write(tag + ".a", build_part_a(template, route, tag))
+        else:
+            write(tag, preamble(template, route, tag, plan["preamble_bearing_deg"]) + body)
+        plans[tag] = plan
+    write("PRIME", prime_lines(route))
+    for base in BASES:
+        write(f"FB-{base}", fallback_stream(template, route, base))
+    for name, lines in tier0_files(template, route).items():
+        write(name, lines)
     assert sorted(t for tier in TIERS for t in tier) == sorted(plans), "TIERS must list every run exactly once"
     tiers = []
     for name, runs in zip(TIER_NAMES, TIERS):
         input_s, est = estimate(plans, runs, ENV_MIN if name == "1" else 0.0)
-        tier = dict(tier=name, runs=runs, input_s=input_s, photos=sum(len(plans[t]["frames"]) for t in runs),
+        tier = dict(tier=name, runs=runs, input_s=input_s, photos=sum(len(plans[t]["frames"]) + 1 for t in runs),
                     estimate_min=est, unattended=name != "M")
         if name == "3":
             tier.update(always=list(TIER3_ALWAYS), per_added_run_min=estimate(plans, ["B1-r2"], 0.0)[1],
                         note="candidate list; the README rule selects the runs")
         tiers.append(tier)
-    lat0, lon0, road0 = route.at(P0_M)
-    doc = dict(site=dict(p0_route_m=P0_M, p0=[round(lat0, 7), round(lon0, 7)], true_bearing_deg=round(road0, 1),
-                         after_tunnel_exit_m=round(P0_M - route.exit, 1)),
-               timeline=dict(t0="first second after the passed guidance gate (guidance already started in the preparation)",
-                             guidance_photo_t=GUIDE_SHOT_T, move_t=MOVE_T,
-                             ramp_s=RAMP_S, v_max_mps=round(V_MAX, 3), move_s=MOVE_S, tail_s=TAIL_S, duration_s=T_END,
-                             rs_part_a_s=RS_A_S, photo_t=sorted(PHOTOS)),
-               prep=dict(files={b: f"PREP-{b}.txt" for b in BASES}, accuracy_m=ACC_PREP, max_s=PREP_S,
-                         rule="the run's own standstill fix with accuracy 5 m; RS part a uses PREP-B2; RS part b has none"),
-               tier0=dict(files=["T0-LPROBE.txt", "PREP-B2.txt", "T0-SMOKE-BODY.txt", "T0-EXP9-PREP.txt"],
-                          lprobe_s=LPROBE_S, smoke_s=SMOKE_S, estimate_min=list(TIER0_MIN),
-                          expected_remaining_km=dict(p0=[1.0, 1.9], exp9_start=[3.9, 4.7])),
-               ui_fallback=UI_FALLBACK, budget_min=BUDGET_MIN, order=ORDER, tiers=tiers, runs=plans)
+    s0 = start_m(route)
+    lat0, lon0, road0 = route.at(s0)
+    doc = dict(site=dict(start_route_m=round(s0, 1), start=[round(lat0, 7), round(lon0, 7)], true_bearing_deg=round(road0, 1),
+                         before_tunnel_entrance_m=round(route.entrance - s0, 1), expected_d0_km=list(EXPECTED_D0_KM)),
+               timeline=dict(preamble="setup-template.txt with @START@, @BRG@ (condition), @SHOT@, @TAG@ substituted",
+                             t0="first body line after the preamble's guidance screenshot", move_t=MOVE_T, ramp_s=RAMP_S,
+                             v_max_mps=round(V_MAX, 3), move_s=MOVE_S, tail_s=TAIL_S, duration_s=T_END, rs_part_a_s=RS_A_S,
+                             photo_t=sorted(PHOTOS)),
+               tier0=dict(files=["T0-PRE.txt", "T0-COLD.txt", "T0-LPROBE.txt"], extra_s=T0_EXTRA_S, lprobe_s=LPROBE_S,
+                          estimate_min=list(TIER0_MIN)),
+               fallback=dict(files={b: f"FB-{b}.txt" for b in BASES}, stream_s=FB_S, ui_fallback=UI_FALLBACK,
+                             rule="only after the preamble's gate G failed"),
+               budget_min=BUDGET_MIN, order=ORDER, tiers=tiers, runs=plans)
     if plan_path:
         with open(plan_path, "w") as f:
             json.dump(doc, f, ensure_ascii=False, indent=1)
@@ -297,7 +304,8 @@ def main(argv):
     plan = argv[2] if len(argv) > 2 else os.path.join(HERE, "run-plan.json")
     _, doc = generate(out, plan)
     s = doc["site"]
-    print(f"P0 {s['p0']} route m {s['p0_route_m']} ({s['after_tunnel_exit_m']} m after the exit), true bearing {s['true_bearing_deg']}")
+    print(f"start {s['start']} route m {s['start_route_m']} ({s['before_tunnel_entrance_m']} m before the entrance), "
+          f"true bearing {s['true_bearing_deg']}")
     for tier in doc["tiers"]:
         print(f"tier {tier['tier']}: {len(tier['runs'])} runs, {tier['input_s']} s input, {tier['photos']} photos, "
               f"about {tier['estimate_min'][0]}-{tier['estimate_min'][1]} min" + ("" if tier["unattended"] else " (manual)"))

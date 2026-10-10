@@ -1,0 +1,18 @@
+location @START@ 5 NAN 0 @BRG@
+sleep 0.5
+tap 200 50
+sleep 10
+tap 345 145
+sleep 3
+location @START@ 5 NAN 0 @BRG@
+sleep 1
+location @START@ 5 NAN 0 @BRG@
+sleep 1
+location @START@ 5 NAN 0 @BRG@
+sleep 1
+location @START@ 5 NAN 0 @BRG@
+sleep 1
+location @START@ 5 NAN 0 @BRG@
+sleep 1
+sleep 2
+screenshot @SHOT@@TAG@-setup-guidance.png

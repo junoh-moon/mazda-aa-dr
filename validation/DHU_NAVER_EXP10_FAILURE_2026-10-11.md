@@ -52,7 +52,7 @@ unevaluated. Package versions (GMS, Play Store, Android Auto, Naver) did not cha
 One diagnostic separates hypothesis 2 from its alternatives: in one fresh session, after the projection is ready and before any UI input,
 send 15 s of P0 fixes at 15 m, screenshot, then 15 s at 5 m, screenshot (v2 Tier 0 `T0-LPROBE`: LP-15 / LP-5 / LP-NONE).
 
-## What changed in the plan (v2)
+## What changed in the plan (v2, superseded by v3 below)
 
 - Run files carry no taps. Each fresh session first passes gate A (Naver map visible, Naver process alive, no call, no overlay), then
   streams `PREP-<condition>.txt` (the condition's own standstill fix with accuracy 5 m) while the agent starts guidance with coordinates
@@ -70,5 +70,46 @@ send 15 s of P0 fixes at 15 m, screenshot, then 15 s at 5 m, screenshot (v2 Tier
 
 ## Limits
 
-The photos were not seen by this analysis; the readings above are the executing agent's written frame codes. Hypothesis 2 stays a
-hypothesis until T0-LPROBE runs. v2 is not executed; its gates, coordinate resolution and timing are unverified on the device.
+The first version of this analysis did not see the photos and relied on the executing agent's frame codes; the photo addendum below adds
+the analyst's reading. Hypothesis 1 is not proven by a controlled contrast (no 15 m vs 5 m run in the same state exists yet). v2 was never
+executed; v3 is not executed; their gates and timing are unverified on the device.
+
+## Addendum: the photos (owner upload, read by the analyst, 2026-10-11)
+
+Observation (screens): in every inspected frame (B2-r1 a1, a2 and a3 at t=0, 6 and 21; B1-r1 a1 at t=55; the environment-prime and
+prime-verified screens) the Naver map stayed at the phone's real location (the owner's physical place, not the Busan test site), with the
+blue arrow there. The injected test positions never moved the map. The PRIME at 15 m also left the map at the real location. At t=21 Naver
+showed the free map with the home, search, pin and settings buttons: no guidance and no route.
+
+Interpretation: the 15 m injection of v1 never displaced the phone's own fix. This supports hypothesis 1 (15 m first fixes) as the lead
+explanation and makes the taps moot: guidance cannot start correctly from a map that is not at the test site, whatever the taps hit. It
+is still not proven that 5 m would have worked in the same cold state; that is what v3 Tier 0 (proven preamble at 5 m) and, if it fails,
+T0-LPROBE show.
+
+Side observation from the exp7-exp9 bundles (relevant to the v3 fallback only): their executing agents often adapted the preparation
+after looking at the screen (the observed 모라역 row at x 230 and y 130 / 225 / 318, a second route-start tap, dismissing a recalculation
+popup at (170, 177)) while sending the preamble's 5 m fix; exp6 used the template taps as written except one run with a changed recent
+list. The template remains the primary path in v3; these observed adaptations are its fallback.
+
+## Rework v3 (2026-10-11): change only the independent variable
+
+v2 was rejected by the owner: it replaced the proven preamble with a new screen-resolved preparation and kept P0 and cold starts, so the
+next night would again have changed several things at once. v3 (validation/DHU_NAVER_EXP10_PLAN_2026-10-11/README.md):
+- Every run file begins with `setup-template.txt` byte for byte (exp6-9 copy: a 5 m fix, `tap 200 50`, `tap 345 145`, five 5 m fixes, the
+  guidance screenshot); only @START@ (the exp9 start, same characters as the exp9 command files), @BRG@ (the condition's first standstill
+  bearing) and @SHOT@/@TAG@ are substituted. A test compares every preamble line with the template.
+- Start point, route and D0 gate as exp9 (route metre 95.6, T 328.9 deg, D0 4.3 km); session state as exp6-9 (previous guidance ended,
+  DHU restarted, Naver warm). Cold starts only in three Tier 3 runs (B3/B1/B2-cold) and only if the Tier 0 cold check passes.
+- Accuracy 5 m in preamble, standstill and motion (exp8 ST1, exp9 approach); 15 m only in the conditional B1/B2-A15 runs (exp8 ST2 form).
+- The manipulation is the bearing of the first stationary fixes (B0-B7; B5/B6/B7 keep their stock speed/position forms in the standstill).
+  Cost of the exp9 start: B1 (0 deg) is only 31 deg from T and B6 (335 deg) 6 deg; recorded in the labels (`SLIGHTLY-OFF` for 20-45 deg) and
+  in the decision-table notes; the rows are unchanged.
+- Tier 0 runs the proven preamble alone (the exp9 ST8 preamble lines, true bearing) and checks gates A/L/G and 20 s of stability; the
+  screen-resolved preparation (F1 popup dismissal, F2 search/row/route start) is used only when the preamble fails gate G; T0-LPROBE
+  (15 m vs 5 m) runs only if the preamble and the fallback both fail, then ABORT.
+- Uploads (owner correction): upload as soon as results are ready (right after Tier 0 in a small separate bundle, and right after the run
+  ends or aborts); the only timing constraint is the transfer server's purge at about 06:00 KST, so no upload starts or is in flight from
+  05:55 to 06:10 KST. v1 ended around 02:30 KST and its results arrived at 06:10, which wasted the night. All screenshots of every attempt
+  go uncropped in a separate photos ZIP with frames.csv; the results ZIP stays small and text-only; text artefacts must not contain
+  accounts, ADB keys, auth tokens or phone serial numbers. The executing agent keeps local copies and commits or pushes nothing.
+- The owner must still re-enable USB debugging and accept the ADB prompt (the v1 cleanup disabled it and deleted the key).

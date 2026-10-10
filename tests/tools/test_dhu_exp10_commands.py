@@ -19,11 +19,22 @@ def load(name, path):
 
 
 gen = load("dhu_exp10", PLAN / "gen_commands.py")
-T = 278.7
+T = 328.9
+TEMPLATE = (PLAN9 / "setup-template.txt").read_text().rstrip("\n").splitlines()
+N_PRE = len(TEMPLATE)
 
 
 def locs(lines):
     return [line.split() for line in lines if line.startswith("location ")]
+
+
+def expected_preamble(tag, brg):
+    start = "35.1697679 129.0267566"  # exp9 start fix
+    out = []
+    for x in TEMPLATE:
+        out.append(x.replace("@START@", start).replace("@BRG@", brg).replace("@SHOT@", "../../../../experiment10/")
+                   .replace("@TAG@", tag))
+    return out
 
 
 class Exp10Commands(unittest.TestCase):
@@ -34,10 +45,15 @@ class Exp10Commands(unittest.TestCase):
         cls.out, cls.plan_path = base / "a", base / "a.json"
         cls.route, cls.doc = gen.generate(str(cls.out), str(cls.plan_path))
         cls.files = {p.name[:-4]: p.read_text().splitlines() for p in cls.out.glob("*.txt")}
+        cls.json = json.loads(cls.plan_path.read_text())
 
     @classmethod
     def tearDownClass(cls):
         cls.tmp.cleanup()
+
+    def body(self, tag):
+        plan = self.doc["runs"][tag]
+        return self.files[tag + ".b"] if plan["reconnect"] else self.files[tag][N_PRE:]
 
     def test_generator_is_deterministic_and_matches_the_committed_files(self):
         with tempfile.TemporaryDirectory() as other:
@@ -49,25 +65,36 @@ class Exp10Commands(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in committed.glob("*.txt")), sorted(p.name for p in self.out.glob("*.txt")))
         for p in self.out.glob("*.txt"):
             self.assertEqual(p.read_bytes(), (committed / p.name).read_bytes(), p.name)
-        self.assertEqual(json.loads((PLAN / "run-plan.json").read_text()), json.loads(self.plan_path.read_text()))
+        self.assertEqual(json.loads((PLAN / "run-plan.json").read_text()), self.json)
 
-    def test_same_geometry_as_experiment_9_and_no_blind_taps(self):
-        self.assertEqual((PLAN / "geometry" / "route.json").read_bytes(), (PLAN9 / "geometry" / "route.json").read_bytes())
-        # v2: no command file taps; the agent resolves taps from the screen, the observed exp7 coordinates are only a fallback
-        self.assertFalse(hasattr(gen, "TAP_SEARCH"))
-        for name, lines in self.files.items():
-            self.assertEqual([x for x in lines if x.startswith("tap ")], [], name)
-        ui = json.loads(self.plan_path.read_text())["ui_fallback"]
-        self.assertEqual((ui["search"], ui["route_start"], ui["recalc_popup_dismiss"]), ([600, 44], [345, 145], [170, 177]))
+    def test_proven_preamble_geometry_and_start_of_experiment_9(self):
+        for name in ("setup-template.txt", "geometry/route.json"):
+            self.assertEqual((PLAN / name).read_bytes(), (PLAN9 / name).read_bytes(), name)
+        e9 = (PLAN9 / "commands" / "ST8-nostop-r1.txt").read_text().splitlines()
+        self.assertEqual(self.files["T0-PRE"][:N_PRE], [x.replace("experiment9/ST8-nostop-r1", "experiment10/T0-PRE")
+                                                         for x in e9[:N_PRE]])
         site = self.doc["site"]
-        self.assertEqual(site["true_bearing_deg"], T)
-        self.assertGreater(site["after_tunnel_exit_m"], 100)
+        self.assertEqual((site["start"], site["true_bearing_deg"]), ([35.1697679, 129.0267566], T))
         for tag, plan in self.doc["runs"].items():
-            self.assertLess(plan["end_m"], 3195.0, tag)  # inside the post-exit stretch exp7 verified
+            self.assertLess(plan["end_m"], self.route.entrance, tag)  # the whole run stays before the tunnel
+
+    def test_every_run_starts_with_the_template_only_the_bearing_differs(self):
+        want = {"B0": "NAN", "B1": "0.0", "B2": f"{T}", "B3": "148.9", "B4": "238.9", "B6": "335.0", "B7": f"{T}"}
+        for tag, plan in self.doc["runs"].items():
+            if plan["reconnect"]:
+                self.assertEqual(self.files[tag + ".a"][:N_PRE], expected_preamble(tag + "-a", f"{T}"))
+                self.assertFalse([x for x in self.files[tag + ".b"] if x.startswith("tap ")])
+                continue
+            base = plan["base"]
+            brg = want[base] if base in want else f"{plan['preamble_bearing_deg']:.1f}"
+            self.assertEqual(self.files[tag][:N_PRE], expected_preamble(tag, brg), tag)
+            self.assertEqual([x for x in self.files[tag] if x.startswith("tap ")], ["tap 200 50", "tap 345 145"])
+            if base == "B5":
+                self.assertEqual(float(brg), float(locs(self.body(tag))[0][6]))
 
     def test_file_count_and_syntax(self):
-        # 23 runs (RS as .b) + 2 RS part a + PRIME + 8 preparation files + 3 tier 0 files
-        self.assertEqual(len(self.files), 23 + 2 + 1 + 8 + 3)
+        # 26 runs (RS as .b) + 2 RS part a + PRIME + 8 fallback streams + T0-PRE + T0-COLD + T0-LPROBE
+        self.assertEqual(len(self.files), 26 + 2 + 1 + 8 + 3)
         for name, lines in self.files.items():
             for line in lines:
                 w = line.split()
@@ -81,22 +108,21 @@ class Exp10Commands(unittest.TestCase):
                 if w[0] == "screenshot":
                     self.assertTrue(w[1].startswith("../../../../experiment10/"))
 
-    def test_one_hertz_timeline_and_photos(self):
+    def test_one_hertz_body_and_photos(self):
         for tag, plan in self.doc["runs"].items():
-            name = tag + ".b" if plan["reconnect"] else tag
-            lines = self.files[name]
+            lines = self.body(tag)
             self.assertEqual(len(locs(lines)), plan["duration_s"])
             self.assertEqual(sum(1 for x in lines if x in ("sleep 1", "sleep 0.8")), plan["duration_s"])
             shots = [x for x in lines if x.startswith("screenshot ")]
             self.assertEqual(len(shots), len(plan["frames"]))
             self.assertEqual(len(shots), 37)
-            self.assertEqual(plan["prep"], None if plan["reconnect"] else "PREP-" + plan["base"])
+            self.assertFalse([x for x in lines if x.startswith("tap ")])
 
     def test_conditions_differ_only_in_the_standstill(self):
-        ref = locs(self.files["B2-r1"])
-        want = {"B0": "NAN", "B1": "0.0", "B2": f"{T}", "B3": "98.7", "B4": "188.7", "B6": "335.0"}
+        ref = locs(self.body("B2-r1"))
+        want = {"B0": "NAN", "B1": "0.0", "B2": f"{T}", "B3": "148.9", "B4": "238.9", "B6": "335.0"}
         for tag, plan in self.doc["runs"].items():
-            f = locs(self.files[tag + ".b" if plan["reconnect"] else tag])
+            f = locs(self.body(tag))
             self.assertEqual(f[gen.MOVE_T:], ref[gen.MOVE_T:], tag)
             base = plan["base"]
             stand = f[:gen.MOVE_T]
@@ -104,15 +130,15 @@ class Exp10Commands(unittest.TestCase):
                 b = [float(x[6]) for x in stand]
                 if base == "B7":
                     self.assertEqual(set(b), {T})
-                    b5 = locs(self.files["B5-r1"])[:gen.MOVE_T]
-                    self.assertEqual([x[:6] for x in stand], [x[:6] for x in b5])  # same speed and wander as B5
+                    b5 = locs(self.body("B5-r1"))[:gen.MOVE_T]
+                    self.assertEqual([x[:6] for x in stand], [x[:6] for x in b5])
                     b = [100.0]
                 v = [float(x[5]) for x in stand]
                 self.assertTrue(all(67.0 <= x <= 241.0 for x in b))
                 self.assertTrue(all(0.28 <= x <= 0.56 for x in v))
                 lat = [float(x[1]) for x in stand]
                 lon = [float(x[2]) for x in stand]
-                span = math.hypot((max(lat) - min(lat)) * 111195, (max(lon) - min(lon)) * 111195 * math.cos(math.radians(35.19)))
+                span = math.hypot((max(lat) - min(lat)) * 111195, (max(lon) - min(lon)) * 111195 * math.cos(math.radians(35.17)))
                 self.assertLess(span, 19.0)
                 self.assertGreater(span, 5.0)
                 continue
@@ -121,15 +147,15 @@ class Exp10Commands(unittest.TestCase):
             if base == "B6":
                 self.assertEqual({(x[3], x[5]) for x in stand}, {("8.800", "1.111")})
             else:
-                acc = "5.000" if "-A5-" in tag else "15.000"
+                acc = "15.000" if "-A15-" in tag else "5.000"
                 self.assertEqual({(x[3], x[5]) for x in stand}, {(acc, "0.000")}, tag)
 
     def test_motion_ramp_true_course_and_neutral_tail(self):
-        f = locs(self.files["B2-r1"])
+        f = locs(self.body("B2-r1"))
         move = f[gen.MOVE_T:gen.MOVE_T + gen.MOVE_S]
         self.assertAlmostEqual(float(move[0][5]), 20 / 3.6 / 10, places=3)
         self.assertEqual(move[9][5], "5.556")
-        self.assertTrue(all(x[3] == "15.000" for x in move))
+        self.assertTrue(all(x[3] == "5.000" for x in move))
         for fr in self.doc["runs"]["B2-r1"]["frames"]:
             if fr["phase"] == "move":
                 self.assertEqual(fr["bearing_sent_deg"], fr["road_bearing_deg"])
@@ -140,12 +166,26 @@ class Exp10Commands(unittest.TestCase):
         self.assertEqual(len(prime), gen.TAIL_S)
         self.assertLess(abs(float(prime[0][1]) - float(tail[0][1])) * 111195, 2.0)
 
-    def test_reconnect_part_a_is_b2_with_guidance(self):
+    def test_reconnect_part_a_is_b2_with_the_preamble(self):
         for tag in ("RS-B1-r1", "RS-B3-r1"):
             a = self.files[tag + ".a"]
-            self.assertEqual(len(locs(a)), gen.RS_A_S)
-            self.assertEqual(locs(a), locs(self.files["B2-r1"])[:gen.RS_A_S])
-            self.assertEqual([x for x in a if x.startswith("tap ")], [])
+            self.assertEqual(len(locs(a[N_PRE:])), gen.RS_A_S)
+            self.assertEqual(locs(a[N_PRE:]), locs(self.body("B2-r1"))[:gen.RS_A_S])
+
+    def test_fallback_streams_and_tier0(self):
+        for base in gen.BASES:
+            fb = locs(self.files["FB-" + base])
+            self.assertEqual(len(fb), gen.FB_S)
+            self.assertEqual({tuple(x) for x in fb}, {tuple(locs(self.files[base + "-r1"])[0])}, base)  # the preamble fix
+            self.assertFalse([x for x in self.files["FB-" + base] if x.startswith(("tap ", "screenshot "))])
+        extra = locs(self.files["T0-PRE"][N_PRE:])
+        self.assertEqual(len(extra), gen.T0_EXTRA_S)
+        self.assertEqual(extra, locs(self.body("B2-r1"))[:gen.T0_EXTRA_S])
+        self.assertEqual(locs(self.files["T0-COLD"]), locs(self.files["T0-PRE"]))
+        self.assertEqual(self.files["T0-COLD"][:N_PRE], expected_preamble("T0-COLD", f"{T}"))
+        probe = locs(self.files["T0-LPROBE"])
+        self.assertEqual([x[3] for x in probe], ["15.000"] * gen.LPROBE_S + ["5.000"] * gen.LPROBE_S)
+        self.assertTrue(all(x[6] == "NAN" for x in probe))
 
     def test_tiers(self):
         tiers = {t["tier"]: t for t in self.doc["tiers"]}
@@ -156,38 +196,12 @@ class Exp10Commands(unittest.TestCase):
         self.assertTrue(all(self.doc["runs"][r]["manual"] for r in tiers["M"]["runs"]))
         self.assertTrue(all(not self.doc["runs"][r]["manual"] for r in self.doc["order"]))
         self.assertEqual(self.doc["order"], tiers["1"]["runs"] + tiers["2"]["runs"] + tiers["3"]["runs"])
-        self.assertEqual(tiers["1"]["estimate_min"], [43, 48])
+        self.assertEqual(tiers["1"]["estimate_min"], [38, 43])
         total = sum(tiers[k]["estimate_min"][0] for k in ("1", "2", "3")) + self.doc["tier0"]["estimate_min"][0]
-        self.assertLessEqual(total, self.doc["budget_min"])  # the low estimate of everything fits the night budget
+        self.assertLessEqual(total, self.doc["budget_min"])
+        self.assertTrue(all(self.doc["runs"][r]["cold"] == ("-cold-" in r) for r in self.doc["runs"]))
         cond = [r.rsplit("-r", 1)[0] for r in self.doc["order"]]
         self.assertTrue(all(a != b for a, b in zip(cond, cond[1:])))
-
-
-    def test_preparation_is_the_standstill_condition_at_5_m(self):
-        for base in gen.BASES:
-            prep = self.files["PREP-" + base]
-            p = locs(prep)
-            self.assertEqual(len(p), gen.PREP_S)
-            self.assertEqual(sum(1 for x in prep if x == "sleep 1"), gen.PREP_S)
-            self.assertFalse([x for x in prep if x.startswith(("tap ", "screenshot "))])
-            self.assertEqual({x[3] for x in p}, {"5.000"}, base)
-            body = locs(self.files[base + "-r1"])[:gen.MOVE_T]
-            strip = lambda rows: [x[:3] + x[4:] for x in rows]
-            self.assertEqual(strip(p[:gen.MOVE_T]), strip(body), base)  # same position, speed and bearing as the run
-
-    def test_tier0_files(self):
-        lat0, lon0 = self.doc["site"]["p0"]
-        probe = locs(self.files["T0-LPROBE"])
-        self.assertEqual([x[3] for x in probe], ["15.000"] * gen.LPROBE_S + ["5.000"] * gen.LPROBE_S)
-        self.assertTrue(all(x[6] == "NAN" and x[5] == "0.000" for x in probe))
-        self.assertEqual({(float(x[1]), float(x[2])) for x in probe}, {(lat0, lon0)})
-        self.assertEqual(len([x for x in self.files["T0-LPROBE"] if x.startswith("screenshot ")]), 2)
-        smoke = locs(self.files["T0-SMOKE-BODY"])
-        self.assertEqual(smoke, locs(self.files["B2-r1"])[:gen.SMOKE_S])
-        exp9 = locs(self.files["T0-EXP9-PREP"])
-        e9 = (PLAN9 / "commands" / "ST8-nostop-r1.txt").read_text().split("\n")[0].split()
-        self.assertEqual({(x[1], x[2], x[6]) for x in exp9}, {(e9[1], e9[2], e9[6])})
-        self.assertEqual({x[3] for x in exp9}, {"5.000"})
 
 
 if __name__ == "__main__":
