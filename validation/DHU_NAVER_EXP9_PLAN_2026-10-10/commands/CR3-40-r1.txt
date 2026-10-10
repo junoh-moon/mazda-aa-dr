@@ -1,0 +1,628 @@
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 0.5
+tap 200 50
+sleep 10
+tap 345 145
+sleep 3
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 328.9
+sleep 1
+sleep 2
+screenshot ../../../../experiment9/CR3-40-r1-setup-guidance.png
+location 35.1697679 129.0267566 5.000 NAN 14.000 328.9
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-000.png
+sleep 0.8
+location 35.1698757 129.0266770 5.000 NAN 14.000 328.9
+sleep 1
+location 35.1699834 129.0265973 5.000 NAN 14.000 328.9
+sleep 1
+location 35.1700899 129.0265152 5.000 NAN 14.000 327.5
+sleep 1
+location 35.1701962 129.0264325 5.000 NAN 14.000 327.5
+sleep 1
+location 35.1703003 129.0263463 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1703984 129.0262498 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1704965 129.0261532 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1705946 129.0260567 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1706928 129.0259602 5.000 NAN 14.000 321.2
+sleep 1
+location 35.1707909 129.0258636 5.000 NAN 14.000 321.2
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-010.png
+sleep 0.8
+location 35.1708834 129.0257600 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1709669 129.0256447 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1710504 129.0255294 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1711340 129.0254142 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1712175 129.0252989 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1713010 129.0251836 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1713845 129.0250684 5.000 NAN 14.000 311.6
+sleep 1
+location 35.1714665 129.0249515 5.000 NAN 14.000 309.4
+sleep 1
+location 35.1715464 129.0248325 5.000 NAN 14.000 309.4
+sleep 1
+location 35.1716264 129.0247136 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-020.png
+sleep 0.8
+location 35.1717064 129.0245946 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1717863 129.0244756 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-022.png
+sleep 0.8
+location 35.1718663 129.0243566 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1719463 129.0242376 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-024.png
+sleep 0.8
+location 35.1720262 129.0241187 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1721062 129.0239997 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-026.png
+sleep 0.8
+location 35.1721862 129.0238807 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1722662 129.0237617 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-028.png
+sleep 0.8
+location 35.1723461 129.0236428 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1724261 129.0235238 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-030.png
+sleep 0.8
+location 35.1725061 129.0234048 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1725860 129.0232858 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1726660 129.0231668 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1727460 129.0230479 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1728259 129.0229289 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1729059 129.0228099 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1729859 129.0226909 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1730658 129.0225720 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1731458 129.0224530 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1732258 129.0223340 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-040.png
+sleep 0.8
+location 35.1733057 129.0222150 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1733857 129.0220960 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1734657 129.0219771 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1735456 129.0218581 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1736256 129.0217391 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1737056 129.0216201 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1737855 129.0215011 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1738655 129.0213822 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1739455 129.0212632 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1740254 129.0211442 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-050.png
+sleep 0.8
+location 35.1741054 129.0210252 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1741854 129.0209063 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1742654 129.0207873 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1743453 129.0206683 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1744253 129.0205493 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1745053 129.0204303 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1745852 129.0203114 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1746652 129.0201924 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1747452 129.0200734 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1748251 129.0199544 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-060.png
+sleep 0.8
+location 35.1749051 129.0198355 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1749851 129.0197165 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1750650 129.0195975 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1751450 129.0194785 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1752250 129.0193595 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1753049 129.0192406 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1753849 129.0191216 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1754649 129.0190026 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1755448 129.0188836 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1756248 129.0187647 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-070.png
+sleep 0.8
+location 35.1757048 129.0186457 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1757847 129.0185267 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1758647 129.0184077 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1759447 129.0182887 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1760247 129.0181698 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1761046 129.0180508 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1761846 129.0179318 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1762646 129.0178128 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1763445 129.0176939 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1764245 129.0175749 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-080.png
+sleep 0.8
+location 35.1765045 129.0174559 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1765844 129.0173369 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1766644 129.0172179 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1767444 129.0170990 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1768243 129.0169800 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1769043 129.0168610 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1769843 129.0167420 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1770642 129.0166231 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1771442 129.0165041 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1772242 129.0163851 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-090.png
+sleep 0.8
+location 35.1773041 129.0162661 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1773841 129.0161471 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1774641 129.0160282 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1775440 129.0159092 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1776240 129.0157902 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1777040 129.0156712 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1777839 129.0155523 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1778639 129.0154333 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1779439 129.0153143 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1780239 129.0151953 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-100.png
+sleep 0.8
+location 35.1781038 129.0150763 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1781838 129.0149574 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1782638 129.0148384 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1783437 129.0147194 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-104.png
+sleep 0.8
+location 35.1784237 129.0146004 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1785037 129.0144815 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1785084 129.0144744 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-107.png
+sleep 0.8
+location 35.1785132 129.0144673 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-108.png
+sleep 0.8
+location 35.1785179 129.0144602 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-109.png
+sleep 0.8
+location 35.1785227 129.0144531 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-110.png
+sleep 0.8
+location 35.1785275 129.0144460 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785322 129.0144390 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-112.png
+sleep 0.8
+location 35.1785370 129.0144319 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785417 129.0144248 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785465 129.0144177 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785513 129.0144106 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-116.png
+sleep 0.8
+location 35.1785560 129.0144036 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785608 129.0143965 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785655 129.0143894 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785703 129.0143823 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-120.png
+sleep 0.8
+location 35.1785751 129.0143752 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785798 129.0143681 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785846 129.0143611 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785893 129.0143540 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-124.png
+sleep 0.8
+location 35.1785941 129.0143469 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1785989 129.0143398 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1786036 129.0143327 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1786084 129.0143256 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-128.png
+sleep 0.8
+location 35.1786131 129.0143186 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1786179 129.0143115 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-130.png
+sleep 0.8
+location 35.1786227 129.0143044 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1786274 129.0142973 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-132.png
+sleep 0.8
+location 35.1786322 129.0142902 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1786369 129.0142832 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1786417 129.0142761 40.000 NAN 0.833 309.4
+sleep 1
+location 35.1786465 129.0142690 40.000 NAN 0.833 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-136.png
+sleep 0.8
+location 35.1787264 129.0141500 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1788064 129.0140310 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1788864 129.0139121 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-139.png
+sleep 0.8
+location 35.1789663 129.0137931 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-140.png
+sleep 0.8
+location 35.1790463 129.0136741 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1791263 129.0135551 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1792062 129.0134361 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1792862 129.0133172 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-144.png
+sleep 0.8
+location 35.1793662 129.0131982 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1794461 129.0130792 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1795261 129.0129602 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1796061 129.0128413 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-148.png
+sleep 0.8
+location 35.1796860 129.0127223 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1797660 129.0126033 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-150.png
+sleep 0.8
+location 35.1798460 129.0124843 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1799259 129.0123653 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1800059 129.0122464 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1800859 129.0121274 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1801659 129.0120084 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1802458 129.0118894 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1803258 129.0117705 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1804058 129.0116515 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1804857 129.0115325 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1805657 129.0114135 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-160.png
+sleep 0.8
+location 35.1806457 129.0112945 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1807256 129.0111756 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1808056 129.0110566 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1808856 129.0109376 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1809655 129.0108186 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1810455 129.0106997 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1811255 129.0105807 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1812054 129.0104617 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1812854 129.0103427 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1813654 129.0102237 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-170.png
+sleep 0.8
+location 35.1814453 129.0101048 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1815253 129.0099858 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1816053 129.0098668 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1816852 129.0097478 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1817652 129.0096289 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1818452 129.0095099 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1819251 129.0093909 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1820051 129.0092719 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1820851 129.0091529 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1821651 129.0090340 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-180.png
+sleep 0.8
+location 35.1822450 129.0089150 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1823250 129.0087960 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1824050 129.0086770 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1824849 129.0085581 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-184.png
+sleep 0.8
+location 35.1825649 129.0084391 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1826449 129.0083201 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1827248 129.0082011 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1828048 129.0080821 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-188.png
+sleep 0.8
+location 35.1828848 129.0079632 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1829647 129.0078442 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-190.png
+sleep 0.8
+location 35.1830447 129.0077252 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1831247 129.0076062 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-192.png
+sleep 0.8
+location 35.1832046 129.0074873 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1832846 129.0073683 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1833646 129.0072493 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1834445 129.0071303 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-196.png
+sleep 0.8
+location 35.1835245 129.0070113 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1836045 129.0068924 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1836844 129.0067734 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1837644 129.0066544 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-200.png
+sleep 0.8
+location 35.1838444 129.0065354 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1839244 129.0064164 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1840043 129.0062975 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1840843 129.0061785 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-204.png
+sleep 0.8
+location 35.1841643 129.0060595 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1842442 129.0059405 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1843242 129.0058216 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1844042 129.0057026 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-208.png
+sleep 0.8
+location 35.1844841 129.0055836 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1845641 129.0054646 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-210.png
+sleep 0.8
+location 35.1846441 129.0053456 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1847240 129.0052267 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-212.png
+sleep 0.8
+location 35.1848040 129.0051077 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1848840 129.0049887 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1849639 129.0048697 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1850439 129.0047508 40.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-216.png
+sleep 0.8
+location 35.1851239 129.0046318 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1852038 129.0045128 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1852838 129.0043938 40.000 NAN 14.000 309.4
+sleep 1
+location 35.1853554 129.0042680 5.000 NAN 14.000 298.5
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-220.png
+sleep 0.8
+location 35.1854156 129.0041326 5.000 NAN 14.000 298.5
+sleep 1
+location 35.1854749 129.0039968 5.000 NAN 14.000 296.9
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-222.png
+sleep 0.8
+location 35.1855318 129.0038593 5.000 NAN 14.000 296.9
+sleep 1
+location 35.1855887 129.0037219 5.000 NAN 14.000 296.9
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-224.png
+sleep 0.8
+location 35.1856457 129.0035845 5.000 NAN 14.000 296.9
+sleep 1
+location 35.1856907 129.0034409 5.000 NAN 14.000 289.3
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-226.png
+sleep 0.8
+location 35.1857324 129.0032956 5.000 NAN 14.000 289.3
+sleep 1
+location 35.1857740 129.0031502 5.000 NAN 14.000 289.3
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-228.png
+sleep 0.8
+location 35.1858154 129.0030047 5.000 NAN 14.000 289.2
+sleep 1
+location 35.1858567 129.0028592 5.000 NAN 14.000 289.2
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-230.png
+sleep 0.8
+location 35.1858981 129.0027136 5.000 NAN 14.000 289.2
+sleep 1
+location 35.1859394 129.0025681 5.000 NAN 14.000 289.2
+sleep 1
+location 35.1859586 129.0024159 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1859777 129.0022636 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1859967 129.0021113 5.000 NAN 14.000 278.7
+sleep 1
+location 35.1860041 129.0019578 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860071 129.0018038 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860101 129.0016498 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860131 129.0014958 5.000 NAN 14.000 271.4
+sleep 1
+location 35.1860161 129.0013418 5.000 NAN 14.000 271.4
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-240.png
+sleep 0.8
+location 35.1860028 129.0011886 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859889 129.0010355 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859751 129.0008824 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859612 129.0007293 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859474 129.0005762 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859335 129.0004230 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859197 129.0002699 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1859058 129.0001168 5.000 NAN 14.000 263.7
+sleep 1
+location 35.1858999 128.9999630 5.000 NAN 14.000 268.3
+sleep 0.2
+screenshot ../../../../experiment9/CR3-40-r1-249.png
+sleep 0.8
