@@ -2,6 +2,7 @@
 #define MX5_AA_DR_BETA_PROFILE_H
 #include "core/dr_core.h"
 #include <stdint.h>
+#include <limits>
 
 namespace mx5 { namespace runtime {
 
@@ -94,7 +95,30 @@ struct BetaProfile {
     bool continuous_anchor;
     double course_weight_kmh, course_innovation_rad, course_correction_rad;
     double position_slack_m;
+    // Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md; DHU
+    // experiments 8 and 9 Tier 1, owner decision 2026-10-10). Unbounded profile only.
+    // While the replacement is sent in the standstill/hold-bearing form (speed
+    // 0: the 1.5 s stop-confirmation wait and the stopped state) the REPORTED
+    // accuracy is min(honest, stopped_accuracy_m, accuracy_max_m) provided the
+    // honest budget is <= stopped_honest_max_m (experiment 9 rule D; above it
+    // the normal min(honest, accuracy_max_m) is kept). With crawl_speed_mps > 0
+    // a moving estimate with 0 < speed < crawl_speed_mps uses the same rule
+    // (rule C). Reporting below the honest budget is a deliberate,
+    // journaled under-report (beta_state/beta_summary "acc_rule" when not 0);
+    // the honest budget stays in accuracy_honest_m. The speed-0 form is the
+    // product's own stop logic (BETA core: all four wheels exactly zero; the
+    // 1.5 s confirmation wait and the stopped state); any wheel movement is
+    // the moving form again. The neutral values of beta_profile()
+    // (stopped_accuracy_m == accuracy_max_m == 40, no honest limit, crawl off)
+    // disable the rule; beta_profile_tunnel() sets the decided values.
+    double stopped_accuracy_m;    // A*
+    double stopped_honest_max_m;  // H_max (+infinity: no limit)
+    double crawl_speed_mps;       // v_c (0: off)
 };
+// The stopped-accuracy rule can change a reported value (and is journaled).
+inline bool beta_stopped_rule_enabled(const BetaProfile& p) {
+    return p.unbounded && p.stopped_accuracy_m<p.accuracy_max_m;
+}
 
 inline BetaProfile beta_profile() {
     BetaProfile p;
@@ -132,6 +156,10 @@ inline BetaProfile beta_profile() {
     p.course_innovation_rad=5.0*3.14159265358979323846/180.0;
     p.course_correction_rad=10.0*3.14159265358979323846/180.0;
     p.position_slack_m=20.0;
+    // Neutral: the rule is disabled (see the struct comment).
+    p.stopped_accuracy_m=p.accuracy_max_m;
+    p.stopped_honest_max_m=std::numeric_limits<double>::infinity();
+    p.crawl_speed_mps=0.0;
     return p;
 }
 
@@ -145,6 +173,13 @@ inline BetaProfile beta_profile_tunnel() {
     p.unbounded=true;
     p.continuous_anchor=true;
     p.error_max_m=1000000.0; p.duration_max_s=21600.0; p.distance_max_m=1000000.0;
+    // Owner decision 2026-10-10 from DHU experiment 9 Tier 1
+    // (validation/STOPPED_ACCURACY_2026-10-10.md): 25 m while stopped (AC25
+    // normal; 20 m had gray frames outside the stop; 40 m rejected in
+    // experiment 8), only while the honest budget is <= 150 m (the drifted
+    // stop with a 135 m position error was accepted; not extrapolated), and
+    // no crawl rule (a crawl at a small accuracy was not tested).
+    p.stopped_accuracy_m=25.0; p.stopped_honest_max_m=150.0; p.crawl_speed_mps=0.0;
     return p;
 }
 

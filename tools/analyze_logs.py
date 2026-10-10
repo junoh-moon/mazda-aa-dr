@@ -715,6 +715,21 @@ class Auditor:
         self.beta_entry_reasons = Counter()
         self.beta_cadence_fences = Counter()  # by stream (2026-10-08)
         self.beta_reverse_latch = Counter()
+        # Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md): optional
+        # beta_state/beta_summary "acc_rule" (1 stopped, 2 crawl), present only
+        # while such a rule held at the last publication (absent: 0 normal).
+        self.beta_rule_seconds = Counter()
+        self.beta_rule_rows = Counter()
+        self.beta_under_reported_rows = 0
+        self.beta_under_report_honest_max = None
+        # Stops above H_max (acc_h0 with acc_rule 0) and, from the sent
+        # payloads, stop episodes and their stopped/normal accuracy changes
+        # (review M1: a wheel tick flips 25 <-> 40; > 2 changes are flagged).
+        self.beta_stops_above_hmax = 0
+        self.beta_stop_episodes = 0
+        self.beta_stop_changes_max = 0
+        self.beta_stop_flip_episodes = 0
+        self.beta_stop_raised = 0
 
     def issue(self, code, source, detail, violation=False):
         severity = "violation" if violation else "inconclusive"
@@ -745,7 +760,13 @@ class Auditor:
                                       overlays=[], wheels=[], wheel_profile=WHEEL_PROFILE,
                                       # Intervals with rows lost by the journal writer
                                       # (journal_dropped): [last time before, first after].
-                                      journal_gaps=[], gap_open=None, last_time_ns=None))
+                                      journal_gaps=[], gap_open=None, last_time_ns=None,
+                                      # acc_rule of the newest beta_state/beta_summary row,
+                                      # when that row was written and whether it was ENGAGED.
+                                      rule=0, rule_ns=None, rule_engaged=False,
+                                      # a row with acc_rule/acc_h0 was seen (rule-enabled build),
+                                      # acc_h0 of the current stop above H_max, open stop episode.
+                                      rule_build=False, h0_above=None, stop=None))
         self.sessions.append(self.session)
         self.positions = {}
         self.invalid_positions = set()
@@ -2373,6 +2394,8 @@ class Auditor:
             if key in row and row[key] is not None and not bounded_number(row[key], 0, 40):
                 self.issue("beta_accuracy_out_of_range", source, "%s=%r outside 0..40 m" % (key, row[key]), True)
         beta = self.session["beta"]
+        if kind in ("beta_state", "beta_summary"):
+            self.beta_accuracy_rule(row, beta, source)
         if kind == "beta_state":
             if not self.validate(row, source, strings=("from", "to", "reason")):
                 return
@@ -2497,6 +2520,44 @@ class Auditor:
         else:  # beta_session_storage
             if self.validate(row, source, ("session_epoch", "previous")):
                 self.beta_storage_changes += 1
+
+    def beta_accuracy_rule(self, row, beta, source):
+        """Seconds per acc_rule while ENGAGED (between consecutive state/summary
+        rows, attributed to the earlier row's rule: 1 s resolution) and the
+        largest honest budget while the reported accuracy was below it under
+        rule 1/2. A missing field is rule 0 (the default profile omits it)."""
+        rule = row.get("acc_rule", 0)
+        if not integer(rule) or rule not in (0, 1, 2):
+            # Reported, then counted as rule 0; the state row itself is still processed.
+            self.issue("partial_record", source, "Invalid BETA acc_rule %r" % (rule,))
+            rule = 0
+        now = row["mono_ns"]
+        state = row.get("to") if row["kind"] == "beta_state" else row.get("state")
+        engaged = state == "ENGAGED"
+        h0 = row.get("acc_h0")
+        if "acc_rule" in row or "acc_h0" in row:
+            beta["rule_build"] = True
+        # Rule 0 with acc_h0: a stop whose honest budget at its start was above H_max.
+        key = "stop_above_hmax" if rule == 0 and finite_number(h0) else str(rule)
+        if beta["rule_ns"] is not None and beta["rule_engaged"] and now >= beta["rule_ns"]:
+            self.beta_rule_seconds[beta["rule"]] += (now - beta["rule_ns"]) / 1e9
+        beta["rule"], beta["rule_ns"], beta["rule_engaged"] = key, now, engaged
+        if key == "stop_above_hmax" and engaged:
+            if beta["h0_above"] != h0:
+                self.beta_stops_above_hmax += 1
+            beta["h0_above"] = h0
+        else:
+            beta["h0_above"] = None
+        # The fields keep their last value after the episode: count ENGAGED rows only.
+        if not engaged:
+            return
+        if "acc_rule" in row and rule == row["acc_rule"]:
+            self.beta_rule_rows[str(rule)] += 1
+        honest, accuracy = row.get("accuracy_honest_m"), row.get("accuracy_m")
+        if rule and finite_number(honest) and finite_number(accuracy) and honest > accuracy + 0.01:
+            self.beta_under_reported_rows += 1
+            if self.beta_under_report_honest_max is None or honest > self.beta_under_report_honest_max:
+                self.beta_under_report_honest_max = honest
 
     def reverse_latch(self, row, source):
         """MODEL reverse latch kept across / cleared after an input gap, or
@@ -2623,7 +2684,44 @@ class Auditor:
             self.issue("beta_payload_mismatch", source, "Replaced latitude/longitude out of range", True)
             return
         add_difference(self.beta_accuracy_m, fields["accuracy_e3"] / 1000.0)
-        beta["pending"] = dict(fields, mono_ns=row["mono_ns"], source=source)
+        beta["pending"] = dict(fields, mono_ns=row["mono_ns"], source=source,
+                               acc_rule=int(beta["rule"]) if beta["rule"] in ("1", "2") else 0)
+        self.beta_stop_send(beta, fields, source)
+
+    def beta_stop_send(self, beta, fields, source):
+        """Stop episodes from the sent payloads: from a speed-0 replacement
+        until a replacement at >= 1 m/s or the end of the outage. Counts the
+        changes of reported accuracy (> 1 m) that come with a stopped/moving
+        form change (a wheel tick), and flags a rise between two speed-0
+        sends (the stopped accuracy must not switch back to 40 m mid-stop)."""
+        still, acc = fields["speed_mps"] == 0.0, fields["accuracy_e3"] / 1000.0
+        stop = beta["stop"]
+        if stop is None:
+            if still:
+                beta["stop"] = dict(changes=0, acc=acc, still=True, source=source)
+            return
+        if not still and fields["speed_mps"] >= 1.0:
+            self.close_stop(beta)
+            return
+        if abs(acc - stop["acc"]) > 1.0 and still != stop["still"]:
+            stop["changes"] += 1
+        if still and stop["still"] and acc > stop["acc"] + 1.0:
+            self.beta_stop_raised += 1
+            self.issue("beta_stop_accuracy_raised", source,
+                       "Reported accuracy rose from %.1f to %.1f m between two speed-0 sends of one stop"
+                       % (stop["acc"], acc))
+        stop["acc"], stop["still"] = acc, still
+
+    def close_stop(self, beta):
+        stop, beta["stop"] = beta["stop"], None
+        if stop is None:
+            return
+        self.beta_stop_episodes += 1
+        self.beta_stop_changes_max = max(self.beta_stop_changes_max, stop["changes"])
+        if stop["changes"] > 2:
+            self.beta_stop_flip_episodes += 1
+            self.issue("beta_stop_accuracy_flips", stop["source"],
+                       "%d stopped/normal accuracy changes in one stop (wheel ticks)" % stop["changes"])
 
     def beta_position(self, row, source):
         """Owner validation: last BETA LOCATION sent versus the first original
@@ -2632,6 +2730,7 @@ class Auditor:
             return
         beta = self.session["beta"]
         beta["gps_returned"] = True
+        self.close_stop(beta)
         if row["mode"] in (1, 2) and row.get("utc_s") == 0:
             return  # stored no-fix position (class NO_FIX): not a GPS reference
         last = beta["pending"]
@@ -2650,8 +2749,17 @@ class Auditor:
         # Tunnel mode (beta.6): the SENT accuracy is clamped at 40 m while the
         # honest budget (beta_summary accuracy_honest_m) keeps growing. The
         # honest budget, not the clamp, is what a GPS return can contradict.
+        # A stopped/crawl rule (acc_rule 1/2) may report below the honest budget
+        # and below 40 m (a deliberate under-report): judged against the honest
+        # budget in the same way.
         honest = beta.get("honest_m")
-        clamped = finite_number(honest) and honest > accuracy + 0.01 and accuracy >= BETA_MAX_ACCURACY_E3 / 1000.0 - 0.01
+        # The sent payload decides when it disagrees with the 1 Hz row: a
+        # speed-0 replacement of a rule-enabled build is the stopped form.
+        rule = last.get("acc_rule", 0)
+        if beta["rule_build"]:
+            rule = 1 if last["speed_mps"] == 0.0 else (2 if rule == 2 else 0)
+        clamped = finite_number(honest) and honest > accuracy + 0.01 and \
+            (accuracy >= BETA_MAX_ACCURACY_E3 / 1000.0 - 0.01 or rule in (1, 2))
         limit = honest if clamped else accuracy
         check = dict(dr_send=last["source"], gps_position=source, gap_s=round(gap, 3),
                      distance_m=round(raw, 2), time_aligned_distance_m=round(aligned, 2),
@@ -2659,6 +2767,8 @@ class Auditor:
                      honest_accuracy_m=honest if clamped else None, reported_accuracy_clamped=bool(clamped),
                      within_honest_budget=aligned <= limit,
                      dr_speed_mps=last["speed_mps"], gps_mode=row["mode"], gps_horizontal=row.get("horizontal"))
+        if rule:
+            check["accuracy_rule"] = rule
         self.beta_returns_total += 1
         if len(self.beta_returns) < 100:
             self.beta_returns.append(check)
@@ -2674,6 +2784,7 @@ class Auditor:
         if s is None or s["beta"]["closed"]:
             return
         s["beta"]["closed"] = True
+        self.close_stop(s["beta"])
         if s["beta"]["gap_open"] is not None:
             s["beta"]["journal_gaps"].append((s["beta"]["gap_open"], float("inf")))
             s["beta"]["gap_open"] = None
@@ -2860,6 +2971,19 @@ class Auditor:
                               cadence_fences=dict(self.beta_cadence_fences),
                               position_classes=dict(self.beta_position_classes),
                               state_seconds={k: round(v, 3) for k, v in self.beta_state_seconds.items()},
+                              accuracy_rules=dict(
+                                  engaged_seconds={k: round(v, 3) for k, v in sorted(self.beta_rule_seconds.items())},
+                                  rows_with_field=dict(self.beta_rule_rows),
+                                  under_reported_rows=self.beta_under_reported_rows,
+                                  max_honest_while_under_reporting_m=self.beta_under_report_honest_max,
+                                  stops_above_honest_max=self.beta_stops_above_hmax,
+                                  stop_episodes=self.beta_stop_episodes,
+                                  stop_accuracy_changes_max=self.beta_stop_changes_max,
+                                  stop_episodes_flagged=self.beta_stop_flip_episodes,
+                                  stop_accuracy_raised=self.beta_stop_raised,
+                                  names={"0": "normal", "1": "stopped", "2": "crawl",
+                                         "stop_above_hmax": "stop decided above H_max (40 m)"},
+                                  resolution="beta_state/beta_summary rows (about 1 s)"),
                               no_fix_seconds=dict(self.beta_no_fix_seconds),
                               speed_engaged_periods=self.beta_speed_engaged_periods,
                               speed_engaged_seconds=dict(self.beta_speed_engaged_seconds),
@@ -3400,6 +3524,16 @@ def main(argv=None):
                    if beta["last_state"] else "none"))
             print("BETA exits from ENGAGED: %s; withdrawals: %s; reported accuracy (m): %s" %
                   (beta["engaged_exit_reasons"], beta["withdraw_reasons"], beta["replaced_accuracy_m"]))
+            rules = beta["accuracy_rules"]
+            if rules["rows_with_field"] or rules["stops_above_honest_max"]:
+                print("BETA accuracy rules (ENGAGED seconds; 0 normal, 1 stopped, 2 crawl): %s; under-reported "
+                      "rows %d, largest honest budget while under-reporting %s m" %
+                      (rules["engaged_seconds"], rules["under_reported_rows"],
+                       rules["max_honest_while_under_reporting_m"]))
+                print("BETA stops: %d episodes, max %d stopped/normal changes, %d flagged (> 2), %d mid-stop "
+                      "rises, %d stops above H_max" %
+                      (rules["stop_episodes"], rules["stop_accuracy_changes_max"], rules["stop_episodes_flagged"],
+                       rules["stop_accuracy_raised"], rules["stops_above_honest_max"]))
             if beta["heading_sources"] or beta["entry_decisions"]:
                 print("BETA heading sources: %s; resyncs %d; outage entries: %s" %
                       (beta["heading_sources"], beta["heading_resyncs"], beta["entry_decisions"]))

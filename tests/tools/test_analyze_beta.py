@@ -312,6 +312,150 @@ class BetaAnalyzeTests(unittest.TestCase):
         self.assertFalse(report["beta"]["gps_return_checks"][0]["reported_accuracy_clamped"])
         self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
 
+    # Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md): acc_rule 1
+    # (stopped) or 2 (crawl) may report below the honest budget and below 40 m.
+    def stopped_drive(self, rule, offset, honest=300.0, accuracy_e3=20000, last_speed=0.0, fields=True):
+        rows = drive(gps_offset_m=offset, accuracy_e3=accuracy_e3, honest_m=honest)
+        summary = next(r for r in rows if r["kind"] == "beta_summary")
+        summary.update(accuracy_m=accuracy_e3 / 1000.0)
+        if fields:
+            summary.update(acc_rule=rule, acc_h0=95.5)
+        at = next(i for i, r in enumerate(rows) if r["kind"] == "position" and r["call"] == 4)
+        rows.insert(at, dict(summary, mono_ns=3_500_000_000))
+        stale = original_payload()
+        last = beta_payload(stale, LAT + 20 * M_LAT, LON, accuracy_e3, speed_mps=last_speed)
+        for r in rows:
+            if r["kind"] == "send" and r["call"] == 4:
+                r["outgoing_hex"] = last.hex()
+        return rows
+
+    def test_stopped_rule_is_judged_against_the_honest_budget_and_tabulated(self):
+        report = self.audit(self.stopped_drive(1, 120.0))
+        self.assertNotIn("beta_return_exceeds_accuracy", self.codes(report))
+        self.assertNotIn("partial_record", self.codes(report))
+        check = report["beta"]["gps_return_checks"][0]
+        self.assertEqual(check["reported_accuracy_m"], 20.0)
+        self.assertEqual(check["accuracy_rule"], 1)
+        self.assertTrue(check["reported_accuracy_clamped"] and check["within_honest_budget"])
+        self.assertFalse(check["within_reported_accuracy"])
+        rules = report["beta"]["accuracy_rules"]
+        # ENGAGED 2.5 s -> 3.5 s rule 0 (state row), 3.5 s -> 5.0 s rule 1.
+        self.assertAlmostEqual(rules["engaged_seconds"]["0"], 1.0, places=3)
+        self.assertAlmostEqual(rules["engaged_seconds"]["1"], 1.5, places=3)
+        self.assertEqual(rules["rows_with_field"], {"1": 2})
+        self.assertEqual(rules["under_reported_rows"], 2)
+        self.assertEqual(rules["max_honest_while_under_reporting_m"], 300.0)
+        out = io.StringIO()
+        self.path.write_text("".join(json.dumps(row) + "\n" for row in self.stopped_drive(1, 120.0)))
+        with contextlib.redirect_stdout(out):
+            module.main([str(self.path)])
+        self.assertIn("BETA accuracy rules (ENGAGED seconds; 0 normal, 1 stopped, 2 crawl)", out.getvalue())
+        self.assertIn("largest honest budget while under-reporting 300.0 m", out.getvalue())
+        self.assertIn("BETA stops: 1 episodes", out.getvalue())
+        # Beyond the honest budget the jump is still flagged.
+        report = self.audit(self.stopped_drive(1, 320.0))
+        self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
+        # An older build (no acc fields): 20 m below a (possibly stale) honest value is not excused.
+        report = self.audit(self.stopped_drive(0, 120.0, fields=False))
+        self.assertFalse(report["beta"]["gps_return_checks"][0]["reported_accuracy_clamped"])
+        self.assertNotIn("accuracy_rule", report["beta"]["gps_return_checks"][0])
+        self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
+        self.assertEqual(report["beta"]["accuracy_rules"]["under_reported_rows"], 0)
+
+    def test_gps_return_rule_follows_the_sent_payload(self):
+        # Review L2: the 1 Hz row says stopped but the last LOCATION was moving
+        # (restart after the row): judged against the reported accuracy.
+        report = self.audit(self.stopped_drive(1, 120.0, last_speed=10.0))
+        check = report["beta"]["gps_return_checks"][0]
+        self.assertNotIn("accuracy_rule", check)
+        self.assertFalse(check["reported_accuracy_clamped"])
+        self.assertIn("beta_return_exceeds_accuracy", self.codes(report, "inconclusive"))
+        # The row says normal (the stop began after it) but the last LOCATION
+        # was the speed-0 form of a rule-enabled build: judged against the honest budget.
+        rows = self.stopped_drive(1, 120.0)
+        summary = [r for r in rows if r["kind"] == "beta_summary"][-1]
+        late = {k: v for k, v in summary.items() if k not in ("acc_rule", "acc_h0")}
+        late["mono_ns"] = 3_900_000_000
+        at = next(i for i, r in enumerate(rows) if r["kind"] == "position" and r["call"] == 4)
+        rows.insert(at, late)
+        report = self.audit(rows)
+        check = report["beta"]["gps_return_checks"][0]
+        self.assertEqual(check["accuracy_rule"], 1)
+        self.assertTrue(check["within_honest_budget"])
+        self.assertNotIn("beta_return_exceeds_accuracy", self.codes(report))
+
+    def test_rule_tables_count_engaged_rows_only_and_stops_above_hmax(self):
+        rows = self.stopped_drive(1, 5.0)
+        # Rows after the episode keep their last acc fields (ARMED): not counted.
+        rows.insert(-1, dict(kind="beta_summary", mono_ns=5_500_000_000, domain="beta", assist_ready=False,
+                             state="ARMED", reason="gps_returned", publications=3, replaced_sends=2,
+                             replaced_nonzero=0, withdrawals=0, accuracy_m=20.0, accuracy_honest_m=900.0,
+                             acc_rule=1, acc_h0=95.5))
+        rules = self.audit(rows)["beta"]["accuracy_rules"]
+        self.assertEqual(rules["rows_with_field"], {"1": 2})
+        self.assertEqual(rules["max_honest_while_under_reporting_m"], 300.0)
+        # acc_rule 0 with acc_h0: a stop decided above H_max (40 m), counted once.
+        rules = self.audit(self.stopped_drive(0, 5.0, accuracy_e3=40000))["beta"]["accuracy_rules"]
+        self.assertEqual(rules["stops_above_honest_max"], 1)
+        self.assertAlmostEqual(rules["engaged_seconds"]["stop_above_hmax"], 1.5, places=3)
+        self.assertEqual(rules["under_reported_rows"], 0)
+
+    def flip_drive(self, sends):
+        """ENGAGED with replaced sends (speed m/s, accuracy m), then GPS return."""
+        rows = drive()
+        at = next(i for i, r in enumerate(rows) if r["kind"] == "position" and r["call"] == 3)
+        stale = original_payload()
+        extra = []
+        for k, (speed, acc) in enumerate(sends):
+            t = 2_600_000_000 + k * 1_000_000
+            extra += [position(100 + k, t, 0),
+                      send(100 + k, t + 100, 0, stale, beta_payload(stale, LAT, LON, int(acc * 1000), speed), choice=3)]
+        rows[at:at] = extra
+        return rows
+
+    def test_stop_episode_flips_and_mid_stop_rise_are_flagged(self):
+        clean = [(10, 40), (0, 25), (0, 25), (0, 25), (10, 40)]
+        rules = self.audit(self.flip_drive(clean))["beta"]["accuracy_rules"]
+        self.assertEqual((rules["stop_episodes"], rules["stop_accuracy_changes_max"], rules["stop_episodes_flagged"],
+                          rules["stop_accuracy_raised"]), (1, 0, 0, 0))
+        # One wheel tick (25 -> 40 -> 25) is two changes: reported, not flagged.
+        one = [(0, 25), (0.0007, 40), (0, 25), (0, 25), (10, 40)]
+        report = self.audit(self.flip_drive(one))
+        self.assertEqual(report["beta"]["accuracy_rules"]["stop_accuracy_changes_max"], 2)
+        self.assertNotIn("beta_stop_accuracy_flips", self.codes(report))
+        # Repeated flips (> 2 changes) are flagged.
+        flips = [(0, 25), (0.0007, 40), (0, 25), (0.0014, 40), (0, 25), (10, 40)]
+        report = self.audit(self.flip_drive(flips))
+        self.assertEqual(report["beta"]["accuracy_rules"]["stop_episodes_flagged"], 1)
+        self.assertIn("beta_stop_accuracy_flips", self.codes(report, "inconclusive"))
+        # Exactly three changes are already flagged.
+        three = [(0, 25), (0.0007, 40), (0, 25), (0.0014, 40), (10, 40)]
+        report = self.audit(self.flip_drive(three))
+        self.assertEqual(report["beta"]["accuracy_rules"]["stop_accuracy_changes_max"], 3)
+        self.assertEqual(report["beta"]["accuracy_rules"]["stop_episodes_flagged"], 1)
+        # 25 -> 40 between two speed-0 sends (the H1 pattern) is flagged.
+        raised = [(0, 25), (0, 25), (0, 40), (10, 40)]
+        report = self.audit(self.flip_drive(raised))
+        self.assertEqual(report["beta"]["accuracy_rules"]["stop_accuracy_raised"], 1)
+        self.assertIn("beta_stop_accuracy_raised", self.codes(report, "inconclusive"))
+
+    def test_default_rows_have_no_accuracy_rule_and_invalid_rules_are_reported(self):
+        report = self.audit(drive())
+        rules = report["beta"]["accuracy_rules"]
+        self.assertEqual(rules["rows_with_field"], {})
+        self.assertIsNone(rules["max_honest_while_under_reporting_m"])
+        self.assertAlmostEqual(rules["engaged_seconds"]["0"], 2.5000003, places=5)
+        out = io.StringIO()
+        self.path.write_text("".join(json.dumps(row) + "\n" for row in drive()))
+        with contextlib.redirect_stdout(out):
+            module.main([str(self.path)])
+        self.assertNotIn("BETA accuracy rules", out.getvalue())
+        for bad in (7, -1, "1", 1.5, True):
+            report = self.audit(self.stopped_drive(bad, 5.0))
+            self.assertIn("partial_record", self.codes(report), bad)
+            # The state machine is still followed (no discontinuity from a dropped row).
+            self.assertNotIn("beta_state_discontinuity", self.codes(report), bad)
+
     def replace_send(self, rows, call, **changes):
         for row in rows:
             if row["kind"] == "send" and row["call"] == call:

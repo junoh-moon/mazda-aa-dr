@@ -946,6 +946,276 @@ static void standstill_in_a_tunnel_episode_keeps_a_bearing() {
     // The stop-confirmation wait (speed 0, not yet stopped) and the stopped state both publish.
     CHECK(moving>0 && still>0 && dropped==0);
 }
+// Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md; owner decision
+// from DHU experiment 9 Tier 1: tunnel profile A*=25 m, H_max=150 m, crawl
+// off). The neutral values (beta_profile()) change nothing; with A* set, the
+// hold-bearing form (and, with v_c, a crawl) reports min(honest, A*) while the
+// honest budget is <= H_max.
+static BetaProfile neutral_tunnel() {
+    BetaProfile p=runtime::beta_profile_tunnel();
+    const BetaProfile b=runtime::beta_profile();
+    p.stopped_accuracy_m=b.stopped_accuracy_m; p.stopped_honest_max_m=b.stopped_honest_max_m;
+    p.crawl_speed_mps=b.crawl_speed_mps;
+    return p;
+}
+static BetaModelInput still_input(double honest,bool stopped=false) {
+    // Speed 0, no bearing: the 1.5 s stop-confirmation wait (or the stopped
+    // state). Lease term (0+sv)*0.5.
+    BetaModelInput in=synthetic(honest-0.3*0.5,0.1);
+    in.snapshot.speed_mps=0; in.snapshot.has_bearing=0; in.snapshot.stopped=stopped?1:0;
+    return in;
+}
+static BetaModelInput moving_input(double honest,double v) {
+    BetaModelInput in=synthetic(honest-(v+0.3)*0.5,0.1);
+    in.snapshot.speed_mps=v;
+    return in;
+}
+static double reported(const BetaModelInput& in,const BetaProfile& p,int* rule,double* honest=0,
+                       runtime::CoreBridgeResult want=runtime::CORE_BRIDGE_OK) {
+    adapter::DrSnapshot s; double h=-1; *rule=-1;
+    const runtime::CoreBridgeResult r=runtime::map_model_publication(in,p,&s,&h,rule);
+    CHECK(r==want);
+    if(honest)*honest=h;
+    if(r!=runtime::CORE_BRIDGE_OK) { CHECK(!s.ready && *rule==runtime::BETA_ACC_RULE_NORMAL); return -1; }
+    // The BETA serializer: hasAccuracy and ceil(accuracy*1000) in (0, 40000].
+    uint8_t original[48]={0},out[48];
+    CHECK(adapter::encode_beta_location(s,original,out) && out[16]==1);
+    const uint32_t e3=uint32_t(out[20])|(uint32_t(out[21])<<8)|(uint32_t(out[22])<<16)|(uint32_t(out[23])<<24);
+    CHECK(e3>=1 && e3<=40000 && e3==uint32_t(std::ceil(s.accuracy_m*1000.0)));
+    return s.accuracy_m;
+}
+static void stopped_accuracy_rules() {
+    int rule; double honest;
+    // Production tunnel profile: 25 m while stopped up to an honest 150 m.
+    { const BetaProfile t=runtime::beta_profile_tunnel();
+      CHECK(t.stopped_accuracy_m==25.0 && t.stopped_honest_max_m==150.0 && t.crawl_speed_mps==0.0 &&
+            t.accuracy_max_m==40.0 && runtime::beta_stopped_rule_enabled(t));
+      CHECK(reported(still_input(50),t,&rule,&honest)==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED &&
+            std::fabs(honest-50)<1e-9);
+      CHECK(reported(still_input(150,true),t,&rule)==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED);
+      CHECK(reported(still_input(150.5),t,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+      CHECK(reported(still_input(600,true),t,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+      CHECK(std::fabs(reported(still_input(21),t,&rule)-21)<1e-9 && rule==runtime::BETA_ACC_RULE_STOPPED);
+      // Crawl off: any movement reports the normal min(honest, 40).
+      CHECK(reported(moving_input(50,0.0007),t,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+      CHECK(reported(moving_input(50,0.833),t,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+      CHECK(std::fabs(reported(moving_input(30,10),t,&rule)-30)<1e-9 && rule==runtime::BETA_ACC_RULE_NORMAL); }
+    const BetaProfile d=neutral_tunnel();
+    // Neutral (beta_profile()): A* == accuracy_max == 40, no H_max, crawl off; rule disabled.
+    CHECK(d.stopped_accuracy_m==40.0 && d.stopped_accuracy_m==d.accuracy_max_m &&
+          std::isinf(d.stopped_honest_max_m) && d.crawl_speed_mps==0.0);
+    CHECK(!runtime::beta_stopped_rule_enabled(d) && !runtime::beta_stopped_rule_enabled(runtime::beta_profile()));
+    CHECK(reported(still_input(50),d,&rule,&honest)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL &&
+          std::fabs(honest-50)<1e-9);
+    CHECK(std::fabs(reported(still_input(12),d,&rule)-12)<1e-9 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    CHECK(reported(moving_input(50,1.0),d,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+
+    BetaProfile a=d; a.stopped_accuracy_m=20.0;     // H_max infinite, crawl off
+    CHECK(runtime::beta_stopped_rule_enabled(a));
+    // Stopped at an honest budget of 50 m: A* is reported, honest kept.
+    CHECK(reported(still_input(50),a,&rule,&honest)==20.0 && rule==runtime::BETA_ACC_RULE_STOPPED &&
+          std::fabs(honest-50)<1e-9);
+    CHECK(reported(still_input(500,true),a,&rule)==20.0 && rule==runtime::BETA_ACC_RULE_STOPPED);
+    // Never raised above the honest budget.
+    CHECK(std::fabs(reported(still_input(12),a,&rule)-12)<1e-9 && rule==runtime::BETA_ACC_RULE_STOPPED);
+    // Moving: unchanged (40 m clamp or honest); crawl is off.
+    CHECK(reported(moving_input(50,10),a,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    CHECK(reported(moving_input(50,0.3),a,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    CHECK(std::fabs(reported(moving_input(30,10),a,&rule)-30)<1e-9);
+
+    // H_max (rule D): above it the normal 40 m clamp stays.
+    BetaProfile h=a; h.stopped_honest_max_m=189.0;
+    CHECK(reported(still_input(189),h,&rule)==20.0 && rule==runtime::BETA_ACC_RULE_STOPPED);
+    CHECK(reported(still_input(189.5),h,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    h.stopped_honest_max_m=40.0;
+    CHECK(reported(still_input(39),h,&rule)==20.0 && reported(still_input(41),h,&rule)==40.0);
+    h.stopped_honest_max_m=0.0;
+    CHECK(reported(still_input(25),h,&rule)==25.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+
+    // Crawl (rule C): 0 < speed < v_c, also subject to H_max.
+    BetaProfile c=a; c.crawl_speed_mps=4.7;
+    CHECK(reported(moving_input(50,0.833),c,&rule)==20.0 && rule==runtime::BETA_ACC_RULE_CRAWL);
+    CHECK(reported(moving_input(50,4.69),c,&rule)==20.0 && rule==runtime::BETA_ACC_RULE_CRAWL);
+    CHECK(reported(moving_input(50,4.7),c,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    CHECK(reported(moving_input(50,14),c,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    CHECK(reported(still_input(50),c,&rule)==20.0 && rule==runtime::BETA_ACC_RULE_STOPPED);
+    c.stopped_honest_max_m=100.0;
+    CHECK(reported(moving_input(150,1),c,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    { adapter::DrSnapshot s; double hh; int rr;
+      CHECK(runtime::map_model_publication(moving_input(50,1),c,&s,&hh,&rr)==runtime::CORE_BRIDGE_OK);
+      CHECK(s.travel_bearing_deg==0.0 && s.speed_mps==1.0 && !s.stopped); }
+
+    // Clamps and profile validation.
+    BetaProfile x=a; x.stopped_accuracy_m=60.0;             // above accuracy_max: rule disabled
+    CHECK(!runtime::beta_stopped_rule_enabled(x));
+    CHECK(reported(still_input(50),x,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    x.stopped_accuracy_m=40.0;                              // equal: disabled (the default)
+    CHECK(reported(still_input(50),x,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    x.stopped_accuracy_m=5.0;                               // below the 20 m floor: expressible (owner decision)
+    CHECK(reported(still_input(50),x,&rule)==5.0);
+    x.stopped_accuracy_m=0.5;                               // still a valid (0,40] payload
+    CHECK(reported(still_input(50),x,&rule)==0.5);
+    const double bad_a[]={0.0,-1.0,::nan(""),HUGE_VAL};
+    for(unsigned i=0;i<4;++i) { x=a; x.stopped_accuracy_m=bad_a[i];
+        reported(still_input(50),x,&rule,0,runtime::CORE_BRIDGE_LIMIT); }
+    x=a; x.stopped_honest_max_m=-1.0; reported(still_input(50),x,&rule,0,runtime::CORE_BRIDGE_LIMIT);
+    x=a; x.stopped_honest_max_m=::nan(""); reported(still_input(50),x,&rule,0,runtime::CORE_BRIDGE_LIMIT);
+    x=a; x.crawl_speed_mps=-0.1; reported(still_input(50),x,&rule,0,runtime::CORE_BRIDGE_LIMIT);
+    x=a; x.crawl_speed_mps=HUGE_VAL; reported(still_input(50),x,&rule,0,runtime::CORE_BRIDGE_LIMIT);
+    // Other refusals keep rule NORMAL.
+    { BetaModelInput in=still_input(50); in.snapshot.domain=MX5_DR_QUALIFIED_DOMAIN;
+      reported(in,a,&rule,0,runtime::CORE_BRIDGE_UNQUALIFIED); }
+    // The bounded profile never under-reports (and never sends the hold form).
+    BetaProfile b=runtime::beta_profile(); b.stopped_accuracy_m=20.0; b.crawl_speed_mps=4.7;
+    CHECK(!runtime::beta_stopped_rule_enabled(b));
+    CHECK(std::fabs(reported(still_input(30,true),b,&rule)-30)<1e-9 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    CHECK(std::fabs(reported(moving_input(30,1),b,&rule)-30)<1e-9 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    reported(still_input(30),b,&rule,0,runtime::CORE_BRIDGE_BEARING);
+}
+// Review H1 (2026-10-10): the honest budget keeps growing at standstill
+// (sv*t), so the H_max decision is latched at the first hold-bearing
+// publication of a stop and kept for the whole stop.
+static double latched(const BetaModelInput& in,const BetaProfile& p,runtime::BetaStopLatch* l,int* rule) {
+    adapter::DrSnapshot s; double h; *rule=-1;
+    CHECK(runtime::map_model_publication(in,p,&s,&h,rule,l)==runtime::CORE_BRIDGE_OK);
+    return s.accuracy_m;
+}
+static void stopped_accuracy_latch() {
+    const BetaProfile t=runtime::beta_profile_tunnel();
+    int rule;
+    // A long stop whose honest budget crosses 150 m keeps 25 m throughout.
+    { runtime::BetaStopLatch l;
+      CHECK(latched(still_input(125.7),t,&l,&rule)==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED);
+      CHECK(l.active && l.allowed && std::fabs(l.honest0_m-125.7)<1e-9 && l.anchor_id==1);
+      CHECK(latched(still_input(149.0,true),t,&l,&rule)==25.0);
+      CHECK(latched(still_input(150.1,true),t,&l,&rule)==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED);
+      CHECK(latched(still_input(900,true),t,&l,&rule)==25.0 && std::fabs(l.honest0_m-125.7)<1e-9);
+      // Without the latch the same input would be 40 m (stateless decision).
+      CHECK(reported(still_input(150.1,true),t,&rule)==40.0); }
+    // A stop that starts above 150 m stays at 40 m for the whole stop.
+    { runtime::BetaStopLatch l;
+      CHECK(latched(still_input(150.5),t,&l,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+      CHECK(l.active && !l.allowed && std::fabs(l.honest0_m-150.5)<1e-9);
+      CHECK(latched(still_input(30,true),t,&l,&rule)==30.0 && rule==runtime::BETA_ACC_RULE_NORMAL); // honest < 40: honest
+      CHECK(latched(still_input(170,true),t,&l,&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL); }
+    // Boundary: 149.9 and exactly 150 start an allowed stop.
+    { runtime::BetaStopLatch l;
+      CHECK(latched(still_input(149.9),t,&l,&rule)==25.0 && latched(still_input(150.2),t,&l,&rule)==25.0);
+      runtime::BetaStopLatch e;
+      CHECK(latched(still_input(150.0),t,&e,&rule)==25.0 && e.allowed); }
+    // stop -> move -> stop re-evaluates at the second stop.
+    { runtime::BetaStopLatch l;
+      CHECK(latched(still_input(140),t,&l,&rule)==25.0);
+      CHECK(latched(moving_input(145,10),t,&l,&rule)==40.0 && !l.active);
+      CHECK(latched(still_input(155),t,&l,&rule)==40.0 && l.active && !l.allowed);
+      CHECK(latched(moving_input(160,0.0007),t,&l,&rule)==40.0 && !l.active);   // one wheel tick moves
+      CHECK(latched(still_input(100),t,&l,&rule)==25.0 && l.allowed && std::fabs(l.honest0_m-100)<1e-9); }
+    // A new core anchor (new outage, GPS or carried return) is a new stop.
+    { runtime::BetaStopLatch l;
+      CHECK(latched(still_input(160),t,&l,&rule)==40.0 && !l.allowed);
+      BetaModelInput in=still_input(60); in.snapshot.anchor_id=2;
+      CHECK(latched(in,t,&l,&rule)==25.0 && l.allowed && l.anchor_id==2);
+      in=still_input(60); in.snapshot.anchor_id=2; in.snapshot.stopped=1;
+      CHECK(latched(in,t,&l,&rule)==25.0); }
+    // A refused publication leaves the latch unchanged; the neutral profile never latches.
+    { runtime::BetaStopLatch l; CHECK(latched(still_input(100),t,&l,&rule)==25.0);
+      BetaModelInput in=still_input(500); in.snapshot.domain=MX5_DR_QUALIFIED_DOMAIN;
+      adapter::DrSnapshot s; double h;
+      CHECK(runtime::map_model_publication(in,t,&s,&h,&rule,&l)==runtime::CORE_BRIDGE_UNQUALIFIED);
+      CHECK(l.active && l.allowed && std::fabs(l.honest0_m-100)<1e-9);
+      runtime::BetaStopLatch n;
+      CHECK(latched(still_input(100),neutral_tunnel(),&n,&rule)==40.0 && !n.active); }
+}
+// Pipeline (review H1): a 6 min stop inside a tunnel. The honest budget
+// grows past 150 m during the stop; with the controller's latch the whole
+// stop stays at 25 m (without it the stop would switch to the rejected 40 m).
+static void long_stop_keeps_the_stopped_accuracy() {
+    const BetaProfile t=runtime::beta_profile_tunnel();
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(t));
+    const unsigned stop=ANCHOR_MS+25000,go=ANCHOR_MS+385000;
+    Plan plan=straight(go+5000);
+    plan.wheel=[&](unsigned ms){ return ms>=stop&&ms<go?0.0:36.0; };
+    runtime::BetaStopLatch latch;
+    unsigned still=0,still_25=0,stateless_40=0,after_40=0; double first=-1,last=-1;
+    plan.each=[&](Pipeline& q,unsigned ms) {
+        if(ms<stop-2000) return;
+        const BetaModelInput in=q.model_publication(T(ms));
+        adapter::DrSnapshot s; double honest=-1; int rule=-1;
+        CHECK(runtime::map_model_publication(in,t,&s,&honest,&rule,&latch)==runtime::CORE_BRIDGE_OK);
+        if(s.speed_mps==0.0) {
+            ++still; if(first<0) first=honest; last=honest;
+            if(s.accuracy_m==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED) ++still_25;
+            adapter::DrSnapshot u; int r2;
+            if(runtime::map_model_publication(in,t,&u,0,&r2)==runtime::CORE_BRIDGE_OK && u.accuracy_m==40.0) ++stateless_40;
+        } else if(ms>=go) { CHECK(s.accuracy_m==40.0 && !latch.active); ++after_40; }
+    };
+    run(p,plan);
+    if(!(first>40 && first<150 && last>150)) std::fprintf(stderr,"long stop honest %.1f -> %.1f\n",first,last);
+    CHECK(first>40 && first<150 && last>150);
+    CHECK(still>3500 && still_25==still && stateless_40>0 && after_40>30);
+}
+// Pipeline: 40 m while moving, A* from the stop (including the 1.5 s
+// confirmation wait), back to 40 m at the restart; repeated stops; H_max.
+static void stopped_accuracy_switches_at_stop_and_restart() {
+    struct Variant { double a, hmax, crawl; bool stop_rule; };
+    // 0 neutral, 1 A*=20, 2 H_max below the honest budget, 3 crawl, 4 production.
+    const Variant variants[]={{40,HUGE_VAL,0,false},{20,HUGE_VAL,0,true},{25,30,0,false},{20,HUGE_VAL,2.0,true},
+                              {25,150,0,true}};
+    for(unsigned v=0;v<5;++v) {
+        BetaProfile prof=neutral_tunnel();
+        prof.stopped_accuracy_m=variants[v].a; prof.stopped_honest_max_m=variants[v].hmax;
+        prof.crawl_speed_mps=variants[v].crawl;
+        if(v==4) { const BetaProfile t=runtime::beta_profile_tunnel();
+            CHECK(t.stopped_accuracy_m==prof.stopped_accuracy_m && t.stopped_honest_max_m==prof.stopped_honest_max_m &&
+                  t.crawl_speed_mps==prof.crawl_speed_mps); prof=t; }
+        double honest_max=0;
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(prof));
+        const unsigned stop1=ANCHOR_MS+25000,go1=ANCHOR_MS+35000,stop2=ANCHOR_MS+40000,go2=ANCHOR_MS+45000;
+        Plan plan=straight(ANCHOR_MS+50000);
+        // 36 km/h with two stops; a 3 km/h crawl between the stops.
+        plan.wheel=[&](unsigned ms){ return (ms>=stop1&&ms<go1)||(ms>=stop2&&ms<go2)?0.0:
+                                             (ms>=go1+2000&&ms<stop2-1000)?3.0:36.0; };
+        unsigned still=0,still_a=0,moving_after=0,crawl_a=0,fast_40=0,dropped=0;
+        int last_rule=-1; unsigned switches=0;
+        plan.each=[&](Pipeline& q,unsigned ms) {
+            if(ms<ANCHOR_MS+20000) return;   // honest budget > 40 m from about 19 s
+            adapter::DrSnapshot s; double honest=-1; int rule=-1;
+            if(runtime::map_model_publication(q.model_publication(T(ms)),prof,&s,&honest,&rule)!=runtime::CORE_BRIDGE_OK) {
+                ++dropped; return;
+            }
+            CHECK(honest>40.0); if(honest>honest_max) honest_max=honest;
+            CHECK(s.accuracy_m>0 && s.accuracy_m<=40.0 && s.accuracy_m<=honest+1e-9);
+            if(rule!=last_rule) { ++switches; last_rule=rule; }
+            if(s.speed_mps==0.0) {
+                ++still;
+                CHECK(rule==(variants[v].stop_rule?runtime::BETA_ACC_RULE_STOPPED:runtime::BETA_ACC_RULE_NORMAL));
+                if(s.accuracy_m==variants[v].a && variants[v].stop_rule) ++still_a;
+                if(!variants[v].stop_rule) CHECK(s.accuracy_m==40.0);
+            } else if(s.speed_mps<2.0) {
+                if(variants[v].crawl>0) { CHECK(rule==runtime::BETA_ACC_RULE_CRAWL && s.accuracy_m==variants[v].a); ++crawl_a; }
+                else CHECK(rule==runtime::BETA_ACC_RULE_NORMAL && s.accuracy_m==40.0);
+            } else {
+                CHECK(rule==runtime::BETA_ACC_RULE_NORMAL && s.accuracy_m==40.0);
+                if(s.speed_mps>9.0) ++fast_40;
+                if(ms>=go2) ++moving_after;
+            }
+        };
+        run(p,plan);
+        if(!(dropped==0 && still>=140 && moving_after>30 && fast_40>100))
+            std::fprintf(stderr,"variant %u: dropped %u still %u after %u fast %u crawl %u switches %u\n",
+                         v,dropped,still,moving_after,fast_40,crawl_a,switches);
+        CHECK(dropped==0 && still>=140 && moving_after>30 && fast_40>100);
+        if(variants[v].stop_rule) CHECK(still_a==still);
+        if(variants[v].crawl>0) CHECK(crawl_a>=15);
+        // Default and H_max variants never leave rule NORMAL; the A* variant
+        // switches NORMAL -> STOPPED -> NORMAL twice (plus crawl phases).
+        // The production variant stays below its 150 m H_max here.
+        if(v==4) CHECK(honest_max<150.0);
+        if(!variants[v].stop_rule) CHECK(switches==1);
+        else if(variants[v].crawl==0) CHECK(switches==5);
+        else CHECK(switches>=5);
+    }
+}
 // G2 investigation 2026-10-09: the yaw window mean is the exact sum/count, not
 // the integer-truncated value (a 2048.5 mean must turn the heading).
 static void yaw_window_mean_is_exact() {
@@ -1213,6 +1483,10 @@ int main() {
     reverse_then_forward_does_not_seed_backwards();
     back_to_back_tunnels_keep_the_heading();
     standstill_in_a_tunnel_episode_keeps_a_bearing();
+    stopped_accuracy_rules();
+    stopped_accuracy_latch();
+    long_stop_keeps_the_stopped_accuracy();
+    stopped_accuracy_switches_at_stop_and_restart();
     yaw_window_mean_is_exact();
     reverse_latch_contradiction_withdraws();
     pending_gps_caps_and_hides();

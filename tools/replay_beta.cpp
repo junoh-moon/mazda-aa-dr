@@ -392,8 +392,21 @@ struct Options {
     bool sweep, check, real_only;
     uint64_t cadence_ns, grace_ns, truth_lag_ns, truth_gap_ns;
     double course_min_kmh, coverage_min, poll_hdop;
+    // Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md); NAN keeps
+    // the product default of beta_profile_tunnel().
+    double stopped_accuracy_m, stopped_honest_max_m, crawl_speed_mps;
+    bool stopped_rule_set() const {
+        return !std::isnan(stopped_accuracy_m) || !std::isnan(stopped_honest_max_m) || !std::isnan(crawl_speed_mps);
+    }
 };
 Options opt;
+R::BetaProfile bridge_profile() {
+    R::BetaProfile p = R::beta_profile_tunnel();
+    if (!std::isnan(opt.stopped_accuracy_m)) p.stopped_accuracy_m = opt.stopped_accuracy_m;
+    if (!std::isnan(opt.stopped_honest_max_m)) p.stopped_honest_max_m = opt.stopped_honest_max_m;
+    if (!std::isnan(opt.crawl_speed_mps)) p.crawl_speed_mps = opt.crawl_speed_mps;
+    return p;
+}
 
 // --------------------------------------------------- product replay ----
 Input in;
@@ -565,6 +578,9 @@ bool start_product(uint64_t t) {
         return false;
     static R::BetaController controller(shared);
     beta = &controller;
+    // Replay-only: the controller/bridge use the tunnel profile with the
+    // given stopped-accuracy constants (the pipeline does not read them).
+    if (opt.stopped_rule_set() && !controller.set_profile(bridge_profile())) return false;
     g_now = t;
     return beta->enable(journal, t, 0) && A::mode() == A::BETA;
 }
@@ -986,6 +1002,7 @@ void usage() {
         "                   [--truth-gap-ms N] [--course-min-kmh K] [--coverage-min F]\n"
         "                   [--boot-id ID] [--poll-hdop H] [--position-source auto|adapter|poll] [--report FILE.json] [--csv FILE.csv] [--check]\n"
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
+        "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "Times are journal monotonic seconds. Without --t0/--sweep only recorded\n"
         "(real) outages are replayed.\n");
     exit(2);
@@ -999,6 +1016,7 @@ int main(int argc, char** argv) {
     opt.truth_gap_ns = 3000000000ULL; opt.course_min_kmh = 15; opt.coverage_min = 0.95;
     opt.poll_hdop = 1.0; opt.position_source = "auto";
     opt.engagement = "continuous";
+    opt.stopped_accuracy_m = opt.stopped_honest_max_m = opt.crawl_speed_mps = NAN;
     opt.durations = parse_list("10,20,30,45,60");
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -1032,6 +1050,9 @@ int main(int argc, char** argv) {
         }
         else if (a == "--self-test-corrupt" && more) opt.corrupt = argv[++i];
         else if (a == "--journal" && more) opt.journal = argv[++i];
+        else if (a == "--stopped-accuracy-m" && more) opt.stopped_accuracy_m = atof(argv[++i]);
+        else if (a == "--stopped-honest-max-m" && more) opt.stopped_honest_max_m = atof(argv[++i]);
+        else if (a == "--crawl-speed-mps" && more) opt.crawl_speed_mps = atof(argv[++i]);
         else if (a == "--check") opt.check = true;
         else if (a == "--real-only") opt.real_only = true;
         else usage();
@@ -1206,7 +1227,16 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < opt.durations.size(); ++i) j += (i ? "," : "") + num(opt.durations[i]);
     j += "],\"cadence_ms\":" + num(opt.cadence_ns / 1e6) + ",\"grace_s\":" + num(opt.grace_ns / 1e9) +
          ",\"truth_lag_ms\":" + num(opt.truth_lag_ns / 1e6) + ",\"course_min_kmh\":" + num(opt.course_min_kmh) +
-         ",\"coverage_min\":" + num(opt.coverage_min) + ",\"poll_hdop_assumed\":" + num(opt.poll_hdop) + "},";
+         ",\"coverage_min\":" + num(opt.coverage_min) + ",\"poll_hdop_assumed\":" + num(opt.poll_hdop);
+    // Present only when a stopped-accuracy constant was given (default
+    // reports stay byte-identical).
+    if (opt.stopped_rule_set()) {
+        const R::BetaProfile bp = bridge_profile();
+        j += ",\"stopped_accuracy\":{\"stopped_accuracy_m\":" + num(bp.stopped_accuracy_m) +
+             ",\"stopped_honest_max_m\":" + (std::isfinite(bp.stopped_honest_max_m) ? num(bp.stopped_honest_max_m) : std::string("null")) +
+             ",\"crawl_speed_mps\":" + num(bp.crawl_speed_mps) + "}";
+    }
+    j += "},";
     j += "\"windows\":{\"requested\":" + std::to_string(windows.size()) + ",\"skipped_no_gps\":" +
          std::to_string(skipped_no_gps) + ",\"beyond_recording\":" + std::to_string(windows_unreached) +
          ",\"evaluated\":" + std::to_string(window_results.size() - crashed) + ",\"engaged\":" +

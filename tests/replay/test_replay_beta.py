@@ -48,14 +48,14 @@ def meters_per_degree(lat):
     return m, p
 
 
-def truth():
+def truth(speed=speed_kmh, end=END):
     """Integrated truth at 10 ms: list of (t, lat, lon, heading_deg, kmh)."""
     out, north, east, heading, dt = [], 0.0, 0.0, math.radians(90), 0.01
-    for i in range(int(END / dt) + 1):
+    for i in range(int(end / dt) + 1):
         t = i * dt
         m, p = meters_per_degree(LAT0)
-        out.append((t, LAT0 + north / m, LON0 + east / p, math.degrees(heading) % 360, speed_kmh(t)))
-        v = speed_kmh(t) / 3.6
+        out.append((t, LAT0 + north / m, LON0 + east / p, math.degrees(heading) % 360, speed(t)))
+        v = speed(t) / 3.6
         mid = heading + yaw_rate(t) * dt / 2
         north += v * math.cos(mid) * dt
         east += v * math.sin(mid) * dt
@@ -63,14 +63,14 @@ def truth():
     return out
 
 
-def write_fixture(directory, tunnel=True):
-    states = truth()
+def write_fixture(directory, tunnel=True, speed=speed_kmh, window=TUNNEL, end=END):
+    states = truth(speed, end)
     ns = lambda t: int(round(t * 1e9))
     with open(os.path.join(directory, "trace.0.jsonl"), "w") as f:
         f.write(json.dumps({"kind": "boot", "schema": 1, "pid": 1, "mono_ns": ns(0.5), "boot_id": BOOT,
                             "mode": 5, "assist_ready": False}, separators=(",", ":")) + "\n")
         events, seq = [], 0
-        for k in range(100, int(END * 10) + 1):  # 10 Hz from 10.0 s
+        for k in range(100, int(end * 10) + 1):  # 10 Hz from 10.0 s
             t = k / 10.0 + 0.003
             if k in (120, 121):
                 # Change-only REVERSE messages while the yaw stream runs: reverse
@@ -80,7 +80,7 @@ def write_fixture(directory, tunnel=True):
                 # dropped by the MISSING_SENSOR reset and never latch.
                 seq += 1
                 events.append([3, seq, ns(t - 0.05), 0, 0, 0, 0, 0, 0, 1 if k == 120 else 0])
-            kmh = speed_kmh(t)
+            kmh = speed(t)
             seq += 1
             raw = int(round(kmh * 100 + 10000))
             events.append([1, seq, ns(t), 0, raw, raw, raw, raw, 0, 0])
@@ -97,7 +97,7 @@ def write_fixture(directory, tunnel=True):
         f.write(json.dumps({"stream": "collector", "kind": "collector_boot", "schema": 1, "boot_id": BOOT},
                            separators=(",", ":")) + "\n")
         frozen = None
-        for k in range(2, int(END)):
+        for k in range(2, int(end)):
             t = k + 0.37
             s = states[int(round(t / 0.01))]
             row = {"stream": "collector", "kind": "position_poll", "receipt_ns": ns(t), "mode": 1,
@@ -107,7 +107,7 @@ def write_fixture(directory, tunnel=True):
                 # No fix since boot (shadow.5): mode 1, utc_s 0 and a stored
                 # stale fix about 300 m away, while the car already moves.
                 row.update(utc_s=0, lat=LAT0 + 0.0027, lon=LON0, heading=335, kmh=4)
-            elif tunnel and TUNNEL[0] <= t < TUNNEL[1]:
+            elif tunnel and window[0] <= t < window[1]:
                 row = dict(frozen, receipt_ns=ns(t), mode=0)
             else:
                 frozen = row
@@ -270,6 +270,125 @@ class ReplayBetaSynthetic(unittest.TestCase):
                 self.assertTrue(codes <= {1, 2, 3, 4, 5}, codes)
                 self.assertIn(1, codes)
 
+
+# Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md): a 70 s tunnel
+# with a 15 s standstill once the honest budget is above 40 m (and below 150 m).
+STOP_TUNNEL = (200.0, 270.0)
+STOP = (232.0, 247.0)
+STOP_END = 300.0
+
+
+def stop_speed_kmh(t):
+    if STOP[0] <= t < STOP[1]:
+        return 0.0
+    if STOP_TUNNEL[0] <= t < STOP_TUNNEL[1]:
+        return 40.0
+    return speed_kmh(t) if t < TUNNEL[0] else 40.0
+
+
+@unittest.skipUnless(os.access(TOOL, os.X_OK), "build/replay_beta not built (make test-replay-beta)")
+class ReplayBetaStoppedAccuracy(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="mx5dr-replay-stop-")
+        cls.trip = os.path.join(cls.tmp.name, "logs")
+        os.mkdir(cls.trip)
+        write_fixture(cls.trip, speed=stop_speed_kmh, window=STOP_TUNNEL, end=STOP_END)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def run_tool(self, *args):
+        report = os.path.join(self.tmp.name, "report.json")
+        rows = os.path.join(self.tmp.name, "sends.csv")
+        journal = os.path.join(self.tmp.name, "beta.jsonl")
+        p = subprocess.run([TOOL, "--trip", self.trip, "--real-only", "--check", "--report", report, "--csv", rows,
+                            "--journal", journal] + list(args),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=300)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(report) as f:
+            data = json.load(f)
+        with open(rows) as f:
+            replaced = [r for r in csv.DictReader(f) if r["choice"] == "3"]
+        with open(journal) as f:
+            beta = [b for b in map(json.loads, f) if b.get("kind") in ("beta_state", "beta_summary")]
+        return data, replaced, beta
+
+    def phases(self, replaced):
+        still = [r for r in replaced if float(r["speed_mps"]) == 0.0]
+        before = [r for r in replaced if STOP[0] - 8 <= float(r["t_s"]) < STOP[0]]
+        after = [r for r in replaced if STOP[1] + 2 <= float(r["t_s"]) < STOP_TUNNEL[1]]
+        self.assertTrue(len(still) >= 12 and before and after, (len(still), len(before), len(after)))
+        self.assertTrue(all(STOP[0] <= float(r["t_s"]) < STOP[1] + 1.5 for r in still))
+        return still, before, after
+
+    def test_production_profile_reports_25_m_while_stopped_and_40_m_after_the_restart(self):
+        # beta_profile_tunnel(): A* 25 m up to an honest budget of 150 m, crawl off.
+        r, replaced, beta = self.run_tool()
+        self.assertEqual(r["check"], "pass")
+        self.assertNotIn("stopped_accuracy", r["config"])
+        still, before, after = self.phases(replaced)
+        self.assertTrue(all(float(row["accuracy_m"]) == 25.0 for row in still), still)
+        self.assertTrue(all(float(row["accuracy_m"]) == 40.0 for row in before + after))
+        # acc_rule appears only while the stopped rule held (rule 1 rows are
+        # under-reports; the honest budget stays in accuracy_honest_m).
+        self.assertTrue(all(b.get("acc_rule", 0) in (0, 1) for b in beta))
+        self.assertTrue(all("acc_rule" not in b or b["acc_rule"] != 0 or "acc_h0" in b for b in beta))
+        stopped = [b for b in beta if b["kind"] == "beta_summary" and b.get("acc_rule") == 1]
+        self.assertGreaterEqual(len(stopped), 10)
+        self.assertTrue(all(b["accuracy_m"] == 25 and 40 < b["accuracy_honest_m"] <= 150 for b in stopped))
+        self.assertTrue(any(b["kind"] == "beta_summary" and "acc_rule" not in b and b["state"] == "ENGAGED"
+                            and b["accuracy_m"] == 40 for b in beta))
+
+    def stop_rows(self, beta):
+        return [b for b in beta if b["kind"] == "beta_summary" and "acc_h0" in b]
+
+    def test_stop_decision_is_latched_for_the_whole_stop(self):
+        # Review H1: the honest budget grows during the stop; the H_max
+        # decision taken at the stop start (journaled as acc_h0) holds.
+        _, _, beta = self.run_tool()
+        rows = self.stop_rows(beta)
+        self.assertGreaterEqual(len(rows), 10)
+        h0 = rows[0]["acc_h0"]
+        self.assertTrue(all(b["acc_h0"] == h0 and b["acc_rule"] == 1 for b in rows))
+        h_end = max(b["accuracy_honest_m"] for b in rows)
+        self.assertGreater(h_end, h0 + 2)
+        # H_max between the start and the end budget: still 25 m for the whole stop.
+        mid = "%.2f" % ((h0 + h_end) / 2)
+        _, replaced, beta = self.run_tool("--stopped-honest-max-m", mid)
+        still, before, after = self.phases(replaced)
+        self.assertTrue(all(float(row["accuracy_m"]) == 25.0 for row in still), still)
+        self.assertTrue(any(b["accuracy_honest_m"] > float(mid) and b["accuracy_m"] == 25 for b in self.stop_rows(beta)))
+        # H_max just below the start budget: 40 m for the whole stop, acc_rule 0 with acc_h0.
+        _, replaced, beta = self.run_tool("--stopped-honest-max-m", "%.2f" % (h0 - 0.05))
+        still, before, after = self.phases(replaced)
+        self.assertTrue(all(float(row["accuracy_m"]) == 40.0 for row in still))
+        rows = self.stop_rows(beta)
+        self.assertTrue(rows and all(b["acc_rule"] == 0 and b["accuracy_m"] == 40 for b in rows))
+
+    def test_neutral_profile_keeps_40_m_and_journal_rows(self):
+        r, replaced, beta = self.run_tool("--stopped-accuracy-m", "40", "--stopped-honest-max-m", "inf")
+        self.assertEqual(r["check"], "pass")
+        self.assertEqual(r["config"]["stopped_accuracy"],
+                         dict(stopped_accuracy_m=40, stopped_honest_max_m=None, crawl_speed_mps=0))
+        still, before, after = self.phases(replaced)
+        for row in still + before + after:
+            self.assertEqual(float(row["accuracy_m"]), 40.0, row)
+        self.assertTrue(beta and all("acc_rule" not in b for b in beta))
+
+    def test_other_stopped_accuracy_is_a_profile_value(self):
+        r, replaced, beta = self.run_tool("--stopped-accuracy-m", "20", "--stopped-honest-max-m", "inf")
+        still, before, after = self.phases(replaced)
+        self.assertTrue(all(float(row["accuracy_m"]) == 20.0 for row in still), still)
+        self.assertTrue(all(float(row["accuracy_m"]) == 40.0 for row in before + after))
+
+    def test_honest_max_keeps_40_m_on_a_drifted_stop(self):
+        r, replaced, beta = self.run_tool("--stopped-honest-max-m", "35")
+        self.assertEqual(r["config"]["stopped_accuracy"]["stopped_honest_max_m"], 35)
+        still, before, after = self.phases(replaced)
+        self.assertTrue(all(float(row["accuracy_m"]) == 40.0 for row in still + before + after))
+        self.assertTrue(all(b.get("acc_rule", 0) == 0 for b in beta))
 
 if __name__ == "__main__":
     unittest.main()

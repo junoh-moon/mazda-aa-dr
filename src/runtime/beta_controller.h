@@ -129,7 +129,7 @@ public:
           counters_(),have_position_(false),position_mode_(-1),position_generation_(0),
           position_class_(adapter::POSITION_UNDECODED),
           seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
-          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_honest_accuracy_(-1),last_valid_until_(0),
+          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_honest_accuracy_(-1),last_acc_rule_(BETA_ACC_RULE_NORMAL),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
           last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
           seen_latch_clears_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
@@ -137,6 +137,13 @@ public:
           last_position_ns_(0),last_send_ns_(0),position_gap_(false),send_gap_(false),
           position_gap_seen_ns_(0),send_gap_seen_ns_(0),cadence_fences_(0) {}
     BetaState state() const { return state_; }
+    // Replay/test hook: the product keeps beta_profile_tunnel(). Only before
+    // enable(); the pipeline's own profile is set by Pipeline::enable_beta.
+    bool set_profile(const BetaProfile& p) {
+        if(state_!=BETA_DISABLED || strcmp(reason_,"not_enabled")) return false;
+        profile_=p;return true;
+    }
+    const BetaProfile& profile() const { return profile_; }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
     // Live means BETA may still publish in this boot.
@@ -281,6 +288,12 @@ private:
     CoreBridgeResult last_bridge_;
     double last_accuracy_;
     double last_honest_accuracy_; // honest budget at lease end; last_accuracy_ may be clamped to 40 m
+    int last_acc_rule_;            // BetaAccuracyRule of the last publication (journaled when not NORMAL)
+    // Stopped accuracy: the bridge's stop-episode latch (H_max decided once
+    // per stop) and its value at the last publication (journaled as acc_h0).
+    // Released at every transition other than into ENGAGED (new outage, GPS
+    // return, withdrawal) and by the bridge at a moving-form publication.
+    BetaStopLatch stop_latch_,last_stop_;
     uint64_t last_valid_until_,last_frontier_;
     const char* last_skip_;
     const char* payload_;          // "dr", "speed_only" or "none": what the candidate is
@@ -531,9 +544,10 @@ private:
             withdrawn="sensor_silence";
         adapter::DrSnapshot s=adapter::DrSnapshot();
         double honest=0.0;
+        int rule=BETA_ACC_RULE_NORMAL;
         if(!withdrawn) {
             const BetaModelInput in=nav.model_publication(now);
-            last_bridge_=map_model_publication(in,profile_,&s,&honest);
+            last_bridge_=map_model_publication(in,profile_,&s,&honest,&rule,&stop_latch_);
             // The MODEL sample-age guard (250 ms of the frontier) can fire
             // before the 300 ms receipt silence; both mean sensor silence.
             if(last_bridge_!=CORE_BRIDGE_OK)
@@ -569,7 +583,7 @@ private:
         if(skip) { last_skip_=skip;++counters_.publish_skipped;return; }
         ++counters_.publications;last_skip_="none";payload_="dr";
         last_accuracy_=s.accuracy_m;last_valid_until_=s.valid_until_mono_ns;
-        last_honest_accuracy_=honest;
+        last_honest_accuracy_=honest;last_acc_rule_=rule;last_stop_=stop_latch_;
         last_frontier_=s.frontier_mono_ns;
         if(state_==BETA_GPS_LOST)transition(j,now,BETA_ENGAGED,"published");
     }
@@ -617,6 +631,17 @@ private:
         last_speed_=s.speed_mps;last_valid_until_=s.valid_until_mono_ns;last_frontier_=s.frontier_mono_ns;
         if(state_==BETA_NO_FIX)transition(j,now,BETA_SPEED_ENGAGED,"speed_published");
     }
+    // ",\"acc_rule\":N" while a stopped/crawl rule held at the last
+    // publication, plus ",\"acc_h0\":H" (honest budget at the stop start)
+    // while a stop episode was decided (also rule 0: a stop above H_max)
+    // (validation/STOPPED_ACCURACY_2026-10-10.md). Rows without a standstill
+    // and every row of the neutral profile stay byte-identical.
+    void acc_rule_field(char out[48]) const {
+        out[0]=0;
+        if(last_stop_.active)
+            snprintf(out,48,",\"acc_rule\":%d,\"acc_h0\":%.2f",last_acc_rule_,last_stop_.honest0_m);
+        else if(last_acc_rule_!=BETA_ACC_RULE_NORMAL)snprintf(out,48,",\"acc_rule\":%d",last_acc_rule_);
+    }
     static void number_or_null(double v,char out[48]) {
         if(std::isfinite(v) && v>=0)snprintf(out,48,"%.17g",v);else strcpy(out,"null");
     }
@@ -629,6 +654,7 @@ private:
         char original_accuracy[48],speed[48],honest_acc[48];
         number_or_null(last_original_accuracy_,original_accuracy);number_or_null(last_speed_,speed);
         number_or_null(last_honest_accuracy_,honest_acc);
+        char acc_rule[48];acc_rule_field(acc_rule);
         char line[900];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"beta_state\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
@@ -637,7 +663,7 @@ private:
             "\"bridge\":\"%s\",\"accuracy_m\":%s,\"valid_until_ns\":%llu,"
             "\"position_class\":\"%s\",\"payload\":\"%s\",\"original_utc_s\":%llu,"
             "\"original_accuracy_m\":%s,\"speed_mps\":%s,\"core_result\":\"%s\","
-            "\"accuracy_honest_m\":%s}",
+            "\"accuracy_honest_m\":%s%s}",
             (unsigned long long)now,beta_state_name(from),beta_state_name(to),reason,
             unsigned(adapter::mode()),adapter::generation(),
             shared_.source_epoch.load(std::memory_order_acquire),
@@ -645,10 +671,11 @@ private:
             adapter::beta_held()?"true":"false",core_bridge_result_name(last_bridge_),accuracy,
             (unsigned long long)last_valid_until_,adapter::position_class_name(position_class_),
             payload_,(unsigned long long)last_original_utc_,original_accuracy,speed,
-            mx5_dr_result_name(last_core_),honest_acc);
+            mx5_dr_result_name(last_core_),honest_acc,acc_rule);
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
         // A new outage starts without the previous episode's honest budget.
-        if(to==BETA_GPS_LOST)last_honest_accuracy_=-1;
+        if(to==BETA_GPS_LOST) { last_honest_accuracy_=-1;last_acc_rule_=BETA_ACC_RULE_NORMAL;last_stop_=BetaStopLatch(); }
+        if(to!=BETA_ENGAGED) stop_latch_=BetaStopLatch();
     }
     // At most 1 Hz (forced rows bypass the limit once, e.g. at stop).
     template<class J> void summary(J& j,uint64_t now,bool force) {
@@ -660,6 +687,7 @@ private:
         char original_accuracy[48],speed[48],honest_acc[48];
         number_or_null(last_original_accuracy_,original_accuracy);number_or_null(last_speed_,speed);
         number_or_null(last_honest_accuracy_,honest_acc);
+        char acc_rule[48];acc_rule_field(acc_rule);
         char line[1300];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"beta_summary\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
@@ -672,7 +700,7 @@ private:
             "\"position_class\":\"%s\",\"payload\":\"%s\",\"original_utc_s\":%llu,"
             "\"original_accuracy_m\":%s,\"speed_mps\":%s,\"speed_publications\":%llu,"
             "\"speed_overlay_sends\":%llu,\"speed_overlay_nonzero\":%llu,\"original_nofix_sends\":%llu,"
-            "\"accuracy_honest_m\":%s}",
+            "\"accuracy_honest_m\":%s%s}",
             (unsigned long long)now,beta_state_name(state_),reason_,unsigned(adapter::mode()),
             adapter::beta_held()?"true":"false",
             (unsigned long long)counters_.publications,(unsigned long long)counters_.publish_skipped,
@@ -687,7 +715,7 @@ private:
             original_accuracy,speed,(unsigned long long)counters_.speed_publications,
             (unsigned long long)counters_.speed_overlay_sends,
             (unsigned long long)counters_.speed_overlay_nonzero,
-            (unsigned long long)counters_.original_nofix_sends,honest_acc);
+            (unsigned long long)counters_.original_nofix_sends,honest_acc,acc_rule);
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
 };

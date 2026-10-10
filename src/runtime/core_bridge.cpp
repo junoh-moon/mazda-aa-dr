@@ -120,7 +120,9 @@ CoreBridgeResult prepare_core_publication(const mx5_dr_core& core,
     return CORE_BRIDGE_OK;
 }
 CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfile& p,
-                                      adapter::DrSnapshot* out,double* honest_accuracy_m) {
+                                      adapter::DrSnapshot* out,double* honest_accuracy_m,
+                                      int* accuracy_rule,BetaStopLatch* stop_latch) {
+    if (accuracy_rule) *accuracy_rule=BETA_ACC_RULE_NORMAL;
     if (!out) return CORE_BRIDGE_NO_OUTPUT;
     if (honest_accuracy_m) *honest_accuracy_m=0.0;
     *out=adapter::DrSnapshot();
@@ -141,7 +143,11 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
         !std::isfinite(p.accuracy_max_m) || !nonnegative(p.speed_error_mps) ||
         !nonnegative(p.yaw_error_rad_s) || !(p.heading_budget_max_rad>0.0) ||
         !std::isfinite(p.heading_budget_max_rad) || !bounded(p.duration_max_s,duration_cap) ||
-        p.duration_max_s==0.0 || !bounded(p.distance_max_m,distance_cap) || p.distance_max_m==0.0)
+        p.duration_max_s==0.0 || !bounded(p.distance_max_m,distance_cap) || p.distance_max_m==0.0 ||
+        // Stopped accuracy: A* in (0, inf) (clamped to accuracy_max_m below),
+        // H_max >= 0 (may be +infinity), v_c finite and >= 0.
+        !(p.stopped_accuracy_m>0.0) || !std::isfinite(p.stopped_accuracy_m) ||
+        !(p.stopped_honest_max_m>=0.0) || !nonnegative(p.crawl_speed_mps))
         return CORE_BRIDGE_LIMIT;
     if (!s.frontier_ns || !s.derived_utc_ns || in.query_mono_ns<s.frontier_ns ||
         in.now_mono_ns<s.frontier_ns) return CORE_BRIDGE_TIME;
@@ -202,10 +208,34 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
     mapped.ready=true; mapped.limits_ok=true; mapped.stopped=hold_bearing ? false : s.stopped!=0;
     // BETA is not a qualification: these external claims stay false.
     mapped.profile_verified=false; mapped.input_quality_verified=false;
-    mapped.accuracy_m=accuracy>p.accuracy_max_m?p.accuracy_max_m:accuracy; mapped.beta=true;
+    // Stopped accuracy (experiments 8/9; validation/STOPPED_ACCURACY_2026-10-10.md):
+    // rule STOPPED in the hold-bearing form, rule CRAWL for a moving estimate
+    // below crawl_speed_mps; both only when the honest budget <= H_max. For a
+    // stop the H_max decision is latched at its first publication (see
+    // core_bridge.h). The ceiling is min(stopped_accuracy_m, accuracy_max_m);
+    // the reported value is never above the honest budget, so it is below it
+    // only when A* < honest (the deliberate, journaled under-report).
+    int rule=BETA_ACC_RULE_NORMAL;
+    double ceiling=p.accuracy_max_m;
+    BetaStopLatch latch;   // released unless this is a decided stop
+    if (beta_stopped_rule_enabled(p)) {
+        if (hold_bearing) {
+            if (stop_latch && stop_latch->active && stop_latch->anchor_id==s.anchor_id) latch=*stop_latch;
+            else {
+                latch.active=true; latch.allowed=accuracy<=p.stopped_honest_max_m;
+                latch.honest0_m=accuracy; latch.anchor_id=s.anchor_id;
+            }
+            if (latch.allowed) rule=BETA_ACC_RULE_STOPPED;
+        } else if (s.speed_mps>0.0 && s.speed_mps<p.crawl_speed_mps && accuracy<=p.stopped_honest_max_m)
+            rule=BETA_ACC_RULE_CRAWL;
+        if (rule!=BETA_ACC_RULE_NORMAL && p.stopped_accuracy_m<ceiling) ceiling=p.stopped_accuracy_m;
+    }
+    if (stop_latch) *stop_latch=latch;
+    mapped.accuracy_m=accuracy>ceiling?ceiling:accuracy; mapped.beta=true;
     uint8_t bytes[48];
     if (!adapter::encode_location(mapped,bytes)) return CORE_BRIDGE_NUMERIC;
     *out=mapped;
+    if (accuracy_rule) *accuracy_rule=rule;
     return CORE_BRIDGE_OK;
 }
 const char* core_bridge_result_name(CoreBridgeResult r) {
