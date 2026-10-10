@@ -31,12 +31,19 @@ unevaluated. Package versions (GMS, Play Store, Android Auto, Naver) did not cha
 
 ## Ranked hypotheses
 
-1. **Guidance-start procedure (established, sufficient alone).** Two blind taps at an obsolete coordinate, no destination-row tap, no
-   popup dismissal, no gate. Guidance could not start; this explains "no guidance at t=21" in all 9 attempts.
-2. **15 m first fixes at a cold session do not replace the phone's own location (supported, not proven).** Explains "map stayed at the
-   phone's location" through the whole run including the 15 m motion phase. Alternatives not separated by the data: fixes sent before the
-   projection was ready (B3/B1 timing), or a location channel problem; B2-r1-a2 started its run file about 16 s after the DHU start, which argues against
-   timing alone.
+1. **15 m first fixes (best supported by the data, not proven).** Every one of the 130 `location` lines in B2-r1 (and PRIME) carries accuracy
+   15 m. The proven guidance-start preamble shared by experiments 6, 7, 8 and 9 (`setup-template.txt`, byte copies) sends fixes with accuracy 5 m
+   before and after `tap 200 50` / `tap 345 145`. Experiment 8 ST2 accepted 15 m only after a synthetic position was already established. With
+   15 m the injected position probably never replaced the phone's own location: this explains "the map stayed at the phone's location through the
+   whole run", and then the two taps (which are valid only on the screen state the 5 m preamble produces) hit the wrong screen, so no guidance at t=21.
+   CORRECTION (2026-10-11, after reading the full upload): an earlier version of this record called the taps themselves a blind design error
+   ("established"). That was wrong: the same two taps are the proven setup of experiments 6-9. What v1 changed was the accuracy (15 m), putting
+   the taps inside the measured run, and cold-starting Naver every round.
+2. **Cold-start screen state (plausible, not separated).** v1 force-stops Naver and restarts DHU every round; experiments 6-9 ran the preamble on
+   a warm, prepared app. The executing agent observed that a cold map has the search icon at (600,44) and that the recent destination had to be
+   selected at about (200,130); a different first screen (resume prompt, 'long route recalculation' window, overlay) would make the same taps miss.
+   Alternatives not separated by the data: fixes sent before the projection was ready (B3/B1 timing; B2-r1-a2 started its run file about 16 s after
+   the DHU start, which argues against timing alone), or a location channel problem.
 3. **Contributors (fixed or recorded, not root causes):** non-TTY controller (a1 only), session-readiness timing, the Gemini overlay.
 4. **Ruled out by the data:** a package update (no change), Naver cold start as such (exp7 H6 worked), the 30 s wait (exp7 used 30-47 s),
    the controller as the only cause (native replay failed the same way). P0 being far from the prepared destination is not a cause of
