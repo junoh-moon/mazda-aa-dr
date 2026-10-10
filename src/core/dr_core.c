@@ -55,6 +55,7 @@ mx5_dr_config mx5_dr_default_config(void) {
 static int valid_config(const mx5_dr_config *p, int allow_extended) {
     const int ext = p && p->extended_limits == 1;
     if (p && (p->extended_limits > 1 || p->reserved_zero)) return 0;
+    if (p && (p->hold_stopped_yaw > 1 || (p->hold_stopped_yaw && !allow_extended))) return 0;
     if (ext && !allow_extended) return 0;
     return p && finite_value(p->duration_max_s) && p->duration_max_s > 0.0 && p->duration_max_s <= (ext ? EXT_DURATION_MAX_S : 60.0) &&
         finite_value(p->distance_max_m) && p->distance_max_m > 0.0 && p->distance_max_m <= (ext ? EXT_DISTANCE_MAX_M : 1500.0) &&
@@ -259,7 +260,12 @@ mx5_dr_result mx5_dr_step(mx5_dr_core *c, const mx5_dr_interval *i) {
     s.distance_m += i->speed_mps*remaining;
     if (s.distance_m > c->config.distance_max_m) return fail(c,MX5_DR_E_LIMIT);
     if (s.stopped && i->speed_mps >= c->config.stop_exit_mps) { s.stopped=0; dwell=0.0; }
-    if (s.stopped && fabs(i->yaw_rad_s)>c->config.stop_yaw_max_rad_s) return fail(c,MX5_DR_E_FRAME);
+    /* Tunnel BETA can see a closed yaw window before the first nonzero
+     * wheel event. Keep the established stop and charge the held rotation
+     * to the existing uncertainty budget below. Never mask moving input. */
+    if (s.stopped && fabs(i->yaw_rad_s)>c->config.stop_yaw_max_rad_s &&
+        !(c->config.hold_stopped_yaw && c->domain==MX5_DR_MODEL_DOMAIN && i->speed_mps==0.0))
+        return fail(c,MX5_DR_E_FRAME);
     while (remaining > 1e-12) {
         double dt=minimum(remaining,c->config.integration_step_s), signed_v, angle, sinc_value, east, north;
         int candidate=i->speed_mps <= c->config.stop_enter_mps && fabs(i->yaw_rad_s)<=c->config.stop_yaw_max_rad_s;

@@ -1423,6 +1423,153 @@ static void late_arrival_output_stays_bounded() {
     const uint64_t resets=q.status().resets;
     CHECK(q.enqueue_raw(behind)!=PIPELINE_OK && q.status().resets==resets+1);
 }
+static void tunnel_zero_wheel_yaw_holds_heading() {
+    // Synthetic warm-up/anchor, followed by the trip6 stop/restart interval
+    // inputs (no vehicle position). The mean yaw window precedes the first
+    // nonzero wheel event by 99.296 ms; reverse is a valid latched 1.
+    const BetaProfile profile=runtime::beta_profile_tunnel();
+    mx5_dr_config cfg=runtime::beta_core_config(profile);
+    mx5_dr_context x={1,1,1};
+    mx5_dr_core c;
+    CHECK(mx5_dr_init_model(&c,&cfg,x)==MX5_DR_OK);
+    mx5_dr_anchor a=mx5_dr_anchor(); a.context=x; a.anchor_id=1; a.position_seq=1;
+    a.measured_ns=3356860805736ULL; a.utc_ns=1700000000000000000ULL;
+    a.quality=MX5_DR_MODEL; a.heading_error_rad=profile.heading_error_rad;
+    a.position_error_m=profile.anchor_error_m;
+    CHECK(mx5_dr_seed(&c,&a)==MX5_DR_OK);
+    ++x.generation;
+    CHECK(mx5_dr_control(&c,MX5_DR_GAP,x,2)==MX5_DR_OK);
+    const auto step=[&](uint64_t end,double speed,double rate) {
+        mx5_dr_interval i=mx5_dr_interval(); i.context=x;
+        i.interval_seq=c.last_interval.interval_seq+1;
+        i.start_ns=c.estimate.frontier_ns; i.end_ns=end; i.received_ns=end;
+        i.speed_mps=speed; i.yaw_rad_s=rate; i.reverse_active=1;
+        i.raw_yaw=2048; i.yaw_count=5;
+        mx5_dr_evidence* ev[]={&i.speed,&i.yaw,&i.reverse};
+        for(unsigned n=0;n<3;++n) {
+            ev[n]->source_id=n+1; ev[n]->source_epoch=1;
+            ev[n]->producer_seq=i.interval_seq;
+            ev[n]->measured_ns=ev[n]->received_ns=i.start_ns;
+            ev[n]->lease_until_ns=i.start_ns+250000000ULL;
+            ev[n]->quality=MX5_DR_MODEL; ev[n]->freshness=MX5_DR_MODEL_TIME;
+        }
+        return i;
+    };
+    for(unsigned n=0;n<20;++n) {
+        const mx5_dr_interval i=step(c.estimate.frontier_ns+100000000ULL,0,0);
+        CHECK(mx5_dr_step(&c,&i)==MX5_DR_OK);
+    }
+    CHECK(c.estimate.stopped && c.estimate.frontier_ns==3358860805736ULL);
+    const double heading=c.estimate.body_heading_rad, budget=c.estimate.heading_budget_rad;
+    const double rate=(10043.0/5-2048)*research_model_profile().yaw_rad_per_count;
+    CHECK(std::fabs(rate-0.025949431)<1e-12);
+    mx5_dr_interval i=step(3358960101736ULL,0,rate);
+    i.raw_yaw=2008; i.yaw_is_mean=1;
+    i.yaw_window_start_ns=3358860805736ULL; i.yaw_window_end_ns=3358962515402ULL;
+    i.received_ns=i.yaw.received_ns=i.yaw.measured_ns=i.yaw_window_end_ns;
+    // raw wheels [10000,10000,10000,10000], yaw sum/count 10043/5.
+    const mx5_dr_result result=mx5_dr_step(&c,&i);
+    if(result!=MX5_DR_OK) std::fprintf(stderr,"zero-wheel interval: %s\n",mx5_dr_result_name(result));
+    CHECK(result==MX5_DR_OK);
+    CHECK(c.estimate.stopped && c.estimate.model_valid && !c.estimate.valid);
+    CHECK(c.estimate.speed_mps==0 && !c.estimate.has_bearing);
+    CHECK(c.estimate.body_heading_rad==heading && c.estimate.distance_m==0);
+    CHECK(c.estimate.heading_budget_rad>=budget+(std::fabs(rate)+cfg.yaw_error_rad_s)*0.099296-1e-12);
+    // The same yaw window, now with [10000,10015,10000,10013]. Motion
+    // releases the stop immediately and reverse rotates travel bearing by pi.
+    mx5_dr_interval moving=i;
+    ++moving.interval_seq; moving.start_ns=i.end_ns; moving.end_ns=i.yaw_window_end_ns;
+    moving.speed_mps=(0.15+0.13)/4/3.6;
+    ++moving.speed.producer_seq;
+    moving.speed.measured_ns=moving.speed.received_ns=moving.start_ns;
+    moving.speed.lease_until_ns=moving.start_ns+250000000ULL;
+    CHECK(mx5_dr_step(&c,&moving)==MX5_DR_OK);
+    CHECK(!c.estimate.stopped && c.estimate.has_bearing);
+    CHECK(std::fabs(c.estimate.body_heading_rad-heading-rate*0.002413666)<1e-12);
+    CHECK(std::fabs(c.estimate.travel_bearing_rad-c.estimate.body_heading_rad-std::acos(-1.0))<1e-12);
+
+    // Exercise the real navigation path as well. Only the tunnel profile
+    // opts in; the bounded BETA test below keeps its strict E_FRAME check.
+    Pipeline p; init(p); CHECK(p.enable_beta(profile));
+    Plan plan=straight(ANCHOR_MS+6000);
+    plan.wheel=[](unsigned ms){return ms<LOST_MS+400?36.0:0.0;};
+    plan.yaw=[](unsigned ms){return ms<LOST_MS+3000?STRAIGHT:yaw_raw(0.2);};
+    run(p,plan);
+    CHECK(p.beta_core_failure()==MX5_DR_OK);
+    adapter::DrSnapshot out;
+    CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),profile,&out)==runtime::CORE_BRIDGE_OK);
+    CHECK(out.speed_mps==0 && out.travel_bearing_deg==0);
+    CHECK(p.status().core_result==MX5_DR_E_FRAME); // default SHADOW unchanged
+}
+// Body heading of the BETA core estimate (degrees, 0..360).
+static double live_heading(const Pipeline& p,unsigned ms) {
+    return p.model_publication(T(ms)).snapshot.body_heading_rad*180.0/3.14159265358979323846;
+}
+static void tunnel_restart_with_yaw_leading_the_wheels_stays_engaged() {
+    // The 2026-10-10 drive (validation/FRAME_REJECT_RESTART_2026-10-10.md):
+    // a tunnel episode, a 10 s stop with all four wheels zero, reverse
+    // engaged during the stop, then a start while steering where the yaw
+    // rises 300 ms (or 0 ms) before the first wheel pulse. The episode
+    // publishes throughout, the lead rotation is held (not integrated) and
+    // integration resumes with the first wheel movement.
+    for(unsigned lead=0;lead<2;++lead) {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+        const unsigned stop_ms=LOST_MS+2000, go_ms=LOST_MS+12000, yaw_ms=go_ms-(lead?300:0);
+        Plan plan=straight(LOST_MS+16000);
+        plan.reverse.push_back(std::make_pair(LOST_MS+9000,1));
+        plan.wheel=[=](unsigned ms){return ms<stop_ms?36.0:ms<go_ms?0.0:2.0;};
+        plan.yaw=[=](unsigned ms){return ms<yaw_ms?STRAIGHT:yaw_raw(0.2);};
+        unsigned dropped=0,still=0,moving=0;
+        double before=-1,at_go=-1;
+        plan.each=[&](Pipeline& q,unsigned ms) {
+            if(ms<LOST_MS+300) return;
+            if(before<0&&ms>=yaw_ms-200) before=live_heading(q,ms);
+            if(at_go<0&&ms>=go_ms-100) at_go=live_heading(q,ms);
+            adapter::DrSnapshot s;
+            if(runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s)!=
+               runtime::CORE_BRIDGE_OK) { ++dropped; return; }
+            if(s.speed_mps>0.0) ++moving; else ++still;
+        };
+        run(p,plan);
+        CHECK(dropped==0 && still>90 && moving>20);
+        CHECK(p.beta_core_failure()==MX5_DR_OK);
+        CHECK(before>=0 && at_go==before);                         // lead held
+        CHECK(angle_error(live_heading(p,plan.end_ms),before)>30); // then integrated
+    }
+}
+static void tunnel_standstill_yaw_bias_holds_heading() {
+    // A sustained 0.03 rad/s standstill bias for 30 s inside a tunnel
+    // episode: no withdrawal, heading held, honest budget grows.
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(runtime::beta_profile_tunnel()));
+    const unsigned stop_ms=LOST_MS+2000, bias_ms=LOST_MS+5000;
+    Plan plan=straight(bias_ms+30000);
+    plan.wheel=[=](unsigned ms){return ms<stop_ms?36.0:0.0;};
+    plan.yaw=[=](unsigned ms){return ms<bias_ms?STRAIGHT:yaw_raw(0.03);};
+    unsigned dropped=0;
+    double held=-1,honest0=-1,honest1=-1,hb0=-1,hb1=-1;
+    plan.each=[&](Pipeline& q,unsigned ms) {
+        if(ms<LOST_MS+300) return;
+        adapter::DrSnapshot s; double honest=0;
+        if(runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s,&honest)!=
+           runtime::CORE_BRIDGE_OK) { ++dropped; return; }
+        const double hb=q.model_publication(T(ms)).snapshot.heading_budget_rad; // core part
+        if(held<0&&ms>=bias_ms-100) { held=live_heading(q,ms); honest0=honest; hb0=hb; }
+        if(ms>bias_ms) { CHECK(live_heading(q,ms)==held && s.speed_mps==0.0); honest1=honest; hb1=hb; }
+    };
+    run(p,plan);
+    CHECK(dropped==0 && p.beta_core_failure()==MX5_DR_OK && held>=0);
+    // The held rotation |yaw|*dt (raw 2002: 0.0303 rad/s) plus the yaw error
+    // rate over the 30 s is budgeted.
+    const double expected=((2048-2002)*0.000658615+runtime::beta_profile_tunnel().yaw_error_rad_s)*30.0;
+    CHECK(honest1>honest0 && std::fabs((hb1-hb0)-expected)<0.03);
+    // Bounded BETA keeps the strict stationary guard.
+    Pipeline b; init(b);
+    run(b,plan);
+    CHECK(b.beta_core_failure()==MX5_DR_E_FRAME);
+    CHECK(!runtime::beta_core_config(runtime::beta_profile()).hold_stopped_yaw &&
+          runtime::beta_core_config(runtime::beta_profile_tunnel()).hold_stopped_yaw==1 &&
+          !mx5_dr_default_config().hold_stopped_yaw);
+}
 static void creeping_turn_is_not_a_frame_fault() {
     // Decision F: after the outage the car stops (all wheels zero, quiet yaw)
     // and then creeps at 1 km/h while turning at 0.2 rad/s. The BETA core
@@ -1455,6 +1602,9 @@ static void creeping_turn_is_not_a_frame_fault() {
     CHECK(c.stop_enter_mps==0.0 && c.stop_exit_mps==0.0005 && d.stop_enter_mps==0.2 && d.stop_exit_mps==0.5);
 }
 int main() {
+    tunnel_zero_wheel_yaw_holds_heading();
+    tunnel_restart_with_yaw_leading_the_wheels_stays_engaged();
+    tunnel_standstill_yaw_bias_holds_heading();
     tunnel_multipath_course_step_keeps_yaw();
     course_step_without_yaw_turn_is_not_blended();
     tunnel_keeps_data_validity_and_accepts_turns();

@@ -46,6 +46,10 @@ typedef struct {
     // Nonzero lifts the 60 s / 1500 m / 100 m caps to the extended sanity caps
     // (see dr_core.c). Accepted only by mx5_dr_init_model (never QUALIFIED).
     uint32_t extended_limits;
+    /* MODEL-only opt-in: after stop confirmation, hold heading at exactly
+     * zero wheel speed even with nonquiet yaw. Its magnitude still grows
+     * heading uncertainty; physical/time/quality guards remain mandatory. */
+    uint32_t hold_stopped_yaw;
     uint32_t reserved_zero;
 } mx5_dr_config;
 

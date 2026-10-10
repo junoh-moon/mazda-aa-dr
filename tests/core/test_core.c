@@ -169,6 +169,102 @@ static void stops_and_limits(void) {
     CHECK(mx5_dr_control(&c,MX5_DR_GAP,ctx(2),2)==MX5_DR_OK); run(&c,1,0,0,0);
     i=interval(&c,0,0,0); CHECK(mx5_dr_step(&c,&i)==MX5_DR_E_LIMIT);
 }
+static void model_stopped_yaw_guards(void) {
+    mx5_dr_core c,d; mx5_dr_config p=mx5_dr_default_config();
+    mx5_dr_anchor a=anchor(1); mx5_dr_interval i;
+    unsigned n,k;
+    CHECK(p.hold_stopped_yaw==0);
+    p.hold_stopped_yaw=2;
+    CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+    p.hold_stopped_yaw=1;
+    CHECK(mx5_dr_init(&c,&p,ctx(1))==MX5_DR_E_CONFIG);
+    CHECK(mx5_dr_init_model(&c,&p,ctx(1))==MX5_DR_OK);
+    CHECK(mx5_dr_reset(&c,ctx(1))==MX5_DR_OK && c.config.hold_stopped_yaw==1);
+    a.quality=MX5_DR_MODEL; a.validated=a.heading_valid=a.calibration_verified=0;
+    CHECK(mx5_dr_seed(&c,&a)==MX5_DR_OK);
+    CHECK(mx5_dr_control(&c,MX5_DR_GAP,ctx(2),2)==MX5_DR_OK);
+    for(n=0;n<15;++n) {
+        i=interval(&c,0,0,0);
+        i.speed.quality=i.yaw.quality=i.reverse.quality=MX5_DR_MODEL;
+        i.speed.freshness=i.yaw.freshness=i.reverse.freshness=MX5_DR_MODEL_TIME;
+        CHECK(mx5_dr_step(&c,&i)==MX5_DR_OK);
+    }
+    CHECK(c.estimate.stopped);
+    for(k=0;k<8;++k) {
+        mx5_dr_result expected=MX5_DR_OK;
+        d=c; i=interval(&d,0,0.2,0);
+        i.speed.quality=i.yaw.quality=i.reverse.quality=MX5_DR_MODEL;
+        i.speed.freshness=i.yaw.freshness=i.reverse.freshness=MX5_DR_MODEL_TIME;
+        switch(k) {
+        case 0: i.yaw_rad_s=2.01; expected=MX5_DR_E_NUMERIC; break;
+        case 1: i.raw_yaw=4094; expected=MX5_DR_E_QUALITY; break;
+        case 2: i.yaw_count=0; expected=MX5_DR_E_QUALITY; break;
+        case 3: i.reverse_active=2; expected=MX5_DR_E_FRAME; break;
+        case 4: i.received_ns+=250000001; expected=MX5_DR_E_TIME; break;
+        case 5: i.speed_mps=0.1; expected=MX5_DR_E_FRAME; break;
+        case 6: i.speed_mps=1.0; break;
+        default: break;
+        }
+        CHECK(mx5_dr_step(&d,&i)==expected);
+        if(k==6) {
+            CHECK(!d.estimate.stopped && d.estimate.has_bearing);
+            near(d.estimate.body_heading_rad,0.02,1e-12);
+        }
+        if(k==7) {
+            CHECK(d.estimate.stopped && d.estimate.model_valid && !d.estimate.valid);
+            near(d.estimate.body_heading_rad,c.estimate.body_heading_rad,0);
+            near(d.estimate.heading_budget_rad-c.estimate.heading_budget_rad,0.0202,1e-12);
+        }
+    }
+}
+/* validation/FRAME_REJECT_RESTART_2026-10-10.md: BETA thresholds (stop only
+ * at exactly zero wheels), a sustained standstill yaw bias and a yaw lead
+ * before the first wheel pulse. */
+static void model_interval(mx5_dr_core *c,mx5_dr_interval *i,double v,double w) {
+    *i=interval(c,v,w,1);
+    i->speed.quality=i->yaw.quality=i->reverse.quality=MX5_DR_MODEL;
+    i->speed.freshness=i->yaw.freshness=i->reverse.freshness=MX5_DR_MODEL_TIME;
+}
+static void model_run(mx5_dr_core *c,unsigned n,double v,double w) {
+    unsigned j; for(j=0;j<n;++j) { mx5_dr_interval i; model_interval(c,&i,v,w); CHECK(mx5_dr_step(c,&i)==MX5_DR_OK); }
+}
+static void model_setup(mx5_dr_core *c,const mx5_dr_config *p,double heading) {
+    mx5_dr_anchor a=anchor(1); a.body_heading_rad=heading;
+    a.validated=0; a.heading_valid=0; a.calibration_verified=0; a.quality=MX5_DR_MODEL;
+    CHECK(mx5_dr_init_model(c,p,ctx(1))==MX5_DR_OK); CHECK(mx5_dr_seed(c,&a)==MX5_DR_OK);
+    CHECK(mx5_dr_control(c,MX5_DR_GAP,ctx(2),2)==MX5_DR_OK);
+}
+static void hold_stopped_yaw_bias_and_restart(void) {
+    mx5_dr_core c; mx5_dr_interval i; mx5_dr_config p=mx5_dr_default_config();
+    double lat,lon,hb,heading;
+    p.stop_enter_mps=0.0; p.stop_exit_mps=0.0005;     /* BETA stop thresholds */
+    /* Without the flag a stopped estimate still fails E_FRAME. */
+    model_setup(&c,&p,1.0); model_run(&c,20,0,0); CHECK(c.estimate.stopped);
+    model_interval(&c,&i,0,0.03); CHECK(mx5_dr_step(&c,&i)==MX5_DR_E_FRAME);
+    p.hold_stopped_yaw=1;
+    /* Sustained 0.03 rad/s bias for 30 s at standstill: no failure, the
+     * heading and position are held, the heading budget grows by |yaw|*dt. */
+    model_setup(&c,&p,1.0); model_run(&c,20,0,0); CHECK(c.estimate.stopped);
+    lat=c.estimate.latitude_deg; lon=c.estimate.longitude_deg;
+    hb=c.estimate.heading_budget_rad; heading=c.estimate.body_heading_rad;
+    model_run(&c,300,0,0.03);
+    CHECK(c.estimate.stopped && c.estimate.model_valid && !c.estimate.has_bearing);
+    CHECK(c.estimate.body_heading_rad==heading);
+    CHECK(c.estimate.latitude_deg==lat && c.estimate.longitude_deg==lon);
+    near(c.estimate.heading_budget_rad-hb,(0.03+p.yaw_error_rad_s)*30.0,1e-9);
+    /* 0.3 s of yaw lead at zero wheels, then the first wheel pulse: the
+     * lead is held, integration resumes with the movement. */
+    model_setup(&c,&p,1.0); model_run(&c,20,0,0);
+    heading=c.estimate.body_heading_rad;
+    model_run(&c,3,0,0.2);
+    CHECK(c.estimate.stopped && c.estimate.body_heading_rad==heading);
+    model_run(&c,1,0.02,0.2);
+    CHECK(!c.estimate.stopped && c.estimate.has_bearing);
+    near(c.estimate.body_heading_rad,heading+0.02,1e-12);
+    /* A quiet zero-speed run re-confirms the stop after stop_hold_s. */
+    model_run(&c,14,0,0); CHECK(!c.estimate.stopped);
+    model_run(&c,2,0,0); CHECK(c.estimate.stopped);
+}
 static void reacquisition_and_replay(void) {
     mx5_dr_core c,d; mx5_dr_config p=mx5_dr_default_config(); mx5_dr_anchor a; mx5_dr_snapshot s;
     setup(&c,0); run(&c,10,10,0,0);
@@ -190,6 +286,6 @@ static void reacquisition_and_replay(void) {
     CHECK(mx5_dr_get_snapshot(&c,T0,ctx(6),&s)==MX5_DR_E_NO_SEED);
 }
 int main(void) {
-    geometry(); invalid_inputs(); extended_limits_are_model_only(); timing_and_identity(); mean_intervals(); stops_and_limits(); reacquisition_and_replay();
+    geometry(); invalid_inputs(); extended_limits_are_model_only(); timing_and_identity(); mean_intervals(); stops_and_limits(); model_stopped_yaw_guards(); hold_stopped_yaw_bias_and_restart(); reacquisition_and_replay();
     printf("core tests: %u checks passed (synthetic fixtures; no vehicle claims)\n",checks); return 0;
 }

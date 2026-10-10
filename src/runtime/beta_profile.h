@@ -184,7 +184,7 @@ inline BetaProfile beta_profile_tunnel() {
 }
 
 // Core configuration for the BETA core: the shared defaults with the BETA
-// budget rates and limits. Stop/time/physical guards keep the core defaults.
+// budget rates and limits. Time/physical guards keep the core defaults.
 inline mx5_dr_config beta_core_config(const BetaProfile& p) {
     mx5_dr_config c=mx5_dr_default_config();
     c.speed_error_mps=p.speed_error_mps; c.yaw_error_rad_s=p.yaw_error_rad_s;
@@ -197,6 +197,11 @@ inline mx5_dr_config beta_core_config(const BetaProfile& p) {
     // creep while turning in a garage is integrated instead of being a frame
     // fault (2026-10-04, t=1360 s). The MODEL/SHADOW cores keep the defaults.
     c.stop_enter_mps=0.0; c.stop_exit_mps=0.0005;
+    // Tunnel only: an already confirmed stop with all four wheels exactly
+    // zero holds heading and budgets |yaw| instead of ending the outage.
+    // A closed mean-yaw window can precede the first moving wheel callback.
+    // Bounded BETA, SHADOW and QUALIFIED retain the strict stationary guard.
+    c.hold_stopped_yaw=p.unbounded?1:0;
     return c;
 }
 
