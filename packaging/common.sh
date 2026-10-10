@@ -296,9 +296,12 @@ verify_firmware() {
 set_config() {
     tmp=$BASE/mx5dr.conf.new.$$
     # The always-on BETA install (persistent policy) uses the quiet journal
-    # profile and a 16 MiB trace ring; one-boot trials keep the full profile.
+    # profile and a 48 MiB trace ring (3 x 16 MiB; boots append to trace.0
+    # until it is full, so the ring is the newest rows whatever the number
+    # of boots, validation/LOG_RETENTION_2026-10-10.md);
+    # one-boot trials keep the full profile.
     if [ "${POLICY:-}" = persistent ]; then
-        printf 'mode=%s\nmax_log_bytes=8388608\nmax_log_files=2\nsample_ms=1000\nlog_profile=persistent\n' "$MODE" > "$tmp"
+        printf 'mode=%s\nmax_log_bytes=16777216\nmax_log_files=3\nsample_ms=1000\nlog_profile=persistent\n' "$MODE" > "$tmp"
     else
         printf 'mode=%s\nmax_log_bytes=41943040\nmax_log_files=3\nsample_ms=1000\n' "$MODE" > "$tmp"
     fi

@@ -320,12 +320,17 @@ struct Journal {
   size_t written;
   uint64_t total_bytes;   // bytes written by this object (all files)
   bool failed;
+  // The first open of this object may append to a small trace.0 instead of
+  // rotating (reopen_small); later opens, including a same-boot rotation of
+  // a full file, always rotate.
+  bool opened_once;
   JournalWriter* writer;
   // log_profile=persistent: the quiet profile's filter (log_profile.h) in
   // front of the writer. Worker side only; the writer's own backend has none.
   mx5::runtime::PersistentLog* filter;
   explicit Journal(const char *directory = ROOT)
-      : root(directory), f(0), written(0), total_bytes(0), failed(false), writer(0), filter(0) {}
+      : root(directory), f(0), written(0), total_bytes(0), failed(false), opened_once(false),
+        writer(0), filter(0) {}
   ~Journal() {
     if (writer) { bool ignored; stop_journal_writer(writer,false,&ignored); writer=0; }
     if (f)
@@ -351,6 +356,69 @@ struct Journal {
   // Worker side: adopt a failure the writer thread reported.
   void poll() {
     if (writer && !failed && !journal_writer_ok(writer)) fail();
+  }
+  // Log retention (validation/LOG_RETENTION_2026-10-10.md): a boot appends
+  // to an existing trace.0.jsonl that is not yet full instead of shifting the
+  // ring, so the ring is the newest max_log_files x max_log_bytes of rows in
+  // order, whatever the number of boots. Only a full file rotates.
+  // Called once, at the first write of this object. Leaves f open on the
+  // existing trace.0.jsonl (append) or f null (the caller rotates as before).
+  // Any doubt about the existing file (missing, symlink, FIFO, not regular,
+  // size query or read failure, full) falls back to the old rotation; only a
+  // failed separator write is a storage failure.
+  void reopen_small() {
+    char a[256];
+    snprintf(a, sizeof a, "%s/logs/trace.0.jsonl", root);
+    // Same flags as the O_TRUNC path except: no O_CREAT (only an existing
+    // file is reused), no O_TRUNC, O_APPEND; never follows a symlink.
+    // O_NONBLOCK: a FIFO planted at this path cannot block the open; fstat
+    // below rejects it.
+    const int fd = open(a, O_RDWR | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0)
+      return;
+    struct stat st;
+    // Only a file this writer could have created itself: regular, one link,
+    // owned by this process, no group/other access (the O_TRUNC path creates
+    // 0600 files); anything else rotates as before.
+    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_nlink != 1 ||
+        st.st_uid != geteuid() || (st.st_mode & 077) || st.st_size < 0 ||
+        uint64_t(st.st_size) >= uint64_t(config.max_log_bytes)) {
+      close(fd);
+      return;
+    }
+    // Back to blocking writes, as on the O_TRUNC path.
+    const int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK)) {
+      close(fd);
+      return;
+    }
+    size_t size = size_t(st.st_size);
+    if (size > 0) {
+      // The previous boot may have been cut mid-row: never concatenate.
+      char last = 0;
+      if (pread(fd, &last, 1, st.st_size - 1) != 1) {
+        close(fd);
+        return;
+      }
+      if (last != '\n') {
+        if (write(fd, "\n", 1) != 1) {
+          close(fd);
+          fail();
+          return;
+        }
+        ++size;
+        ++total_bytes;
+      }
+    }
+    f = fdopen(fd, "a");
+    if (!f) {
+      close(fd);
+      fail();
+      return;
+    }
+    // The cap counts the bytes already in the file: a reused file that
+    // fills rotates normally.
+    written = size;
   }
   void rotate() {
     if (f) {
@@ -463,6 +531,13 @@ struct Journal {
       mx5::runtime::record_storage_stop(root,"trace",space);
       fail();return;
     }
+    if (!f && !opened_once) {
+      opened_once = true;
+      reopen_small();
+      if (failed)
+        return;
+    }
+    opened_once = true;
     if (!f || written + n + 1 > config.max_log_bytes)
       rotate();
     if (!f || failed)

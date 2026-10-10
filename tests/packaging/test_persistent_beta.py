@@ -100,10 +100,11 @@ class PersistentBetaTests(unittest.TestCase):
         self.assertIn('Choose 5 to start the first BETA boot', result.stdout)
         installed = (self.base / 'installed.txt').read_text()
         self.assertIn('mode=BETA\npolicy=persistent\n', installed)
-        # The always-on product journals with the quiet profile and a 16 MiB
-        # trace ring (validation/PERSISTENT_LOGGING_2026-10-06.md).
+        # The always-on product journals with the quiet profile and a 48 MiB
+        # trace ring of 3 x 16 MiB (validation/PERSISTENT_LOGGING_2026-10-06.md,
+        # validation/LOG_RETENTION_2026-10-10.md).
         self.assertEqual((self.base / 'mx5dr.conf').read_text(),
-                         'mode=BETA\nmax_log_bytes=8388608\nmax_log_files=2\nsample_ms=1000\n'
+                         'mode=BETA\nmax_log_bytes=16777216\nmax_log_files=3\nsample_ms=1000\n'
                          'log_profile=persistent\n')
         # The one-boot arming marker belongs to the one-boot policy only.
         self.assertFalse((self.base / 'guard/armed-boot').exists())

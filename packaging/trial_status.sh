@@ -81,6 +81,27 @@ read_config_mode() (
         }
         END {if(bad || mode=="") exit 1; print mode}' "$config"
 )
+# Ring caps the runtime and collector apply for this config (defaults as in
+# runtime/config.cpp; the collector clamps to 2 x 4 MiB, persistent 2 x 1 MiB).
+# Call only after read_config_mode accepted the file.
+read_log_caps() (
+    LC_ALL=C awk '
+        function trim(s) {sub(/^[ \t\r\n]+/,"",s); sub(/[ \t\r\n]+$/,"",s); return s}
+        BEGIN {bytes=8388608; files=3; quiet=0}
+        {
+            line=$0; sub(/#.*/,"",line); line=trim(line)
+            equal=index(line,"="); if(!equal) next
+            key=trim(substr(line,1,equal-1)); value=trim(substr(line,equal+1))
+            if(key=="max_log_bytes") bytes=value+0
+            else if(key=="max_log_files") files=value+0
+            else if(key=="log_profile") quiet=(value=="persistent")
+        }
+        END {
+            cb=bytes; if(cb>4194304) cb=4194304; if(quiet && cb>1048576) cb=1048576
+            cf=files; if(cf>2) cf=2
+            printf "%d %d %d\n", bytes * files, cb * cf, quiet
+        }' "$BASE/mx5dr.conf"
+)
 # A guard marker alone proves neither a live process nor successful capture.
 guard_last_boot=missing
 last_boot=
@@ -295,7 +316,17 @@ for name in trace.2.jsonl trace.1.jsonl trace.0.jsonl collector.1.jsonl collecto
         set -- "$@" "$file"
     fi
 done
-echo "one_boot=$oneboot retained_bytes=$retained trace_cap_bytes=125829120 collector_cap_bytes=8388608 (120+8 MiB, rotates)"
+caps=
+case "$config_mode" in OFF|OBSERVE|SCRUB|SHADOW|BETA) caps=$(read_log_caps) || caps=;; esac
+if [ -n "$caps" ]; then
+    # Not set --: "$@" holds the retained file list for the report below.
+    trace_cap=${caps%% *}; quiet_profile=${caps##* }
+    collector_cap=${caps#* }; collector_cap=${collector_cap% *}
+    echo "one_boot=$oneboot retained_bytes=$retained trace_cap_bytes=$trace_cap collector_cap_bytes=$collector_cap ($(($trace_cap / 1048576))+$(($collector_cap / 1048576)) MiB, rotates)"
+else
+    quiet_profile=unknown
+    echo "one_boot=$oneboot retained_bytes=$retained trace_cap_bytes=unconfirmed collector_cap_bytes=unconfirmed (config unconfirmed; at most 120+8 MiB, rotates)"
+fi
 echo "guard_last_boot=$guard_last_boot guard_consumed=$guard_consumed; markers do not prove SM received the trial path or that runtime capture began."
 echo "guard_arm=$guard_arm guard_armed_boot=$guard_armed_boot guard_previous_armed_boot=$guard_previous_armed_boot startup_state=$startup_state"
 echo "guard_arm_schema=$guard_arm_schema guard_consumed_schema=$guard_consumed_schema (v2 is retained evidence, not a v3 startup gate)"
@@ -304,7 +335,11 @@ case "$startup_state" in
     new_linux_boot_arm_unconsumed) echo 'New CMU Linux boot observed, but guard arm remains; selection and capture are not yet observed. Wait 60 seconds while parked and run menu 2 once more; if still incomplete, export with 3 and disarm with 4.';;
     guard_selected_same_boot_as_arm) echo 'Guard selected in the arming Linux boot: a new boot was not observed.';;
 esac
-echo 'Measured SHADOW rate (2026-10-05 drive) is about 28 KB/s on average and 36 KB/s with AA connected, so the 120 MiB trace can rotate out its oldest data after about 58 minutes. Park and export within about 50 minutes, at the first parked USB return, without reinstalling or rearming. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
+if [ "$quiet_profile" = 1 ]; then
+    echo 'Persistent profile: every boot appends to trace.0 until it is full, so restarts no longer push a drive out; the trace ring keeps the newest 32-48 MiB of rows. At about 2 KB/s on an ordinary drive and 4.3 KB/s in tunnel mode that is about 4.6-6.9 h (tunnel mode about 2.2-3.2 h) of newer logs before a drive is lost. Collector files still rotate per boot. Export with 3 soon after the drive, before restarting the CMU if possible. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
+else
+    echo 'Measured SHADOW rate (2026-10-05 drive) is about 28 KB/s on average and 36 KB/s with AA connected, so the 120 MiB trace can rotate out its oldest data after about 58 minutes. Park and export within about 50 minutes, at the first parked USB return, without reinstalling or rearming. Reboot may leave incomplete final rows; do not repeat a drive just to obtain a status pass.'
+fi
 space_ok=0
 space_free=$(storage_free_kib "$persist") || space_free=unknown
 if [ "$space_free" != unknown ] && [ "$space_free" -gt 8256 ]; then space_ok=1; fi

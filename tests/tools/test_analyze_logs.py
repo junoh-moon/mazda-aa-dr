@@ -235,6 +235,52 @@ class AnalyzeTests(unittest.TestCase):
         report = module.analyze([self.root])
         self.assertEqual(report["status"], "local_checks_pass")
 
+    def normalized(self, report):
+        """The report without input names and line numbers."""
+        import re
+        text = json.dumps({k: v for k, v in report.items() if k != "files"}, sort_keys=True)
+        return re.sub(r'[^"]*trace\.\d\.jsonl:\d+', "SRC", text)
+
+    def two_layouts(self, first, second, cut=False):
+        """Log retention (2026-10-10): a short boot appends to a small trace.0
+        (after a newline separator when the previous boot was cut) instead
+        of rotating. Report (appended file, rotated pair)."""
+        rotated, appended = self.root / "rotated", self.root / "appended"
+        rotated.mkdir()
+        appended.mkdir()
+        older = encode(first)
+        if cut:
+            older = older[:-9]
+        (rotated / "trace.1.jsonl").write_bytes(older)
+        (rotated / "trace.0.jsonl").write_bytes(encode(second))
+        (appended / "trace.0.jsonl").write_bytes(older + (b"\n" if cut else b"") + encode(second))
+        return module.analyze([appended]), module.analyze([rotated])
+
+    def test_boots_appended_in_one_file_equal_the_rotated_pair(self):
+        first = records()
+        second = records(mode=1, choice=1)
+        second[0]["pid"] = 456
+        appended, rotated = self.two_layouts(first, second)
+        self.assertEqual(len(appended["boots"]), 2)
+        self.assertEqual(self.normalized(appended), self.normalized(rotated))
+
+    def test_cut_row_before_an_appended_boot_is_a_partial_final_line(self):
+        first = records()
+        second = records()
+        appended, rotated = self.two_layouts(first, second, cut=True)
+        for report in (appended, rotated):
+            self.assertIn("partial_final_line", self.codes(report))
+            self.assertIn("malformed_json", self.codes(report))
+        self.assertEqual(self.normalized(appended), self.normalized(rotated))
+
+    def test_malformed_row_not_followed_by_a_boot_is_not_partial(self):
+        rows = encode(records())
+        lines = rows.split(b"\n")
+        lines.insert(2, b'{"kind":"pos')
+        report = self.audit(raw=b"\n".join(lines))
+        self.assertIn("malformed_json", self.codes(report))
+        self.assertNotIn("partial_final_line", self.codes(report))
+
     def make_tar(self, members):
         path = self.root / "logs.tar"
         with tarfile.open(path, "w") as archive:

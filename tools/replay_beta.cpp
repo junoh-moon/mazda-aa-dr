@@ -192,8 +192,9 @@ std::vector<std::string> journal_files(const std::string& dir, const char* prefi
 // Rows attributed to the latest boot row of their file. Rows before any boot
 // row are accepted only when a single boot is present.
 struct Row { std::string boot; std::string line; };
+// newest_boot (optional): the last boot row of the first (newest) file.
 std::vector<Row> read_rows(const std::vector<std::string>& files, const char* boot_kind,
-                           std::vector<std::string>* boots) {
+                           std::vector<std::string>* boots, std::string* newest_boot = 0) {
     std::vector<Row> rows;
     for (size_t i = 0; i < files.size(); ++i) {
         std::ifstream f(files[i].c_str());
@@ -203,6 +204,7 @@ std::vector<Row> read_rows(const std::vector<std::string>& files, const char* bo
             if (kind_of(line) == boot_kind && str_field(line, "boot_id", &boot)) {
                 if (std::find(boots->begin(), boots->end(), boot) == boots->end())
                     boots->push_back(boot);
+                if (i == 0 && newest_boot) *newest_boot = boot;
             }
             Row r; r.boot = boot; r.line = line; rows.push_back(r);
         }
@@ -229,12 +231,16 @@ bool load(const std::string& dir, const std::string& want_boot, double poll_hdop
     in->files = unsigned(trace.size() + collector.size());
     if (trace.empty()) { *error = "no trace.*.jsonl in " + dir; return false; }
     std::vector<std::string> trace_boots, collector_boots;
-    const std::vector<Row> rows = read_rows(trace, "boot", &trace_boots);
+    std::string newest_boot;
+    const std::vector<Row> rows = read_rows(trace, "boot", &trace_boots, &newest_boot);
     std::string boot = want_boot;
     if (boot.empty()) {
-        // Several boots (rotation keeps an older boot in trace.1): default to
-        // the first boot row of the newest file, trace.0.jsonl.
-        if (!trace_boots.empty()) boot = trace_boots[0];
+        // Several boots (rotation keeps an older boot in trace.1; since
+        // 2026-10-10 short boots also append to a small trace.0): default to
+        // the newest boot, the last boot row of trace.0.jsonl, or else the
+        // first boot row found.
+        if (!newest_boot.empty()) boot = newest_boot;
+        else if (!trace_boots.empty()) boot = trace_boots[0];
     }
     in->boot_id = boot;
     std::map<uint64_t, Fix> positions;     // adapter POSITION rows by call

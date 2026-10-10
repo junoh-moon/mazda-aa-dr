@@ -2802,8 +2802,13 @@ class Auditor:
         self.total_bytes += size
         self.files.append(name)
         number = 0
+        # One line of lookahead: since 2026-10-10 a short boot may append to
+        # a small trace.0 after a previous boot whose last row was cut; the
+        # runtime then writes a newline separator first. That cut row is
+        # reported as partial_final_line exactly as at the end of a file.
+        following = stream.readline(MAX_LINE_BYTES + 1)
         while True:
-            raw = stream.readline(MAX_LINE_BYTES + 1)
+            raw = following
             if not raw:
                 break
             number += 1
@@ -2811,17 +2816,36 @@ class Auditor:
             if len(raw) > MAX_LINE_BYTES:
                 self.issue("line_limit", source, "Oversized record; remainder of file not read")
                 break
-            if not raw.endswith(b"\n"):
-                self.issue("partial_final_line", source, "Final record lacks newline; completeness unproven")
+            following = stream.readline(MAX_LINE_BYTES + 1)
             if not raw.strip():
+                if not raw.endswith(b"\n"):
+                    self.issue("partial_final_line", source, "Final record lacks newline; completeness unproven")
                 continue
             try:
-                row = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object, parse_float=finite_float,
+                # Without its terminator: an error detail is then the same
+                # whether a cut record ends the file or precedes a separator.
+                record = raw[:-1] if raw.endswith(b"\n") else raw
+                row = json.loads(record.decode("utf-8"), object_pairs_hook=strict_object, parse_float=finite_float,
                                  parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
             except (ValueError, UnicodeError, RecursionError) as exc:
+                if not raw.endswith(b"\n") or self.boot_follows(following):
+                    self.issue("partial_final_line", source, "Final record lacks newline; completeness unproven")
                 self.issue("malformed_json", source, str(exc))
                 continue
+            if not raw.endswith(b"\n"):
+                self.issue("partial_final_line", source, "Final record lacks newline; completeness unproven")
             self.consume(row, source, group if group is not None else ("stream", name))
+
+    @staticmethod
+    def boot_follows(raw):
+        """The next line is a complete runtime boot row (an appended boot)."""
+        if not raw or len(raw) > MAX_LINE_BYTES or not raw.endswith(b"\n"):
+            return False
+        try:
+            row = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeError, RecursionError):
+            return False
+        return isinstance(row, dict) and row.get("kind") == "boot"
 
     def read_path(self, path):
         path = Path(path)

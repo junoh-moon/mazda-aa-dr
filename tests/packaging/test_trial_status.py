@@ -632,6 +632,29 @@ exec "$MX5DR_REAL_OD" "$@"
         self.assertIn('health_recent=unavailable window=5s', r.stdout)
         self.assertIn('log_profile=full health_window_s=5', r.stdout)
 
+    def test_log_caps_follow_the_installed_config(self):
+        # Log retention (validation/LOG_RETENTION_2026-10-10.md): the persistent
+        # install is 3 x 16 MiB trace and the collector's 2 x 1 MiB clamp.
+        (self.base / 'mx5dr.conf').write_text(
+            'mode=SHADOW\nmax_log_bytes=16777216\nmax_log_files=3\nsample_ms=1000\nlog_profile=persistent\n')
+        out = self.run_status().stdout
+        self.assertIn('trace_cap_bytes=50331648 collector_cap_bytes=2097152 (48+2 MiB, rotates)', out)
+        self.assertIn('every boot appends to trace.0 until it is full, so restarts no longer push a drive out', out)
+        self.assertIn('about 4.6-6.9 h (tunnel mode about 2.2-3.2 h)', out)
+        self.assertIn('Collector files still rotate per boot', out)
+        self.assertNotIn('120 MiB', out)
+        # One-boot trial config: 3 x 40 MiB and the collector's 2 x 4 MiB.
+        (self.base / 'mx5dr.conf').write_text('mode=SHADOW\nmax_log_bytes=41943040\nmax_log_files=3\nsample_ms=1000\n')
+        out = self.run_status().stdout
+        self.assertIn('trace_cap_bytes=125829120 collector_cap_bytes=8388608 (120+8 MiB, rotates)', out)
+        self.assertIn('the 120 MiB trace can rotate out its oldest data after about 58 minutes', out)
+        # Runtime defaults when the keys are absent: 3 x 8 MiB.
+        (self.base / 'mx5dr.conf').write_text(CONFIG)
+        self.assertIn('trace_cap_bytes=25165824 collector_cap_bytes=8388608 (24+8 MiB, rotates)',
+                      self.run_status().stdout)
+        (self.base / 'mx5dr.conf').write_text(CONFIG + 'max_log_files=9\n')
+        self.assertIn('trace_cap_bytes=unconfirmed', self.run_status().stdout)
+
     def test_persistent_profile_config_key_is_accepted(self):
         (self.base / 'mx5dr.conf').write_text(CONFIG + 'log_profile=persistent\n')
         self.assertIn('config_mode=SHADOW', self.run_status().stdout)

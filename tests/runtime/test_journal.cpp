@@ -6,6 +6,7 @@
 #define statvfs(path,info) fixture_statvfs(path,info)
 #include "../../src/runtime/runtime.cpp"
 #undef statvfs
+#include <algorithm>
 #include <cassert>
 #include <string>
 #include <fstream>
@@ -108,6 +109,9 @@ static void receive_turn_tests(const char* root,const std::string& logs) {
     assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
     assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
     if(mode==1)audit_fault=1;
+    // Each case reads its own rows: a small trace.0 would otherwise be
+    // appended to by the next Journal (log retention, 2026-10-10).
+    unlink((logs+"/trace.0.jsonl").c_str());
     {
       Journal j(root);mx5::runtime::MotionBatch batch;FakeReceiver receiver(3,true);
       drain_motion(j,batch,receiver,navigation,holdout,mode!=2,mode==3?UINT64_MAX:0);j.flush();
@@ -176,6 +180,7 @@ static void late_turn_tests(const char* root,const std::string& logs) {
     std::vector<unsigned> recv,read;recv.push_back(0);read.push_back(0);
     for(unsigned k=1;k<=5;++k) { recv.push_back(20*k);read.push_back(stall_end); }
     for(unsigned k=0;k<3;++k) { recv.push_back(stall_end+20*k);read.push_back(stall_end+20*k); }
+    unlink((logs+"/trace.0.jsonl").c_str()); // own rows only (small-boot reuse)
     {
       Journal j(root);mx5::runtime::MotionBatch batch;LateReceiver receiver(recv,read);
       drain_motion(j,batch,receiver,navigation,holdout,true);j.flush();
@@ -696,6 +701,7 @@ static void writer_shutdown(const char* root,const std::string& logs) {
 // stall loses datagrams long before a backlog could reach this bound.)
 static void pipeline_capacity_overflow(const char* root,const std::string& logs) {
   arm_test_mode();config.max_log_bytes=65536;
+  unlink((logs+"/trace.0.jsonl").c_str()); // own rows only (small-boot reuse)
   N::Pipeline navigation;N::GpsHoldout holdout;const mx5_dr_context context={1,1,1};
   assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
   assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
@@ -715,6 +721,7 @@ static void pipeline_capacity_overflow(const char* root,const std::string& logs)
 }
 static void pipeline_fault_capture(const char* root,const std::string& logs) {
   arm_test_mode();config.max_log_bytes=65536;
+  unlink((logs+"/trace.0.jsonl").c_str()); // own rows only (small-boot reuse)
   N::Pipeline navigation;N::GpsHoldout holdout;const mx5_dr_context context={1,1,1};
   assert(navigation.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
   assert(holdout.init_model(N::research_model_profile(),mx5_dr_default_config(),context));
@@ -758,6 +765,7 @@ static void stop_tests(const char* root,const std::string& logs) {
   assert(!queue.dropped() && !queue.drained());
   assert(pop(&event) && !pop(&event));
   assert(queue.drained());
+  unlink((logs+"/trace.0.jsonl").c_str()); // own rows only (small-boot reuse)
   {
     Journal j(root);j.line("{\"kind\":\"fixture\",\"mono_ns\":9}");
     assert(finish_capture(j,boot,10,11));
@@ -859,6 +867,7 @@ static void route_capture_tail(const char* root,const std::string& logs) {
   char expected[mx5::runtime::OBSERVATION_JSON_CAPACITY];
   assert(format_observation(expected,sizeof expected,event) && strlen(expected)>5120);
   sink(&event,0);freeze_capture();
+  unlink((logs+"/trace.0.jsonl").c_str()); // own rows only (small-boot reuse)
   {
     Journal j(root);assert(drain_capture_tail(j));j.flush();
     assert(!j.failed && queue.drained());
@@ -1403,10 +1412,184 @@ static int run() {
   return 0;
 }
 }
+// ---- Log retention: boots append (validation/LOG_RETENTION_2026-10-10.md) ----
+// A boot appends to an existing trace.0.jsonl until it is full; only a full
+// file rotates, so the ring is the newest rows whatever the number of boots.
+static bool retention_exists(const std::string& path) { struct stat st;return lstat(path.c_str(),&st)==0; }
+static void retention_put(const std::string& path,const std::string& bytes,mode_t mode=0600) {
+  unlink(path.c_str());
+  const int fd=open(path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,mode);assert(fd>=0);
+  assert(fchmod(fd,mode)==0);
+  size_t done=0;
+  while(done<bytes.size()) { const ssize_t w=write(fd,bytes.data()+done,bytes.size()-done);assert(w>0);done+=size_t(w); }
+  assert(close(fd)==0);
+}
+// n bytes of complete rows (the last row padded to land exactly on n).
+static std::string retention_rows(size_t n,char tag) {
+  std::string out;const std::string head=std::string("{\"kind\":\"old_")+tag+"\",\"pad\":\"";
+  while(out.size()<n) {
+    const size_t left=n-out.size();
+    if(left<head.size()+3) { out.append(left-1,' ');out+='\n';break; }
+    const size_t pad=std::min<size_t>(left-head.size()-3,200);
+    out+=head;out.append(pad,'x');out+="\"}\n";
+  }
+  assert(out.size()==n);return out;
+}
+static size_t retention_lines(const std::string& s) { return size_t(std::count(s.begin(),s.end(),'\n')); }
+static void retention_boot(const char* root,const char* row,size_t* written=0) {
+  Journal j(root);j.line(row);j.flush();assert(!j.failed);
+  if(written)*written=j.written;
+}
+static void retention_tests() {
+  const size_t saved_bytes=config.max_log_bytes;const unsigned saved_files=config.max_log_files;
+  config.max_log_bytes=16777216;config.max_log_files=3;
+  char root[]="/tmp/mx5dr-retention-XXXXXX";assert(mkdtemp(root));
+  const std::string logs=std::string(root)+"/logs";assert(!mkdir(logs.c_str(),0700));
+  const std::string t0=logs+"/trace.0.jsonl",t1=logs+"/trace.1.jsonl",t2=logs+"/trace.2.jsonl";
+  arm_test_mode();
+  // 1. First boot creates trace.0 (0600) and nothing else.
+  size_t w=0;
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":1}",&w);
+  assert(storage_read(t0)=="{\"kind\":\"boot\",\"n\":1}\n" && !retention_exists(t1));
+  { struct stat st;assert(!stat(t0.c_str(),&st) && (st.st_mode&0777)==0600); }
+  // 2. A short boot appends: no shift, written continues from the file size.
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":2}",&w);
+  assert(storage_read(t0)=="{\"kind\":\"boot\",\"n\":1}\n{\"kind\":\"boot\",\"n\":2}\n");
+  assert(w==storage_read(t0).size() && !retention_exists(t1));
+  // 3. Many short boots after a large drive file (2 MiB, well above any
+  //    fixed small-file threshold) keep appending: no trace.1 appears and the
+  //    drive's rows stay first in trace.0.
+  const std::string drive=retention_rows(2u*1024*1024,'d');
+  retention_put(t0,drive);
+  const std::string chunk=std::string("{\"kind\":\"short\",\"pad\":\"")+std::string(100000,'s')+"\"}";
+  for(unsigned i=3;i<11;++i) {
+    char row[64];snprintf(row,sizeof row,"{\"kind\":\"boot\",\"n\":%u}",i);
+    Journal j(root);j.line(row);j.line(chunk.c_str());j.flush();assert(!j.failed);
+  }
+  {
+    const std::string now=storage_read(t0);
+    assert(!retention_exists(t1) && now.compare(0,drive.size(),drive)==0);
+    assert(retention_lines(now)==retention_lines(drive)+16);
+  }
+  // 4. A boot that finds a file within 100 bytes of the cap rotates normally
+  //    on its first write; a file at the cap is rotated too.
+  config.max_log_bytes=1048576;
+  const std::string full=retention_rows(1048576-100,'f');
+  retention_put(t0,full);unlink(t1.c_str());
+  const std::string row200=std::string("{\"kind\":\"boot\",\"pad\":\"")+std::string(170,'p')+"\"}";
+  retention_boot(root,row200.c_str(),&w);
+  assert(storage_read(t1)==full && storage_read(t0)==row200+"\n" && w==row200.size()+1);
+  const std::string atcap=retention_rows(1048576,'c');
+  retention_put(t0,atcap);unlink(t1.c_str());
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":20}");
+  assert(storage_read(t1)==atcap && storage_read(t0)=="{\"kind\":\"boot\",\"n\":20}\n");
+  // A full file is not even opened for append: a cut last row gets no
+  // separator and moves to trace.1 byte for byte.
+  const std::string cutfull=atcap.substr(0,atcap.size()-1)+"x";
+  retention_put(t0,cutfull);unlink(t1.c_str());
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":22}");
+  assert(storage_read(t1)==cutfull && storage_read(t0)=="{\"kind\":\"boot\",\"n\":22}\n");
+  // 4b. 100 short boots stay in trace.0 until it fills; then the ring
+  //     rotates once and trace.1 starts with those 100 boots in order.
+  config.max_log_bytes=65536;
+  unlink(t0.c_str());unlink(t1.c_str());unlink(t2.c_str());
+  std::string hundred;
+  for(unsigned i=0;i<100;++i) {
+    char row[64];snprintf(row,sizeof row,"{\"kind\":\"boot\",\"n\":%u,\"pad\":\"xxxxxxxxxxxxxxxx\"}",i);
+    retention_boot(root,row);hundred+=std::string(row)+"\n";
+  }
+  assert(storage_read(t0)==hundred && !retention_exists(t1));
+  const std::string big900=std::string("{\"kind\":\"boot\",\"pad\":\"")+std::string(900,'b')+"\"}";
+  unsigned boots=0;
+  while(!retention_exists(t1)) { retention_boot(root,big900.c_str());++boots; assert(boots<200); }
+  assert(boots>=30 && storage_read(t1).compare(0,hundred.size(),hundred)==0 &&
+         storage_read(t1).size()<=65536 && storage_read(t0)==big900+"\n");
+  config.max_log_bytes=16777216;
+  unlink(t1.c_str());
+  // 5. A previous boot cut mid-row gets a newline separator first: rows
+  //    never concatenate, and the separator is counted by the cap.
+  retention_put(t0,"{\"kind\":\"boot\",\"n\":10}\n{\"kind\":\"cut");
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":11}",&w);
+  assert(storage_read(t0)=="{\"kind\":\"boot\",\"n\":10}\n{\"kind\":\"cut\n{\"kind\":\"boot\",\"n\":11}\n");
+  assert(w==storage_read(t0).size() && !retention_exists(t1));
+  // An empty existing trace.0 is reused without a separator.
+  retention_put(t0,"");
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":12}",&w);
+  assert(storage_read(t0)=="{\"kind\":\"boot\",\"n\":12}\n" && w==storage_read(t0).size());
+  // 6. The cap counts the reused bytes: a reused file that fills rotates
+  //    normally, and a same-boot rotation never reuses.
+  config.max_log_bytes=65536;
+  const std::string nearly=retention_rows(65000,'n');
+  retention_put(t0,nearly);unlink(t1.c_str());unlink(t2.c_str());
+  {
+    Journal j(root);
+    const std::string big=std::string("{\"kind\":\"fill\",\"pad\":\"")+std::string(900,'f')+"\"}";
+    j.line(big.c_str());j.flush();assert(!j.failed);
+    assert(storage_read(t1)==nearly && storage_read(t0)==big+"\n" && j.written==big.size()+1);
+    while(!retention_exists(t2)) { j.line(big.c_str());assert(!j.failed); }
+    j.flush();assert(!j.failed);
+    assert(storage_read(t2)==nearly);
+    std::string first=storage_read(t1);
+    assert(first.size()<=65536 && first.size()+big.size()+1>65536 && retention_lines(first)==first.size()/(big.size()+1));
+    assert(storage_read(t0)==big+"\n");
+  }
+  config.max_log_bytes=16777216;
+  // 7. Never follows a symlink: a linked trace.0 is rotated as before and
+  //    its target is untouched.
+  unlink(t1.c_str());unlink(t2.c_str());
+  const std::string target=std::string(root)+"/target";
+  retention_put(target,"{\"kind\":\"target\"}\n");
+  unlink(t0.c_str());assert(!symlink(target.c_str(),t0.c_str()));
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":13}");
+  assert(storage_read(target)=="{\"kind\":\"target\"}\n");
+  { struct stat st;assert(!lstat(t1.c_str(),&st) && S_ISLNK(st.st_mode)); }
+  assert(storage_read(t0)=="{\"kind\":\"boot\",\"n\":13}\n");
+  // 8. A file this writer would not have created (group/other access, or a
+  //    second hard link) is rotated, not appended to.
+  unlink(t1.c_str());
+  retention_put(t0,"{\"kind\":\"loose\"}\n",0644);
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":14}");
+  assert(storage_read(t1)=="{\"kind\":\"loose\"}\n" && storage_read(t0)=="{\"kind\":\"boot\",\"n\":14}\n");
+  unlink(t1.c_str());
+  const std::string other=std::string(root)+"/other";
+  retention_put(t0,"{\"kind\":\"linked\"}\n");assert(!link(t0.c_str(),other.c_str()));
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":15}");
+  assert(storage_read(other)=="{\"kind\":\"linked\"}\n" && storage_read(t0)=="{\"kind\":\"boot\",\"n\":15}\n");
+  unlink(other.c_str());unlink(target.c_str());
+  // 8b. A FIFO at trace.0 is neither waited on nor appended to: rotated.
+  unlink(t0.c_str());unlink(t1.c_str());assert(!mkfifo(t0.c_str(),0600));
+  retention_boot(root,"{\"kind\":\"boot\",\"n\":21}");
+  { struct stat st;assert(!lstat(t1.c_str(),&st) && S_ISFIFO(st.st_mode)); }
+  assert(storage_read(t0)=="{\"kind\":\"boot\",\"n\":21}\n");
+  // 9. The writer thread's backend follows the same rule.
+  unlink(t1.c_str());
+  retention_put(t0,"{\"kind\":\"boot\",\"n\":16}\n{\"kind\":\"cut");
+  {
+    Journal j(root);assert(j.start_writer());
+    j.line("{\"kind\":\"boot\",\"n\":17}");
+    assert(j.close_durable());assert(!j.failed);
+  }
+  assert(storage_read(t0)=="{\"kind\":\"boot\",\"n\":16}\n{\"kind\":\"cut\n{\"kind\":\"boot\",\"n\":17}\n");
+  assert(!retention_exists(t1));
+  // 10. Only the first open of a boot may reuse: a write after this
+  //     object closed its file (capture stop) rotates as before.
+  unlink(t0.c_str());
+  {
+    Journal j(root);j.line("{\"kind\":\"boot\",\"n\":18}");assert(j.close_durable());
+    j.line("{\"kind\":\"late\"}");j.flush();assert(!j.failed);
+  }
+  assert(storage_read(t1)=="{\"kind\":\"boot\",\"n\":18}\n" && storage_read(t0)=="{\"kind\":\"late\"}\n");
+  unlink(t0.c_str());unlink(t1.c_str());unlink(t2.c_str());
+  assert(!rmdir(logs.c_str()) && !rmdir(root));
+  config.max_log_bytes=saved_bytes;config.max_log_files=saved_files;
+  puts("Log retention: boots append to trace.0 until it is full (separator after a cut row, cap counts reused bytes); "
+       "only a full file rotates, so short boots never push a drive out of the ring");
+}
 int main(int argc,char** argv) {
   if(argc==2 && !strcmp(argv[1],"--rmc-status")) {rmc_status_journal();return 0;}
   if(argc==2 && !strcmp(argv[1],"--heading-presence")) {heading_presence_journal();return 0;}
   if(argc==2 && !strcmp(argv[1],"--emit-positions")) {position_journal();return 0;}
+  if(argc==2 && !strcmp(argv[1],"--retention")) {retention_tests();return 0;}
   if(argc==3 && !strcmp(argv[1],"--real-storage")) {
     config.max_log_bytes=8388608;config.max_log_files=3;
     arm_test_mode();check_real_storage<Journal>(argv[2],"trace");return 0;
@@ -1483,6 +1666,7 @@ int main(int argc,char** argv) {
     return 0;
   }
   cadence_tests();
+  retention_tests();
   config.max_log_bytes = 64;
   config.max_log_files = 3;
   char tmp[] = "/tmp/mx5dr-journal-XXXXXX";
