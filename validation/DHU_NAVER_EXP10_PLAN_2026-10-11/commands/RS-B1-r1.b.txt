@@ -1,0 +1,334 @@
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-000.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-006.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-021.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-023.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-025.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-027.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-029.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-031.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-035.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-039.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-043.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-047.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-051.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-055.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-059.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-063.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-067.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-071.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-075.png
+sleep 0.8
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 1
+location 35.1859415 129.0025527 15.000 NAN 0.000 0.0
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-079.png
+sleep 0.8
+location 35.1859422 129.0025467 15.000 NAN 0.556 278.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-080.png
+sleep 0.8
+location 35.1859438 129.0025346 15.000 NAN 1.111 278.7
+sleep 1
+location 35.1859460 129.0025165 15.000 NAN 1.667 278.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-082.png
+sleep 0.8
+location 35.1859490 129.0024923 15.000 NAN 2.222 278.7
+sleep 1
+location 35.1859528 129.0024621 15.000 NAN 2.778 278.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-084.png
+sleep 0.8
+location 35.1859574 129.0024258 15.000 NAN 3.333 278.7
+sleep 1
+location 35.1859627 129.0023835 15.000 NAN 3.889 278.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-086.png
+sleep 0.8
+location 35.1859687 129.0023352 15.000 NAN 4.444 278.7
+sleep 1
+location 35.1859755 129.0022808 15.000 NAN 5.000 278.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-088.png
+sleep 0.8
+location 35.1859831 129.0022204 15.000 NAN 5.556 278.7
+sleep 1
+location 35.1859906 129.0021600 15.000 NAN 5.556 278.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-090.png
+sleep 0.8
+location 35.1859982 129.0020995 15.000 NAN 5.556 278.7
+sleep 1
+location 35.1860025 129.0020388 15.000 NAN 5.556 271.4
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-092.png
+sleep 0.8
+location 35.1860037 129.0019776 15.000 NAN 5.556 271.4
+sleep 1
+location 35.1860049 129.0019165 15.000 NAN 5.556 271.4
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-094.png
+sleep 0.8
+location 35.1860061 129.0018554 15.000 NAN 5.556 271.4
+sleep 1
+location 35.1860073 129.0017943 15.000 NAN 5.556 271.4
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-096.png
+sleep 0.8
+location 35.1860085 129.0017332 15.000 NAN 5.556 271.4
+sleep 1
+location 35.1860097 129.0016721 15.000 NAN 5.556 271.4
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-098.png
+sleep 0.8
+location 35.1860109 129.0016110 15.000 NAN 5.556 271.4
+sleep 1
+location 35.1860120 129.0015498 15.000 NAN 5.556 271.4
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-100.png
+sleep 0.8
+location 35.1860132 129.0014887 15.000 NAN 5.556 271.4
+sleep 1
+location 35.1860144 129.0014276 15.000 NAN 5.556 271.4
+sleep 1
+location 35.1860156 129.0013665 15.000 NAN 5.556 271.4
+sleep 1
+location 35.1860134 129.0013056 15.000 NAN 5.556 263.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-104.png
+sleep 0.8
+location 35.1860079 129.0012448 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1860024 129.0011840 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859969 129.0011233 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859914 129.0010625 15.000 NAN 5.556 263.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-108.png
+sleep 0.8
+location 35.1859859 129.0010018 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859804 129.0009410 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859749 129.0008802 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859694 129.0008195 15.000 NAN 5.556 263.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-112.png
+sleep 0.8
+location 35.1859639 129.0007587 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859584 129.0006980 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859529 129.0006372 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859474 129.0005764 15.000 NAN 5.556 263.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-116.png
+sleep 0.8
+location 35.1859419 129.0005157 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859364 129.0004549 15.000 NAN 5.556 263.7
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 5.556 263.7
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-119.png
+sleep 0.8
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 1
+location 35.1859309 129.0003942 15.000 NAN 0.000 NAN
+sleep 0.2
+screenshot ../../../../experiment10/RS-B1-r1-129.png
+sleep 0.8
