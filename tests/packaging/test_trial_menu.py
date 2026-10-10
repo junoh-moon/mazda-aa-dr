@@ -95,6 +95,56 @@ class TrialMenuTests(unittest.TestCase):
         self.assertTrue(ran.exists())
         self.assertNotIn('Cancelled', result.stdout)
 
+    def test_menu_seven_toggles_the_vim_side_channel_marker(self):
+        # Owner switch of the log-only VIM side channel (2026-10-10): state
+        # first, one numeric confirmation, marker written/removed atomically,
+        # mx5dr.conf untouched, existing numbers unchanged.
+        marker = self.base / 'vimchan-off'
+        result = self.menu('7\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('7 VIM side-channel log on/off (log only)', result.stdout)
+        self.assertIn('package not installed; nothing changed.', result.stdout)
+        self.assertFalse(self.base.exists())
+        self.fixture.run_script('install.sh')
+        config = (self.base / 'mx5dr.conf').read_bytes()
+        for keys in ('7\n0\n', '7\n\n0\n', '7\n77\n0\n', '7\n1\n0\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('VIM side-channel log now: ON', result.stdout)
+                self.assertIn('Enter 7 again to switch it OFF,', result.stdout)
+                self.assertIn('Cancelled; nothing changed.', result.stdout)
+                self.assertFalse(marker.exists())
+        eof = self.menu('7\n')
+        self.assertIn('Cancelled; nothing changed.', eof.stdout)
+        self.assertFalse(marker.exists())
+        result = self.menu('7\n7\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('VIM side-channel log set to OFF.', result.stdout)
+        self.assertIn('Read once at CMU start: choose 5', result.stdout)
+        self.assertEqual(marker.read_text(), 'off\n')
+        self.assertFalse(list(self.base.glob('vimchan-off.new.*')))
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        # The menu returns to the full list (all seven items) after the toggle.
+        self.assertEqual(result.stdout.count('6 Delete everything this package left on the CMU'), 2)
+        result = self.menu('7\n7\n0\n')
+        self.assertIn('VIM side-channel log now: OFF', result.stdout)
+        self.assertIn('VIM side-channel log set to ON.', result.stdout)
+        self.assertFalse(marker.exists())
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        # A directory in its place is reported, never changed.
+        marker.mkdir()
+        result = self.menu('7\n7\n0\n')
+        self.assertIn('OFF (vimchan-off is a directory).', result.stdout)
+        self.assertTrue(marker.is_dir())
+        marker.rmdir()
+        # Menu 1 (reinstall) clears the marker: the default is on again.
+        marker.write_text('off\n')
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Cleared vimchan-off', result.stdout)
+        self.assertFalse(marker.exists())
+
     def test_install_uses_bundle_mode_without_more_typed_commands(self):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         result = self.menu('1\n')
@@ -181,7 +231,7 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('2\n0\n')
         self.assertEqual(result.stdout.count('Parked USB trial menu'), 1)
         out = result.stdout
-        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-6 as listed before)'))
+        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-7 as listed before)'))
         self.assertIn('Startup check saved', out[:out.index('---- GO / NO-GO ----')])
         for line in out[out.index('---- GO / NO-GO ----'):].splitlines():
             self.assertLessEqual(len(line), 40, line)

@@ -415,6 +415,8 @@ struct Journal {
   }
   // Every accepted motion event (digest statistics of the quiet profile).
   void note_motion(const N::RawEvent& e) { if (filter) filter->motion(e); }
+  // One VIM side-channel datagram (0: rejected). Logging only.
+  void note_channels(const N::ChanBatch* b) { if (filter && !failed) filter->channels(b); }
   void tick(uint64_t now) { if (filter && !failed) { sync_filter(); filter->tick(now, emit_to, this); } }
   // Every worker turn: the quiet profile's paced RAW window drain. It
   // waits while rows that must be durable promptly are still queued.
@@ -951,6 +953,19 @@ void note_late(const N::RawEvent& raw,const N::ReceiveDiagnostic& d) {
 // affect is how old the newest estimate is when it is published; that stays
 // bounded by the pipeline's sample-age/sensor-timeout faults, the BETA 300 ms
 // receipt-silence check and the publication lease, all measured against now.
+// VIM side channel (validation/VIM_CHANNEL_CAPTURE_2026-10-10.md): logging
+// only. Bounded nonblocking drain after the motion drain; the batches only
+// reach the persistent profile's chan_digest statistics, never the
+// Pipeline, the holdout, BETA or the adapter.
+template<class Receiver>
+void drain_channels(Journal& j,Receiver& channels) {
+  for(unsigned i=0;i<32 && !j.failed;++i) {
+    N::ChanBatch b;
+    const N::ReceiveResult received=channels.receive(&b);
+    if(received==N::CHANNEL_EMPTY)break;
+    j.note_channels(received==N::CHANNEL_EVENT?&b:0);
+  }
+}
 template<class Receiver>
 void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
                   N::Pipeline& navigation,N::GpsHoldout& holdout,bool compute,
@@ -1443,6 +1458,25 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   // BETA (5) keeps SHADOW capture and adds the MODEL reverse latch and the
   // separate BETA core (decisions 7 and 9). SHADOW (4) is unchanged.
   const bool capture=(config.mode==4 || beta_requested) && motion.open_channel(motion_channel);
+  // The side channel exists only for the persistent profile's chan_digest
+  // rows; failing to open it changes nothing else.
+  // shadow_boot "vim_side_channel": open, disabled (owner marker),
+  // unavailable:<errno> (bind failed), not_persistent or no_capture. Rows
+  // from the tap then tell its own socket worked (0x116 always arrives with
+  // motion); n[1]/n[2] tell whether 0x169/0x15B arrive.
+  N::ChanReceiver side_channels;
+  char side_name[96],side_state[32];
+  bool side_capture=false;
+  if(!capture)strcpy(side_state,"no_capture");
+  else if(!j.filter)strcpy(side_state,"not_persistent");
+  else if(!N::chan_switch_on(N::CHAN_OFF_MARKER))strcpy(side_state,"disabled");
+  else if(!N::chan_channel_name(motion_channel,side_name))strcpy(side_state,"unavailable:0");
+  else {
+    errno=0;
+    side_capture=side_channels.open_channel(side_name);
+    if(side_capture)strcpy(side_state,"open");
+    else snprintf(side_state,sizeof side_state,"unavailable:%d",errno);
+  }
   bool shadow=capture && hook_installed &&
       navigation.init_model(model,mx5_dr_default_config(),nav_context,true,true,beta_requested) &&
       holdout.init_model(model,mx5_dr_default_config(),nav_context);
@@ -1457,11 +1491,11 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         "\"gps_anchor_gate_model\":true,\"wheel_scale_model\":true,"
         "\"yaw_zero\":%.9g,\"yaw_rad_per_count\":%.9g,"
         "\"wheel_kmh_per_count\":%.9g,\"wheel_zero_kmh\":%.9g,"
-        "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu}",
+        "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu,\"vim_side_channel\":\"%s\"}",
         shadow?"true":"false",capture?"true":"false",model.yaw_zero,model.yaw_rad_per_count,
         model.wheel_kmh_per_count,model.wheel_zero_kmh,
         model.reverse_forward_value,model.reverse_reverse_value,
-        (unsigned long long)model.reorder_ns);
+        (unsigned long long)model.reorder_ns,side_state);
     j.line(line);j.flush();
   }
   if (hook_installed && (config.mode == 2 || beta_requested) && !boot_durable && !j.failed) {
@@ -1607,6 +1641,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     if(capture && !j.failed)drain_motion(j,motion_batch,motion,navigation,holdout,
         shadow && model_session.available() && model_bus.available(),
         bus_boundary?model_bus.since_ns():model_session.since_ns(),bus_boundary);
+    if(side_capture && !j.failed)drain_channels(j,side_channels);
     if(stopping) {
       lds.close_channel();
       lds_sideband::Diagnostic diagnostic=lds_sideband::Diagnostic();
@@ -1714,7 +1749,7 @@ void* run_worker_inputs(const char* root,const char* motion_channel,const char* 
 } }
 
 namespace {
-void* worker_at(const char* root,const char* motion_channel="mx5dr.motion.v1") {
+void* worker_at(const char* root,const char* motion_channel=N::MOTION_CHANNEL_NAME) {
   // TODO: connect the physically verified sensor and per-request provider
   // backend. Never substitute the MODEL source or observed receipt clock.
   return mx5::runtime::run_worker(root,motion_channel,0);

@@ -61,6 +61,8 @@ LOWER_BOUNDS = {
                                "is already behind",
     "yaw_data": "yaw_stop/yaw_edge/yaw_reinit rows are rate-limited (the rest in persistent_profile.suppressed) and, "
                 "like the digests, diagnostic class (droppable); an open standstill is lost on a reset",
+    "chan_data": "chan_digest rows are diagnostic class (droppable), the side channel is lossy (tap 'lost' "
+                 "counts) and the open period is lost on a reset",
 }
 # Adapter PositionClass numbers carried as the send/position "class" field.
 POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
@@ -673,6 +675,10 @@ class Auditor:
         # Yaw-zero data rows (2026-10-09): per session, in journal order.
         self.yaw_rows = []      # (session index, row)
         self.yaw_digests = []   # (session index, digest yaw fields)
+        self.chan_rows = []     # (session index, chan_digest row)
+        self.chan_speeds = []   # (session index, since_ns, mono_ns, speed_kmh_min, moving yaw sum, count)
+        self.chan_side_states = []   # (session index, shadow_boot vim_side_channel value)
+        self.chan_digest_spans = {}  # session index -> [first since_ns, last mono_ns, motion events]
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
@@ -1063,6 +1069,8 @@ class Auditor:
             self.rejected_motion(row, source)
         elif kind == "motion_late_accepted":
             self.late_motion(row, source)
+        elif kind == "chan_digest":
+            self.chan_row(row, source)
         elif kind == "log_digest" or kind.endswith("_digest"):
             self.digest(row, source)
         elif kind == "raw_window":
@@ -1094,6 +1102,8 @@ class Auditor:
                             else "motion")
         elif kind in ("shadow_boot", "shadow", "shadow_input_reset", "shadow_disabled",
                       "shadow_pipeline_reset"):
+            if kind == "shadow_boot" and isinstance(row.get("vim_side_channel"), str):
+                self.chan_side_states.append((len(self.sessions), row["vim_side_channel"][:32]))
             if (kind == "shadow_boot" and bounded_number(row.get("wheel_kmh_per_count"), 0.0001, 1) and
                     bounded_number(row.get("wheel_zero_kmh"), -1000, 1000)):
                 self.session["beta"]["wheel_profile"] = (row["wheel_kmh_per_count"], row["wheel_zero_kmh"])
@@ -1181,6 +1191,15 @@ class Auditor:
             fields = None
         if fields is not None:
             self.yaw_digests.append((len(self.sessions), fields))
+            if row["kind"] == "log_digest" and bounded_number(row.get("speed_kmh_min"), -1000, 1000):
+                self.chan_speeds.append((len(self.sessions), fields["since_ns"], fields["mono_ns"],
+                                         row["speed_kmh_min"], sum(fields["y1"]), sum(fields["y1n"])))
+        if (row["kind"] == "log_digest" and bounded_int(row.get("since_ns"), 0, 2**64-1) and
+                bounded_int(row.get("motion_events"), 0, 2**63-1)):
+            span = self.chan_digest_spans.setdefault(len(self.sessions), [row["since_ns"], row["mono_ns"], 0])
+            span[0] = min(span[0], row["since_ns"])
+            span[1] = max(span[1], row["mono_ns"])
+            span[2] += row["motion_events"]
         p = self.persistent
         p["digests"] += 1
         p["digest_kinds"][row["kind"] + ":" + str(row.get("digest", "unspecified"))] += 1
@@ -1293,6 +1312,18 @@ class Auditor:
                     samples_per_second=rates, yaw_rad_per_count=YAW_RAD_PER_COUNT, lags_s=list(YAW_FIT_LAGS),
                     units="yaw in counts (2048 nominal zero); course in degrees",
                     gps_is_ground_truth=False, scope="diagnostic_yaw_zero_data_not_sensor_qualification")
+
+    def chan_row(self, row, source):
+        """VIM side-channel statistics (diagnostic raw integers; never evidence)."""
+        if not chan_row_valid(row):
+            self.issue("malformed_chan_row", source, "Invalid chan_digest row")
+            return
+        self.chan_rows.append((len(self.sessions), row))
+
+    def chan_report(self):
+        return chan_report(self.chan_rows, self.chan_speeds,
+                           [(s, r) for s, r in self.yaw_rows if r["kind"] == "yaw_stop"], self.chan_side_states,
+                           self.chan_digest_spans)
 
     def journal_lag_row(self, row, source):
         """The worker withheld BETA provenance because the journal writer was
@@ -2779,6 +2810,7 @@ class Auditor:
                                             scope="digest_counts_not_raw_evidence"),
                     journal_dropped=dict(self.journal_dropped, scope="diagnostic_rows_only"),
                     yaw_data=self.yaw_report(),
+                    chan_data=self.chan_report(),
                     journal_lag=dict(self.journal_lag),
                     lower_bounds=dict(LOWER_BOUNDS),
                     motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
@@ -3098,6 +3130,238 @@ def print_yaw_data(yaw, limit=40):
                    f(r["after"]), f(r["step"])))
 
 
+# ---- VIM side-channel rows (validation/VIM_CHANNEL_CAPTURE_2026-10-10.md) ----
+# chan_digest rows: raw integers of the longitudinal/lateral acceleration,
+# brake pressure, Qf bits, speed and rpm the VIP forwards in SPI 0x116, 0x169
+# and 0x15B. No scale, sign or zero is known; the thresholds below are in raw
+# counts and were chosen without vehicle data (candidate scale ~1952 counts/g
+# from a public DBC comment: 20 counts ~ 0.01 g). Diagnostic only.
+CHAN_PERIOD_S = 20.0
+CHAN_STRAIGHT_AY_COUNTS = 20      # |period lateral mean - stationary lateral reference|
+CHAN_STRAIGHT_AY_SPREAD = 120     # lateral max - min within the period
+CHAN_STRAIGHT_MIN_KMH = 30.0      # every log_digest of the period above this
+YAW_DEG_PER_COUNT = math.degrees(YAW_RAD_PER_COUNT)
+
+
+def _accel_list(value):
+    return value is None or (isinstance(value, list) and len(value) == 5 and
+                             bounded_int(value[0], 0, 8191) and bounded_int(value[1], 0, 8191) and
+                             value[0] <= value[1] and bounded_number(value[2], 0, 8191) and
+                             _num_or_none(value[3], 0, 8191) and bounded_int(value[4], 0, 2**63-1) and
+                             (value[3] is None) == (value[4] == 0))
+
+
+def chan_row_valid(row):
+    if not bounded_int(row.get("schema"), 1, 1) or not bounded_int(row.get("mono_ns"), 0, 2**64-1):
+        return False
+    n, q, bp, v, rpm = row.get("n"), row.get("q"), row.get("bp"), row.get("v"), row.get("rpm")
+    return (isinstance(n, list) and len(n) == 3 and all(bounded_int(x, 0, 2**63-1) for x in n) and
+            _accel_list(row.get("ax")) and _accel_list(row.get("ay")) and
+            (bp is None or (isinstance(bp, list) and len(bp) == 3 and bounded_int(bp[0], 0, 8191) and
+                            bounded_int(bp[1], 0, 8191) and bp[0] <= bp[1] and bounded_int(bp[2], 0, 2**63-1))) and
+            isinstance(q, list) and len(q) == 3 and all(bounded_int(x, 0, 15) for x in q) and
+            (v is None) == (rpm is None) and
+            (v is None or (isinstance(v, list) and len(v) == 3 and bounded_int(v[0], 0, 65535) and
+                           bounded_int(v[1], 0, 2**63-1) and bounded_int(v[2], -1, 3))) and
+            (rpm is None or (isinstance(rpm, list) and len(rpm) == 2 and bounded_int(rpm[0], 0, 8191) and
+                             bounded_int(rpm[1], 0, 2**63-1))) and
+            ("bad" not in row or (isinstance(row["bad"], list) and len(row["bad"]) == 4 and
+                                  all(bounded_int(x, 0, 2**63-1) for x in row["bad"]))) and
+            ("lost" not in row or bounded_int(row["lost"], 1, 2**63-1)) and
+            ("lost0" not in row or bounded_int(row["lost0"], 0, 2**32-1)) and
+            ("wrap" not in row or bounded_int(row["wrap"], 1, 3)))
+
+
+def chan_wrap(row):
+    """Wrap hint bits (1 ax, 2 ay): the row's flag or min < 200 and max > 7900."""
+    bits = row.get("wrap", 0)
+    for bit, key in ((1, "ax"), (2, "ay")):
+        a = row.get(key)
+        if a and a[0] < 200 and a[1] > 7900:
+            bits |= bit
+    return bits
+
+
+def _qf_values(mask):
+    return [value for value in range(4) if mask & (1 << value)]
+
+
+CHAN_SILENT_MIN_BOOT_S = 40.0   # tap_silent: boot at least this long (two chan periods)
+
+
+def chan_report(rows, speeds, stops, side_states=(), spans=None):
+    """Per-minute summaries, stationary values, the standstill table (yaw_stop
+    means against the stationary acceleration means of the same stop) and
+    the straight-stretch test. Periods are (previous row of the session or
+    mono_ns - 20 s, mono_ns]."""
+    periods, previous = [], {}
+    for session, row in rows:
+        start = previous.get(session, row["mono_ns"] / 1e9 - CHAN_PERIOD_S)
+        periods.append(dict(session=session, start=start, end=row["mono_ns"] / 1e9, row=row))
+        previous[session] = row["mono_ns"] / 1e9
+    totals = [sum(p["row"]["n"][i] for p in periods) for i in range(3)]
+    bad = [sum(p["row"].get("bad", [0, 0, 0, 0])[i] for p in periods) for i in range(4)]
+    lost = sum(p["row"].get("lost", 0) for p in periods)
+    lost_before = sum(p["row"].get("lost0", 0) for p in periods)
+    with_rows = {p["session"] for p in periods}
+    silent = sorted({session for session, state in side_states
+                     if state == "open" and session not in with_rows and (spans or {}).get(session) and
+                     spans[session][2] > 0 and (spans[session][1] - spans[session][0]) / 1e9 >= CHAN_SILENT_MIN_BOOT_S})
+    wraps = sum(1 for p in periods if chan_wrap(p["row"]))
+    masks = [0, 0, 0]
+    for p in periods:
+        for i in range(3):
+            masks[i] |= p["row"]["q"][i]
+
+    def stationary(key, chosen):
+        n = sum(p["row"][key][4] for p in chosen if p["row"][key])
+        if not n:
+            return None, 0
+        return round(sum(p["row"][key][3] * p["row"][key][4] for p in chosen if p["row"][key] and p["row"][key][4]) / n, 1), n
+
+    minutes = {}
+    for p in periods:
+        minutes.setdefault((p["session"], int(p["end"] // 60)), []).append(p)
+    per_minute = []
+    for (session, minute), chosen in sorted(minutes.items()):
+        entry = dict(session=session, minute_s=minute * 60, rows=len(chosen),
+                     messages=[sum(p["row"]["n"][i] for p in chosen) for i in range(3)])
+        for key in ("ax", "ay"):
+            present = [p["row"][key] for p in chosen if p["row"][key]]
+            entry[key] = None if not present else dict(
+                min=min(a[0] for a in present), max=max(a[1] for a in present),
+                mean_of_rows=round(sum(a[2] for a in present) / len(present), 1),
+                stationary_mean=stationary(key, chosen)[0])
+        brakes = [p["row"]["bp"] for p in chosen if p["row"]["bp"]]
+        entry["bp"] = None if not brakes else dict(min=min(b[0] for b in brakes), max=max(b[1] for b in brakes),
+                                                   nonzero=sum(b[2] for b in brakes))
+        last = [p["row"] for p in chosen if p["row"]["v"]]
+        entry["speed_raw_last"] = last[-1]["v"][0] if last else None
+        entry["rpm_raw_last"] = last[-1]["rpm"][0] if last else None
+        entry["speed_changes"] = sum(r["v"][1] for r in last)
+        entry["rpm_changes"] = sum(r["rpm"][1] for r in last)
+        per_minute.append(entry)
+    # Standstills: chan periods overlapping each yaw_stop (shared when a
+    # period also touches another standstill of the session).
+    intervals = [(s, r["boot_s"], r["boot_s"] + r["dur_ms"] / 1000.0, r) for s, r in stops]
+    stop_table = []
+    for session, start, end, r in intervals:
+        chosen = [p for p in periods if p["session"] == session and p["start"] < end and p["end"] > start]
+        shared = any(o is not r and os == session and p["start"] < oe and p["end"] > ostart
+                     for p in chosen for os, ostart, oe, o in intervals)
+        ax, axn = stationary("ax", chosen)
+        ay, ayn = stationary("ay", chosen)
+        stop_table.append(dict(session=session, boot_s=start, dur_s=round(end - start, 1),
+                               yaw_mean=round(2048 + r["ys"] / r["yn"], 2) if r["yn"] else None,
+                               ax_stationary=ax, ax_n=axn, ay_stationary=ay, ay_n=ayn,
+                               chan_rows=len(chosen), shared=shared))
+    # Straight stretches: lateral near its stationary reference (weighted
+    # stationary mean of the session so far), small spread, every log_digest
+    # of the period above CHAN_STRAIGHT_MIN_KMH; yaw excess = moving yaw mean
+    # of those digests minus the latest standstill mean before the period.
+    straight, reference = [], {}
+    for p in periods:
+        row, session = p["row"], p["session"]
+        ay = row["ay"]
+        if ay and ay[4]:
+            sum_, n = reference.get(session, (0.0, 0))
+            reference[session] = (sum_ + ay[3] * ay[4], n + ay[4])
+        sum_, n = reference.get(session, (0.0, 0))
+        if not ay or not n or chan_wrap(row):
+            continue
+        ref = sum_ / n
+        if abs(ay[2] - ref) > CHAN_STRAIGHT_AY_COUNTS or ay[1] - ay[0] > CHAN_STRAIGHT_AY_SPREAD:
+            continue
+        inside = [d for d in speeds if d[0] == session and d[1] >= p["start"] * 1e9 - 2e8 and d[2] <= p["end"] * 1e9 + 2e8]
+        if not inside or any(d[3] <= CHAN_STRAIGHT_MIN_KMH for d in inside):
+            continue
+        count = sum(d[5] for d in inside)
+        before = [r for s, r in stops if s == session and r["yn"] and r["boot_s"] + r["dur_ms"] / 1000.0 <= p["start"]]
+        zero = (2048 + before[-1]["ys"] / before[-1]["yn"]) if before else None
+        moving = 2048 + sum(d[4] for d in inside) / count if count else None
+        excess = None if zero is None or moving is None else moving - zero
+        if straight and straight[-1]["session"] == session and abs(straight[-1]["end_s"] - p["start"]) < 0.5:
+            s = straight[-1]
+            s["end_s"] = p["end"]
+            s["periods"] += 1
+            s["_sum"] += sum(d[4] for d in inside)
+            s["_n"] += count
+            s["min_kmh"] = min(s["min_kmh"], min(d[3] for d in inside))
+        else:
+            straight.append(dict(session=session, start_s=p["start"], end_s=p["end"], periods=1,
+                                 lateral_reference=round(ref, 1), stationary_yaw_zero=None if zero is None else round(zero, 2),
+                                 min_kmh=min(d[3] for d in inside), _sum=sum(d[4] for d in inside), _n=count))
+    for s in straight:
+        s["moving_yaw_mean"] = round(2048 + s["_sum"] / s["_n"], 2) if s["_n"] else None
+        excess = (None if s["moving_yaw_mean"] is None or s["stationary_yaw_zero"] is None
+                  else s["moving_yaw_mean"] - s["stationary_yaw_zero"])
+        s["yaw_excess_counts"] = None if excess is None else round(excess, 2)
+        s["yaw_excess_deg_s"] = None if excess is None else round(excess * YAW_DEG_PER_COUNT, 3)
+        s["start_s"], s["end_s"] = round(s["start_s"], 1), round(s["end_s"], 1)
+        del s["_sum"], s["_n"]
+    ax_st, ax_n = stationary("ax", periods)
+    ay_st, ay_n = stationary("ay", periods)
+    summary = dict(rows=len(periods), messages=dict(zip(("0x116", "0x169", "0x15B"), totals)),
+                   reached=dict(zip(("0x116", "0x169", "0x15B"), [t > 0 for t in totals])),
+                   bad=dict(zip(("short", "odd", "invalid", "rejected_datagrams"), bad)), tap_lost=lost,
+                   tap_lost_before_listening=lost_before, wrap_hint_rows=wraps,
+                   side_channel=sorted({state for _, state in side_states}),
+                   # Per boot: the worker listened (open), motion events
+                   # arrived, the boot lasted >= 40 s of digests, yet no row
+                   # arrived: the tap's own socket failed or the tap declined
+                   # (0x116 always arrives with motion). Right after a menu-7
+                   # toggle without the parked restart this can appear too.
+                   tap_silent_sessions=silent,
+                   tap_silent=bool(silent),
+                   qf_values=dict(zip(("0x116_a", "0x116_b", "0x169"), [_qf_values(m) for m in masks])),
+                   ax_stationary_mean=ax_st, ax_stationary_n=ax_n, ay_stationary_mean=ay_st, ay_stationary_n=ay_n,
+                   straight_stretches=len(straight), standstills=len(stop_table))
+    return dict(summary=summary, per_minute=per_minute, standstills=stop_table, straight_stretches=straight,
+                thresholds=dict(straight_ay_counts=CHAN_STRAIGHT_AY_COUNTS, straight_ay_spread=CHAN_STRAIGHT_AY_SPREAD,
+                                straight_min_kmh=CHAN_STRAIGHT_MIN_KMH),
+                units="raw integers (no scale, sign or zero known); yaw in counts (2048 nominal)",
+                scope="diagnostic_vim_side_channel_not_sensor_qualification")
+
+
+def print_chan_data(chan, limit=40):
+    """Text section: VIM side-channel rows (raw integers, diagnostic)."""
+    summary = chan["summary"]
+    if summary["tap_silent"]:
+        print("VIM side channel: the worker listened (vim_side_channel=open) but no chan_digest row arrived: "
+              "the tap's side socket failed or the tap declined")
+    if not summary["rows"]:
+        return
+    def f(value, fmt="%.1f"):
+        return "-" if value is None else fmt % value
+    print("VIM side channel (raw, diagnostic; state %s): %d rows, messages %s, bad %s, tap lost %d (before "
+          "listening %d), wrap-hint rows %d, Qf seen %s; stationary ax %s (n %d), ay %s (n %d)" %
+          (summary["side_channel"], summary["rows"], summary["messages"], summary["bad"], summary["tap_lost"],
+           summary["tap_lost_before_listening"], summary["wrap_hint_rows"], summary["qf_values"],
+           f(summary["ax_stationary_mean"]), summary["ax_stationary_n"], f(summary["ay_stationary_mean"]),
+           summary["ay_stationary_n"]))
+    if chan["per_minute"]:
+        print("  per minute: minute_s msgs ax(min/max/mean/stat) ay(min/max/mean/stat) bp(max/nz) speed rpm")
+        for m in chan["per_minute"][:limit]:
+            def a(x):
+                return "-" if not x else "%d/%d/%s/%s" % (x["min"], x["max"], f(x["mean_of_rows"]), f(x["stationary_mean"]))
+            print("   %8d %s %s %s %s %s %s" % (m["minute_s"], m["messages"], a(m["ax"]), a(m["ay"]),
+                                             "-" if not m["bp"] else "%d/%d" % (m["bp"]["max"], m["bp"]["nonzero"]),
+                                             f(m["speed_raw_last"], "%d"), f(m["rpm_raw_last"], "%d")))
+    if chan["standstills"]:
+        print("  standstills: boot_s dur_s yaw_mean ax_stationary ay_stationary rows shared")
+        for s in chan["standstills"][:limit]:
+            print("   %8.1f %6.1f %8s %8s %8s %d %s" % (s["boot_s"], s["dur_s"], f(s["yaw_mean"], "%.2f"),
+                                                    f(s["ax_stationary"]), f(s["ay_stationary"]), s["chan_rows"],
+                                                    "shared" if s["shared"] else ""))
+    if chan["straight_stretches"]:
+        print("  straight stretches (lateral near stationary, > %.0f km/h): start_s end_s min_kmh moving_yaw "
+              "stationary_zero excess(counts, deg/s)" % CHAN_STRAIGHT_MIN_KMH)
+        for s in chan["straight_stretches"][:limit]:
+            print("   %8.1f %8.1f %5.1f %8s %8s %s %s" % (s["start_s"], s["end_s"], s["min_kmh"],
+                                                     f(s["moving_yaw_mean"], "%.2f"), f(s["stationary_yaw_zero"], "%.2f"),
+                                                     f(s["yaw_excess_counts"], "%.2f"), f(s["yaw_excess_deg_s"], "%.3f")))
+
+
 def analyze(paths):
     auditor = Auditor()
     for path in paths:
@@ -3168,6 +3432,7 @@ def main(argv=None):
         if report["persistent_profile"]["suppressed"]:
             print("Persistent-profile suppressed rows (lower bound): %s" % report["persistent_profile"]["suppressed"])
         print_yaw_data(report["yaw_data"])
+        print_chan_data(report["chan_data"])
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")

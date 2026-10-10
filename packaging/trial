@@ -280,6 +280,49 @@ finish_and_export() {
     fi
 }
 
+# Menu 7 (2026-10-10, validation/VIM_CHANNEL_CAPTURE_2026-10-10.md): the
+# owner switch of the log-only VIM side channel. While BASE/vimchan-off exists
+# the VIM tap opens no side-channel socket and the worker binds none; both
+# read it once at CMU start. Never touches mx5dr.conf (the guard binds its
+# hash). Shows the state first, then one numeric confirmation (7 again).
+vim_side_toggle() {
+    marker=$BASE/vimchan-off
+    if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
+        echo 'VIM side-channel log: package not installed; nothing changed.'
+        return 0
+    fi
+    if [ -d "$marker" ] && [ ! -L "$marker" ]; then
+        echo 'VIM side-channel log: OFF (vimchan-off is a directory).'
+        echo 'Not changed by this menu; menu 6 removes it.'
+        return 0
+    fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then state=OFF; next=ON
+    else state=ON; next=OFF; fi
+    printf '%s
+' "VIM side-channel log now: $state" \
+        'Log-only; BETA and LOCATION unaffected.' \
+        "Enter 7 again to switch it $next," \
+        'anything else cancels.'
+    printf 'Number, then Enter: '
+    if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
+    if [ "$confirm" != 7 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
+    if [ "$next" = OFF ]; then
+        marker_tmp=$BASE/vimchan-off.new.$$
+        rm -f "$marker_tmp" || fail 'Cannot stage the vimchan-off marker'
+        if ! printf 'off\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
+            rm -f "$marker_tmp" || :
+            fail 'Cannot write the vimchan-off marker'
+        fi
+    else
+        rm -f "$marker" || fail 'Cannot remove the vimchan-off marker'
+    fi
+    sync
+    echo "VIM side-channel log set to $next."
+    echo 'Read once at CMU start: choose 5'
+    echo '(parked reboot) for it to take effect.'
+    return 0
+}
+
 # Display only: install.sh validates the same marker again before any write.
 bundle_mode() {
     marker=$HERE/bundle-default-mode
@@ -312,7 +355,7 @@ short_menu=0
 while :; do
     if [ "$short_menu" = 1 ]; then
         short_menu=0
-        printf '\n%s\n' '0 Exit (1-6 as listed before)'
+        printf '\n%s\n' '0 Exit (1-7 as listed before)'
     else
         printf '\n%s\n' 'Parked USB trial menu' \
             "This USB installs mode $BUNDLE_MODE: $mode_text" \
@@ -322,6 +365,7 @@ while :; do
             '4 Uninstall (keeps collected logs)' \
             '5 Reboot CMU now through the original system reboot command' \
             '6 Delete everything this package left on the CMU (run 4, then 5, first)' \
+            '7 VIM side-channel log on/off (log only)' \
             '0 Exit'
         echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
@@ -346,6 +390,7 @@ while :; do
            if ! IFS= read -r confirm; then echo 'Cancelled; nothing deleted.'; exit "$last_rc"; fi
            if [ "$confirm" != 6 ]; then echo 'Cancelled; nothing deleted.'; continue; fi
            sh "$HERE/purge.sh" "$HERE"; exit 0;;
+        7) if ! vim_side_toggle; then exit "$last_rc"; fi;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac

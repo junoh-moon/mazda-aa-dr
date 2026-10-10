@@ -60,7 +60,7 @@ function beta_member(key, s, p) {
 function clear_model_snapshot() {shadow=""; solution=""; processed=""; pipeline=""; result=""; attempts=""; intervals=""}
 function reset_runtime() {
     health_window=5; model_window=2; log_profile="full"
-    health=""; hooks=""; boot_install=""; dropped=""; audit=""; capture=""; mode=""
+    health=""; hooks=""; boot_install=""; dropped=""; audit=""; capture=""; mode=""; side=""
     computation=""; position=""; position_mode=""; anchor="none_observed"
     rejected_raw=0; untimed_rejected_raw=0; untimed_motion_reset=0
     clear_model_snapshot()
@@ -170,7 +170,7 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
         }
     }
     if (FILENAME ~ /\/trace\.[012]\.jsonl$/ && runtime) {
-        if (kind=="shadow_boot") capture=field("capture_active")
+        if (kind=="shadow_boot") { capture=field("capture_active"); side=field("vim_side_channel") }
         # The status snapshot is taken at `now`. The journals keep growing
         # while this script runs; a row written after `now` must not replace
         # the latest value that existed at `now` (it would then fail the age
@@ -294,6 +294,9 @@ END {
         solution=="true" && result=="OK" && pipeline=="OK" && audit=="0" && dropped=="0"
     print "model_solution=" (usable ? "observed" : "not_observed") " domain=model assist_ready=false"
     print "log_profile=" log_profile " health_window_s=" health_window
+    # The worker's side-channel state from this boot's shadow_boot row
+    # (older builds and the full profile without the field: unavailable).
+    print "vim_side_channel=" (runtime && side!="" ? side : "unavailable")
     print "gps_anchor_gate=" anchor " last_position_rejection_30s=" position_rejection " last_motion_reset_30s=" motion_rejection " last_model_exclusion_30s=" motion_exclusion
     print "rejected_raw_seen_this_boot=" (rejected_raw ? "true" : "false") " untimed_rejected_raw_seen=" (untimed_rejected_raw ? "true" : "false") " untimed_motion_reset_seen=" (untimed_motion_reset ? "true" : "false")
     print "last_pipeline_reset_this_boot=" pipeline_reset " operation=" reset_operation " receive_seq=" reset_sequence " mono_ns=" reset_time " untimed_reset_seen=" (untimed_pipeline_reset ? "true" : "false")

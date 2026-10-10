@@ -254,5 +254,135 @@ class YawDataRows(unittest.TestCase):
         self.assertLess(max(abs(z - 2048) for z in fits), 0.5)
 
 
+# VIM side-channel rows (2026-10-10, src/runtime/chan_digest_log.h,
+# validation/VIM_CHANNEL_CAPTURE_2026-10-10.md): logging only. With the
+# synthetic side channel off (--chan off) the profile is the previous one;
+# with it on, chan_digest rows are added and every other row is unchanged.
+def without_chan(rows):
+    out = []
+    for r in rows:
+        if r['kind'] == 'chan_digest':
+            continue
+        if r['kind'] == 'boot':
+            r = {k: v for k, v in r.items() if k != 'pid'}
+        out.append(json.dumps(r, sort_keys=True))
+    return out
+
+
+@unittest.skipUnless(TOOL.exists(), 'build/log_rate not built')
+class ChanRows(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='mx5dr-chan-rows-')
+        cls.runs = {}
+        scenarios = dict(drive=(3600, VEHICLE_YAW), stopgo=(3600, VEHICLE_YAW + ('--drive', 'stopgo')),
+                         long=(14400, VEHICLE_YAW))
+        for name, (seconds, extra) in scenarios.items():
+            for state in ('on', 'off'):
+                directory = os.path.join(cls.tmp.name, '%s-%s' % (name, state))
+                cls.runs[(name, state)] = run('persistent', directory, seconds,
+                                              extra=extra + ('--chan', state)) + (directory,)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_logic_and_other_rows_unchanged(self):
+        for name in ('drive', 'stopgo', 'long'):
+            (on, on_rows, _), (off, off_rows, _) = self.runs[(name, 'on')], self.runs[(name, 'off')]
+            self.assertEqual(evidence(on_rows), evidence(off_rows), name)
+            self.assertEqual(without_chan(on_rows), without_chan(off_rows), name)
+            self.assertFalse([r for r in off_rows if r['kind'] == 'chan_digest'])
+            self.assertTrue([r for r in on_rows if r['kind'] == 'chan_digest'])
+            self.assertEqual(on['beta_state'], off['beta_state'])
+
+    def test_rate_within_budget(self):
+        rates = {}
+        for name in ('drive', 'stopgo', 'long'):
+            on, off = self.runs[(name, 'on')][0], self.runs[(name, 'off')][0]
+            rates[name] = (off['bytes_per_s'], on['bytes_per_s'], round(on['bytes_per_s'] - off['bytes_per_s'], 1))
+            self.assertGreater(rates[name][2], 5, name)    # the rows are really written
+            self.assertLess(rates[name][2], 15, name)      # design: ~10 B/s (20 s cadence)
+        print('chan rows log rate (before, after, added B/s): %s' % rates)
+        self.assertLess(rates['drive'][1], 2048 * 0.97)
+        self.assertLess(rates['long'][1], 2048 * 0.97)
+        self.assertLess(rates['stopgo'][1], 2048)
+        found = {}
+        for state in ('on', 'off'):
+            a, b = self.runs[('drive', state)][0], self.runs[('long', state)][0]
+            steady = (b['total_bytes'] - a['total_bytes']) / float(b['seconds'] - a['seconds'])
+            found[state] = (round(steady, 1), round(a['total_bytes'] - steady * a['seconds']))
+        print('chan rows steady B/s and fixed burst B: %s' % found)
+        self.assertLess(found['on'][0], 2048 * 0.97)
+        self.assertLess(abs(found['on'][1] - found['off'][1]), 5000)
+
+    def test_rows(self):
+        rows = [r for r in self.runs[('drive', 'on')][1] if r['kind'] == 'chan_digest']
+        self.assertEqual(len(rows), 180)                  # one per 20 s
+        times = [r['mono_ns'] for r in rows]
+        self.assertLessEqual(max(b - a for a, b in zip(times, times[1:])), 20.06e9)
+        self.assertTrue(all(audit.chan_row_valid(r) for r in rows))
+        self.assertTrue(all(len(json.dumps(r, separators=(',', ':'))) < 400 for r in rows))
+        self.assertTrue(all('bad' not in r and 'lost' not in r and 'wrap' not in r for r in rows))
+        self.assertEqual([r.get('lost0') for r in rows[:2]], [0, None])   # baseline once
+        self.assertEqual(sum(r['n'][0] for r in rows), 36000)   # every synthetic 0x116 (10 Hz)
+
+    def test_analyzer_reads_the_rows(self):
+        report, codes = analyze(self.runs[('drive', 'on')][2])
+        self.assertFalse([c for (_, c) in codes if c == 'malformed_chan_row'])
+        chan = report['chan_data']
+        self.assertEqual(chan['summary']['rows'], 180)
+        self.assertEqual(chan['summary']['reached'], {'0x116': True, '0x169': True, '0x15B': True})
+        self.assertEqual(chan['summary']['qf_values'], {'0x116_a': [3], '0x116_b': [3], '0x169': [3]})
+        # Authored zero 4096: the stationary means find it.
+        self.assertAlmostEqual(chan['summary']['ay_stationary_mean'], 4096, delta=0.5)
+        self.assertAlmostEqual(chan['summary']['ax_stationary_mean'], 4096, delta=1.0)
+        self.assertEqual(len(chan['per_minute']), 61)
+        # One table entry per yaw_stop row, with stationary acceleration means.
+        self.assertEqual(len(chan['standstills']), 18)
+        self.assertTrue(all(s['ay_stationary'] is not None for s in chan['standstills']))
+        # Straight stretches: the synthetic drive integrates exactly zero 2048.
+        straight = chan['straight_stretches']
+        self.assertGreater(len(straight), 10)
+        self.assertTrue(all(s['min_kmh'] > 30 for s in straight))
+        self.assertLess(max(abs(s['yaw_excess_counts']) for s in straight if s['yaw_excess_counts'] is not None), 0.5)
+        _, off_codes = analyze(self.runs[('drive', 'off')][2])
+        self.assertEqual({c for (_, c) in codes}, {c for (_, c) in off_codes})
+
+    def test_analyzer_rejects_malformed_rows(self):
+        good = dict(kind='chan_digest', schema=1, mono_ns=20000000000, n=[200, 200, 3],
+                    ax=[4000, 4100, 4050.5, 4001.0, 20], bp=[0, 300, 4], ay=[4090, 4100, 4095.0, None, 0],
+                    q=[8, 10, 8], v=[4000, 2, 3], rpm=[2400, 2])
+        self.assertTrue(audit.chan_row_valid(good))
+        self.assertTrue(audit.chan_row_valid(dict(good, ax=None, bp=None, ay=None, v=None, rpm=None,
+                                                  bad=[1, 0, 0, 2], lost=4, lost0=0, wrap=3, future='tolerated')))
+        # Wrap hint from the flag or from min < 200 and max > 7900.
+        self.assertEqual(audit.chan_wrap(dict(good, ay=[100, 8000, 4000.0, None, 0])), 2)
+        self.assertEqual(audit.chan_wrap(dict(good, wrap=1)), 1)
+        self.assertEqual(audit.chan_wrap(good), 0)
+        # Per boot: worker listened, motion events, >= 40 s of digests, no rows.
+        long_boot = {1: [0, 60 * 10**9, 500]}
+        silent = audit.chan_report([], [], [], [(1, 'open')], long_boot)
+        self.assertTrue(silent['summary']['tap_silent'])
+        self.assertEqual(silent['summary']['tap_silent_sessions'], [1])
+        self.assertFalse(audit.chan_report([], [], [], [(1, 'disabled')], long_boot)['summary']['tap_silent'])
+        self.assertFalse(audit.chan_report([], [], [], [(1, 'open')], {1: [0, 30 * 10**9, 500]})['summary']['tap_silent'])
+        self.assertFalse(audit.chan_report([], [], [], [(1, 'open')], {1: [0, 60 * 10**9, 0]})['summary']['tap_silent'])
+        self.assertFalse(audit.chan_report([], [], [], [(1, 'open')], None)['summary']['tap_silent'])
+        # Another boot with rows does not hide a silent boot.
+        row = dict(good, mono_ns=20 * 10**9)
+        both = audit.chan_report([(2, row)], [], [], [(1, 'open'), (2, 'open')], {1: long_boot[1], 2: [0, 60 * 10**9, 9]})
+        self.assertEqual(both['summary']['tap_silent_sessions'], [1])
+        for change in (dict(q=[16, 8, 8]), dict(n=[1, 2]), dict(ax=[4100, 4000, 4050.0, None, 0]),
+                       dict(ax=[0, 9000, 1.0, None, 0]), dict(ay=[0, 1, 0.5, 1.0, 0]), dict(ay=[0, 1, 0.5, None, 3]),
+                       dict(v=None), dict(rpm=[9000, 0]), dict(v=[1, 0, 4]), dict(bad=[0, 0, 0]), dict(lost=0),
+                       dict(wrap=0), dict(wrap=4), dict(lost0=-1),
+                       dict(schema=2), dict(bp=[5, 1, 0])):
+            self.assertFalse(audit.chan_row_valid(dict(good, **change)), change)
+        a = audit.Auditor()
+        a.consume(dict(good, q=[99, 0, 0]), 'synthetic:1')
+        self.assertIn('malformed_chan_row', [i['code'] for i in a.report()['issues']])
+
+
 if __name__ == '__main__':
     unittest.main()

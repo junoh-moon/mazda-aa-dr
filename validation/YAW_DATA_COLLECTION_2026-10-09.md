@@ -224,7 +224,9 @@ Product isolation: a collector that perturbs product rows.
 Analyzer: fit sign, step sign, row validation, digest gate.
 
 ## Not collected, and why
-- Acceleration, steering, temperature, rpm, A/C: not in the VIM tap.
+- Acceleration, steering, temperature, rpm, A/C: not in the VIM tap. Correction (2026-10-10): this was wrong for acceleration,
+  brake pressure and rpm. The VIP forwards them in SPI 0x116 (+4..+9), 0x169 and 0x15B (validation/VIP_CAN_MAP_2026-10-03.md);
+  the motion path only ignores them. They are now logged as raw `chan_digest` rows (validation/VIM_CHANNEL_CAPTURE_2026-10-10.md).
 - CMU SoC temperature: out of scope; its firmware path is unverified.
 - Per-fix speed and accuracy: only the digest's worst accuracy and slowest speed.
 - Raw yaw outside event windows: not within the log budget.

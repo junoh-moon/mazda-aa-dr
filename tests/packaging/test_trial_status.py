@@ -292,6 +292,16 @@ exec "$MX5DR_REAL_OD" "$@"
         self.assertIn('startup_state=prior_arming_history_invalid', result.stdout)
         self.assertIn('one_boot=unconfirmed', result.stdout)
 
+    def test_vim_side_channel_marker_and_state(self):
+        result = self.run_status()
+        self.assertIn('vim_side_channel_marker=absent', result.stdout)
+        self.assertIn('vim_side_channel=unavailable', result.stdout)   # shadow_boot without the field
+        (self.base / 'vimchan-off').write_text('off\n')
+        self.trace[1] = dict(kind='shadow_boot', active=True, capture_active=True, vim_side_channel='disabled')
+        result = self.run_status()
+        self.assertIn('vim_side_channel_marker=present', result.stdout)
+        self.assertIn('vim_side_channel=disabled', result.stdout)
+
     def test_runtime_disable_marker_blocks_old_boot_evidence(self):
         (self.logs / 'disable-next-start').write_text('restore_failed_fatal\n')
         result = self.run_status()

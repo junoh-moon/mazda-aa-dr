@@ -127,6 +127,10 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/journal-queue-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-ring-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_log_profile.cpp -o "$build/log-profile-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/log-profile-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_yaw_rows.cpp -o "$build/yaw-rows-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/yaw-rows-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_chan_rows.cpp -o "$build/chan-rows-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/chan-rows-test"
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/loader.cpp src/runtime/assist_worker.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp "$build/core.o" tests/runtime/test_journal.cpp -ldl -pthread -lrt -lm -o "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/journal-test" --writer
@@ -215,6 +219,8 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/vim-tap-test"
 result=0
 qemu-arm -L "$QEMU_SYSROOT" "$build/motion-channel-test" || result=$?
 [ "$result" -eq 0 ] || [ "$result" -eq 77 ]
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/navigation/test_chan_channel.cpp src/navigation/channel.cpp -pthread -lrt -o "$build/chan-channel-test"
+qemu-arm -L "$QEMU_SYSROOT" "$build/chan-channel-test"
 
 "${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/navigation/test_live_pipeline.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/navigation/pipeline.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -lrt -o "$build/live-pipeline-test"
 qemu-arm -L "$QEMU_SYSROOT" "$build/live-pipeline-test"

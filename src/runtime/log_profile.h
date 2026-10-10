@@ -53,11 +53,18 @@
 //    rate-limited per kind with the rest counted in the digest's suppressed
 //    map. set_yaw_rows(false) turns them off (tests: everything else is
 //    then byte-identical).
+//  * VIM side-channel rows (2026-10-10, chan_digest_log.h and
+//    validation/VIM_CHANNEL_CAPTURE_2026-10-10.md): one chan_digest row per
+//    20 s with raw statistics of the longitudinal/lateral acceleration,
+//    brake pressure, Qf bits, speed and rpm from channels(). Logging only,
+//    diagnostic rows (ROW_RAW), written only once side-channel input
+//    arrived. set_chan_rows(false) turns them off.
 // Worker thread only. No allocation after init(), no I/O except through the
 // emit callback, bounded work per row. OEM threads never reach this code.
 #include "adapter/adapter.h"
 #include "navigation/pipeline.h"
 #include "runtime/yaw_study_log.h"
+#include "runtime/chan_digest_log.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -99,9 +106,14 @@ public:
     // ,"raw_window":true after the kind of a row written from the window.
     static const size_t WINDOW_TAG_BYTES=18;
 
-    PersistentLog():window_(0),cap_(0),scratch_(0),paced_(DRAIN_ROWS_PER_S),yaw_rows_(true) { reset_all(); }
+    PersistentLog():window_(0),cap_(0),scratch_(0),paced_(DRAIN_ROWS_PER_S),yaw_rows_(true),chan_rows_(true) { reset_all(); }
     // Yaw-zero data rows and digest fields (default on).
     void set_yaw_rows(bool on) { yaw_rows_=on; }
+    // VIM side-channel rows (default on; written only after channels() input).
+    void set_chan_rows(bool on) { chan_rows_=on; }
+    // One VIM side-channel datagram (decoded batch, or 0 when rejected).
+    // Logging only: never motion, never a decision input.
+    void channels(const navigation::ChanBatch* b) { if(chan_rows_)chan_.batch(b); }
     // Rows per second of the window drain; 0 writes the whole window at the
     // event (the behaviour before 2026-10-08; unit tests of window contents).
     void set_paced(unsigned rows_per_s) { paced_=rows_per_s; }
@@ -184,6 +196,7 @@ public:
         case K_CAPTURE_END:
             trigger("capture_end",now,emit,context,true);
             if(yaw_rows_) { YawThunk t={emit,context};yaw_.flush(now,yaw_sink,&t); }
+            if(chan_rows_) { YawThunk t={emit,context};chan_.flush(now,yaw_sink,&t); }
             digest(now,"final",emit,context);
             keep(s,emit,context);
             return;
@@ -227,6 +240,7 @@ public:
     void motion(const navigation::RawEvent& e) {
         if(total_events_!=UINT64_MAX)++total_events_;
         if(yaw_rows_)yaw_.motion(e,model_);
+        if(chan_rows_)chan_.wheels(e,model_);
         if(e.kind>=navigation::WHEELS && e.kind<=navigation::REVERSE) {
             ++kind_events_[e.kind-1];last_received_[e.kind-1]=e.received_ns;
         }
@@ -404,9 +418,10 @@ private:
         if(!since_) { since_=now?now:1;yaw_.period(since_);return; }
         if(now>=since_ && now-since_>=DIGEST_NS)digest(now,"periodic",emit,context);
         if(yaw_rows_) { YawThunk t={emit,context};yaw_.poll(now,yaw_sink,&t); }
+        if(chan_rows_) { YawThunk t={emit,context};chan_.poll(now,yaw_sink,&t); }
     }
     struct YawThunk { Emit emit;void* context; };
-    // Yaw rows are diagnostic class whatever their kind (ROW_RAW).
+    // Yaw and chan_digest rows are diagnostic class whatever their kind (ROW_RAW).
     static void yaw_sink(void* thunk,const char* row) {
         const YawThunk* t=static_cast<const YawThunk*>(thunk);t->emit(t->context,row,ROW_RAW);
     }
@@ -517,7 +532,7 @@ private:
         have_class_=false;last_class_=0;beta_live_=false;journal_current_=true;have_motion_=false;epoch_=last_seq_=last_motion_ns_=0;total_events_=0;
         for(unsigned i=0;i<3;++i)last_received_[i]=0;
         reverse_value_=-1;trigger_[0]=0;
-        yaw_.reset();
+        yaw_.reset();chan_.reset();
         reset_period(0);since_=0;
     }
     // ---- RAW window: rows [u32 length|evidence bit][u64 mono_ns][bytes], oldest first ----
@@ -574,6 +589,8 @@ private:
     char trigger_[40];
     bool yaw_rows_;
     YawStudyLog yaw_;
+    bool chan_rows_;
+    ChanDigestLog chan_;
     PersistentLog(const PersistentLog&);
     PersistentLog& operator=(const PersistentLog&);
 };

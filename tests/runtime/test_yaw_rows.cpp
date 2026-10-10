@@ -33,10 +33,11 @@ static bool has(const std::string& row,const char* needle) {
     if(row.find(needle)!=std::string::npos)return true;
     fprintf(stderr,"missing %s in %s\n",needle,row.c_str());return false;
 }
-static long field(const std::string& row,const char* name) {
+// long long: mono_ns values exceed a 32-bit long on the ARM target.
+static long long field(const std::string& row,const char* name) {
     const std::string k=std::string("\"")+name+"\":";
     const size_t at=row.find(k);assert(at!=std::string::npos);
-    return atol(row.c_str()+at+k.size());
+    return strtoll(row.c_str()+at+k.size(),0,10);
 }
 
 // A synthetic drive at the vehicle cadence: wheels at t%100 ms == 0, a yaw
@@ -93,7 +94,7 @@ static void stop_row() {
     assert(rows("yaw_stop").empty());
     f.run(1,20,2048);              // 5.3 s after the last zero wheel event (17.9 s)
     const std::vector<std::string> r=rows("yaw_stop");
-    assert(r.size()==1 && field(r[0],"mono_ns")==23200000000L);
+    assert(r.size()==1 && field(r[0],"mono_ns")==23200000000LL);
     // Zero wheel events at stop .. stop+2.9 s. Yaw windows within 0.2 s of
     // the first zero event (15.05, 15.15) still hold moving samples and the
     // one after the last zero event (17.95) may: excluded. Left: 8 x -1

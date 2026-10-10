@@ -232,6 +232,12 @@ int main(int argc,char** argv) {
                line.find("\"input_available\":true")!=std::string::npos &&
                line.find("\"result\":\"unobserved\"")!=std::string::npos)session=true;
         assert(session); // The declined fence admits MODEL input.
+        // The full profile binds no VIM side channel (log-only, persistent profile only).
+        std::ifstream g((logs+"/trace.0.jsonl").c_str());bool side=false;
+        while(std::getline(g,line))
+            if(line.find("\"kind\":\"shadow_boot\"")!=std::string::npos &&
+               line.find(",\"vim_side_channel\":\"not_persistent\"}")!=std::string::npos)side=true;
+        assert(side);
     }
     assert(A::mode()==A::BETA);
     N::MotionSender sender;assert(sender.open_channel(motion_channel));uint64_t sequence=0;

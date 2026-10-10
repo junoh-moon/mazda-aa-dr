@@ -22,9 +22,11 @@
 //    2048*count) with their counts, the stationary sum/count, the integer
 //    GPS course of every new fix, and the mean left-right wheel difference
 //    of slot pairs 0-1 and 2-3.
-// The VIM tap provides only wheel speeds (0x100), yaw window sums/counts
-// (0x116) and the reverse lamp (0x118): no acceleration, steering,
-// temperature, rpm or A/C signal exists to log.
+// The VIM motion path decodes only wheel speeds (0x100), yaw window
+// sums/counts (0x116) and the reverse lamp (0x118). Correction 2026-10-10:
+// the VIP also forwards longitudinal acceleration, brake pressure and Qf
+// bits (0x116 +4..+9), lateral acceleration (0x169) and speed/rpm (0x15B);
+// those are logged separately as raw chan_digest rows (chan_digest_log.h).
 // Times: wheel/yaw events by their producer receipt time (received_ns),
 // POSITION rows by their hook time, rows by the worker clock; all are
 // CLOCK_MONOTONIC (seconds since kernel boot).

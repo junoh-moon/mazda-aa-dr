@@ -8,6 +8,7 @@
 #include <cstring>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
@@ -202,5 +203,101 @@ bool MotionSender::send_event(const RawEvent& e) {
     if(fd_<0 || !encode_motion(e,bytes) || !address(name_,&a,&n))return false;
     return sendto(fd_,bytes,sizeof(bytes),MSG_DONTWAIT|MSG_NOSIGNAL,
                   reinterpret_cast<sockaddr*>(&a),n)==static_cast<ssize_t>(sizeof(bytes));
+}
+
+// ---- VIM side channel (diagnostic only; see channel.h) ----
+size_t encode_chan_batch(const ChanBatch& b,unsigned char out[CHAN_DATAGRAM_MAX]) {
+    if(!out || !b.count || b.count>CHAN_RECORDS || !b.epoch || !b.batch)return 0;
+    const size_t n=CHAN_HEADER_SIZE+b.count*CHAN_RECORD_SIZE;
+    memset(out,0,n);memcpy(out,"MDC1",4);
+    put(out+4,1,2);put(out+6,b.count,2);put(out+8,b.epoch,8);put(out+16,b.batch,4);put(out+20,b.lost,4);
+    for(unsigned i=0;i<b.count;++i) {
+        const ChanRecord& r=b.records[i];
+        unsigned char* p=out+CHAN_HEADER_SIZE+i*CHAN_RECORD_SIZE;
+        if(r.length>CHAN_PAYLOAD && r.length!=CHAN_LENGTH_INVALID)return 0;
+        put(p,r.id,2);p[2]=r.length;put(p+4,r.dt_ms,4);
+        if(r.length<=CHAN_PAYLOAD)memcpy(p+8,r.data,r.length);
+    }
+    return n;
+}
+bool decode_chan_batch(const unsigned char* p,size_t n,ChanBatch* out) {
+    if(!out)return false;
+    memset(out,0,sizeof *out);
+    if(!p || n<CHAN_HEADER_SIZE+CHAN_RECORD_SIZE || n>CHAN_DATAGRAM_MAX || memcmp(p,"MDC1",4) || get(p+4,2)!=1)
+        return false;
+    const unsigned count=unsigned(get(p+6,2));
+    if(!count || count>CHAN_RECORDS || n!=CHAN_HEADER_SIZE+count*CHAN_RECORD_SIZE)return false;
+    ChanBatch b;memset(&b,0,sizeof b);
+    b.epoch=get(p+8,8);b.batch=uint32_t(get(p+16,4));b.lost=uint32_t(get(p+20,4));b.count=count;
+    if(!b.epoch || !b.batch)return false;
+    for(unsigned i=0;i<count;++i) {
+        const unsigned char* q=p+CHAN_HEADER_SIZE+i*CHAN_RECORD_SIZE;
+        ChanRecord& r=b.records[i];
+        r.id=uint16_t(get(q,2));r.length=q[2];r.dt_ms=uint32_t(get(q+4,4));
+        if(q[3] || (r.length>CHAN_PAYLOAD && r.length!=CHAN_LENGTH_INVALID))return false;
+        const size_t used=r.length<=CHAN_PAYLOAD?r.length:0;
+        for(size_t k=used;k<CHAN_PAYLOAD;++k)if(q[8+k])return false;   // canonical zero padding
+        memcpy(r.data,q+8,used);
+    }
+    *out=b;return true;
+}
+bool chan_channel_name(const char* motion,char out[96]) {
+    if(!motion || !out)return false;
+    const size_t n=strlen(motion);
+    if(!n || n+3>95)return false;
+    memcpy(out,motion,n);memcpy(out+n,".ch",4);return true;
+}
+bool chan_switch_on(const char* marker) {
+    struct stat st;
+    return !marker || lstat(marker,&st)!=0;
+}
+ChanSender::ChanSender():fd_(-1){name_[0]=0;}
+ChanSender::~ChanSender(){if(fd_>=0)close(fd_);}
+bool ChanSender::open_channel(const char* name) {
+    if(fd_>=0)return false;
+    sockaddr_un a;socklen_t n;if(!address(name,&a,&n))return false;
+    fd_=socket(AF_UNIX,SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);
+    if(fd_<0)return false;
+    strcpy(name_,name);return true;
+}
+bool ChanSender::send(const unsigned char* bytes,size_t size) {
+    sockaddr_un a;socklen_t n;
+    if(fd_<0 || !bytes || !size || size>CHAN_DATAGRAM_MAX || !address(name_,&a,&n))return false;
+    return sendto(fd_,bytes,size,MSG_DONTWAIT|MSG_NOSIGNAL,
+                  reinterpret_cast<sockaddr*>(&a),n)==static_cast<ssize_t>(size);
+}
+ChanReceiver::ChanReceiver():fd_(-1) {}
+ChanReceiver::~ChanReceiver(){if(fd_>=0)close(fd_);}
+bool ChanReceiver::open_channel(const char* name) {
+    if(fd_>=0)return false;
+    sockaddr_un a;socklen_t n;if(!address(name,&a,&n))return false;
+    int fd=socket(AF_UNIX,SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);
+    if(fd<0)return false;
+    int one=1;
+    if(setsockopt(fd,SOL_SOCKET,SO_PASSCRED,&one,sizeof(one)) ||
+       bind(fd,reinterpret_cast<sockaddr*>(&a),n)){close(fd);return false;}
+    fd_=fd;return true;
+}
+ReceiveResult ChanReceiver::receive(ChanBatch* out) {
+    if(out)memset(out,0,sizeof *out);
+    if(!out || fd_<0)return CHANNEL_FAULT;
+    unsigned char bytes[CHAN_DATAGRAM_MAX+1];
+    union { cmsghdr alignment; unsigned char bytes[CMSG_SPACE(sizeof(ucred))]; } ancillary;
+    memset(&ancillary,0,sizeof(ancillary));
+    iovec iov={bytes,sizeof(bytes)};msghdr msg;memset(&msg,0,sizeof(msg));
+    msg.msg_iov=&iov;msg.msg_iovlen=1;msg.msg_control=ancillary.bytes;
+    msg.msg_controllen=sizeof(ancillary.bytes);
+    const ssize_t n=recvmsg(fd_,&msg,MSG_DONTWAIT);
+    if(n<0)return errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR?CHANNEL_EMPTY:CHANNEL_FAULT;
+    bool credentials=false;ucred credential;memset(&credential,0,sizeof(credential));
+    for(cmsghdr* c=CMSG_FIRSTHDR(&msg);c;c=CMSG_NXTHDR(&msg,c)) {
+        if(c->cmsg_level==SOL_SOCKET && c->cmsg_type==SCM_CREDENTIALS &&
+           c->cmsg_len==CMSG_LEN(sizeof(ucred))) {
+            memcpy(&credential,CMSG_DATA(c),sizeof(credential));credentials=true;
+        }
+    }
+    if((msg.msg_flags&(MSG_TRUNC|MSG_CTRUNC)) || !credentials || credential.uid!=getuid() ||
+       credential.pid<=0 || !decode_chan_batch(bytes,size_t(n),out))return CHANNEL_FAULT;
+    return CHANNEL_EVENT;
 }
 } }

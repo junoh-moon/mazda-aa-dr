@@ -242,6 +242,10 @@ if [ -e "$BASE/logs/disable-next-start" ] || [ -L "$BASE/logs/disable-next-start
     startup_state=runtime_disabled_next_start
 fi
 echo "runtime_disable_next_start=$runtime_disable_next_start"
+# Owner switch of the log-only VIM side channel (menu 7); read once at start.
+vim_side_channel_marker=absent
+if [ -e "$BASE/vimchan-off" ] || [ -L "$BASE/vimchan-off" ]; then vim_side_channel_marker=present; fi
+echo "vim_side_channel_marker=$vim_side_channel_marker (read at CMU start; present = side channel off)"
 guard_config_binding=unconfirmed
 if [ "$startup_state" = guard_committed_after_new_boot ]; then
     # Row 3 of the validated v3 manifest is the configuration digest used by

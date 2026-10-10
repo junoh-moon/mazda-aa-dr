@@ -5,6 +5,8 @@
 
 namespace mx5 { namespace navigation {
 // Local diagnostic input only. This protocol grants no physical qualification.
+// The one definition of the product's motion channel name (tap and worker).
+static const char MOTION_CHANNEL_NAME[]="mx5dr.motion.v1";
 // Fixed byte encoding, no compiler ABI structs, no pointer/heap ownership.
 static const size_t MOTION_RECORD_SIZE=64;
 bool encode_motion(const RawEvent&, unsigned char out[MOTION_RECORD_SIZE]);
@@ -66,7 +68,7 @@ class MotionReceiver {
 public:
     MotionReceiver();
     ~MotionReceiver();
-    bool open_channel(const char* name="mx5dr.motion.v1");
+    bool open_channel(const char* name=MOTION_CHANNEL_NAME);
     // Bounded readiness wait only: 1=input, 0=timeout/interrupted, -1=error.
     // Does not consume records, alter their receipt times, or advance the cursor.
     int wait_for_input(unsigned timeout_ms) const;
@@ -85,13 +87,83 @@ class MotionSender {
 public:
     MotionSender();
     ~MotionSender();
-    bool open_channel(const char* name="mx5dr.motion.v1");
+    bool open_channel(const char* name=MOTION_CHANNEL_NAME);
     bool send_event(const RawEvent&);
 private:
     int fd_;
     char name_[96];
     MotionSender(const MotionSender&);
     MotionSender& operator=(const MotionSender&);
+};
+
+// ---- VIM side channel (validation/VIM_CHANNEL_CAPTURE_2026-10-10.md) ----
+// LOGGING ONLY. Raw payload copies of the VIM 0x116 (whole payload, incl.
+// the longitudinal acceleration, brake pressure and Qf bytes the motion path
+// ignores), 0x169 and 0x15B messages, batched by the tap. A separate socket
+// with its own batch counter: never a RawEvent, never a receive_seq, never
+// read by the Pipeline, the BETA controller or the adapter. Lossy by design:
+// the tap sends nonblocking and counts what it could not send; the worker
+// drains it only for diagnostic journal rows.
+static const size_t CHAN_RECORDS=8;
+static const size_t CHAN_PAYLOAD=16;          // VIMC application bytes (28-12)
+static const size_t CHAN_RECORD_SIZE=24;      // id u16, length u8, 0, dt_ms u32, payload[16]
+static const size_t CHAN_HEADER_SIZE=24;      // "MDC1", version u16, count u16, epoch u64, batch u32, lost u32
+static const size_t CHAN_DATAGRAM_MAX=CHAN_HEADER_SIZE+CHAN_RECORDS*CHAN_RECORD_SIZE;
+// length CHAN_LENGTH_INVALID: the callback message had no data or more than
+// CHAN_PAYLOAD bytes (nothing copied).
+static const uint8_t CHAN_LENGTH_INVALID=255;
+struct ChanRecord {
+    uint16_t id;
+    uint8_t length;
+    uint32_t dt_ms;                           // tap receipt time - epoch (ms)
+    unsigned char data[CHAN_PAYLOAD];
+};
+struct ChanBatch {
+    uint64_t epoch;                           // the tap's motion epoch (CLOCK_MONOTONIC ns)
+    uint32_t batch;                           // tap batch counter (1, 2, ...)
+    uint32_t lost;                            // cumulative records the tap dropped
+    unsigned count;
+    ChanRecord records[CHAN_RECORDS];
+};
+// Bytes written (CHAN_HEADER_SIZE + count*CHAN_RECORD_SIZE) or 0 when invalid.
+size_t encode_chan_batch(const ChanBatch&,unsigned char out[CHAN_DATAGRAM_MAX]);
+bool decode_chan_batch(const unsigned char*,size_t,ChanBatch*);
+// The side channel's name: the motion channel's name + ".ch".
+bool chan_channel_name(const char* motion,char out[96]);
+// Owner switch (2026-10-10 review): while this file exists (any type,
+// any content) the tap opens no side-channel socket and the worker binds
+// none; read once at start. Absent, or not checkable for another reason:
+// on. Deliberately not a mx5dr.conf key: the guard binds that file's hash,
+// so editing it declines the whole product until a reinstall.
+static const char CHAN_OFF_MARKER[]="/data_persist/mx5-aa-dr/vimchan-off";
+// false only when `marker` exists (lstat succeeds); every error is "on".
+bool chan_switch_on(const char* marker);
+class ChanSender {
+public:
+    ChanSender();
+    ~ChanSender();
+    bool open_channel(const char* name);
+    // One nonblocking datagram; no retry.
+    bool send(const unsigned char*,size_t);
+private:
+    int fd_;
+    char name_[96];
+    ChanSender(const ChanSender&);
+    ChanSender& operator=(const ChanSender&);
+};
+class ChanReceiver {
+public:
+    ChanReceiver();
+    ~ChanReceiver();
+    bool open_channel(const char* name);
+    // Nonblocking: CHANNEL_EMPTY, CHANNEL_EVENT (*out decoded from an
+    // authenticated sender of this uid) or CHANNEL_FAULT (rejected datagram).
+    ReceiveResult receive(ChanBatch* out);
+    bool active() const { return fd_>=0; }
+private:
+    int fd_;
+    ChanReceiver(const ChanReceiver&);
+    ChanReceiver& operator=(const ChanReceiver&);
 };
 } }
 #endif

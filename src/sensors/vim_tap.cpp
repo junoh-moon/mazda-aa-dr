@@ -32,7 +32,79 @@ MotionSender* sender=0;
 #ifdef MX5_VIM_TAP_TESTING
 bool test_accept_tables=false;
 bool (*test_send)(const RawEvent&)=0;
+bool (*test_chan_send)(const unsigned char*,size_t)=0;
 #endif
+// ---- VIM side channel (validation/VIM_CHANNEL_CAPTURE_2026-10-10.md) ----
+// LOGGING ONLY. After the unchanged motion path above has finished with a
+// message, 0x116/0x169/0x15B payloads are copied (no parsing here) into a
+// static batch that goes out as one nonblocking datagram on a separate
+// socket every CHAN_RECORDS records or CHAN_FLUSH_NS. 0x169/0x15B never
+// reach decode_vim_message and consume no receive_seq. Record times reuse
+// the receipt time the motion path already read (0x100/0x116/0x118): no
+// extra clock read, no allocation, no waiting. chan_busy is a try-only flag
+// (never waited on): a concurrent callback skips the copy and counts it.
+// Cost on the OEM thread: one flag acquire/release per motion or side
+// message and one nonblocking sendto per batch (<= ~20/s); errno restored.
+// Timestamps: a 0x169/0x15B record carries the receipt time of the latest
+// motion message; that is at most ~100 ms old only while motion messages
+// keep arriving. Without them no clock is read, so a pending batch flushes
+// only when full (8 records) and its times are the last motion time. A
+// partial batch (< 8 records, < 500 ms) pending when the CMU stops is lost
+// and not counted.
+const uint64_t CHAN_FLUSH_NS=500000000ULL;
+bool chan_enabled=false;
+int chan_busy=0;
+uint32_t chan_lost=0;
+uint64_t chan_last_t=0,chan_first_t=0;
+ChanBatch chan_batch;
+unsigned char chan_bytes[CHAN_DATAGRAM_MAX];
+alignas(ChanSender) unsigned char chan_storage[sizeof(ChanSender)];
+ChanSender* chan_sender=0;
+bool chan_id(uint32_t id) { return id==0x116 || id==0x169 || id==0x15b; }
+void chan_flush() {
+    chan_batch.epoch=epoch;
+    if(!++chan_batch.batch)chan_batch.batch=1;
+    chan_batch.lost=__sync_fetch_and_add(&chan_lost,0);
+    const size_t n=encode_chan_batch(chan_batch,chan_bytes);
+    bool sent=false;
+#ifdef MX5_VIM_TAP_TESTING
+    if(test_chan_send)sent=n && test_chan_send(chan_bytes,n);else
+#endif
+    sent=n && chan_sender && chan_sender->send(chan_bytes,n);
+    if(!sent)__sync_fetch_and_add(&chan_lost,chan_batch.count);
+    chan_batch.count=0;
+}
+void chan_observe(const VimMessage& m,uint64_t received) {
+    const bool copy=chan_id(m.id);
+    if(!copy && !received)return;
+    if(__sync_lock_test_and_set(&chan_busy,1)) {
+        if(copy)__sync_fetch_and_add(&chan_lost,1);
+        return;
+    }
+    if(received>chan_last_t)chan_last_t=received;
+    if(copy) {
+        if(chan_last_t<epoch)__sync_fetch_and_add(&chan_lost,1);   // no receipt time yet
+        else {
+            if(!chan_batch.count)chan_first_t=chan_last_t;
+            ChanRecord& r=chan_batch.records[chan_batch.count++];
+            r.id=uint16_t(m.id);r.dt_ms=uint32_t((chan_last_t-epoch)/1000000ULL);
+            memset(r.data,0,sizeof r.data);
+            if(m.data && m.length<=CHAN_PAYLOAD) { r.length=uint8_t(m.length);memcpy(r.data,m.data,m.length); }
+            else r.length=CHAN_LENGTH_INVALID;
+        }
+    }
+    if(chan_batch.count>=CHAN_RECORDS || (chan_batch.count && chan_last_t-chan_first_t>=CHAN_FLUSH_NS))chan_flush();
+    __sync_lock_release(&chan_busy);
+}
+// Side-channel start (initialize(), outside every callback): off while the
+// owner's marker exists; otherwise one nonblocking datagram socket. Returns
+// whether the side channel is enabled; on false nothing was opened.
+bool chan_start(const char* marker,const char* motion_name) {
+    char name[96];
+    if(!chan_switch_on(marker) || !chan_channel_name(motion_name,name))return false;
+    chan_sender=new(chan_storage) ChanSender();
+    return chan_sender->open_channel(name);
+}
 uint64_t now_ns() {
     timespec ts;
     if(clock_gettime(CLOCK_MONOTONIC,&ts) || ts.tv_sec<0)return 0;
@@ -43,20 +115,24 @@ uint64_t now_ns() {
 void receive(unsigned index,uint64_t client,uint64_t server,const VimMessage* msg) {
     Route& route=routes[index];
     const int incoming_errno=errno;
-    if(observation_enabled && msg && client==route.client && server==route.server &&
-       (msg->id==0x100 || msg->id==0x116 || msg->id==0x118)) {
-        const uint32_t seq=__sync_add_and_fetch(&sequence,1);
-        RawEvent event;
-        // The observation sequence is never a physical producer sequence.
-        if(seq && decode_vim_message(*msg,epoch,seq,now_ns(),&event)==VIM_DECODED &&
-           pthread_mutex_trylock(&sender_lock)==0) {
+    if(observation_enabled && msg && client==route.client && server==route.server) {
+        uint64_t received=0;
+        if(msg->id==0x100 || msg->id==0x116 || msg->id==0x118) {
+            const uint32_t seq=__sync_add_and_fetch(&sequence,1);
+            RawEvent event;
+            // The observation sequence is never a physical producer sequence.
+            if(seq && decode_vim_message(*msg,epoch,seq,(received=now_ns()),&event)==VIM_DECODED &&
+               pthread_mutex_trylock(&sender_lock)==0) {
 #ifdef MX5_VIM_TAP_TESTING
-            if(test_send)test_send(event);else
+                if(test_send)test_send(event);else
 #endif
-            if(sender)sender->send_event(event); // bounded nonblocking send; no retry
-            pthread_mutex_unlock(&sender_lock);
+                if(sender)sender->send_event(event); // bounded nonblocking send; no retry
+                pthread_mutex_unlock(&sender_lock);
+            }
+            // Missing datagrams/invalid payloads retain the consumed sequence gap.
         }
-        // Missing datagrams/invalid payloads retain the consumed sequence gap.
+        // Diagnostic side channel, after the motion send (never before it).
+        if(chan_enabled)chan_observe(*msg,received);
     }
     errno=incoming_errno;
     route.original(client,server,msg); // exact original pointer and exactly once
@@ -110,6 +186,9 @@ void initialize(VimAddClient forward) {
     epoch=now_ns();if(!epoch)return;
     sender=new(sender_storage) MotionSender();
     observation_enabled=sender->open_channel();
+    // The side channel only adds a socket; its failure leaves the motion
+    // path exactly as before (chan_enabled stays false).
+    if(observation_enabled)chan_enabled=chan_start(CHAN_OFF_MARKER,MOTION_CHANNEL_NAME);
 }
 }
 extern "C" __attribute__((visibility("default"))) int VIMC_AddClient(

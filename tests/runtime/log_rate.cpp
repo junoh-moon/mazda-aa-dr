@@ -114,6 +114,35 @@ struct SimReceiver {
     }
 };
 
+// --chan on|off (2026-10-10, VIM side channel, chan_digest rows): synthetic
+// side-channel batches as the tap makes them (0x116 with longitudinal
+// acceleration/brake pressure, 0x169 lateral acceleration with every yaw
+// window, 0x15B when speed or rpm change; a batch per 8 records or 500 ms).
+// Authored raw mapping for this harness only (zero 4096, 200 counts per
+// m/s^2); the product assumes no scale. Default on: the vehicle build has it.
+struct SimChanReceiver {
+    std::deque<std::pair<uint64_t,N::ChanBatch> > pending;
+    N::ChanBatch open;uint64_t first;uint32_t batches;
+    SimChanReceiver():first(0),batches(0) { memset(&open,0,sizeof open); }
+    void add(uint16_t id,uint64_t now,const unsigned char* bytes,uint8_t length) {
+        if(!open.count)first=now;
+        N::ChanRecord& r=open.records[open.count++];memset(&r,0,sizeof r);
+        r.id=id;r.length=length;r.dt_ms=uint32_t((now-7)/1000000ULL);memcpy(r.data,bytes,length);
+        if(open.count==N::CHAN_RECORDS)flush(now);
+    }
+    void tick(uint64_t now) { if(open.count && now-first>=500000000ULL)flush(now); }
+    void flush(uint64_t now) {
+        open.epoch=7;open.batch=++batches;open.lost=0;
+        pending.push_back(std::make_pair(now,open));memset(&open,0,sizeof open);
+    }
+    N::ReceiveResult receive(N::ChanBatch* out) {
+        if(pending.empty() || pending.front().first>clock_ns(0))return N::CHANNEL_EMPTY;
+        unsigned char bytes[N::CHAN_DATAGRAM_MAX];
+        const size_t n=N::encode_chan_batch(pending.front().second,bytes);pending.pop_front();
+        return n && N::decode_chan_batch(bytes,n,out)?N::CHANNEL_EVENT:N::CHANNEL_FAULT;
+    }
+};
+
 int manager_object;
 // One OEM POSITION callback with one LOCATION send.
 void oem_position(const Truth& x,int mode,uint64_t utc,bool stored,const Truth& frozen) {
@@ -151,7 +180,7 @@ int main(int argc,char** argv) {
     // motion_ms: wheels and yaw each every motion_ms (vehicle 2026-10-05:
     // about 100 ms each); turn_ms: worker receive turn (the real worker wakes
     // per datagram, so a turn per datagram is turn_ms = motion_ms/2).
-    unsigned motion_ms=100,turn_ms=50;bool yaw_rows=true;
+    unsigned motion_ms=100,turn_ms=50;bool yaw_rows=true,chan=true;
     for(int i=1;i+1<argc;i+=2) {
         const std::string k=argv[i],v=argv[i+1];
         if(k=="--profile")profile=v;else if(k=="--seconds")seconds=unsigned(atoi(v.c_str()));
@@ -163,6 +192,7 @@ int main(int argc,char** argv) {
         else if(k=="--out")out=v;
         else if(k=="--drive" && (v=="normal" || v=="stopgo"))stopgo=v=="stopgo";
         else if(k=="--yaw-rows" && (v=="on" || v=="off"))yaw_rows=v=="on";
+        else if(k=="--chan" && (v=="on" || v=="off"))chan=v=="on";
         else if(k=="--yaw-count" && atoi(v.c_str())>=1 && atoi(v.c_str())<=15)yaw_count=unsigned(atoi(v.c_str()));
         else if(k=="--yaw-noise")yaw_noise=atoi(v.c_str())!=0;
         else { fprintf(stderr,"unknown option %s\n",k.c_str());return 64; }
@@ -171,7 +201,7 @@ int main(int argc,char** argv) {
        !turn_ms || turn_ms%10) {
         fprintf(stderr,"usage: log_rate --profile full|persistent --out DIR [--seconds N] "
                        "[--event-every S] [--nofix S] [--outage S] [--motion-ms 20k] [--turn-ms 10k] [--drive normal|stopgo] "
-                       "[--yaw-rows on|off] [--yaw-count 1-15] [--yaw-noise 0|1]\n");return 64;
+                       "[--yaw-rows on|off] [--yaw-count 1-15] [--yaw-noise 0|1] [--chan on|off]\n");return 64;
     }
     const std::string logs=out+"/logs";
     if(mkdir(out.c_str(),0700) && errno!=EEXIST)return 73;
@@ -224,7 +254,8 @@ int main(int argc,char** argv) {
     mx5::runtime::BetaController beta(beta_shared);
     mx5::runtime::ModelSession model_session;mx5::runtime::ModelBus model_bus;
     if(!beta.enable(j,clock_ns(0),0) || A::mode()!=A::BETA)return 70;
-    mx5::runtime::MotionBatch batch;SimReceiver receiver;
+    mx5::runtime::MotionBatch batch;SimReceiver receiver;SimChanReceiver side;
+    unsigned last_speed_raw=0,last_rpm_raw=0;bool side_started=false;double previous_kmh=0;
     Drive drive;Truth frozen=drive.truth();
     uint64_t sequence=0,last_health=0,last_calibration=0,last_shadow=0,drain_calls=0;
     unsigned other_counter=0;
@@ -248,6 +279,25 @@ int main(int argc,char** argv) {
                 const long sample=lround(2048-cycle_yaw(fmod(drive.t,600.0))/0.000658615);
                 long sum=0;for(unsigned k=0;k<yaw_count;++k)sum+=sample+(yaw_noise?noise():0);
                 e.raw[0]=uint16_t(sum);
+                if(chan && quiet_profile) {
+                    const double accel=(x.kmh-previous_kmh)/3.6/(motion_ms/1000.0);previous_kmh=x.kmh;
+                    const double lateral=x.kmh/3.6*cycle_yaw(fmod(drive.t,600.0));
+                    // Clamped to 13 bits (the drive's 600 s wrap is a speed step).
+                    const unsigned ax=unsigned(fmin(8191,fmax(0,lround(4096+200*accel))));
+                    const unsigned ay=unsigned(fmin(8191,fmax(0,lround(4096+200*lateral))));
+                    const unsigned bp=accel<-0.1?unsigned(fmin(8191,lround(-accel*300))):0;
+                    const unsigned char p116[10]={7,uint8_t(sum),uint8_t(sum>>8),uint8_t(yaw_count),3,
+                        uint8_t(ax),uint8_t(ax>>8),uint8_t(bp),uint8_t(bp>>8),3};
+                    side.add(0x116,now,p116,10);
+                    const unsigned char p169[4]={2,3,uint8_t(ay),uint8_t(ay>>8)};
+                    side.add(0x169,now,p169,4);
+                    const unsigned speed=unsigned(lround(x.kmh*100)),rpm=x.kmh>0?unsigned(lround(800+x.kmh*40)):800;
+                    if(!side_started || speed!=last_speed_raw || rpm!=last_rpm_raw) {
+                        const unsigned char p15b[12]={0x2f,uint8_t(speed),uint8_t(speed>>8),uint8_t(rpm),uint8_t(rpm>>8),
+                            0,0,0,0,0,0,3};
+                        side.add(0x15b,now,p15b,12);last_speed_raw=speed;last_rpm_raw=rpm;side_started=true;
+                    }
+                }
             }
             receiver.pending.push_back(e);
         }
@@ -285,6 +335,8 @@ int main(int argc,char** argv) {
             }
         }
         drain_motion(j,batch,receiver,navigation,holdout,true);
+        side.tick(now);
+        if(quiet_profile)drain_channels(j,side);
         if(now>navigation.reorder_ns()) {
             const uint64_t resets=navigation.status().resets,watermark=now-navigation.reorder_ns();
             navigation.drain(watermark);++drain_calls;
@@ -331,10 +383,10 @@ int main(int argc,char** argv) {
             KindStat& k=kinds[kind];++k.rows;k.bytes+=row.size()+1;
         }
     }
-    printf("{\"profile\":\"%s\",\"drive\":\"%s\",\"yaw_rows\":%s,\"seconds\":%u,\"event_every_s\":%u,\"outages\":%u,\"nofix_s\":%u,"
+    printf("{\"profile\":\"%s\",\"drive\":\"%s\",\"yaw_rows\":%s,\"chan\":%s,\"seconds\":%u,\"event_every_s\":%u,\"outages\":%u,\"nofix_s\":%u,"
            "\"total_bytes\":%llu,\"file_bytes\":%llu,\"bytes_per_s\":%.1f,\"bytes_per_hour\":%.0f,"
            "\"journal_failed\":%s,\"beta_state\":\"%s\",\"kinds\":{",
-           profile.c_str(),stopgo?"stopgo":"normal",yaw_rows?"true":"false",seconds,event_every,outages,nofix_s,(unsigned long long)total,
+           profile.c_str(),stopgo?"stopgo":"normal",yaw_rows?"true":"false",chan?"true":"false",seconds,event_every,outages,nofix_s,(unsigned long long)total,
            (unsigned long long)file_bytes,double(total)/seconds,double(total)/seconds*3600.0,
            j.failed?"true":"false",mx5::runtime::beta_state_name(beta.state()));
     bool first=true;

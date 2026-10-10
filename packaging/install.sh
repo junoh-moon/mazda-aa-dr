@@ -154,6 +154,13 @@ fi
 # No old arm or persistent enablement may survive a partial replacement.
 rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 clear_capture_markers
+# Menu 1 also returns the log-only VIM side channel to its default (on): a
+# vimchan-off marker from menu 7 is cleared, like disable-next-start.
+if [ -e "$BASE/vimchan-off" ] || [ -L "$BASE/vimchan-off" ]; then
+    if [ -d "$BASE/vimchan-off" ] && [ ! -L "$BASE/vimchan-off" ]; then fail 'Cannot clear vimchan-off: it is a directory'; fi
+    rm -f "$BASE/vimchan-off" || fail 'Cannot clear the vimchan-off marker'
+    echo 'Cleared vimchan-off: the VIM side-channel log is on again from the next start.'
+fi
 if [ "$POLICY" = persistent ]; then
     # A failure from here on must not leave an enablement behind.
     PERSIST_PENDING=1
