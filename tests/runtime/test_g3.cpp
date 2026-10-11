@@ -816,6 +816,37 @@ static void pipeline_motion() {
 }
 // Exact-zero stop runs in the pipeline: a crawl at 0.02 m/s is never a stop;
 // a 20 s wheel gap followed by one zero sample restarts the run there.
+// Review gap (2026-10-11): the G3 yaw-chain break conditions reachable from
+// raw input. A yaw silence longer than sample_age_max (250 ms, the core's
+// upper bound) is a MISSING_SENSOR fault: reset_state counts one break and,
+// while moving, the first window after it (a hole > G3_YAW_HOLE_NS) a
+// second one. A hole while standing still is no break. A window longer than
+// G3_YAW_WINDOW_MAX_NS (1 s) or a non-finite rate cannot reach g3_yaw from
+// the raw path (the 250 ms limit faults first; rates are finite by
+// construction): those checks are defensive only.
+static uint32_t yaw_gap_breaks(bool moving) {
+    navigation::Pipeline p;mx5_dr_context x={1,1,1};
+    CHECK(p.init_model(navigation::research_model_profile(),mx5_dr_default_config(),x,false,false,true));
+    CHECK(p.enable_beta(beta_profile_tunnel()));
+    uint64_t seq=0;
+    uint32_t before=0;
+    for(unsigned ms=0;ms<=4000;ms+=100) {
+        navigation::RawEvent w=raw(navigation::WHEELS,ms,++seq);
+        for(unsigned i=0;i<4;++i)w.raw[i]=uint16_t(moving?lround(18*100+10000):10000);
+        p.enqueue_raw(w);
+        if(ms<2000||ms>=2500) {                      // yaw silent 2.0-2.5 s
+            navigation::RawEvent y=raw(navigation::YAW,ms,++seq);y.raw[0]=2048;
+            p.enqueue_raw(y);
+        }
+        if(ms>=100)p.drain(T(ms)-100000000ULL);
+        if(ms==1900)before=p.g3_motion().breaks;
+    }
+    return p.g3_motion().breaks-before;
+}
+static void yaw_chain_breaks() {
+    CHECK(yaw_gap_breaks(true)==2);    // the fault's reset + the hole after it
+    CHECK(yaw_gap_breaks(false)==1);   // stationary: the reset only
+}
 static void pipeline_park_detection() {
     navigation::Pipeline p;mx5_dr_context x={1,1,1};
     CHECK(p.init_model(navigation::research_model_profile(),mx5_dr_default_config(),x,false,false,true));
@@ -928,6 +959,7 @@ int main(int argc,char** argv) {
     two_boot_roundtrip();
     pipeline_motion();
     pipeline_park_detection();
+    yaw_chain_breaks();
     std::printf("test_g3: %u checks passed\n",checks);
     return 0;
 }

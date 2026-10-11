@@ -726,6 +726,10 @@ class Auditor:
         self.beta_entry_reasons = Counter()
         self.beta_cadence_fences = Counter()  # by stream (2026-10-08)
         self.beta_reverse_latch = Counter()
+        # Rule F (validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md): reasons of the
+        # beta_reverse_latch "assumed_forward" rows and the first BETA seed per boot.
+        self.beta_assumed_forward = Counter()
+        self.beta_seeds = []
         # Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md): optional
         # beta_state/beta_summary "acc_rule" (1 stopped, 2 crawl), present only
         # while such a rule held at the last publication (absent: 0 normal).
@@ -777,7 +781,9 @@ class Auditor:
                                       rule=0, rule_ns=None, rule_engaged=False,
                                       # a row with acc_rule/acc_h0 was seen (rule-enabled build),
                                       # acc_h0 of the current stop above H_max, open stop episode.
-                                      rule_build=False, h0_above=None, stop=None))
+                                      rule_build=False, h0_above=None, stop=None,
+                                      # rule F: first seed recorded.
+                                      seeded=False))
         self.sessions.append(self.session)
         self.positions = {}
         self.invalid_positions = set()
@@ -2535,6 +2541,13 @@ class Auditor:
                     self.issue("partial_record", source, "Invalid beta_anchor heading")
                     return
                 self.beta_heading_sources[name] += 1
+                if name in ("seed", "legacy") and not beta["seeded"]:
+                    # The reason comes from the seed row itself: "rev_assumed"
+                    # marks a fix evaluated under the rule F assumption.
+                    beta["seeded"] = True
+                    self.beta_seeds.append(dict(
+                        boot=len(self.sessions) - 1, first_seed_s=round(row["mono_ns"] / 1e9, 3),
+                        reason="reverse_assumed_forward" if row.get("rev_assumed") is True else "reverse_latch"))
             if row["gate"].startswith("ENTRY_"):
                 entry = row.get("entry")
                 reason = entry[2] if isinstance(entry, list) and len(entry) == 3 and \
@@ -2596,6 +2609,23 @@ class Auditor:
         """MODEL reverse latch kept across / cleared after an input gap, or
         cleared by the worker (with per-reason totals). Never BETA evidence."""
         if not self.validate(row, source, ("mono_ns",), ("event", "reason")):
+            return
+        if row["event"] in ("assumed_forward", "contradicted") and row.get("domain") == "beta":
+            # Rule F: the BETA gates assumed forward while the MODEL latch was
+            # unknown; "contradicted": a real reverse 1 ended an active
+            # assumption and the BETA anchor state was reset.
+            fixes = row.get("fixes")
+            if row["event"] == "assumed_forward" and (
+                    row["reason"] != "reverse_assumed_forward" or not isinstance(fixes, list) or len(fixes) != 3 or
+                    any(not isinstance(f, list) or len(f) != 4 for f in fixes)):
+                self.issue("partial_record", source, "Invalid reverse_assumed_forward row")
+                return
+            if row["event"] == "contradicted" and (row["reason"] != "assumed_forward_contradicted" or
+                                                  type(row.get("discarded")) is not bool):
+                self.issue("partial_record", source, "Invalid assumed_forward_contradicted row")
+                return
+            self.beta_assumed_forward[row["reason"]] += 1
+            self.beta_reverse_latch[row["event"] + ":" + row["reason"]] += 1
             return
         if row.get("domain") != "model" or row.get("assist_ready", False) is not False:
             self.issue("unexpected_reverse_latch_domain", source, "Reverse latch rows are MODEL diagnostics", True)
@@ -3056,6 +3086,9 @@ class Auditor:
                               heading_resyncs=self.beta_heading_sources["resync"],
                               entry_decisions=dict(self.beta_entry_reasons),
                               reverse_latch_events=dict(self.beta_reverse_latch),
+                              seeds=self.beta_seeds,
+                              reverse_assumed_forward=dict(rows=sum(self.beta_assumed_forward.values()),
+                                                           reasons=dict(self.beta_assumed_forward)),
                               last_state=self.beta_last_state, last_summary=self.beta_last_summary,
                               gps_return_checks=self.beta_returns,
                               gps_return_checks_total=self.beta_returns_total,
@@ -3794,6 +3827,12 @@ def main(argv=None):
             if beta["heading_sources"] or beta["entry_decisions"]:
                 print("BETA heading sources: %s; resyncs %d; outage entries: %s" %
                       (beta["heading_sources"], beta["heading_resyncs"], beta["entry_decisions"]))
+            for seed in beta["seeds"]:
+                print("BETA seed: boot %d first seed at %.1f s (reason %s)" %
+                      (seed["boot"], seed["first_seed_s"], seed["reason"]))
+            assumed = beta["reverse_assumed_forward"]
+            if assumed["rows"] or beta["seeds"]:
+                print("BETA reverse assumed forward: %d rows (reasons %s)" % (assumed["rows"], assumed["reasons"]))
             if beta["position_classes"]:
                 print("BETA NO_FIX: %d state rows; position classes: %s" %
                       (beta["position_classes"].get("NO_FIX", 0), beta["position_classes"]))

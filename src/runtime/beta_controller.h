@@ -132,7 +132,7 @@ public:
           last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_honest_accuracy_(-1),last_acc_rule_(BETA_ACC_RULE_NORMAL),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
           last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
-          seen_latch_clears_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
+          seen_latch_clears_(0),seen_assumptions_(0),seen_contradictions_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
           rearm_needs_hold_clear_(false),rearm_not_before_(0),rearm_reason_("none"),
           last_position_ns_(0),last_send_ns_(0),position_gap_(false),send_gap_(false),
           position_gap_seen_ns_(0),send_gap_seen_ns_(0),cadence_fences_(0) {}
@@ -261,6 +261,9 @@ public:
         const uint32_t source=bus_epoch && bus_epoch<=UINT32_MAX?uint32_t(bus_epoch):0;
         shared_.source_epoch.store(source,std::memory_order_release);
         journal_events(j,now);
+        // Before the anchor rows: a seed enabled by rule F follows its reason.
+        journal_assumed(j,now,nav);
+        journal_contradicted(j,now,nav);
         journal_anchors(j,nav);
         journal_latch(j,now,nav);
         if(!live())return;
@@ -300,7 +303,7 @@ private:
     uint64_t last_original_utc_;   // utc_s of the newest POSITION
     double last_original_accuracy_; // original LOCATION accuracy (m), -1 when absent
     double last_speed_;            // last published overlay speed (m/s), -1 none
-    uint64_t seen_anchor_seq_,anchor_rows_dropped_,seen_latch_clears_;
+    uint64_t seen_anchor_seq_,anchor_rows_dropped_,seen_latch_clears_,seen_assumptions_,seen_contradictions_;
     mx5_dr_result last_core_;      // BETA core failure behind the last publish attempt
     // NO_FIX withdrawal re-arm: pending, waiting for the adapter hold clear,
     // earliest worker time, and the reason journaled with the re-arm.
@@ -378,6 +381,54 @@ private:
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
 
+    template<class J> void journal_contradicted(J& j,uint64_t now,const navigation::Pipeline& nav) {
+        // A real reverse 1 contradicted an active assumption: the BETA anchor
+        // state was reset (seed discarded when "discarded" is true).
+        const uint64_t contradictions=nav.reverse_contradictions();
+        if(contradictions!=seen_contradictions_) {
+            seen_contradictions_=contradictions;
+            char row[400];
+            const int m=snprintf(row,sizeof row,
+                "{\"kind\":\"beta_reverse_latch\",\"mono_ns\":%llu,\"domain\":\"beta\",\"event\":\"contradicted\","
+                "\"reason\":\"assumed_forward_contradicted\",\"message_ns\":%llu,\"contradicted\":%llu,"
+                "\"discarded\":%s,\"state\":\"%s\"}",
+                (unsigned long long)now,(unsigned long long)nav.last_contradiction_ns(),
+                (unsigned long long)contradictions,nav.last_contradiction_discarded_seed()?"true":"false",
+                beta_state_name(state_));
+            if(m>0 && size_t(m)<sizeof row)j.line(row);else j.fail();
+        }
+    }
+    // Rule F (runtime::BETA_ASSUME_FORWARD_*, validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md):
+    // the BETA gates assumed forward while the MODEL reverse latch was unknown.
+    // One row per assumption (the newest one if several happened since the
+    // last tick; "assumed" is the running total): the fix receipt time and per
+    // qualifying fix [age s before that fix, GPS km/h, wheel km/h, |course
+    // change - yaw turn| deg or null for the first fix].
+    template<class J> void journal_assumed(J& j,uint64_t now,const navigation::Pipeline& nav) {
+        const uint64_t total=nav.reverse_assumptions();
+        if(total==seen_assumptions_)return;
+        seen_assumptions_=total;
+        const navigation::ReverseAssumption& a=nav.last_reverse_assumption();
+        char fixes[240]={0};
+        size_t at=0;
+        for(unsigned k=0;k<3;++k) {
+            const navigation::ReverseAssumptionFix& f=a.fixes[k];
+            char age[48],gps[48],wheel[48],turn[48];
+            compact_or_null(a.mono_ns>=f.mono_ns?double(a.mono_ns-f.mono_ns)/1e9:NAN,age);
+            compact_or_null(f.gps_kmh,gps);compact_or_null(f.wheel_kmh,wheel);compact_or_null(f.turn_error_deg,turn);
+            append(fixes,sizeof fixes,&at,"%s[%s,%s,%s,%s]",k?",":"",age,gps,wheel,turn);
+        }
+        char line[512];
+        const int n=at<sizeof fixes?snprintf(line,sizeof line,
+            "{\"kind\":\"beta_reverse_latch\",\"mono_ns\":%llu,\"domain\":\"beta\",\"event\":\"assumed_forward\","
+            "\"reason\":\"reverse_assumed_forward\",\"fix_ns\":%llu,\"assumed\":%llu,\"fixes\":[%s],"
+            "\"min_kmh\":%.4g,\"wheel_tol_kmh\":%.4g,\"state\":\"%s\"}",
+            (unsigned long long)now,(unsigned long long)a.mono_ns,(unsigned long long)total,fixes,
+            BETA_ASSUME_FORWARD_MIN_KMH,nav.beta_profile_in_use().wheel_gps_speed_max_diff_kmh,
+            beta_state_name(state_)):-1;
+        if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+    }
+
     // BETA_DECISIONS 3.2: every fix evaluation, including each rejection
     // reason, and every continuous-policy entry decision becomes one
     // beta_anchor row (ring overrun is counted). Compact form (review M4,
@@ -409,6 +460,8 @@ private:
                 append(extra,sizeof extra,&at,",\"streak_s\":%s",streak);
             if(!nav.reverse_exit_seen())
                 append(extra,sizeof extra,&at,",\"reverse_exit_seen\":false");
+            if(r.reverse_assumed)
+                append(extra,sizeof extra,&at,",\"rev_assumed\":true");
             if(anchor_rows_dropped_)
                 append(extra,sizeof extra,&at,",\"dropped\":%llu",(unsigned long long)anchor_rows_dropped_);
             if(r.gate==navigation::BETA_GATE_ACCEPTED&&std::isfinite(r.heading_deg)&&

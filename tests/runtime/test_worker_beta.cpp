@@ -196,7 +196,12 @@ static bool wait_rows(const std::string& logs,const char* const* needles,unsigne
 }
 
 int main(int argc,char** argv) {
-    assert(argc==2);const std::string scenario=argv[1];
+    assert(argc==2);
+    // main_no_reverse (rule F, validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md):
+    // the main scenario without any REVERSE message; BETA seeds from the
+    // assumed forward state and journals the assumption before the seed.
+    const bool no_reverse=std::string(argv[1])=="main_no_reverse";
+    const std::string scenario=no_reverse?std::string("main"):std::string(argv[1]);
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
            scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed"||
@@ -306,7 +311,7 @@ int main(int argc,char** argv) {
             if(kind==N::YAW && ms%100)continue;
             // Change-only producer: reverse at boot, then forward (a 1->0
             // transition, BETA_DECISIONS 3.4), nothing else.
-            if(kind==N::REVERSE && ms!=0 && ms!=100)continue;
+            if(kind==N::REVERSE && (no_reverse || (ms!=0 && ms!=100)))continue;
             N::RawEvent r=N::RawEvent();r.kind=static_cast<N::SensorKind>(kind);
             r.epoch=1;r.receive_seq=++sequence;r.received_ns=now;r.count=1;r.reverse=ms==0?1:0;
             // The BETA yaw zero is 2048 (straight); the MODEL keeps its own.
@@ -542,6 +547,21 @@ int main(int argc,char** argv) {
         if(rows.lines[i].find("\"gate\":\"BAD_FIX\"")!=std::string::npos)++anchor_bad_fix;
     }
     printf("anchor rows: accepted=%u settling=%u bad_fix=%u\n",anchor_accepted,anchor_settling,anchor_bad_fix);
+    // Rule F: one assumption row (only without a REVERSE message), before the first seed row.
+    size_t assumed_at=rows.lines.size(),seed_at=rows.lines.size();unsigned assumed_rows=0;
+    for(size_t i=0;i<rows.lines.size();++i) {
+        const std::string& l=rows.lines[i];
+        if(l.find("\"kind\":\"beta_reverse_latch\"")!=std::string::npos &&
+           l.find("\"event\":\"assumed_forward\",\"reason\":\"reverse_assumed_forward\"")!=std::string::npos) {
+            assert(l.find("\"domain\":\"beta\"")!=std::string::npos && l.find("\"fixes\":[[")!=std::string::npos);
+            if(!assumed_rows++)assumed_at=i;
+        }
+        if(seed_at==rows.lines.size() && l.find("\"kind\":\"beta_anchor\"")!=std::string::npos &&
+           l.find("\"gate\":\"ACCEPTED\"")!=std::string::npos && l.find("\"h\":[1,")!=std::string::npos)seed_at=i;
+    }
+    printf("reverse assumed rows: %u\n",assumed_rows);
+    if(no_reverse)assert(assumed_rows==1 && assumed_at<seed_at && seed_at<rows.lines.size());
+    else assert(!assumed_rows);
     if(nofix)assert(anchor_bad_fix>=5 && !anchor_accepted);
     else if(cadence)assert(anchor_accepted>=2);
     else if(scenario=="no_anchor")assert(!anchor_accepted);

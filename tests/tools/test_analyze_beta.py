@@ -731,6 +731,59 @@ class BetaAnalyzeTests(unittest.TestCase):
         self.assertIn("unexpected_reverse_latch_domain", self.codes(self.audit(rows), "violation"))
 
 
+    def test_reverse_assumed_forward_rows_and_first_seed_line(self):
+        # Rule F (validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md): the
+        # worker journals the assumption (domain beta) before the seed it enables.
+        def anchor(seq, mono_ns, gate, **extra):
+            return dict(kind="beta_anchor", mono_ns=mono_ns, seq=seq, mode=1,
+                        utc_s=1_700_000_000 + seq, gate=gate, hdop=1, kmh=40, **extra)
+        assumed = dict(kind="beta_reverse_latch", mono_ns=850_000_000, domain="beta", event="assumed_forward",
+                       reason="reverse_assumed_forward", fix_ns=840_000_000, assumed=1,
+                       fixes=[[2.0, 36, 35.5, None], [1.0, 36, 35.8, 0.4], [0, 37, 36.1, 0.3]],
+                       min_kmh=20, wheel_tol_kmh=4, state="ARMED")
+        rows = drive()
+        rows[2:2] = [anchor(1, 800_000_000, "REVERSE"), assumed, anchor(2, 840_000_000, "COURSE", rev_assumed=True),
+                     anchor(3, 900_000_000, "ACCEPTED", h=[1, 0, 70], rev_assumed=True),
+                     anchor(4, 950_000_000, "ACCEPTED", h=[2, 1, 70, 90], rev_assumed=True)]
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        beta = report["beta"]
+        self.assertEqual(beta["seeds"], [dict(boot=0, first_seed_s=0.9, reason="reverse_assumed_forward")])
+        self.assertEqual(beta["reverse_assumed_forward"], dict(rows=1, reasons={"reverse_assumed_forward": 1}))
+        self.assertEqual(beta["reverse_latch_events"], {"assumed_forward:reverse_assumed_forward": 1})
+        self.path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            module.main([str(self.path)])
+        text = out.getvalue()
+        self.assertIn("BETA seed: boot 0 first seed at 0.9 s (reason reverse_assumed_forward)", text)
+        self.assertIn("BETA reverse assumed forward: 1 rows (reasons {'reverse_assumed_forward': 1})", text)
+        # A seed after a real REVERSE message names the latch, even when an
+        # assumption row came earlier (e.g. a reset in between): the reason is
+        # the seed row's own "rev_assumed" flag.
+        rows = drive()
+        rows[2:2] = [assumed, anchor(1, 900_000_000, "ACCEPTED", h=[1, 0, 70])]
+        beta = self.audit(rows)["beta"]
+        self.assertEqual(beta["seeds"], [dict(boot=0, first_seed_s=0.9, reason="reverse_latch")])
+        self.assertEqual(beta["reverse_assumed_forward"]["rows"], 1)
+        # A contradiction row (real reverse 1 during an assumption) is known.
+        rows = drive()
+        rows[2:2] = [assumed, dict(kind="beta_reverse_latch", mono_ns=950_000_000, domain="beta",
+                                   event="contradicted", reason="assumed_forward_contradicted",
+                                   message_ns=940_000_000, contradicted=1, discarded=True, state="ARMED")]
+        report = self.audit(rows)
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["beta"]["reverse_assumed_forward"]["reasons"],
+                         {"reverse_assumed_forward": 1, "assumed_forward_contradicted": 1})
+        # A malformed assumption row is a partial record; another beta-domain
+        # latch row stays a domain violation.
+        rows = drive()
+        rows[2:2] = [dict(assumed, fixes=[[1, 2]])]
+        self.assertIn("partial_record", self.codes(self.audit(rows)))
+        rows = drive()
+        rows[2:2] = [dict(assumed, event="cleared")]
+        self.assertIn("unexpected_reverse_latch_domain", self.codes(self.audit(rows), "violation"))
+
     def test_paced_window_rows_are_older_context_not_a_gps_return(self):
         # 2026-10-08: a paced RAW window drain writes older FIX rows after
         # the GPS loss and the first replacements. Tagged "raw_window": true

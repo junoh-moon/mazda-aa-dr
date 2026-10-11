@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <string>
 #include <vector>
 using namespace mx5;
 using namespace mx5::navigation;
@@ -1601,6 +1602,368 @@ static void creeping_turn_is_not_a_frame_fault() {
     const mx5_dr_config d=mx5_dr_default_config();
     CHECK(c.stop_enter_mps==0.0 && c.stop_exit_mps==0.0005 && d.stop_enter_mps==0.2 && d.stop_exit_mps==0.5);
 }
+
+// Rule F (validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md): with no
+// REVERSE message latched, BETA_ASSUME_FORWARD_FIXES consecutive data-valid
+// fixes >= 20 km/h that agree with the wheels (4 km/h), point along their
+// displacement and turn with the yaw let the BETA gates assume forward. The
+// MODEL core never uses the assumption; a real message always overrides it.
+static void tunnel(Pipeline& p,bool assume=true) {
+    init(p,true,false);
+    // The product tunnel profile enables rule F; the legacy profile does not.
+    CHECK(runtime::beta_profile_tunnel().assume_forward && !runtime::beta_profile().assume_forward);
+    BetaProfile b=runtime::beta_profile_tunnel(); if(!assume) b.assume_forward=false;
+    CHECK(p.enable_beta(b));
+}
+// Every anchor record as "ms gate source", collected while the ring lasts.
+struct Rows { uint64_t seen; std::vector<std::string> rows; Rows():seen(0) {} };
+static void collect(const Pipeline& p,Rows* r) {
+    for(uint64_t q=r->seen+1;q<=p.beta_anchor_sequence();++q) {
+        BetaAnchorRecord a; CHECK(p.beta_anchor_record(q,&a));
+        char line[96];
+        std::snprintf(line,sizeof line,"%llu %s %s %.3f",(unsigned long long)((a.mono_ns-T(0))/1000000ULL),
+                      beta_anchor_gate_name(a.gate),a.heading_source?a.heading_source:"-",a.heading_deg);
+        r->rows.push_back(line);
+    }
+    r->seen=p.beta_anchor_sequence();
+}
+static uint64_t first_seed_ms(const Rows& r) {
+    for(size_t i=0;i<r.rows.size();++i)
+        if(r.rows[i].find(" ACCEPTED seed")!=std::string::npos) return std::strtoull(r.rows[i].c_str(),0,10);
+    return 0;
+}
+// 1 Hz fixes from 410 ms at kmh with course 0 (north), wheels at wheel_kmh.
+static Plan fast_plan(unsigned end_ms,double kmh,double wheel_kmh) {
+    Plan plan; plan.end_ms=end_ms;
+    plan.wheel=[wheel_kmh](unsigned){return wheel_kmh;};
+    for(unsigned ms=410;ms+200<=end_ms;ms+=1000) plan.fixes.push_back(fix(ms,1,kmh));
+    return plan;
+}
+static void assume_forward_seeds_without_reverse_message() {
+    Pipeline p; tunnel(p);
+    Plan plan=fast_plan(16000,36,36);
+    plan.fixes.push_back(fix(14620,0,36));   // GPS lost after 14 fixes
+    Rows rows;
+    unsigned published=0;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        collect(q,&rows);
+        if(ms<14820) return;
+        adapter::DrSnapshot s;
+        if(runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK) {
+            ++published; CHECK(angle_error(s.travel_bearing_deg,0)<1.0 && std::fabs(s.speed_mps-10)<1e-6);
+        }
+    };
+    run(p,plan);
+    CHECK(p.reverse_assumptions()==1 && p.reverse_assumed() && !p.reverse_latched() && !p.reverse_exit_seen());
+    const ReverseAssumption& a=p.last_reverse_assumption();
+    CHECK(a.mono_ns==T(2410) && a.epoch==1);
+    for(unsigned k=0;k<3;++k) {
+        CHECK(a.fixes[k].mono_ns==T(410+1000*k));
+        CHECK(std::fabs(a.fixes[k].gps_kmh-36)<1e-9 && std::fabs(a.fixes[k].wheel_kmh-36)<1e-6);
+        CHECK(k==0?std::isnan(a.fixes[k].turn_error_deg):a.fixes[k].turn_error_deg<0.01);
+    }
+    // 410 PREVIOUS, 1410 REVERSE, 2410 assumed (COURSE: first course reference), 3410 seed.
+    CHECK(rows.rows.size()>=4);
+    CHECK(rows.rows[0].find("410 PREVIOUS")==0 && rows.rows[1].find("1410 REVERSE")==0);
+    CHECK(rows.rows[2].find("2410 COURSE")==0);
+    CHECK(first_seed_ms(rows)==3410);
+    CHECK(published>0);
+    // MODEL isolation: the MODEL core still needs a real message.
+    CHECK(!p.diagnostic(T(plan.end_ms)).snapshot.model_valid);
+    // Without rule F the same stream never seeds (the beta.10 behaviour).
+    Pipeline off; tunnel(off,false);
+    Plan same=fast_plan(16000,36,36); run(off,same);
+    CHECK(off.reverse_assumptions()==0 && off.beta_gate()==BETA_GATE_REVERSE && !off.beta_seeded());
+}
+static void assume_forward_needs_three_fast_consistent_fixes() {
+    struct Case { double gps, wheel; unsigned fixes; bool want; const char* what; };
+    const Case cases[]={
+        {36,36,2,false,"two fixes only"},
+        {36,36,3,true,"three fixes"},
+        {19.9,19.9,12,false,"below 20 km/h"},
+        {20,20,3,true,"exactly 20 km/h"},
+        {36,31.5,12,false,"wheel 4.5 km/h slower"},
+        {36,40.5,12,false,"wheel 4.5 km/h faster"},
+        {36,32.5,3,true,"wheel 3.5 km/h slower"}};
+    for(unsigned c=0;c<sizeof cases/sizeof cases[0];++c) {
+        const Case& k=cases[c];
+        Pipeline p; tunnel(p);
+        Plan plan; plan.end_ms=410+1000*k.fixes+500;
+        plan.wheel=[k](unsigned){return k.wheel;};
+        for(unsigned i=0;i<k.fixes;++i) plan.fixes.push_back(fix(410+1000*i,1,k.gps));
+        run(p,plan);
+        if((p.reverse_assumptions()==1)!=k.want) std::fprintf(stderr,"rule F case: %s\n",k.what);
+        CHECK((p.reverse_assumptions()==1)==k.want && p.reverse_assumed()==k.want);
+    }
+    // Two fixes, a GPS loss, two fixes: the loss breaks the run.
+    Pipeline p; tunnel(p);
+    Plan plan=fast_plan(5000,36,36); plan.fixes.clear();
+    plan.fixes.push_back(fix(410,1,36)); plan.fixes.push_back(fix(1410,1,36));
+    plan.fixes.push_back(fix(1620,0,36));
+    plan.fixes.push_back(fix(2410,1,36)); plan.fixes.push_back(fix(3410,1,36));
+    run(p,plan);
+    CHECK(p.reverse_assumptions()==0 && p.beta_gate()==BETA_GATE_REVERSE);
+    // A repeated utc second (OEM poll) neither counts nor breaks the run.
+    Pipeline r; tunnel(r);
+    Plan poll=fast_plan(4000,36,36); poll.fixes.clear();
+    poll.fixes.push_back(fix(410,1,36)); poll.fixes.push_back(fix(1410,1,36));
+    Fix again=fix(1410,1,36); again.ms=1910; poll.fixes.push_back(again);
+    poll.fixes.push_back(fix(2410,1,36));
+    run(r,poll);
+    CHECK(r.reverse_assumptions()==1 && r.last_reverse_assumption().mono_ns==T(2410));
+}
+static void assume_forward_course_must_follow_motion_and_yaw() {
+    // A 25 deg course step without a yaw turn (chord still within 30 deg):
+    // the run restarts at the step; the assumption comes three fixes later.
+    {
+        Pipeline p; tunnel(p);
+        Plan plan=fast_plan(7000,36,36);
+        plan.fixes[2].heading=25;               // 2410 ms
+        run(p,plan);
+        CHECK(p.reverse_assumptions()==1);
+        CHECK(p.last_reverse_assumption().mono_ns==T(5410));
+    }
+    // A course across the displacement (positions move north, course 90):
+    // never consistent, never assumed.
+    {
+        Pipeline p; tunnel(p);
+        Plan plan=fast_plan(7000,36,36);
+        for(size_t i=0;i<plan.fixes.size();++i) plan.fixes[i].heading=90;
+        run(p,plan);
+        CHECK(p.reverse_assumptions()==0 && p.beta_gate()==BETA_GATE_REVERSE);
+    }
+    // A turn the yaw shows: the course follows the yaw integral, assumed.
+    {
+        Pipeline p; tunnel(p);
+        Plan plan=fast_plan(4000,36,36);
+        plan.yaw=[](unsigned){return yaw_raw(0.1);};   // 5.7 deg/s clockwise
+        double lat=35, lon=135, course=0;
+        for(size_t i=0;i<plan.fixes.size();++i) {
+            plan.fixes[i].heading=course; plan.fixes[i].lat=lat; plan.fixes[i].lon=lon;
+            const double mid=(course+0.1*90/3.14159265358979*1)*3.14159265358979/180; // half-step course
+            lat+=10*std::cos(mid)/111320; lon+=10*std::sin(mid)/(111320*std::cos(35*3.14159265358979/180));
+            course+=0.1*180/3.14159265358979;
+        }
+        run(p,plan);
+        CHECK(p.reverse_assumptions()==1);
+        CHECK(p.last_reverse_assumption().fixes[2].turn_error_deg<1.0);
+    }
+}
+static void real_reverse_message_overrides_assumption() {
+    // An early real message: rule F never acts, the records equal those of
+    // the same stream with rule F disabled (reverse 1: REVERSE gate; 0: seeds).
+    for(int value=0;value<2;++value) {
+        Rows on,off;
+        for(unsigned k=0;k<2;++k) {
+            Pipeline p; tunnel(p,k==0);
+            Plan plan=fast_plan(9000,36,36);
+            plan.reverse.push_back(std::make_pair(0u,value));
+            Rows& r=k==0?on:off;
+            plan.each=[&](Pipeline& q,unsigned){ collect(q,&r); };
+            run(p,plan);
+            CHECK(p.reverse_assumptions()==0 && !p.reverse_assumed() && p.reverse_latched());
+            CHECK((p.beta_gate()==BETA_GATE_REVERSE)==(value==1));
+        }
+        CHECK(on.rows==off.rows && !on.rows.empty());
+    }
+    // A message after the assumption: reverse 1 ends it (normal reverse
+    // handling of a carried estimate), and a later 1->0 continues BETA
+    // without a core evidence failure.
+    Pipeline p; tunnel(p);
+    Plan plan=fast_plan(16000,36,36);
+    plan.reverse.push_back(std::make_pair(6000u,1));
+    plan.reverse.push_back(std::make_pair(7000u,0));
+    plan.wheel=[](unsigned ms){return ms>=5000&&ms<8000?0.0:36.0;};
+    plan.fixes.clear();
+    for(unsigned ms=410;ms<=4410;ms+=1000) plan.fixes.push_back(fix(ms,1,36));
+    const double stop_lat=fix(4410,1,36).lat+5.0/111320;
+    for(unsigned ms=5410;ms<=7410;ms+=1000) plan.fixes.push_back(fix_at(ms,stop_lat,0,0));
+    for(unsigned ms=8410;ms<=13410;ms+=1000)
+        plan.fixes.push_back(fix_at(ms,stop_lat+10.0*(ms-8000)/1000/111320,36,0));
+    plan.fixes.push_back(fix(13620,0,36));
+    bool assumed_before=false,ended_by_one=false;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        if(ms==5900) assumed_before=q.reverse_assumed();
+        if(ms==6500) ended_by_one=!q.reverse_assumed()&&q.reverse_latched()&&q.latch_value()==1;
+    };
+    run(p,plan);
+    CHECK(assumed_before && ended_by_one);
+    // The reverse 1 contradicted the active assumption: the seed was discarded
+    // and BETA re-seeded through the normal path after the 1->0 transition.
+    CHECK(p.reverse_contradictions()==1 && p.last_contradiction_discarded_seed());
+    CHECK(p.reverse_assumptions()==1 && p.reverse_latched() && p.latch_value()==0 && p.reverse_exit_seen());
+    CHECK(p.beta_seeded());
+    adapter::DrSnapshot s;
+    CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+    CHECK(angle_error(s.travel_bearing_deg,0)<2.0);
+    // A forward message while seeded under the assumption: the evidence
+    // sequence continues (same epoch, newer local sequence).
+    Pipeline f; tunnel(f);
+    Plan fwd=fast_plan(10610,36,36);
+    fwd.reverse.push_back(std::make_pair(6000u,0));
+    fwd.fixes.push_back(fix(10620,0,36)); fwd.end_ms=12000;
+    run(f,fwd);
+    CHECK(f.reverse_assumptions()==1 && f.reverse_latched() && !f.reverse_assumed() && f.reverse_exit_seen());
+    CHECK(f.beta_core_failure()==MX5_DR_OK);
+    CHECK(runtime::map_model_publication(f.model_publication(T(fwd.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+}
+// Failure mode 1: reversing at >= 20 km/h with an unknown latch. Rule F
+// cannot see it (the course is the body heading + 180 deg and turns with the
+// yaw), so BETA seeds 180 deg wrong; after the stop and forward driving the
+// continuous policy's resync (BETA_RESYNC_FIXES chord-confirmed courses)
+// corrects it. A course flip inside the run (no stop) restarts the run.
+static void reverse_start_is_corrected_by_resync() {
+    Pipeline p; tunnel(p);
+    Plan plan; plan.end_ms=21000;
+    // 0-5 s reversing south at 25 km/h (body faces north), 5-7 s stopped,
+    // from 7 s forward north at 25 km/h; GPS lost at 18.62 s.
+    plan.wheel=[](unsigned ms){return ms<5000?25.0:ms<7000?0.0:25.0;};
+    const double v=25/3.6;
+    double lat=35;
+    for(unsigned ms=410;ms<=4410;ms+=1000) { plan.fixes.push_back(fix_at(ms,lat,25,180)); lat-=v/111320; }
+    const double stop=lat;
+    for(unsigned ms=5410;ms<=6410;ms+=1000) plan.fixes.push_back(fix_at(ms,stop,0,180));
+    for(unsigned ms=7410;ms<=18410;ms+=1000) plan.fixes.push_back(fix_at(ms,stop+v*(ms-7000)/1000/111320,25,0));
+    plan.fixes.push_back(fix(18620,0,25));
+    Rows rows;
+    plan.each=[&](Pipeline& q,unsigned){ collect(q,&rows); };
+    run(p,plan);
+    CHECK(p.reverse_assumptions()>=1 && p.last_reverse_assumption().mono_ns<T(5000));
+    uint64_t seed=0,resync=0;
+    for(size_t i=0;i<rows.rows.size();++i) {
+        const uint64_t ms=std::strtoull(rows.rows[i].c_str(),0,10);
+        if(!seed&&rows.rows[i].find(" ACCEPTED seed")!=std::string::npos) seed=ms;
+        if(!resync&&rows.rows[i].find(" ACCEPTED resync")!=std::string::npos) resync=ms;
+    }
+    CHECK(seed&&seed<5000);
+    BetaAnchorRecord r; CHECK(p.beta_anchor_record(p.beta_anchor_sequence()-1,&r));
+    if(!(resync>7000&&resync<=7000+7000)) std::fprintf(stderr,"resync at %llu ms\n",(unsigned long long)resync);
+    CHECK(resync>7000 && resync<=14000);    // <= 7 s of forward driving with fixes
+    adapter::DrSnapshot s;
+    CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK);
+    CHECK(angle_error(s.travel_bearing_deg,0)<3.0);
+    // A course flip inside the run without a stop (multipath reversal): the
+    // turn check restarts the run.
+    Pipeline q; tunnel(q);
+    Plan flip=fast_plan(7000,36,36);
+    flip.fixes[1].heading=180;
+    run(q,flip);
+    CHECK(q.reverse_assumptions()==1 && q.last_reverse_assumption().mono_ns==T(4410));
+}
+static void reset_clears_and_rederives_the_assumption() {
+    Pipeline p; tunnel(p);
+    Plan plan=fast_plan(12000,36,36);
+    bool before=false,cleared=false,after_fence=false;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        if(ms==4000) { q.fence_beta(); after_fence=q.reverse_assumed(); }
+        if(ms==4900) before=q.reverse_assumed();
+        if(ms==5000) { q.reset(q.context()); cleared=!q.reverse_assumed()&&!q.beta_seeded(); }
+    };
+    run(p,plan);
+    CHECK(after_fence && before && cleared);  // a cadence fence keeps it, a reset clears it
+    CHECK(p.reverse_assumptions()==2 && p.reverse_assumed());
+    CHECK(p.last_reverse_assumption().mono_ns>T(5000));
+    CHECK(p.beta_seeded());
+    // A rejected REVERSE message (the change is lost) also clears it.
+    Pipeline r; tunnel(r);
+    Plan rej=fast_plan(6000,36,36);
+    rej.each=[&](Pipeline& q,unsigned ms){
+        if(ms==3500) { CHECK(q.reverse_assumed()); q.exclude_reverse(); CHECK(!q.reverse_assumed()); }
+    };
+    run(r,rej);
+    CHECK(r.reverse_assumptions()==2);
+}
+
+// Review HIGH (2026-10-11): reversing at >= 20 km/h with an unknown latch
+// seeds under the assumed forward state with the course (body + 180 deg). A
+// real reverse 1 that arrives later contradicts the assumption: the seed must
+// be discarded, never kept with the latch now saying reverse (the travel
+// bearing would be the opposite of the real motion).
+static void contradicting_reverse_message_discards_the_seed() {
+    Pipeline p; tunnel(p);
+    Plan plan; plan.end_ms=12000;
+    // Body faces north; reversing south at 25 km/h, slowing to 10 km/h from
+    // 5 s; reverse 1 arrives at 6.5 s; GPS lost at 7.62 s.
+    plan.wheel=[](unsigned ms){return ms<5000?25.0:10.0;};
+    plan.reverse.push_back(std::make_pair(6500u,1));
+    double lat=35;
+    for(unsigned ms=410;ms<=6410;ms+=1000) {
+        const double v=ms<5000?25.0:10.0;
+        plan.fixes.push_back(fix_at(ms,lat,v,180)); lat-=v/3.6/111320;
+    }
+    plan.fixes.push_back(fix(7620,0,10));
+    bool seeded_before=false; unsigned published=0,opposite=0;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        if(ms==6300) seeded_before=q.beta_seeded()&&q.reverse_assumed();
+        if(ms<7700) return;
+        adapter::DrSnapshot s;
+        if(runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK) {
+            ++published; if(angle_error(s.travel_bearing_deg,180)>90) ++opposite;
+        }
+    };
+    run(p,plan);
+    CHECK(seeded_before);                       // the assumption did seed (rule F cannot see it)
+    CHECK(p.reverse_contradictions()==1 && p.last_contradiction_discarded_seed());
+    CHECK(p.last_contradiction_ns()==T(6500));
+    CHECK(!p.reverse_assumed() && p.reverse_latched() && p.latch_value()==1);
+    CHECK(opposite==0 && published==0);         // no replacement with a reversed direction
+    CHECK(!p.beta_seeded());
+    // A consistent real forward message keeps the seed (no contradiction).
+    Pipeline f; tunnel(f);
+    Plan fwd=fast_plan(7610,36,36); fwd.reverse.push_back(std::make_pair(6500u,0));
+    fwd.fixes.push_back(fix(7620,0,36)); fwd.end_ms=9000;
+    run(f,fwd);
+    CHECK(f.reverse_contradictions()==0 && f.beta_seeded());
+}
+// Review mitigation (2026-10-11): a latch that said reverse when it was
+// cleared blocks rule F until a real message is latched again; a latch that
+// said forward (the trip8 2026.7 s reset) does not.
+static void reverse_latch_cleared_in_reverse_blocks_rule_f() {
+    for(int value=0;value<2;++value) {
+        Pipeline p; tunnel(p);
+        Plan plan=fast_plan(9000,36,36);
+        plan.reverse.push_back(std::make_pair(0u,value));
+        plan.each=[&](Pipeline& q,unsigned ms){ if(ms==3000) q.reset(q.context()); };
+        run(p,plan);
+        CHECK(p.reverse_assumption_blocked()==(value==1));
+        CHECK((p.reverse_assumptions()==1)==(value==0));
+    }
+    // A real message lifts the block; the next clear (latch 0) allows rule F.
+    Pipeline p; tunnel(p);
+    Plan plan=fast_plan(16000,36,36);
+    plan.reverse.push_back(std::make_pair(0u,1));
+    plan.reverse.push_back(std::make_pair(5000u,0));
+    bool blocked=false;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        if(ms==2000) q.reset(q.context());
+        if(ms==4500) blocked=q.reverse_assumption_blocked()&&q.reverse_assumptions()==0;
+        if(ms==8000) q.reset(q.context());
+    };
+    run(p,plan);
+    CHECK(blocked && !p.reverse_assumption_blocked());
+    CHECK(p.reverse_assumptions()==1 && p.last_reverse_assumption().mono_ns>T(8000));
+    // An excluded message while the latch says reverse also blocks.
+    Pipeline x; tunnel(x);
+    Plan ex=fast_plan(8000,36,36); ex.reverse.push_back(std::make_pair(0u,1));
+    ex.each=[&](Pipeline& q,unsigned ms){ if(ms==2000) q.exclude_reverse(); };
+    run(x,ex);
+    CHECK(x.reverse_assumption_blocked() && x.reverse_assumptions()==0);
+}
+// Review gap: a raw source epoch change ends the assumption even when no
+// SOURCE_RESET fault follows (raw epoch 0 after a latch-keeping reset).
+static void raw_epoch_change_clears_the_assumption() {
+    Pipeline p; tunnel(p);
+    Plan plan=fast_plan(4000,36,36);
+    run(p,plan);
+    CHECK(p.reverse_assumed());
+    mx5_dr_context c=p.context(); ++c.generation;
+    p.reset_keep_reverse(c);
+    CHECK(p.reverse_assumed());                  // kept like the real latch
+    RawEvent w=raw(WHEELS,4100,1,2);
+    for(unsigned i=0;i<4;++i) w.raw[i]=uint16_t(wheel_raw(36));
+    CHECK(p.enqueue_raw(w)==PIPELINE_OK);
+    CHECK(!p.reverse_assumed());
+}
 int main() {
     tunnel_zero_wheel_yaw_holds_heading();
     tunnel_restart_with_yaw_leading_the_wheels_stays_engaged();
@@ -1641,6 +2004,15 @@ int main() {
     reverse_latch_contradiction_withdraws();
     pending_gps_caps_and_hides();
     shadow_diagnostic_unchanged_by_beta();
+    assume_forward_seeds_without_reverse_message();
+    assume_forward_needs_three_fast_consistent_fixes();
+    assume_forward_course_must_follow_motion_and_yaw();
+    real_reverse_message_overrides_assumption();
+    reverse_start_is_corrected_by_resync();
+    reset_clears_and_rederives_the_assumption();
+    contradicting_reverse_message_discards_the_seed();
+    reverse_latch_cleared_in_reverse_blocks_rule_f();
+    raw_epoch_change_clears_the_assumption();
     std::printf("beta tests passed (%u checks)\n",checks);
     return 0;
 }

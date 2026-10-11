@@ -77,11 +77,19 @@ struct Fix {
 };
 struct Wheel { uint64_t t; double mps; };
 
+// A recorded MODEL session/bus boundary row (runtime.cpp sync_model_session /
+// sync_model_bus): the worker time, whether it is the bus fence, whether
+// input is available after it, its raw_since_ns and whether it reset the
+// pipeline (CHANGED).
+struct Boundary { uint64_t t, since; bool bus, available, reset; };
 struct Input {
     std::vector<Raw> raws;
     std::vector<Fix> calls;   // OEM POSITION callbacks in time order
     std::vector<Fix> truth;   // recorded valid GPS (mode 1/2, utc, finite)
     std::vector<Wheel> wheels;
+    // shadow_session/shadow_bus rows for --reverse-fence runtime, sorted by
+    // time across files (trace.1 then trace.0 are read in file order).
+    std::vector<Boundary> boundaries;
     std::string boot_id, position_source;
     unsigned files, input_resets, motion_events;
 };
@@ -308,6 +316,14 @@ bool load(const std::string& dir, const std::string& want_boot, double poll_hdop
                 pending_rejected.rejected.receive_seq = seq;
                 pending_rejected.rejected.received_ns = rec;
             }
+        } else if (k == "shadow_bus" || k == "shadow_session") {
+            Boundary b = Boundary();
+            b.bus = k == "shadow_bus";
+            if (!u64_field(l, "mono_ns", &b.t)) continue;
+            if (!u64_field(l, "raw_since_ns", &b.since)) b.since = b.t;
+            b.available = l.find("\"input_available\":true") != std::string::npos;
+            b.reset = l.find("\"reset\":true") != std::string::npos;
+            in->boundaries.push_back(b);
         } else if (k == "shadow_input_reset") {
             Raw r = pending_rejected;
             pending_rejected = Raw();
@@ -378,6 +394,8 @@ bool load(const std::string& dir, const std::string& want_boot, double poll_hdop
             in->calls.push_back(f);
         }
     }
+    std::stable_sort(in->boundaries.begin(), in->boundaries.end(),
+                     [](const Boundary& a, const Boundary& b) { return a.t < b.t; });
     std::stable_sort(in->raws.begin(), in->raws.end(),
                      [](const Raw& a, const Raw& b) { return a.t < b.t; });
     std::stable_sort(in->calls.begin(), in->calls.end(),
@@ -402,6 +420,23 @@ struct Options {
     std::vector<double> t0s, durations;
     double sweep_from, sweep_to, sweep_step;
     bool sweep, check, real_only;
+    // Rule F (validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md):
+    // assume_forward=false is the replay-only beta.10 counterfactual;
+    // seed_report adds the "beta_seed" object (default reports unchanged).
+    bool assume_forward, seed_report;
+    // reverse_fence (--reverse-fence runtime): reproduces the runtime's MODEL
+    // session/bus fence for REVERSE messages only (runtime.cpp drain_motion):
+    // a REVERSE message is handed to the pipeline only while both recorded
+    // fences admit input (the newest shadow_session and shadow_bus rows at
+    // the worker turn say input_available; a missing kind counts as admitted),
+    // with a receipt time and a positive transport time not before the newer
+    // raw_since_ns; otherwise exclude_reverse(). A recorded CHANGED boundary
+    // (reset:true) resets the pipeline with a new source (bus) or session
+    // epoch. NOT reproduced: the same fence for wheel/yaw events and POSITION
+    // callbacks (the request-level checks of ModelSession/ModelBus::reject),
+    // the worker's turn timing of the boundary reads, audit faults. Feed
+    // (default): every recorded REVERSE message is fed, no boundary resets.
+    bool reverse_fence;
     uint64_t cadence_ns, grace_ns, truth_lag_ns, truth_gap_ns;
     double course_min_kmh, coverage_min, poll_hdop;
     // Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md); NAN keeps
@@ -510,10 +545,17 @@ void oem_call(const Fix& f, bool synthetic, uint64_t t, const uint8_t* original_
 }
 
 size_t raw_index;
+// --reverse-fence runtime: the newest recorded session/bus boundary state.
+struct FenceState { bool session_available, bus_available; uint64_t session_since, bus_since; };
+FenceState fence = {true, true, 0, 0};
+size_t boundary_index;
 R::MotionGapTracker motion_gap;
 // Recorded-replay exposure of the MODEL reverse latch (design decision 7):
 // BETA cannot seed or keep a DR anchor while it is unknown.
 struct LatchExposure { uint64_t moving_ticks, moving_latched_ticks; };
+// --seed-report: moving time with a seeded BETA core and the first seed.
+struct SeedExposure { uint64_t moving_seeded_ticks, first_seed_ns, seeded_ticks; };
+SeedExposure seed_exposure;
 LatchExposure latch_exposure;
 bool count_latch = true;  // parent only; window children stop counting
 // G3 record-only tracker: rows in their own journal, so every BETA output
@@ -560,6 +602,18 @@ void worker_turn(uint64_t now) {
         }
     }
     pending.clear();
+    // runtime.cpp: sync_model_boundaries() runs before drain_motion().
+    while (opt.reverse_fence && boundary_index < in.boundaries.size() && in.boundaries[boundary_index].t <= now) {
+        const Boundary& b = in.boundaries[boundary_index++];
+        if (b.reset) {
+            mx5_dr_context c = nav.context();
+            if (b.bus) ++c.source_epoch; else ++c.session_epoch;
+            ++c.generation;
+            nav.reset(c);
+        }
+        if (b.bus) { fence.bus_available = b.available; fence.bus_since = b.since; }
+        else { fence.session_available = b.available; fence.session_since = b.since; }
+    }
     while (raw_index < in.raws.size() && in.raws[raw_index].t <= now) {
         const Raw& r = in.raws[raw_index++];
         if (r.reset) {
@@ -575,6 +629,14 @@ void worker_turn(uint64_t now) {
             uint64_t missing = 0, span = 0;
             if (motion_gap.accept(r.event, &missing, &span) == R::MotionGapTracker::TOO_LARGE)
                 nav.exclude_reverse(N::LATCH_CLEAR_INPUT_GAP);
+            if (opt.reverse_fence && r.event.kind == N::REVERSE) {
+                const uint64_t since = fence.bus_since > fence.session_since ? fence.bus_since : fence.session_since;
+                const bool old_transport = r.event.source_mono_ms > 0 &&
+                    uint64_t(r.event.source_mono_ms) <= UINT64_MAX / 1000000ULL &&
+                    uint64_t(r.event.source_mono_ms) * 1000000ULL < since;
+                if (!fence.session_available || !fence.bus_available ||
+                    r.event.received_ns < since || old_transport) { nav.exclude_reverse(); continue; }
+            }
             nav.enqueue_raw(r.event);
         }
     }
@@ -591,6 +653,11 @@ void worker_turn(uint64_t now) {
         if (count_latch && wheel_at(now, &w) && w > 1.0) {
             ++latch_exposure.moving_ticks;
             if (nav.reverse_latched()) ++latch_exposure.moving_latched_ticks;
+            if (nav.beta_seeded()) ++seed_exposure.moving_seeded_ticks;
+        }
+        if (count_latch && nav.beta_seeded()) {
+            ++seed_exposure.seeded_ticks;
+            if (!seed_exposure.first_seed_ns) seed_exposure.first_seed_ns = now;
         }
     }
 }
@@ -610,6 +677,7 @@ bool start_product(uint64_t t) {
     // Counterfactuals are replay-only. Controller/bridge still use the same
     // tunnel budgets; only the pipeline's engagement policy changes.
     if (opt.engagement=="legacy") profile.continuous_anchor=false;
+    if (!opt.assume_forward) profile.assume_forward=false;
     if (opt.engagement=="latest-course") {
         profile.course_weight_kmh=0.001;
         profile.course_innovation_rad=1e6;
@@ -1056,6 +1124,7 @@ void usage() {
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
         "                   [--g3 off|on|slow] [--g3-store DIR] [--g3-out FILE]\n"
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
+        "                   [--assume-forward on|off] [--seed-report] [--reverse-fence feed|runtime]\n"
         "Times are journal monotonic seconds. Without --t0/--sweep only recorded\n"
         "(real) outages are replayed.\n");
     exit(2);
@@ -1070,6 +1139,7 @@ int main(int argc, char** argv) {
     opt.poll_hdop = 1.0; opt.position_source = "auto";
     opt.engagement = "continuous";
     opt.g3 = "off";
+    opt.assume_forward = true; opt.seed_report = false; opt.reverse_fence = false;
     opt.stopped_accuracy_m = opt.stopped_honest_max_m = opt.crawl_speed_mps = NAN;
     opt.durations = parse_list("10,20,30,45,60");
     for (int i = 1; i < argc; ++i) {
@@ -1113,6 +1183,16 @@ int main(int argc, char** argv) {
         else if (a == "--stopped-accuracy-m" && more) opt.stopped_accuracy_m = atof(argv[++i]);
         else if (a == "--stopped-honest-max-m" && more) opt.stopped_honest_max_m = atof(argv[++i]);
         else if (a == "--crawl-speed-mps" && more) opt.crawl_speed_mps = atof(argv[++i]);
+        else if (a == "--assume-forward" && more) {
+            const std::string v = argv[++i];
+            if (v != "on" && v != "off") usage();
+            opt.assume_forward = v == "on";
+        } else if (a == "--seed-report") opt.seed_report = true;
+        else if (a == "--reverse-fence" && more) {
+            const std::string v = argv[++i];
+            if (v != "feed" && v != "runtime") usage();
+            opt.reverse_fence = v == "runtime";
+        }
         else if (a == "--check") opt.check = true;
         else if (a == "--real-only") opt.real_only = true;
         else usage();
@@ -1123,6 +1203,11 @@ int main(int argc, char** argv) {
     std::string error;
     if (!load(opt.trip, opt.boot_id, opt.poll_hdop, opt.position_source, &in, &error)) { fprintf(stderr, "replay_beta: %s\n", error.c_str()); return 2; }
 
+    // --reverse-fence runtime: before the first recorded row of a fence kind
+    // the runtime has no input; a kind never recorded (older builds) admits.
+    for (size_t i = 0; i < in.boundaries.size(); ++i) {
+        if (in.boundaries[i].bus) fence.bus_available = false; else fence.session_available = false;
+    }
     // Window list: every (T0, D) pair, ordered by T0.
     std::vector<double> t0s = opt.t0s;
     if (opt.sweep) {
@@ -1365,6 +1450,12 @@ int main(int argc, char** argv) {
     }
     j += "],\"reverse_latch\":{\"moving_s\":" + num(latch_exposure.moving_ticks * TICK_NS / 1e9) +
          ",\"moving_latched_s\":" + num(latch_exposure.moving_latched_ticks * TICK_NS / 1e9) + "}";
+    if (opt.seed_report)
+        j += ",\"beta_seed\":{\"assume_forward\":" + std::string(opt.assume_forward ? "true" : "false") +
+             ",\"first_seed_s\":" + (seed_exposure.first_seed_ns ? num(seed_exposure.first_seed_ns / 1e9) : std::string("null")) +
+             ",\"seeded_s\":" + num(seed_exposure.seeded_ticks * TICK_NS / 1e9) +
+             ",\"moving_seeded_s\":" + num(seed_exposure.moving_seeded_ticks * TICK_NS / 1e9) +
+             ",\"reverse_assumptions\":" + std::to_string(nav.reverse_assumptions()) + "}";
     j += ",\"real_outages\":{\"runs\":" + std::to_string(real_runs) + ",\"mode0_sends\":" +
          std::to_string(real_mode0) + ",\"replaced\":" + std::to_string(real_replaced) +
          ",\"longest_engaged_s\":" + num(baseline_longest) + ",\"return_jump_m\":" +

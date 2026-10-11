@@ -40,6 +40,9 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     qualified_revoker_(0), qualified_revoker_user_(0), qualified_owner_(0),
     reverse_latch_(false), latch_valid_(false), latch_value_(0), latch_time_(0),
     latch_received_(0), latch_epoch_(0), latch_seq_(0),
+    assumed_forward_(false), assumed_time_(0), assumed_epoch_(0), assumptions_(0),
+    af_count_(0), af_last_ns_(0), af_blocked_(false), contradiction_seeded_(false),
+    contradictions_(0), contradiction_ns_(0),
     beta_enabled_(false), beta_have_prev_(false), beta_gate_(BETA_GATE_DISABLED),
     beta_core_result_(MX5_DR_E_CONFIG), beta_core_failure_(MX5_DR_OK), beta_mode_(-1), beta_position_seq_(0),
     beta_conflict_since_(0), beta_rotation_rad_(0), beta_rotation_budget_m_(0),
@@ -52,6 +55,7 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     std::memset(beta_records_,0,sizeof beta_records_);
     std::memset(&g3_,0,sizeof g3_); g3_.first_move_reverse=-1;
     std::memset(latch_clears_,0,sizeof latch_clears_);
+    std::memset(af_run_,0,sizeof af_run_); std::memset(&assumption_,0,sizeof assumption_);
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
     std::memset(&beta_core_,0,sizeof beta_core_);
     beta_=runtime::beta_profile_tunnel(); beta_prev_=adapter::Observation();
@@ -95,6 +99,7 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
     if(!valid_profile)return false;
     model_=true; profile_=p; qualified_retired_=false;retired_from_generation_=0;
     reverse_latch_=reverse_latch; clear_latch(); reverse_exit_seen_=reverse_any_seen_=false;
+    af_blocked_=false;
     beta_enabled_=false; beta_gate_=BETA_GATE_DISABLED;
     qualified_stale_position_cutoff_ns_=0;
     qualified_stale_position_call_sequence_=0;
@@ -310,6 +315,8 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
     if(reverse_latch_&&latch_valid_&&r.epoch!=latch_epoch_) {
         drop_latch(LATCH_CLEAR_SOURCE_EPOCH);reverse_exit_seen_=reverse_any_seen_=false;
     }
+    // Rule F: an assumption belongs to its source epoch like the real latch.
+    if(reverse_latch_&&assumed_forward_&&r.epoch!=assumed_epoch_)clear_latch();
     const PipelineResult result=enqueue_raw_event(r);
     if(reverse_latch_&&r.kind==REVERSE&&result!=PIPELINE_OK)drop_latch(LATCH_CLEAR_REJECTED_REVERSE);
     return result;
@@ -762,7 +769,10 @@ PipelineResult Pipeline::advance(uint64_t end) {
     const uint64_t frontier=core_.seeded?core_.estimate.frontier_ns:beta_core_.estimate.frontier_ns;
     if(end<=frontier)return PIPELINE_OK;
     uint64_t begin=frontier;
-    if (!status_.have_speed||!status_.have_yaw||!reverse_known()||
+    // Rule F: only a BETA-only integration may use the assumed forward state;
+    // a seeded MODEL core needs the real latch as before.
+    const bool assumed=beta_only&&reverse_assumed();
+    if (!status_.have_speed||!status_.have_yaw||!(reverse_known()||assumed)||
         yaw_.time>begin || yaw_.window_end<end) {
         if (beta_only) { beta_control(MX5_DR_DISABLE); return PIPELINE_OK; }
         return PIPELINE_WAITING;
@@ -803,7 +813,7 @@ PipelineResult Pipeline::advance(uint64_t end) {
         const uint64_t step_max=core_.seeded?core_.config.interval_max_ns:beta_core_.config.interval_max_ns;
         i.start_ns=begin; i.end_ns=min64(end,add(begin,step_max));
         mx5_dr_evidence reverse=reverse_.evidence;
-        if (reverse_latch_&&!latch_evidence(i.start_ns,&reverse)) {
+        if (reverse_latch_&&!latch_evidence(i.start_ns,&reverse,assumed)) {
             if (beta_only) { beta_control(MX5_DR_DISABLE); return PIPELINE_OK; }
             return PIPELINE_WAITING;
         }
@@ -834,6 +844,9 @@ PipelineResult Pipeline::advance(uint64_t end) {
 void Pipeline::clear_latch() {
     latch_valid_=false; latch_value_=0;
     latch_time_=latch_received_=latch_epoch_=0;
+    // Rule F: everything that clears the real latch also ends the assumption
+    // and its candidate run; it is re-derived by the same rule afterwards.
+    assumed_forward_=false; assumed_time_=assumed_epoch_=0; af_count_=0; af_last_ns_=0;
 }
 bool Pipeline::reverse_known() const {
     return reverse_latch_?latch_valid_:status_.have_reverse;
@@ -846,15 +859,31 @@ const Pipeline::SensorRecord* Pipeline::reverse_at(uint64_t time,SensorRecord* l
     latched->spread=0; latched->wheel_max=0;
     return latched;
 }
-bool Pipeline::latch_evidence(uint64_t start,mx5_dr_evidence* out) {
+const Pipeline::SensorRecord* Pipeline::beta_reverse_at(uint64_t time,SensorRecord* latched) const {
+    if (!reverse_latch_||latch_valid_||!assumed_forward_) return reverse_at(time,latched);
+    if (assumed_time_>time) return 0;
+    latched->time=latched->received=assumed_time_;
+    latched->lease=UINT64_MAX; latched->value=0;
+    latched->spread=0; latched->wheel_max=0;
+    return latched;
+}
+bool Pipeline::latch_evidence(uint64_t start,mx5_dr_evidence* out,bool allow_assumed) {
     // MODEL claim (REVERSE_LATCH_MODEL): the change-only producer's last state
     // still holds at this interval start. A fresh local sequence per interval
-    // keeps the core's ordering, age and lease checks unchanged.
-    if (!latch_valid_||latch_time_>start||latch_seq_==UINT64_MAX) return false;
-    const uint64_t received=max64(start,latch_received_);
+    // keeps the core's ordering, age and lease checks unchanged. Rule F (BETA
+    // only): without a real latch the assumed forward state, from the time of
+    // its last qualifying fix, in the same raw source epoch, so a later real
+    // message continues the evidence sequence.
+    uint64_t time=latch_time_,received_at=latch_received_,epoch=latch_epoch_;
+    if (!latch_valid_) {
+        if (!allow_assumed||!assumed_forward_||!assumed_epoch_) return false;
+        time=received_at=assumed_time_; epoch=assumed_epoch_;
+    }
+    if (time>start||latch_seq_==UINT64_MAX) return false;
+    const uint64_t received=max64(start,received_at);
     if (received-start>core_.config.sample_age_max_ns) return false;
     mx5_dr_evidence e=mx5_dr_evidence();
-    e.source_id=uint64_t(REVERSE); e.source_epoch=latch_epoch_; e.producer_seq=++latch_seq_;
+    e.source_id=uint64_t(REVERSE); e.source_epoch=epoch; e.producer_seq=++latch_seq_;
     e.measured_ns=start; e.received_ns=received; e.lease_until_ns=UINT64_MAX;
     e.quality=MX5_DR_MODEL; e.freshness=MX5_DR_MODEL_TIME;
     *out=e; return true;
@@ -897,6 +926,7 @@ void Pipeline::reset_beta(mx5_dr_context x) {
     beta_yaw_size_=beta_yaw_next_=0;
     beta_have_heading_ref_=false; beta_resync_count_=0; beta_resync_innovation_=0; beta_resync_ns_=0;
     beta_fix_ns_=0; beta_fix_agrees_=false;
+    af_count_=0; af_last_ns_=0;  // rule F run (the assumption itself stays like the latch)
     if (!beta_enabled_) return;
     const mx5_dr_config c=runtime::beta_core_config(beta_);
     beta_core_result_=mx5_dr_init_model(&beta_core_,&c,x);
@@ -995,6 +1025,7 @@ void Pipeline::beta_record(const adapter::Observation& o,BetaAnchorGate gate,dou
     r.heading_source="none";
     r.entry_age_s=r.entry_budget_m=std::numeric_limits<double>::quiet_NaN();
     r.entry_reason=0;
+    r.reverse_assumed=reverse_assumed();
     if(gate==BETA_GATE_ACCEPTED) {
         r.heading_deg=beta_core_.anchor.body_heading_rad*180/PI;
         r.heading_error_rad=beta_core_.anchor.heading_error_rad;
@@ -1018,6 +1049,9 @@ void Pipeline::reset_keep_reverse(mx5_dr_context x) {
 }
 void Pipeline::drop_latch(LatchClear why) {
     if (latch_valid_&&why<LATCH_CLEAR_COUNT) { ++latch_clears_[why]; last_latch_clear_=why; }
+    // Rule F mitigation: a latch cleared while it said reverse keeps rule F
+    // off until a real message is latched again (the car may still reverse).
+    if (latch_valid_) af_blocked_=latch_value_==1;
     clear_latch();
 }
 uint64_t Pipeline::latch_clears_total() const {
@@ -1063,12 +1097,14 @@ BetaAnchorGate Pipeline::evaluate_beta_tracking(const adapter::Observation& o,
     const SensorRecord* wheel=causal(wheel_history_,o.mono_ns);
     if (!wheel||!finite(wheel->value)) return BETA_GATE_WHEEL;
     SensorRecord latched;
-    const SensorRecord* reverse=reverse_at(o.mono_ns,&latched);
+    const SensorRecord* reverse=beta_reverse_at(o.mono_ns,&latched);
     // Reversing (e.g. into a garage) keeps refreshing the position of a
     // carried estimate; the course is not a body heading then.
     if (!reverse||(reverse->value!=0&&!carried)) return BETA_GATE_REVERSE;
     check->reversing=reverse->value!=0;
-    if (!reverse_exit_seen_) return BETA_GATE_REVERSE_UNPROVEN;
+    // Rule F: the assumption itself is the forward evidence (it exists only
+    // while no real message is latched).
+    if (!reverse_exit_seen_&&!reverse_assumed()) return BETA_GATE_REVERSE_UNPROVEN;
     // Absolute slack avoids turning GPS jitter / v*dt at a crawl into an
     // implicit minimum-speed gate. Reject gross jumps, not ordinary braking.
     double dlon=p.longitude_deg-q.longitude_deg;
@@ -1275,6 +1311,55 @@ bool Pipeline::beta_carry_across_return(const adapter::Observation& o,const mx5_
     beta_core_.stop_dwell_s=stop_dwell; beta_core_.estimate.stopped=carried.stopped;
     return true;
 }
+// Rule F (runtime::BETA_ASSUME_FORWARD_*). Called for every mode 1/2 fix
+// drained by the BETA core before its gate. Only the BETA gates read the
+// result (beta_reverse_at, latch_evidence(allow_assumed)); nothing else.
+void Pipeline::beta_assume_forward(const adapter::Observation& o) {
+    if (!beta_.assume_forward||!beta_.continuous_anchor||!reverse_latch_||latch_valid_||assumed_forward_||
+        af_blocked_) {
+        af_count_=0; return;
+    }
+    const adapter::PositionInput& p=o.position;
+    // A repeated utc second is the same fix: it neither continues nor breaks the run.
+    if (af_count_&&beta_have_prev_&&valid_gps_position(o)&&p.utc_seconds==beta_prev_.position.utc_seconds&&
+        beta_prev_.mono_ns==af_last_ns_) return;
+    const SensorRecord* wheel=causal(wheel_history_,o.mono_ns);
+    const bool fix=raw_epoch_&&valid_gps_position(o)&&finite(p.heading_deg)&&p.heading_deg>=0&&p.heading_deg<360&&
+        finite(p.horizontal)&&p.horizontal>0&&p.horizontal<=beta_.anchor_hdop_max&&
+        p.velocity_kmh>=runtime::BETA_ASSUME_FORWARD_MIN_KMH&&
+        wheel&&finite(wheel->value)&&
+        std::fabs(p.velocity_kmh-wheel->value*3.6)<=beta_.wheel_gps_speed_max_diff_kmh;
+    if (!fix) { af_count_=0; return; }
+    double turn_error=std::numeric_limits<double>::quiet_NaN();
+    bool continues=false;
+    if (af_count_&&beta_have_prev_&&beta_prev_.mono_ns==af_last_ns_&&beta_pair_continues(o)) {
+        const adapter::PositionInput& q=beta_prev_.position;
+        double chord;
+        const double distance=fix_distance(p,q,&chord);
+        const double expected=(p.velocity_kmh+q.velocity_kmh)/7.2*double(p.utc_seconds-q.utc_seconds);
+        double turn=0;
+        if (std::fabs(distance-expected)<=beta_.position_slack_m+0.5*expected&&
+            distance>=runtime::BETA_HEADING_BASELINE_M&&
+            std::fabs(::remainder(p.heading_deg*PI/180-chord,2*PI))<=runtime::BETA_COURSE_CHORD_MAX_DEG*PI/180&&
+            beta_yaw_turn(beta_prev_.mono_ns,o.mono_ns,&turn)) {
+            const double error=std::fabs(::remainder((p.heading_deg-q.heading_deg)*PI/180,2*PI)-turn);
+            turn_error=error*180/PI;
+            continues=error<=runtime::BETA_COURSE_TURN_MAX_DEG*PI/180+runtime::BETA_COURSE_TURN_FRACTION*std::fabs(turn);
+        }
+    }
+    af_count_=continues?af_count_+1:1;
+    ReverseAssumptionFix f={o.mono_ns,p.velocity_kmh,wheel->value*3.6,continues?turn_error:
+        std::numeric_limits<double>::quiet_NaN()};
+    if (af_count_>runtime::BETA_ASSUME_FORWARD_FIXES) af_count_=runtime::BETA_ASSUME_FORWARD_FIXES;
+    if (af_count_==1) af_run_[0]=f;
+    else if (af_count_<=3) af_run_[af_count_-1]=f;
+    af_last_ns_=o.mono_ns;
+    if (af_count_<runtime::BETA_ASSUME_FORWARD_FIXES) return;
+    assumed_forward_=true; assumed_time_=o.mono_ns; assumed_epoch_=raw_epoch_; ++assumptions_;
+    assumption_.mono_ns=o.mono_ns; assumption_.epoch=raw_epoch_;
+    for (unsigned k=0;k<3;++k) assumption_.fixes[k]=af_run_[k];
+    af_count_=0;
+}
 void Pipeline::beta_position(const adapter::Observation& o) {
     if (!beta_enabled_||!beta_core_.configured) return;
     const int mode=o.position.mode;
@@ -1326,6 +1411,9 @@ void Pipeline::beta_position(const adapter::Observation& o) {
     // Only a fix passing the selected policy refreshes position. A failing fix
     // leaves the previous position, heading and clock untouched; it never
     // reseeds or disables the estimate.
+    // Rule F before the gate: the third qualifying fix is evaluated with the
+    // assumed forward state (and becomes the first course reference).
+    beta_assume_forward(o);
     double ratio,heading=o.position.heading_deg*PI/180,heading_error=beta_.heading_error_rad,weight=0;
     CourseCheck check=CourseCheck();
     beta_gate_=beta_.continuous_anchor?
@@ -1348,7 +1436,7 @@ void Pipeline::beta_position(const adapter::Observation& o) {
         // drive the chord from a pre-reverse reference points backwards and
         // would seed a heading 180 deg wrong.
         SensorRecord latched;
-        const SensorRecord* reverse=reverse_at(o.mono_ns,&latched);
+        const SensorRecord* reverse=beta_reverse_at(o.mono_ns,&latched);
         if (!reverse||reverse->value!=0) { beta_have_heading_ref_=false; beta_resync_count_=0; }
         // Review M3 entry evidence: a rejected data-valid fix must agree with
         // the dead-reckoned estimate (honest budget + slack) for a later
@@ -1485,6 +1573,19 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
                 reverse_any_seen_=true;
                 latch_valid_=true; latch_value_=int(e.value); latch_time_=e.time;
                 latch_received_=e.received; latch_epoch_=e.evidence.source_epoch;
+                // Rule F: a real message always overrides (and ends) the assumption
+                // and lifts the reverse-at-clear block. A real reverse 1 while
+                // the assumption was active contradicts it: anything seeded
+                // under the assumed forward state (its body heading would be
+                // 180 deg wrong if the car was reversing) is discarded and
+                // BETA re-qualifies through the normal path with the real latch.
+                const bool contradicted=assumed_forward_&&int(e.value)==1;
+                assumed_forward_=false; af_count_=0; af_last_ns_=0; af_blocked_=false;
+                if(contradicted) {
+                    ++contradictions_; contradiction_ns_=e.received;
+                    contradiction_seeded_=beta_enabled_&&beta_core_.seeded;
+                    fence_beta();
+                }
             }
             gps_wheel_.reverse(e.time,e.received,int(e.value)); break;
         case YAW_EVENT:

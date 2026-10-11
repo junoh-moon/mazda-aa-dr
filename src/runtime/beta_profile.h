@@ -40,6 +40,25 @@ static const double BETA_RESYNC_CONSISTENT_DEG=10.0;
 static const unsigned BETA_RESYNC_FIXES=5;
 static const uint64_t BETA_RESYNC_GAP_NS=2500000000ULL;
 static const uint64_t BETA_POSITION_MAX_AGE_NS=3000000000ULL;
+// Rule F, reverse assumed forward (validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md;
+// continuous policy with assume_forward only). While the MODEL reverse latch is
+// unknown (no REVERSE message drained since the last latch clear: boot, source
+// epoch change, reset, rejected/excluded REVERSE message, input gap), the BETA
+// gates treat reverse as forward after BETA_ASSUME_FORWARD_FIXES consecutive
+// data-valid fixes (pair, HDOP, displacement checks of the continuous policy)
+// with GPS speed >= BETA_ASSUME_FORWARD_MIN_KMH (the legacy anchor minimum)
+// that agree with the wheel speed within wheel_gps_speed_max_diff_kmh (4 km/h,
+// the existing wheel/GPS check), whose course points along the fix-to-fix
+// displacement (BETA_COURSE_CHORD_MAX_DEG) and whose course change matches the
+// closed yaw integral (BETA_COURSE_TURN_MAX_DEG + BETA_COURSE_TURN_FRACTION x
+// |turn|, the M1 check). The last two tests cannot tell forward from reverse
+// travel (a reversing car's course is the body heading + 180 deg and turns
+// with the yaw); they reject multipath and a direction change inside the run.
+// Reverse travel is excluded by the speed bound and by the change-only
+// producer (engaging reverse sends a message, which overrides the assumption).
+// The MODEL core and the MODEL latch never use the assumption.
+static const unsigned BETA_ASSUME_FORWARD_FIXES=3;
+static const double BETA_ASSUME_FORWARD_MIN_KMH=20.0;
 
 struct BetaProfile {
     // Rule 1 / decision 3: reported accuracy =
@@ -114,6 +133,9 @@ struct BetaProfile {
     double stopped_accuracy_m;    // A*
     double stopped_honest_max_m;  // H_max (+infinity: no limit)
     double crawl_speed_mps;       // v_c (0: off)
+    // Rule F (BETA_ASSUME_FORWARD_*; continuous policy only): false in
+    // beta_profile() (legacy gate unchanged), true in beta_profile_tunnel().
+    bool assume_forward;
 };
 // The stopped-accuracy rule can change a reported value (and is journaled).
 inline bool beta_stopped_rule_enabled(const BetaProfile& p) {
@@ -160,6 +182,7 @@ inline BetaProfile beta_profile() {
     p.stopped_accuracy_m=p.accuracy_max_m;
     p.stopped_honest_max_m=std::numeric_limits<double>::infinity();
     p.crawl_speed_mps=0.0;
+    p.assume_forward=false;
     return p;
 }
 
@@ -180,6 +203,9 @@ inline BetaProfile beta_profile_tunnel() {
     // stop with a 135 m position error was accepted; not extrapolated), and
     // no crawl rule (a crawl at a small accuracy was not tested).
     p.stopped_accuracy_m=25.0; p.stopped_honest_max_m=150.0; p.crawl_speed_mps=0.0;
+    // Rule F (2026-10-11): unknown reverse is assumed forward after
+    // BETA_ASSUME_FORWARD_FIXES fast, wheel-consistent fixes.
+    p.assume_forward=true;
     return p;
 }
 

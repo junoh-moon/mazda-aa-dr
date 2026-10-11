@@ -37,8 +37,10 @@ end of a drive, the current rule loses the heading of exactly the stop that matt
 
 ## Was the heading really unknown? (measured)
 
-Yaw reconstruction: `log_digest` `y1` (1 s sums of moving yaw samples) with the BETA profile zero 2047 and
--0.000658615 rad/count. Check against GPS: 1003 pairs of GPS courses 10-15 s apart at >= 30 km/h, residual
+Yaw reconstruction: `log_digest` `y1` (1 s sums of moving yaw samples) with zero 2047 and -0.000658615
+rad/count. Correction (2026-10-11 review): 2047 is the MODEL research zero, not the BETA/G3 product zero
+(`beta_profile.h` `yaw_zero` 2048, which `G3Motion` uses); see "Zero correction" below for the numbers
+re-derived with 2048. Check against GPS: 1003 pairs of GPS courses 10-15 s apart at >= 30 km/h, residual
 (course change minus integrated yaw) median +1.4 deg, mean -0.2 deg, p90 |residual| 7.6 deg.
 
 Carry error = heading at the end of the stop + moving-yaw integral up to the first GPS course with >= 20 km/h
@@ -53,7 +55,7 @@ after departure, minus that course (integer degrees, a GPS course is not ground 
 | 2136.4 / 2164.8 / 2217.4 (across the 2026.7 reset) | unseeded | none (chain broken) | 13.0 / 6.7 / 10.1 s | - | naive propagation: +70.6 / +72.1 / +73.9 |
 | 2467.8, 2511.1, 2567.6 | 27.3 / 325.5 / unseeded | 28.4, 13.5 / 324.7, 26.3 / 331.6, 29.3 | none (no fix after ~2517 s) | - | - |
 
-Reading: when the yaw chain is intact the heading at a stop was good to about 3 deg; BETA's honest budget
+Reading: when the yaw chain is intact the heading at a stop was good to about 3 deg (about 4 deg with the product zero 2048, see "Zero correction"); BETA's honest budget
 (35-70 deg) overstated it 50-100x. Two growth terms that do not describe a parked car: BETA keeps adding
 k*t and 0.10*|yaw| at a standstill (seq 3 -> 5: +13.5 deg in 50 s while the heading stayed 69.0; yaw noise
 sd ~56-75 counts), and low-speed GPS blends raise it (3.0 deg at 957 s to 33.3 deg at 969.5 s while braking).
@@ -61,6 +63,21 @@ Across the reset the heading was really lost: the integrated yaw misses a sharp 
 (about -180 deg of GPS course in 8 s) and errs by about 72 deg. Invalidating there is correct.
 
 n is tiny (4 intact-chain stops, one >= 15 s stop with a following course, 3 broken), one drive, one car.
+
+### Zero correction (re-derived 2026-10-11 with the product zero 2048)
+Check that 2047 was used: the moving-yaw integral from the end of stop 2511.1 s to 2567.6 s is +6.79 deg with
+2047 (the table's +6.9 deg step 324.7 -> 331.6) and +7.28 deg with 2048. Effect of 2048 (1 count = +0.0377 deg/s of
+moving time, clockwise):
+- Uncertainty: the carry growth is k*t + 0.10*|rotation|; |rotation| changes by <= 0.2 deg per segment, so every
+  stated uncertainty changes by < 0.05 deg. seq 11/12 stays 29.3 deg (29.35 with 2048): below the 30 deg restore
+  limit (`G3_UNC_MAX_DEG`), margin about 0.7 deg. The CARRIED-instead-of-UNKNOWN conclusion holds, narrowly.
+- Heading: seq 10 shifts about +0.8 deg (2487.4-2511.1 s, 20 moving s), seq 11/12 about +1.3 deg in total
+  (about 332.9 instead of 331.6).
+- Carry errors of the table (after-stop segment only; the pre-stop part of the "proposed rule" carry was not
+  re-simulated): stop 970.6 +0.2 deg (5 moving s), 1212.0 +3.6 deg (96 s), 1223.7 +3.4 deg (89 s), 1270.6
+  +1.7 deg (46 s). Both columns shift the same way: err BETA -0.3 / +3.5 / +4.0 / +1.5, err rule -3.0 / +0.9 /
+  +0.7 / -1.0 deg. "Good to about 3 deg" becomes "good to about 4 deg"; the GPS-pair residual median (+1.4 deg
+  at 2047) moves by about +0.5 deg (10-15 s pairs). The 72 deg error across the reset is unaffected.
 
 ## Why the first course came at 560 s (measured)
 

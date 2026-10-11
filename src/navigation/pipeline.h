@@ -90,6 +90,9 @@ struct BetaAnchorRecord {
     // ("fresh", "fallback", "unseeded", "age", "budget", "disagree", "state").
     double entry_age_s, entry_budget_m;
     const char* entry_reason;
+    // Rule F: the BETA gates assumed forward when this record was made (the
+    // MODEL reverse latch was unknown). Journaled as "rev_assumed":true.
+    bool reverse_assumed;
 };
 const char* beta_anchor_gate_name(BetaAnchorGate);
 // One-digit journal code of BetaAnchorRecord::heading_source: 1 seed, 2 blend,
@@ -105,6 +108,17 @@ enum LatchClear {
     LATCH_CLEAR_COUNT
 };
 const char* latch_clear_name(LatchClear);
+// Rule F (runtime::BETA_ASSUME_FORWARD_*): the fixes that let the BETA gates
+// assume forward while the MODEL reverse latch was unknown. turn_error_deg is
+// |GPS course change - closed yaw integral| since the previous fix of the run
+// (NaN for the first fix). Journaled by the BETA worker (beta_reverse_latch
+// event "assumed_forward", reason "reverse_assumed_forward").
+struct ReverseAssumptionFix { uint64_t mono_ns; double gps_kmh, wheel_kmh, turn_error_deg; };
+struct ReverseAssumption {
+    uint64_t mono_ns;        // receipt time of the last fix (the assumption's evidence time)
+    uint64_t epoch;          // raw source epoch the assumption belongs to
+    ReverseAssumptionFix fixes[3];
+};
 // BETA speed overlay input (BETA_DECISIONS_2026-10-05.md 2): the last drained
 // wheel SPEED event only. No anchor, core or GPS is involved. stopped means
 // all four wheels <= 0.05 m/s and then speed_mps is 0. MODEL evidence.
@@ -286,6 +300,24 @@ public:
     LatchClear last_latch_clear() const { return last_latch_clear_; }
     int latch_value() const { return latch_value_; }
     bool reverse_latched() const { return reverse_latch_&&latch_valid_; }
+    // Rule F: the BETA gates currently assume forward (the real latch is
+    // unknown). Never true while a real REVERSE message is latched; cleared
+    // by everything that clears the real latch; never used by the MODEL core.
+    bool reverse_assumed() const { return reverse_latch_&&!latch_valid_&&assumed_forward_; }
+    // Number of rule F assumptions since init and the newest one.
+    uint64_t reverse_assumptions() const { return assumptions_; }
+    const ReverseAssumption& last_reverse_assumption() const { return assumption_; }
+    // A real REVERSE message 1 arrived while the assumption was active: the
+    // assumption was wrong (or reverse was engaged, which cannot be told
+    // apart); the BETA anchor state was reset (fence_beta) so nothing seeded
+    // under the wrong forward state survives. Count, newest receipt time and
+    // whether a seeded BETA core was discarded.
+    uint64_t reverse_contradictions() const { return contradictions_; }
+    uint64_t last_contradiction_ns() const { return contradiction_ns_; }
+    bool last_contradiction_discarded_seed() const { return contradiction_seeded_; }
+    // Mitigation: the real latch was 1 (reverse) when it was last cleared; rule
+    // F stays off until a real REVERSE message is latched again.
+    bool reverse_assumption_blocked() const { return af_blocked_; }
     const Status& status() const { return status_; }
     const GyroBiasStatus& calibration() const { return gyro_bias_.status(); }
     const WheelScaleStatus& wheel_calibration() const { return gps_wheel_.status(); }
@@ -354,6 +386,16 @@ private:
     bool reverse_latch_, latch_valid_;
     int latch_value_;
     uint64_t latch_time_, latch_received_, latch_epoch_, latch_seq_;
+    // Rule F (BETA continuous policy only): assumption state and the current
+    // run of qualifying fixes (af_last_ns_: receipt time of its newest fix).
+    bool assumed_forward_;
+    uint64_t assumed_time_, assumed_epoch_, assumptions_;
+    unsigned af_count_;
+    uint64_t af_last_ns_;
+    bool af_blocked_, contradiction_seeded_;
+    uint64_t contradictions_, contradiction_ns_;
+    ReverseAssumptionFix af_run_[3];
+    ReverseAssumption assumption_;
     // BETA core and its anchor gate state.
     struct YawRecord { uint64_t begin,end; double rate; };
     bool beta_enabled_, beta_have_prev_;
@@ -400,7 +442,11 @@ private:
     void drop_latch(LatchClear);
     bool reverse_known() const;
     const SensorRecord* reverse_at(uint64_t,SensorRecord*) const;
-    bool latch_evidence(uint64_t start,mx5_dr_evidence*);
+    // reverse_at() for the BETA continuous policy: the real latch, else the
+    // rule F assumption (forward) from its evidence time on.
+    const SensorRecord* beta_reverse_at(uint64_t,SensorRecord*) const;
+    bool latch_evidence(uint64_t start,mx5_dr_evidence*,bool allow_assumed=false);
+    void beta_assume_forward(const adapter::Observation&);
     void reset_beta(mx5_dr_context);
     mx5_dr_result beta_control(mx5_dr_control_kind);
     void beta_position(const adapter::Observation&);
