@@ -1,14 +1,14 @@
 tap 345 145
 sleep 3
-location 35.1697679 129.0267566 5 NAN 0 0.0
+location 35.1697679 129.0267566 1 NAN 0 0.0
 sleep 1
-location 35.1697679 129.0267566 5 NAN 0 0.0
+location 35.1697679 129.0267566 1 NAN 0 0.0
 sleep 1
-location 35.1697679 129.0267566 5 NAN 0 0.0
+location 35.1697679 129.0267566 1 NAN 0 0.0
 sleep 1
-location 35.1697679 129.0267566 5 NAN 0 0.0
+location 35.1697679 129.0267566 1 NAN 0 0.0
 sleep 1
-location 35.1697679 129.0267566 5 NAN 0 0.0
+location 35.1697679 129.0267566 1 NAN 0 0.0
 sleep 1
 sleep 2
 screenshot ../../../../experiment10/@TAG@-pre-gate-2.png

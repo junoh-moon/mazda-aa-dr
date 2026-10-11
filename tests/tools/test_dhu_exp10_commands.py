@@ -42,8 +42,17 @@ class Exp10Commands(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         base = pathlib.Path(cls.tmp.name)
-        cls.out, cls.plan_path = base / "a", base / "a.json"
-        cls.route, cls.doc = gen.generate(str(cls.out), str(cls.plan_path))
+        # v5: the committed files use gen.ACC (1 m). The structural v3/v4 tests below run on the same generator with ACC = 5 m (the
+        # v4 files); test_v5_accuracy_is_the_only_difference ties the two together line by line.
+        cls.acc = gen.ACC
+        cls.out5, cls.plan_path5 = base / "v5", base / "v5.json"
+        gen.generate(str(cls.out5), str(cls.plan_path5))
+        gen.ACC = 5.0
+        try:
+            cls.out, cls.plan_path = base / "a", base / "a.json"
+            cls.route, cls.doc = gen.generate(str(cls.out), str(cls.plan_path))
+        finally:
+            gen.ACC = cls.acc
         cls.files = {p.name[:-4]: p.read_text().splitlines() for p in cls.out.glob("*.txt")}
         cls.json = json.loads(cls.plan_path.read_text())
 
@@ -59,18 +68,44 @@ class Exp10Commands(unittest.TestCase):
         with tempfile.TemporaryDirectory() as other:
             gen.generate(other + "/c", other + "/p.json")
             for sub in ("", "prep"):
-                cmp = filecmp.dircmp(str(self.out / sub), other + "/c/" + sub)
+                cmp = filecmp.dircmp(str(self.out5 / sub), other + "/c/" + sub)
                 self.assertEqual((cmp.left_only, cmp.right_only, cmp.diff_files), ([], [], []), sub)
-            self.assertEqual(self.plan_path.read_bytes(), pathlib.Path(other + "/p.json").read_bytes())
+            self.assertEqual(self.plan_path5.read_bytes(), pathlib.Path(other + "/p.json").read_bytes())
         committed = PLAN / "commands"
-        self.assertEqual(sorted(p.name for p in committed.glob("*.txt")), sorted(p.name for p in self.out.glob("*.txt")))
-        for p in self.out.glob("*.txt"):
-            self.assertEqual(p.read_bytes(), (committed / p.name).read_bytes(), p.name)
-        self.assertEqual(sorted(p.name for p in (committed / "prep").glob("*.txt")),
-                         sorted(p.name for p in (self.out / "prep").glob("*.txt")))
-        for p in (self.out / "prep").glob("*.txt"):
-            self.assertEqual(p.read_bytes(), (committed / "prep" / p.name).read_bytes(), p.name)
-        self.assertEqual(json.loads((PLAN / "run-plan.json").read_text()), self.json)
+        for sub in ("", "prep"):
+            self.assertEqual(sorted(p.name for p in (committed / sub).glob("*.txt")),
+                             sorted(p.name for p in (self.out5 / sub).glob("*.txt")), sub)
+            for p in (self.out5 / sub).glob("*.txt"):
+                self.assertEqual(p.read_bytes(), (committed / sub / p.name).read_bytes(), p.name)
+        self.assertEqual(json.loads((PLAN / "run-plan.json").read_text()), json.loads(self.plan_path5.read_text()))
+
+    def test_v5_accuracy_is_the_only_difference(self):
+        """v5 files = v4 files (ACC 5 m) except the accuracy field of location lines that were exactly 5 m."""
+        self.assertEqual(self.acc, 1.0)
+        changed = 0
+        for sub in ("", "prep"):
+            for p in sorted((self.out / sub).glob("*.txt")):
+                a = p.read_text().split("\n")
+                b = (self.out5 / sub / p.name).read_text().split("\n")
+                self.assertEqual(len(a), len(b), p.name)
+                for x, y in zip(a, b):
+                    if x == y:
+                        if x.startswith("location ") and p.stem not in gen.ACC_EXEMPT:
+                            self.assertNotIn(x.split()[3], ("5", "5.000"), p.name)  # no 5 m line left behind
+                        continue
+                    xa, ya = x.split(" "), y.split(" ")
+                    self.assertEqual((xa[0], len(xa), len(ya)), ("location", 7, 7), (p.name, x))
+                    self.assertEqual(xa[:3] + xa[4:], ya[:3] + ya[4:], (p.name, x, y))
+                    self.assertIn((xa[3], ya[3]), (("5", "1"), ("5.000", "1.000")), (p.name, x, y))
+                    changed += 1
+        self.assertGreater(changed, 4000)
+        v5 = json.loads(self.plan_path5.read_text())
+        self.assertEqual(v5["accuracy"]["acc_m"], 1.0)
+        for tag, plan in v5["runs"].items():
+            want = {"B6": 8.8}.get(plan["base"], 15.0 if "-A15-" in tag else 1.0)
+            self.assertEqual(plan["accuracy_stand_m"], want, tag)
+        lp = (self.out5 / "T0-LPROBE.txt").read_text()
+        self.assertEqual(lp, (self.out / "T0-LPROBE.txt").read_text())  # the diagnostic keeps 15 m / 5 m
 
     def test_proven_preamble_geometry_and_start_of_experiment_9(self):
         for name in ("setup-template.txt", "geometry/route.json"):

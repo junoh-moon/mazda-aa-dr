@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Generate DHU `location` command files for experiment 10 v4 (G3: bearing shown on a fresh Android Auto session at standstill).
+"""Generate DHU `location` command files for experiment 10 v5 (v4 + one accuracy constant)
+
+v5 (2026-10-11, after the v4 reconnect failures, validation/DHU_NAVER_EXP10_V4_RESULT_2026-10-11.md): every `location` line whose v4
+accuracy field is 5 m (written `5` in the template-derived lines, `5.000` in the generated lines) is written with ACC = 1 m instead.
+Nothing else changes: coordinates, times, speeds, bearings, taps, screenshots and every other accuracy value (B6 8.8 m, A15 15 m) stay
+byte-identical to v4. T0-LPROBE is exempt (it keeps its 15 m / 5 m halves: the optional 5 m diagnostic). Reason: after a phone
+reconnect the injected 5 m fixes no longer moved Naver off the phone's own fix (gate L failed for B3, B1 and the B2-LCHECK control).
+
+Experiment 10 v4 (G3: bearing shown on a fresh Android Auto session at standstill).
 
 v4 (2026-10-11, after the v3 Tier 0 ABORT): the run files are unchanged from v3, but their first 18 lines (the setup-template.txt
 preamble) are NOT sent any more. Primary files show that experiments 6-9 never sent them: exp6 prepare.py and the exp7/8/9 prep_stage.py
@@ -56,6 +64,8 @@ E7 = _load("dhu_exp7_for_exp10", os.path.join(EXP7_DIR, "gen_commands.py"))
 Route, fmt, offset_position = E7.Route, E7.fmt, E7.offset_position
 
 SHOT = "../../../../experiment10/"
+ACC = 1.0  # v5: replaces every v4 accuracy of exactly 5 m (see apply_acc); ACC = 5.0 reproduces the v4 command files byte for byte
+ACC_EXEMPT = ("T0-LPROBE",)  # the 15 m / 5 m diagnostic keeps its v4 values
 ACC_STAND = 5.0  # the preamble accuracy; exp8 ST1 (5 m standstill) CONFIRMED accepted
 ACC_A15 = 15.0  # exp8 ST2 standstill value (CONFIRMED accepted after an established synthetic position)
 ACC_MOVE = 5.0  # exp9 approach accuracy
@@ -273,6 +283,24 @@ def estimate(plans, runs, env):
     return input_s, [round(input_s / 60 + len(runs) * o + extra + env) for o in OVERHEAD_MIN]
 
 
+def apply_acc(line):
+    """v5: a `location` line with accuracy exactly 5 m gets ACC; every other line and accuracy value is returned unchanged."""
+    w = line.split(" ")
+    if w[0] != "location" or w[3] not in ("5", "5.000"):
+        return line
+    w[3] = f"{ACC:g}" if w[3] == "5" else f"{ACC:.3f}"
+    return " ".join(w)
+
+
+def apply_acc_plan(plans):
+    for plan in plans.values():
+        if plan["accuracy_stand_m"] == 5.0:
+            plan["accuracy_stand_m"] = ACC
+        for fr in plan["frames"]:
+            if fr.get("accuracy_m") == 5.0:
+                fr["accuracy_m"] = ACC
+
+
 def generate(out_dir, plan_path=None):
     route = Route(os.path.join(HERE, "geometry", "route.json"))
     with open(os.path.join(HERE, "setup-template.txt")) as f:
@@ -280,6 +308,8 @@ def generate(out_dir, plan_path=None):
     os.makedirs(out_dir, exist_ok=True)
 
     def write(name, lines):
+        if name not in ACC_EXEMPT:
+            lines = [apply_acc(x) for x in lines]
         with open(os.path.join(out_dir, name + ".txt"), "w") as f:
             f.write("\n".join(lines) + "\n")
 
@@ -306,6 +336,7 @@ def generate(out_dir, plan_path=None):
     for name, lines in stages.items():
         write(os.path.join("prep", name), lines)
         prep_names.append(f"prep/{name}.txt")
+    apply_acc_plan(plans)
     assert sorted(t for tier in TIERS for t in tier) == sorted(plans), "TIERS must list every run exactly once"
     tiers = []
     for name, runs in zip(TIER_NAMES, TIERS):
@@ -334,6 +365,8 @@ def generate(out_dir, plan_path=None):
                                  "<base>-route-retry (if no route)", "<base>-gate (popup) | <base>-gate-nopopup", "gate G"],
                          rows_y=list(PREP_ROWS), placeholder="@TAG@ in screenshot lines only",
                          source="exp6 prepare.py; exp7/8/9 prep_stage.py, begin.py, reset-log.txt, preparation-deviations.json"),
+               accuracy=dict(version="v5", acc_m=ACC, rule="every v4 location accuracy of exactly 5 m -> acc_m; others unchanged",
+                             exempt=list(ACC_EXEMPT)),
                budget_min=BUDGET_MIN, order=ORDER, tiers=tiers, runs=plans)
     if plan_path:
         with open(plan_path, "w") as f:

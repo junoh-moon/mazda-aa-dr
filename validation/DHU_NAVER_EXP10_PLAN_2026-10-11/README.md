@@ -1,4 +1,68 @@
-# DHU 시험 10 계획 v4: 새 Android Auto 세션의 정지 중 방위(G3) — 2026-10-11
+# DHU 시험 10 계획 v5: 새 Android Auto 세션의 정지 중 방위(G3) — 2026-10-11
+
+**v5 = v4 + 정확도 상수 하나.** v4(23b0cb9)는 오전에 Tier 0과 B2-r1을 마쳤습니다(5 m fix가 지도를 부산 출발점으로 옮김). 폰을 다시
+연결한 뒤에는 B3-r1, B1-r1(각 3시도)과 참 방위 대조 B2-LCHECK까지 모두 관문 L에서 실패했습니다. 네이버가 폰의 실제 위치에 머물렀고
+안내는 374 km였습니다([v4 결과](../DHU_NAVER_EXP10_V4_RESULT_2026-10-11.md)). 따라서 B3/B1 실패는 방위가 아니라 환경 때문입니다. 유력한
+가설은 폰 자체 fix(3~5 m 수준)가 주입한 5 m fix를 이긴다는 것입니다. 소유자는 폰을 만지지 않으므로 v5는 **v4 명령 파일에서 정확도가
+정확히 5 m인 모든 `location` 줄을 1 m로** 바꿉니다. 좌표·시간·속도·방위·탭·사진·다른 정확도 값(B6 8.8 m, A15 15 m)은 v4와 바이트
+단위로 같습니다(시험 `test_v5_accuracy_is_the_only_difference`가 줄 단위로 확인). `T0-LPROBE.txt`(15 m/5 m 진단)만 v4 그대로 둡니다.
+
+## 노트북 에이전트에게 붙여 넣을 지시문(v5)
+
+```text
+DHU 시험 10 v5(G3: 새 Android Auto 세션 시작 때 정지 상태에서 보낸 방위를 네이버가 어떻게 보이고 쓰는지)를 수행하십시오.
+계획은 GitHub 레포 junoh-moon/mazda-aa-dr의 커밋 COMMIT_TO_PIN에 있는 validation/DHU_NAVER_EXP10_PLAN_2026-10-11/README.md입니다.
+gh로 받아(git clone 후 git checkout COMMIT_TO_PIN) README와 validation/DHU_NAVER_EXP10_V4_RESULT_2026-10-11.md를 끝까지 읽고 README를
+그대로 따르십시오. README가 이 지시문보다 자세하며, 둘이 다르면 README를 따르고 차이를 보고하십시오. 다른 DHU 시험이 실행 중이면
+시작하지 마십시오. 이전 결과는 지우지 말고 새 폴더 results/exp10v5/를 쓰십시오.
+
+고정 명령 파일의 좌표·시간·속도·방위·탭은 하나도 바꾸지 마십시오. 정확도는 이미 파일에 들어 있습니다(v5: 1 m). 준비는 v4와 같이
+commands/prep/ 단계 파일로 하고(@TAG@만 회차 이름으로 바꿈), 관문 G를 통과하면 회차 파일을 19번째 줄부터 끝까지 그대로 보냅니다.
+
+소유자는 폰을 만지지 않습니다. 폰은 잠금이 풀린 채 USB로 연결되어 있습니다. 폰 설정(위치, GPS, USB 디버깅, 헤드유닛 서버 포함)을
+바꾸지 말고 소유자에게 손을 요청하지 마십시오(ADB 허용 창이 뜨면 그것만 알리십시오). 환경은 v4와 같습니다: 이 노트북, Galaxy S25, adb
+forward tcp:5277 tcp:5277, DHU 2.0과 validation/DHU_NAVER_EXP4_2026-10-03/dhu.ini, 시험 9 제어기(driver.py), DHU는 TTY/PTY 아래.
+
+실행: (1) python3 validation/DHU_NAVER_EXP10_PLAN_2026-10-11/gen_commands.py /tmp/exp10-check /tmp/exp10-check.json의 결과가 commands/
+(40개 + prep/ 58개)와 같은지 diff -r로 확인하고 python3 tests/tools/test_dhu_exp10_commands.py를 돌리십시오(다르거나 실패하면 멈추고 보고).
+(2) README "Tier 0(v5)"를 하십시오(약 5~7분: 5 m 진단 30초 → 1 m Tier 0). 끝나면 곧바로 Tier 0 결과와 그 사진을 따로 올리십시오.
+1 m에서도 관문 L이 실패하면 진단 묶음을 올리고 멈추십시오. (3) PASS이면 B2-r1(1 m, 새 대조) → B3-r1 → B1-r1 → B5-r1 → B7-r1 순서로
+돌리십시오. 시간 제한은 Tier 0 시작부터 25분이며, 남은 시간이 5분보다 적으면 새 회차를 시작하지 마십시오. 같은 원인으로 연속 2회차가
+FAILED이면 멈추십시오. 진행은 progress.json에 시도마다 적으십시오.
+
+판독: 단계마다 사진을 직접 보고 다음 단계를 고르십시오. 회차마다 README "화면마다 기록할 것"을 frames.csv에, 미리 정한 판정 이름만
+evidence.json에 적고 판정 표를 README대로 적용하십시오. 관찰과 해석을 구분하십시오.
+
+결과물과 업로드: 결과가 준비되면 바로 올리십시오(Tier 0 직후, 그리고 실행이 끝나거나 멈춘 직후). 유일한 시간 제약은 전송 서버의
+매일 약 06:00 KST 삭제입니다. 05:55~06:10 KST 사이에는 업로드를 시작하거나 진행 중이게 하지 말고, 그 구간에 결과가 준비되면 06:10 KST에
+올리십시오. 텍스트 결과 ZIP(작게)과 모든 시도의 모든 screenshot을 담은 사진 ZIP(원본, frames.csv로 연결)을 따로 만들어 curl
+--upload-file로 https://transfer.sixtyfive.me/에 올리십시오. 링크·sha256·로컬 경로를 마지막 답에 적고 로컬 사본은 지우지 마십시오.
+텍스트 결과물에 계정, ADB 키, 인증 토큰, 폰 일련번호를 넣지 마십시오. 레포에 커밋·푸시하지 마십시오. 차량이나 다른 기기는 건드리지
+마십시오.
+```
+
+## v5에서 바뀐 것(v4 대비)
+
+| 항목 | v4 | v5 | 근거 |
+| --- | --- | --- | --- |
+| 정확도 | 준비·정지·출발·꼬리 5 m | **같은 줄을 1 m로**(`gen_commands.py`의 `ACC` 상수 하나). B6 8.8 m, A15 15 m는 그대로 | v4 B3/B1/B2-LCHECK 관문 L 실패(374 km), 위치 서비스 정상 |
+| Tier 0 | 준비(B2) + T0-PRE, cold 확인 | **5 m 진단 30초(`T0-LPROBE`, v4 그대로) → 1 m Tier 0(준비 B2 + T0-PRE)**. cold 확인은 이번 회기에서 하지 않음 | 가설(정확도 경쟁) 대 세션·상태 가설을 가름 |
+| 순서·시간 | Tier 1~3, 3시간 | **B2-r1(1 m 새 대조) → B3-r1 → B1-r1 → B5-r1 → B7-r1**, Tier 0 시작부터 25분 | 소유자 가용 시간 약 25분 |
+| 소유자 | 최근 목적지 정리, 아침 확인 | **손 쓸 일 없음**(폰은 그대로, 잠금 해제, USB 연결) | 소유자 요청 |
+
+**판정 표 주의(v5, 행은 바꾸지 않음).** v5의 B2-r1(1 m)이 B3-r1·B1-r1의 대조입니다. v4의 B2-r1(5 m, S-SENT·RIGHT-AT-STANDSTILL)은 정확도가
+달라 v5 회차와 r1·r2로 합치지 않고 참고로만 적습니다. 전제 P-1과 D0 비교(R 라벨)는 v5 B2-r1 기준입니다.
+
+**비교 가능성의 한계.** 시험 8·9와 v4 B2의 정지·주행 결과는 모두 5 m 보고 정확도에서 얻은 것입니다. 1 m는 시험 6~9 어디에서도 쓰지 않았고
+실제 차의 순정 값(2~9 m)보다 작습니다. 네이버가 1 m fix를 더 믿어 지도 맞춤·방위 처리를 다르게 할 수 있습니다. 그러므로 v5 결과는
+"1 m 보고에서" 네이버가 방위를 어떻게 다루는지이며, 5 m나 순정 정확도에서도 같다는 근거가 아닙니다.
+
+**1 m 결과가 증명하는 것과 증명하지 않는 것.** 1 m에서 관문 L이 통과하고 5 m 진단이 실패하면(`LP-1 only`) 정확도 경쟁 가설을 지지합니다
+(증명은 아님: 폰 자체 fix의 정확도는 읽지 않음). 그 뒤 B3/B1이 관문을 통과하면 v4의 B3/B1 실패가 방위 때문이 아니었다는 것이 확인되고,
+U(방위 사용 여부)를 1 m에서 판정할 수 있습니다. 증명하지 않는 것: 실제 차에서 순정 정확도(2~9 m)일 때의 표시, 폰 자체 위치가 이기는
+조건의 정체(실내·실외), 5 m 시험 8·9 결과와의 직접 비교.
+
+## v4에서 바뀐 것(v3 대비, 판정 표·조건·본문·사진 일정은 그대로; 역사 기록, v5가 정확도만 바꿈)
 
 **v4 원칙: 시험 6~9가 실제로 한 준비를 그대로 쓰고, 독립 변수만 바꿉니다.** v3(374630e)는 Tier 0에서 ABORT였습니다(유효 회차 0,
 [실패 기록](../DHU_NAVER_EXP10_FAILURE_2026-10-11.md) "v3 결과"). 5 m fix로 지도는 부산 출발점으로 옮겨졌지만(관문 L 통과) 안내가 시작되지
@@ -8,49 +72,6 @@
 파일은 준비 사진 줄 **다음부터만** 보냄). v4는 그 실제 준비를 `commands/prep/`에 바이트로 고정하고(B2는 시험 7·8·9 `prep_stage.py`와 같은
 글자), 회차 파일(v3와 바이트 동일)은 19번째 줄부터 보냅니다. 조건 사이에 다른 것은 v3와 같이 **준비 fix의 방위와 정지 구간의 fix**뿐입니다.
 
-## 노트북 에이전트에게 붙여 넣을 지시문(v4)
-
-```text
-DHU 시험 10 v4(G3: 새 Android Auto 세션 시작 때 정지 상태에서 보낸 방위를 네이버가 어떻게 보이고 쓰는지)를 수행하십시오.
-계획은 GitHub 레포 junoh-moon/mazda-aa-dr의 커밋 COMMIT_TO_PIN에 있는 validation/DHU_NAVER_EXP10_PLAN_2026-10-11/README.md입니다.
-gh로 받아(git clone 후 git checkout COMMIT_TO_PIN) README와 validation/DHU_NAVER_EXP10_FAILURE_2026-10-11.md("v3 결과" 포함)를 끝까지
-읽고 README를 그대로 따르십시오. README가 이 지시문보다 자세하며, 둘이 다르면 README를 따르고 차이를 보고하십시오. 다른 DHU 시험이
-실행 중이면 시작하지 마십시오. 이전 결과(results/exp10/, results/exp10v4/)는 지우지 말고 새 폴더 results/exp10v4/를 쓰십시오.
-
-v4의 핵심: 회차 파일의 앞 18줄(setup-template, tap 200 50 / tap 345 145)은 보내지 않습니다. 안내는 README "준비 절차(v4)"의
-commands/prep/ 단계 파일로 시작합니다(시험 6~9가 실제로 한 방법: 검색 600,44 → 사진으로 모라역 줄 확인 → 230,줄 → 345,145 →
-팝업이 보이면 170,177). 네이버 빈 지도의 버튼은 약 40초 동안 손대지 않으면 숨겨지고, 숨은 상태의 첫 탭은 버튼만 다시 보이게 합니다
-(v3 사진). 그래서 검색 탭은 DHU 시작 직후 버튼이 보일 때 보내고, 검색 화면이 안 열렸으면 바로 search-again을 보냅니다. 단계 파일과
-회차 파일의 좌표·시간·정확도·속도·방위·탭은 하나도 바꾸지 말고, 단계 파일의 @TAG@만 회차 이름으로 바꾸십시오. 관문 G를 통과하면
-회차 파일을 19번째 줄부터 끝까지 그대로 보냅니다.
-
-환경: 시험 4~9와 같은 이 노트북, Galaxy S25만 USB 연결, adb forward tcp:5277 tcp:5277, 폰의 헤드유닛 서버, DHU 2.0과
-validation/DHU_NAVER_EXP4_2026-10-03/dhu.ini, 네이버 지도, 목적지 모라역(부산2호선, 백양터널 경유). 시험 9의 제어기(driver.py: JSON
-작업 큐, stdin 파이프, sleep은 제어기가 처리)를 쓰고, DHU는 터미널(TTY/PTY) 아래에서 띄우십시오. 직접 콘솔에 붙여 넣는 방식은
-쓰지 마십시오(v3 예비 진단에서 위치도 먹지 않았습니다). OWNER_SETUP_KO.md의 소유자 준비(모라역을 최근 목적지 첫 줄로 만들기)가
-끝났는지 소유자에게 한 번 확인하고, 그 뒤에는 소유자에게 묻거나 폰을 만지게 하지 마십시오.
-
-실행: (1) python3 validation/DHU_NAVER_EXP10_PLAN_2026-10-11/gen_commands.py /tmp/exp10-check /tmp/exp10-check.json의 결과가 commands/
-(40개 + prep/ 58개)와 같은지 diff -r로 확인하고 python3 tests/tools/test_dhu_exp10_commands.py를 돌리십시오(다르거나 실패하면 멈추고 보고).
-(2) README "Tier 0(v4)"를 하십시오(약 6~10분). 끝나면 곧바로 Tier 0 결과와 그 사진을 따로 올리십시오(README "결과물"). Tier 0이
-ABORT이면 실험 회차를 시작하지 말고 결과물을 올리고 끝내십시오. (3) PASS이면 README "회차 절차"대로 Tier 1 → Tier 2 → Tier 3(선택
-규칙)을 돌리십시오. 진행은 progress.json에 시도마다 적고, 중단 뒤 다시 시작하면 끝난 회차를 건너뛰십시오. 전체 시간 예산은 시작부터
-3시간이며, 남은 시간이 9분보다 적으면 새 회차를 시작하지 마십시오. Tier M(손 필요)은 하지 마십시오.
-
-판독: 단계마다 사진을 직접 보고 다음 단계를 고르십시오(시험 7~9와 같음). 회차가 끝날 때마다 README "화면마다 기록할 것"을
-frames.csv에, 미리 정한 판정 이름(S-*, R-*, M-*, 회차 분류)만 써서 evidence.json에 적으십시오. 판정 표를 README대로 적용하십시오. r1과
-r2가 다르면 INCONCLUSIVE이고 다수결은 금지입니다. 관찰과 해석을 구분하고 결과를 짐작해 적지 마십시오.
-
-결과물과 업로드: 결과가 준비되면 바로 올리십시오(Tier 0 직후, 그리고 실행이 끝나거나 멈춘 직후). 유일한 시간 제약은 전송 서버의
-매일 약 06:00 KST 삭제입니다. 업로드를 05:55~06:10 KST 사이에 시작하거나 그 사이에 진행 중이게 하지 말고, 그 구간에 결과가 준비되면
-06:10 KST에 올리십시오. 그 밖의 시각에는 결과를 미루지 마십시오. 텍스트 결과 ZIP(작게)과 모든 시도의 모든 screenshot(준비 단계 사진
-포함)을 담은 사진 ZIP(자르거나 고치지 않은 원본, frames.csv로 이름과 회차·단계·t를 연결)을 따로 만들어 curl --upload-file로
-https://transfer.sixtyfive.me/에 올리십시오(README "결과물"). 링크·sha256·로컬 경로를 마지막 답에 적고 로컬 사본은 지우지 마십시오.
-텍스트 결과물에 계정, ADB 키, 인증 토큰, 폰 일련번호를 넣지 마십시오. 정리 때 폰 설정(USB 디버깅, 헤드유닛 서버 포함)을 바꾸지 말고
-끝 상태만 적으십시오. 레포에 커밋·푸시하지 마십시오. 차량이나 다른 기기는 건드리지 마십시오.
-```
-
-## v4에서 바뀐 것(v3 대비, 판정 표·조건·본문·사진 일정은 그대로)
 
 | 항목 | v3(Tier 0 ABORT) | v4 | 근거(원본 파일) |
 | --- | --- | --- | --- |
@@ -194,9 +215,35 @@ Tier M (손 필요): C1-B0-r1, C1-B1-r1 — 무인 실행에서는 하지 않음
 **안내 종료(회차 사이).** `prep/end-guidance.txt`(`tap 55 347`: 예상 도착 카드 왼쪽의 X, 시험 6 `status.json`) → 사진으로 빈 지도 확인.
 안 되면 화면에서 찾은 종료 버튼을 쓰고 그 좌표를 적습니다.
 
-`FB-*.txt`와 `T0-LPROBE.txt`는 v3 대체 절차용으로 남아 있지만 v4에서는 보내지 않습니다.
+`FB-*.txt`는 v3 대체 절차용으로 남아 있지만 보내지 않습니다. `T0-LPROBE.txt`(v4 그대로, 15 m/5 m)는 v5 Tier 0의 5 m 진단에서만 보냅니다.
 
-## Tier 0(v4, 실험 회차 전, 실험 방위 없음)
+## Tier 0(v5, 실험 회차 전, 실험 방위 없음)
+
+0. 환경(한 번): v4와 같음(`env.txt`, `versions.csv`, 생성기 diff와 시험, 시험 9 제어기, TTY/PTY). 폰 설정은 읽기만 합니다:
+   `adb shell dumpsys location`에서 제공자 enabled/allowed 줄, GPS `mStarted`, 각 제공자의 마지막 위치의 **정확도와 나이만**(좌표는 지움)을
+   `tier0/location-before.txt`에.
+1. **5 m 진단(약 1분, LP-5).** DHU 시작 → 관문 A(첫 사진에서 지도가 어디에 있는지: 실제 위치/부산을 적음) → `T0-LPROBE.txt`(v4 그대로:
+   출발점에서 15 m 15초 → 사진, 5 m 15초 → 사진, 탭 없음). 결과: `LP-15`(15 m에서 부산), `LP-5`(5 m에서 부산), `LP-NONE`. DHU 종료.
+2. **1 m Tier 0.** DHU 시작 → 관문 A(지도 위치를 다시 적음) → 준비 절차(B2, 1 m, `@TAG@` = `T0-PRE`) → 관문 S·L·G → `T0-PRE.txt`의 19번째
+   줄부터(20초, 1 m, 참 방위, 사진 10·20초): 두 사진 모두 D0 ±0.1 km, ETA, 파란 화살표, 회색·위성-X 없음.
+3. **판정.** 2가 통과하면 PASS. 진단 이름: 1이 `LP-NONE`이고 2가 통과면 `LP-1 only`(정확도 경쟁 가설 지지), 1이 `LP-5`/`LP-15`이면
+   `LP-5 ok`(폰 상황이 오전과 같아짐: 1 m 회차는 그대로 진행). 2가 관문 L에서 실패하면 `end-guidance`(안내가 켜졌으면) → DHU 재시작 →
+   2를 한 번 더(`T0-PRE2`), 그래도 실패면 **ABORT**: 진단 묶음(Tier 0 모든 사진, 관문 기록, `tier0/location-before.txt`와 같은 형식의
+   `location-after.txt`, `dumpsys activity activities`의 네이버·gearhead 줄)을 바로 올리고 멈춥니다. 관문 L은 통과했지만 G에서 실패하면
+   v4와 같이 한 번 더 뒤 ABORT.
+4. PASS이면 바로 Tier 0 업로드. cold 확인은 이번 회기에서 하지 않습니다. 첫 회차 전에 `PRIME.txt`(꼬리 10초, 1 m)를 한 번 보냅니다.
+
+## 회기 순서와 시간(v5)
+
+```text
+Tier 0 (약 5~7분): T0-LPROBE(5 m 진단) → 준비(B2, 1 m) + T0-PRE
+회차 (각 약 4~5분: v4 실측 B2-r1 준비+본문 약 4분): B2-r1 → B3-r1 → B1-r1 → B5-r1 → B7-r1
+```
+Tier 0 시작부터 25분 제한, 남은 시간이 5분보다 적으면 새 회차를 시작하지 않습니다. 예상: 환경 확인 약 2분 + Tier 0 5~7분 + 세 회차
+12~15분 = 약 19~24분(B5·B7은 시간이 남을 때만). 그 밖의 Tier 2·3과 cold 회차는 이번 회기에서 하지 않습니다. 같은 원인으로 연속 2회차가
+`FAILED`이면 멈춥니다(v4와 같음). 회차 절차는 아래 v4 "회차 절차"와 같고, 시간 예산만 이 25분이 대신합니다.
+
+## Tier 0(v4, 역사 기록: v5는 위 "Tier 0(v5)"를 씀)
 
 0. 환경(한 번): 시험 9와 같은 환경, `env.txt`, `versions.csv`(시작), 생성기 diff와 시험. DHU가 TTY/PTY 아래인지, 시험 9 제어기를 쓰는지
    적습니다. 직접 콘솔 붙여 넣기는 쓰지 않습니다.
@@ -318,17 +365,17 @@ B5로 먼저 판단하고 B1은 함께 적기만 합니다. (3) A15 회차는 U 
 
 ## 결과물
 
-작업 폴더 `results/exp10v4/`(사진 `experiment10/`, `progress.json`, `run-log.csv`, `frames.csv`, `evidence.json`, `versions.csv`, `env.txt`,
+작업 폴더 `results/exp10v5/`(사진 `experiment10/`, `progress.json`, `run-log.csv`, `frames.csv`, `evidence.json`, `versions.csv`, `env.txt`,
 `sensors/`, `tier0/`)를 로컬에 보관합니다. 사진은 소유자의 분석 담당이 봅니다.
 
-- **Tier 0 직후(따로, 작게):** `dhu-exp10v4-tier0-<YYYYMMDD>.zip` = Tier 0의 모든 사진(관문 A 사진, 준비 단계 사진 전부, 20초 사진,
+- **Tier 0 직후(따로, 작게):** `dhu-exp10v5-tier0-<YYYYMMDD>.zip` = Tier 0의 모든 사진(5 m 진단 사진, 관문 A 사진, 준비 단계 사진 전부, 20초 사진,
   재시도·cold 확인을 했으면 그 사진), `tier0/` 기록(PASS/PASS-RETRY/ABORT, 관문 판정 값, uiautomator 결과 요약), `env.txt`, `versions.csv`.
 - **실행이 끝나거나 멈춘 직후:**
-  - `dhu-exp10v4-results-<YYYYMMDD>.zip`(텍스트만, 작게): 위 텍스트 파일 + `report.md`(한국어: Tier 0 결과, 실행 단계, 회차별 모드·준비 방식·
+  - `dhu-exp10v5-results-<YYYYMMDD>.zip`(텍스트만, 작게): 위 텍스트 파일 + `report.md`(한국어: Tier 0 결과, 실행 단계, 회차별 모드·준비 방식·
     D0·S·R·M 라벨·t_align·분류, 조건 상태, 판정 표 행, 제외·FAILED 시도와 이유, 버전 변경, 관찰과 해석 구분) + `SHA256SUMS`.
-  - `dhu-exp10v4-photos-<YYYYMMDD>.zip`: **모든 시도의 모든 screenshot**(실패 시도, 환경 준비·PRIME 화면, Tier 0 관문 사진 포함), 자르거나
+  - `dhu-exp10v5-photos-<YYYYMMDD>.zip`: **모든 시도의 모든 screenshot**(실패 시도, 환경 준비·PRIME 화면, Tier 0 관문 사진 포함), 자르거나
     고치지 않은 원본, `frames.csv`(사진 이름 → 회차·시도·t)와 `SHA256SUMS` 포함.
-  - `dhu-exp10v4-summary-<YYYYMMDD>.md`: 한국어 한 문단(Tier 0 결과, 회차 수, U·D 행 결론, 해로움 여부, 실패, 한계).
+  - `dhu-exp10v5-summary-<YYYYMMDD>.md`: 한국어 한 문단(Tier 0 결과, 회차 수, U·D 행 결론, 해로움 여부, 실패, 한계).
 
 ```text
 curl --upload-file ./<파일> https://transfer.sixtyfive.me/<파일>
@@ -340,6 +387,8 @@ curl --upload-file ./<파일> https://transfer.sixtyfive.me/<파일>
 ## 시험하지 않는 것
 
 - 실제 차·Mazda wire 형식(timestamp 0, mode)·무선 동글·실제 GNSS. LDS 기록의 위치 오프셋(44~195 m).
+- v5: 보고 정확도 1 m는 시험 6~9와 v4 B2(5 m)와 다르고 순정 값(2~9 m)보다 작습니다. v5 결과를 5 m·순정 정확도에 그대로 옮기지 않습니다
+  (위 "비교 가능성의 한계"). 폰 자체 fix의 정확도와 위치는 읽지 않으므로 "폰 fix가 이겼다"는 해석은 가설로 남습니다.
 - 한 장소(시험 9 출발점, T = 328.9°)·한 경로·정확도 5 m(조건부 15 m). 이 장소에서 B1(T+31°)과 B6(T+6°)의 구별력은 낮습니다.
 - 기본 회차는 네이버 프로세스가 살아 있는 새 DHU 세션(시험 6~9와 같음)이며, 실제 시동 뒤 첫 연결(새 프로세스)은 cold 3회차로만 봅니다.
 - v4 준비의 줄 선택·재시도 판단은 시험 7~9처럼 사진을 본 에이전트가 합니다(단계 파일 글자는 고정). 버튼 자동 숨김 시간(약 10~40초)은
@@ -354,5 +403,7 @@ curl --upload-file ./<파일> https://transfer.sixtyfive.me/<파일>
 - `gen_commands.py`: 생성기(표준 라이브러리, 시험 7 생성기의 `Route`·`fmt`·`offset_position`). `commands/` 40개: 회차 26개(RS는 .b) + RS a부분 2개 +
   `PRIME` + `FB-B0`~`FB-B7`(대체 절차용 fix 흐름) + `T0-PRE`, `T0-COLD`, `T0-LPROBE`.
 - `run-plan.json`: 장소, 시간 구성, `order`, `tiers`, `tier0`, `fallback`(관찰 좌표 포함), `budget_min`, 회차별 머리말 방위·사진마다의 보낸 값·참값.
-- 시험: `python3 tests/tools/test_dhu_exp10_commands.py`(v3 회차 파일 바이트 고정, v4 준비 단계 = 시험 7·8·9 단계 비교 포함).
+- 시험: `python3 tests/tools/test_dhu_exp10_commands.py`(v3·v4 구조 시험은 같은 생성기를 `ACC = 5`로 돌려 확인, v5 커밋 파일 = 그 파일에서
+  정확도 5 → 1만 다름을 줄 단위로 확인, v4 준비 단계 = 시험 7·8·9 단계 비교 포함).
+- `gen_commands.py`의 `ACC`(v5: 1.0)와 `ACC_EXEMPT`(`T0-LPROBE`): 정확히 5 m인 `location` 줄만 바꿉니다. `run-plan.json`의 `accuracy` 항목.
 - `OWNER_SETUP_KO.md`: 소유자 준비 사항.
