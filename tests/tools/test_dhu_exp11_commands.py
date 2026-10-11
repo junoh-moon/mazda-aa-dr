@@ -51,6 +51,9 @@ class Exp11Commands(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
+    def tunnel_runs(self):
+        return [t for t, p in self.doc["runs"].items() if p.get("kind") != "garage"]
+
     def test_generator_is_deterministic_and_matches_the_committed_files(self):
         with tempfile.TemporaryDirectory() as other:
             gen.generate(other + "/c", other + "/p.json")
@@ -101,7 +104,7 @@ class Exp11Commands(unittest.TestCase):
         exp9_approach = [w for w in exp9 if w[3] == "5.000"][:gen.APPROACH_N]
         self.assertEqual(len(exp9_approach), 20)
         self.assertEqual(exp9[gen.APPROACH_N][3], "40.000")  # exp9 t=20: first tunnel fix
-        for tag in self.doc["runs"]:
+        for tag in self.tunnel_runs():
             sec = seconds(self.files[tag])
             for (s, w), w9 in zip(sec[:gen.APPROACH_N], exp9_approach):
                 self.assertEqual(s, 5)
@@ -150,7 +153,7 @@ class Exp11Commands(unittest.TestCase):
             return sec[tag][A:A + p["episode_s"]]
 
         # same truth along the route for every run of the same length: speeds identical
-        for t in self.doc["runs"]:
+        for t in self.tunnel_runs():
             self.assertEqual([w[5] for _, w in tunnel(t)], [f"{gen.speed(k):.3f}" for k in range(self.doc["runs"][t]["episode_s"])])
         # V1S0 / V1S5 / V2: same positions and bearings; differ only in satellites (V1) or accuracy (V2)
         for t in ("V1S0-r1", "V2-r1"):
@@ -175,7 +178,8 @@ class Exp11Commands(unittest.TestCase):
                 r1 = t[:-1] + "1"
                 self.assertEqual(self.files[t], [x.replace(r1, t) for x in self.files[r1]])
         # recovery identical for runs of the same length, 1 m, satellites 5
-        for t, p in self.doc["runs"].items():
+        for t in self.tunnel_runs():
+            p = self.doc["runs"][t]
             rec = sec[t][A + p["episode_s"]:]
             self.assertEqual(len(rec), gen.REC_S)
             self.assertEqual({(s, w[3], w[5]) for s, w in rec}, {(5, "1.000", "14.000")})
@@ -226,12 +230,61 @@ class Exp11Commands(unittest.TestCase):
         self.assertTrue(set(photos) <= shot)
         self.assertTrue({0, 2, 4, 6, 8, 10} <= shot)  # the grey indicator is readable from the first tunnel second
 
+    def test_garage_runs(self):
+        runs = self.doc["runs"]
+        sec = {t: seconds(self.files[t]) for t in ("V6S-r1", "V6G0-r1", "V6G5-r1")}
+        self.assertEqual({runs[t]["duration_s"] for t in sec}, {gen.G_T + gen.G_REC_S})
+        g0, g5 = sec["V6G0-r1"], sec["V6G5-r1"]
+        # V6G0 vs V6G5: same path, speed and bearing; differ only in accuracy and satellites
+        for tau in range(gen.G_T):
+            (s0, w0), (s5, w5) = g0[tau], g5[tau]
+            self.assertEqual(w0[1:3] + w0[4:], w5[1:3] + w5[4:])
+            self.assertEqual((s0, s5, w5[3]), (0, 5, "20.000"))
+            self.assertTrue(5.0 <= float(w0[5]) * 3.6 <= 8.0 + 1e-6)
+            self.assertEqual(float(w0[3]), min(40.0, float(gen.math.ceil(30 + 0.36 * tau))))
+        self.assertTrue(all(float(w[3]) == 40.0 for _, w in g0[28:gen.G_T]))  # pinned at the cap
+        # position follows the motion: step length = speed, step direction = mean of the bearings (straight legs exact)
+        for tau in range(1, gen.G_T):
+            a, b = g0[tau - 1][1], g0[tau][1]
+            d = gen.hav((float(a[1]), float(a[2])), (float(b[1]), float(b[2])))
+            self.assertAlmostEqual(d, float(b[5]), delta=0.02, msg=tau)
+            if a[6] == b[6] and d > 0.5:
+                self.assertLess(abs((gen.E7.bearing((float(a[1]), float(a[2])), (float(b[1]), float(b[2]))) - float(b[6]) + 180) % 360
+                                    - 180), 1.0, tau)
+        # two 90 deg turns in 3 s each
+        brg = [float(w[6]) for _, w in g0[:gen.G_T]]
+        h0 = runs["V6G0-r1"]["start_heading_deg"]
+        self.assertEqual(brg[59], h0)
+        self.assertAlmostEqual(brg[62], (h0 + 90) % 360, places=1)
+        self.assertEqual(len({round(x, 1) for x in brg[59:63]}), 4)
+        self.assertAlmostEqual(brg[102], h0, places=1)
+        # V6S: one 1 m fix, then the exp6 T0M / exp8 ST7 stock mode-0 form (NAN accuracy) frozen, speed 0, cached bearing, satellites 0
+        stock = sec["V6S-r1"]
+        self.assertEqual(stock[0], (5, "location 35.1697679 129.0267566 1.000 NAN 0.000 328.9".split()))
+        exp8 = [x for x in (ROOT / "validation" / "DHU_NAVER_EXP8_PLAN_2026-10-10" / "commands" / "ST7-stockmode0-r1.txt")
+                .read_text().splitlines() if " NAN NAN " in x]
+        self.assertTrue(exp8)
+        form = lambda w: (w[0], w[3], w[4])
+        for s, w in stock[1:gen.G_T]:
+            self.assertEqual((s, w), (0, "location 35.1697679 129.0267566 NAN NAN 0.000 328.9".split()))
+            self.assertEqual(form(w), form(exp8[0].split()))
+        # all three share the recovery (the true path position, 1 m, satellites 5)
+        self.assertEqual(stock[gen.G_T:], g0[gen.G_T:])
+        self.assertEqual(g5[gen.G_T:], g0[gen.G_T:])
+        self.assertEqual({(s, w[3]) for s, w in g0[gen.G_T:]}, {(5, "1.000")})
+        # photos every 5 s plus the turns
+        for t in sec:
+            taus = {fr["tau"] for fr in runs[t]["frames"] if fr["phase"] == "garage"}
+            self.assertTrue(set(range(0, gen.G_T, 5)) <= taus)
+        self.assertEqual(self.doc["tiers"][1]["runs"][0], "V6S-r1")
+        self.assertNotIn("V6S-r1", self.doc["tiers"][0]["runs"])
+
     def test_tiers_and_budget(self):
         tiers = self.doc["tiers"]
         # v2: V2 before V3 so the 25 min rule truncates V3 (weakened by the 53 s drive), not V2
         self.assertEqual(tiers[0]["runs"], ["V4-r1", "V1S0-r1", "V2-r1", "V3-r1"])
         self.assertEqual(gen.NOSAT_TIER1, ["V4-r1", "V2-r1", "V3-r1"])
-        self.assertEqual(tiers[1]["runs"][:2], ["V1S5-r1", "V2C30-r1"])
+        self.assertEqual(tiers[1]["runs"][:3], ["V6S-r1", "V1S5-r1", "V2C30-r1"])
         self.assertEqual(sorted(t for x in tiers for t in x["runs"]), sorted(self.doc["runs"]))
         self.assertLessEqual(gen.TIER0_MIN[1] + tiers[0]["estimate_min"], gen.BUDGET_MIN)
         self.assertTrue(set(gen.NOSAT_TIER1) <= set(tiers[0]["runs"]))
@@ -242,7 +295,7 @@ class Exp11Commands(unittest.TestCase):
         for tag in self.doc["runs"]:
             self.assertIn(tag, text)
         for row in ("P-0", "P-1", "P-2", "A-1", "B-1", "B-2", "B-3", "C-1", "D-1", "IND-GREY", "SPEED-FROZEN", "NAV-STOPS",
-                    "t_stop", "53"):
+                    "t_stop", "53", "G-1", "G-2", "G-3", "S-1", "S-2", "TURN-FOLLOWED", "menu 3"):
             self.assertIn(row, text)
         self.assertTrue((PLAN / "OWNER_SETUP_KO.md").exists())
 

@@ -14,6 +14,18 @@ proven experiment 9/10 route and changes one candidate mechanism at a time:
 v2 (2026-10-11, a second real tunnel: 53 s, 40 m cap within 4 s for 49 s, return error only 24-35 m, owner: 'it worked a bit inside
 the tunnel and then stopped'): the cross-track candidate V3 is weakened, the time at the 40 m cap (V2) and the satellites (V1) lead.
 Tier 1 order V4 -> V1S0 -> V2 -> V3 (V3 last, so the time rule truncates V3, not V2). Every v1 command file is unchanged.
+v3 (2026-10-11): GARAGE runs (G2: heading in a garage at low speed). Motivation: the owner's underground-garage drive (not logged)
+showed a black speed stuck at 0, no grey indicator and a direction that reacted once. That drive came AFTER an export (menu 3), which
+disables the product for the rest of the boot, so it was the STOCK behaviour, not a BETA result. Tier 2 runs on a synthetic low-speed
+path from the same start point (no approach):
+  V6S  stock-form control (Tier 2 first): one 1 m fix at the start, then the experiment 6 T0M / experiment 8 ST7 stock mode-0 form
+       (`location <lat> <lon> NAN NAN <cached speed> <cached bearing>`, position frozen) with the cached speed 0 and bearing, satellites 0,
+       for 239 s, then the same recovery as V6G0. Pre-registered expectation (owner's observation): speed 0 fixed, no grey, the arrow
+       direction reacts at most once.
+  V6G0 the real combination: 5-8 km/h alternating every 30 s, 240 s, a 90 deg right turn at tau 60 and a 90 deg left turn at tau 100
+       (3 s each, position integrated from the sent speed and bearing), accuracy ramp ceil(30 + 0.36 tau) capped at 40 (the same honest
+       budget growth at garage speed: 0.3 m/s + 0.03 rad * ~2 m/s), satellites 0, then 20 s recovery (1 m, satellites 5)
+  V6G5 the control: the same path, accuracy 20 m, satellites 5. Every v1/v2 command file is unchanged (BETA-like messages).
   V5 V4 with cross-track 0                                        V4T60 / V4T14: V4 shape for 60 s (52 m) / 14 s (24 m)
 Proven procedure reused byte for byte (rule 1 of the owner's DHU rules):
   * preparation = experiment 10 v5 commands/prep/ (search -> 모라역 row (tap 230 y) -> route start -> gate), condition B2 (true bearing,
@@ -91,14 +103,31 @@ CONDS = {
     "V5": dict(T=111, sat=SAT_LOST, acc="ramp", xt=0.0, ini="sat", q="real combination without the drift"),
     "V1SN": dict(T=120, sat=SAT_FIX, acc="base", xt=0.0, ini="exp4", q="satellite sensor never sent (V1S5 file, sensor off)"),
     "V4T60": dict(T=60, sat=SAT_LOST, acc="ramp", xt=52.0, ini="sat", q="real combination, 60 s episode"),
+    "V6S": dict(kind="garage", form="stock", sat=SAT_LOST, acc=None, ini="sat",
+                q="garage, stock mode-0 form (validity control for the owner's stock observation)"),
+    "V6G0": dict(kind="garage", sat=SAT_LOST, acc="gramp", ini="sat", q="garage, real combination (ramp 30 -> 40, satellites 0)"),
+    "V6G5": dict(kind="garage", sat=SAT_FIX, acc="base", ini="sat", q="garage control (20 m, satellites 5)"),
     "V4T14": dict(T=14, sat=SAT_LOST, acc="ramp", xt=24.0, ini="sat", model="seed", q="real combination, 14 s episode (seed-limited)"),
 }
 TIERS = [
     ["V4-r1", "V1S0-r1", "V2-r1", "V3-r1"],
-    ["V1S5-r1", "V2C30-r1", "V5-r1", "V1SN-r1", "V4-r2", "V4T60-r1", "V4T14-r1", "V1S0-r2", "V2-r2", "V3-r2", "V1S5-r2"],
+    ["V6S-r1", "V1S5-r1", "V2C30-r1", "V6G0-r1", "V6G5-r1", "V5-r1", "V1SN-r1", "V4-r2", "V4T60-r1", "V4T14-r1", "V1S0-r2", "V2-r2", "V3-r2", "V1S5-r2"],
 ]
 NOSAT_TIER1 = ["V4-r1", "V2-r1", "V3-r1"]  # Tier 0 fallback: run with the exp4 ini (gps_satellite lines are ignored by the DHU)
 RUN_MIN = 4.5  # exp 10 v4 measured: preparation + 130 s body about 4 min; body here up to 159 s
+RUN_BODY_REF_S = 160  # bodies longer than this add their extra seconds to the estimate (v3 garage runs)
+# v3 garage path (V6G0 / V6G5)
+G_T = 240
+G_PLATEAU_S, G_TRANS_S = 30, 3
+G_SPEEDS_KMH = (5.0, 8.0)  # alternating plateaus
+G_TURNS = ((60, 90.0), (100, -90.0))  # (tau of the first turning second, total turn deg); 3 s each, + = right
+G_TURN_S = 3
+G_RAMP = dict(start=30.0, rate=0.36)
+G_REC_S = 20
+G_REC_KMH = 8.0
+G_CHECK_OFFSETS = (10, 20, 25)  # plateau speed checks: seconds after each plateau start
+G_PHOTOS = set(range(0, G_T, 5)) | {t + k for t, _ in G_TURNS for k in (1, 3, 7)}
+G_REC_PHOTOS = {0, 2, 5, 10, G_REC_S - 1}
 TIER0_MIN = (5.0, 7.0)
 BUDGET_MIN = 25
 
@@ -246,6 +275,103 @@ def build_run(route, tag, c, sat_lines=True):
     return lines, plan
 
 
+def garage_speed_kmh(tau):
+    k, r = divmod(tau, G_PLATEAU_S)
+    v = G_SPEEDS_KMH[k % 2]
+    if k == 0 or r >= G_TRANS_S:
+        return v
+    prev = G_SPEEDS_KMH[(k - 1) % 2]
+    return prev + (v - prev) * (r + 1) / G_TRANS_S
+
+
+def garage_heading(tau, h0):
+    """Body heading at second tau: h0 plus the completed part of each 3 s turn."""
+    h = h0
+    for t0, deg in G_TURNS:
+        if tau >= t0:
+            h += deg * min(tau - t0 + 1, G_TURN_S) / G_TURN_S
+    return h % 360.0
+
+
+def garage_checks():
+    return [k * G_PLATEAU_S + o for k in range(G_T // G_PLATEAU_S) for o in G_CHECK_OFFSETS]
+
+
+def garage_acc(kind, tau):
+    if kind == "base":
+        return ACC_BASE
+    return min(ACC_CAP, float(math.ceil(G_RAMP["start"] + G_RAMP["rate"] * tau)))
+
+
+def build_garage(route, tag, c):
+    """v3 garage run: from the experiment 9/10 start point (where the preparation leaves the car), no approach."""
+    lat0, lon0, h0 = route.at(start_tunnel(route) - V_APPROACH * (APPROACH_N - 1))
+    lines, frames = [], []
+    e = n = path = 0.0
+    checks = set(garage_checks())
+
+    def emit(t, sat, acc, v_mps, brg, rec, photo):
+        lat, lon = offset_position(lat0, lon0, (e, n))
+        lines.append(f"gps_satellite {sat}")
+        lines.append(fmt(lat, lon, acc, v_mps, brg))
+        rec.update(t=t, satellites_sent=sat, accuracy_m=acc, speed_sent_kmh=round(v_mps * 3.6, 2), bearing_sent_deg=round(brg, 1),
+                   east_m=round(e, 1), north_m=round(n, 1), path_m=round(path, 1))
+        if photo:
+            name = f"{tag}-{t:03d}.png"
+            lines.extend(["sleep 0.2", f"screenshot {SHOT}{name}", "sleep 0.8"])
+            rec["screenshot"] = name
+            frames.append(rec)
+        else:
+            lines.append("sleep 1")
+
+    brg_prev = h0
+    for tau in range(G_T + G_REC_S):
+        if tau < G_T:
+            v = garage_speed_kmh(tau) / 3.6
+            brg = garage_heading(tau, h0)
+        else:
+            v, brg = G_REC_KMH / 3.6, garage_heading(G_T - 1, h0)
+        if tau:  # advance by this second's speed along the mean of the previous and current heading (position follows the motion)
+            mid = math.radians(brg_prev + ((brg - brg_prev + 180.0) % 360.0 - 180.0) / 2)
+            e, n, path = e + v * math.sin(mid), n + v * math.cos(mid), path + v
+        brg_prev = brg
+        if tau < G_T and c.get("form") == "stock":
+            # the stock mode-0 resend: tau 0 = the last good fix (1 m, speed 0), then that position frozen, accuracy removed,
+            # cached speed 0 and cached bearing (exp6 T0M / exp8 ST7 form); the car still moves along the path (truth e/n)
+            lat_f, lon_f = offset_position(lat0, lon0, (0.0, 0.0))
+            sent = fmt(lat_f, lon_f, ACC_GPS if tau == 0 else None, 0.0, h0)
+            lines.append(f"gps_satellite {SAT_FIX if tau == 0 else SAT_LOST}")
+            lines.append(sent)
+            rec = dict(phase="garage", tau=tau, t=tau, form="stock_mode0_frozen" if tau else "last_fix",
+                       satellites_sent=SAT_FIX if tau == 0 else SAT_LOST, accuracy_m=ACC_GPS if tau == 0 else None,
+                       speed_sent_kmh=0.0, bearing_sent_deg=round(h0, 1), truth_speed_kmh=round(v * 3.6, 2),
+                       truth_heading_deg=round(brg, 1), east_m=round(e, 1), north_m=round(n, 1), path_m=round(path, 1),
+                       speed_check=False, turn=next((i + 1 for i, (t0, _) in enumerate(G_TURNS) if t0 <= tau < t0 + G_TURN_S), None))
+            if tau in G_PHOTOS:
+                name = f"{tag}-{tau:03d}.png"
+                lines.extend(["sleep 0.2", f"screenshot {SHOT}{name}", "sleep 0.8"])
+                rec["screenshot"] = name
+                frames.append(rec)
+            else:
+                lines.append("sleep 1")
+        elif tau < G_T:
+            plateau = G_SPEEDS_KMH[(tau // G_PLATEAU_S) % 2]
+            turn = next((i + 1 for i, (t0, _) in enumerate(G_TURNS) if t0 <= tau < t0 + G_TURN_S), None)
+            emit(tau, c["sat"], garage_acc(c["acc"], tau), v, brg,
+                 dict(phase="garage", tau=tau, plateau_kmh=plateau, speed_check=tau in checks, turn=turn,
+                      heading_turns_done=sum(1 for t0, _ in G_TURNS if tau >= t0 + G_TURN_S - 1)), tau in G_PHOTOS)
+        else:
+            r = tau - G_T
+            emit(tau, SAT_FIX, ACC_GPS, v, brg, dict(phase="recovery", rho=r), r in G_REC_PHOTOS)
+    plan = dict(tag=tag, condition=tag.rsplit("-r", 1)[0], kind="garage", question=c["q"], ini=c["ini"], episode_s=G_T,
+                satellites_tunnel=c["sat"], accuracy_tunnel=c["acc"], start_heading_deg=round(h0, 1),
+                headings_deg=[round(garage_heading(t0 + G_TURN_S - 1, h0), 1) for t0, _ in G_TURNS],
+                duration_s=G_T + G_REC_S, garage_t=[0, G_T - 1], recovery_t=[G_T, G_T + G_REC_S - 1],
+                form=c.get("form", "beta"),
+                speed_checks=[] if c.get("form") == "stock" else garage_checks(), end_offset_m=[round(e, 1), round(n, 1)], frames=frames)
+    return lines, plan
+
+
 def tier0_lines(sat):
     """exp 10 v5 T0-PRE stability stream (after line 18), screenshots renamed; with sat, `gps_satellite 5` before each fix."""
     src = open(os.path.join(EXP10_DIR, "commands", T0_SOURCE + ".txt")).read().splitlines()[N_T0_SKIP:]
@@ -277,7 +403,7 @@ def generate(out_dir, plan_path=None):
     for tier in TIERS:
         for tag in tier:
             c = CONDS[tag.rsplit("-r", 1)[0]]
-            lines, plan = build_run(route, tag, c)
+            lines, plan = (build_garage if c.get("kind") == "garage" else build_run)(route, tag, c)
             write(tag, lines)
             plans[tag] = plan
     s_tun = start_tunnel(route)
@@ -286,7 +412,8 @@ def generate(out_dir, plan_path=None):
     tiers = []
     for i, runs in enumerate(TIERS):
         tiers.append(dict(tier=str(i + 1), runs=runs, input_s=sum(plans[t]["duration_s"] for t in runs),
-                          photos=sum(len(plans[t]["frames"]) for t in runs), estimate_min=round(len(runs) * RUN_MIN, 1)))
+                          photos=sum(len(plans[t]["frames"]) for t in runs), estimate_min=round(len(runs) * RUN_MIN + sum(max(0, plans[t]["duration_s"] - RUN_BODY_REF_S)
+                                                                                 for t in runs) / 60, 1)))
     doc = dict(site=dict(start=[round(lat0, 7), round(lon0, 7)], start_route_m=round(s0, 1), true_bearing_deg=round(road0, 1),
                          tunnel_start_route_m=round(s_tun, 1), entrance_route_m=round(route.entrance, 1),
                          tunnel_length_m=round(route.exit - route.entrance, 1), expected_d0_km=list(EXPECTED_D0_KM)),
@@ -301,6 +428,9 @@ def generate(out_dir, plan_path=None):
                tier0=dict(files=["SAT5.txt", "T0-SAT.txt", "T0-NOSAT.txt"], source=f"exp10 v5 {T0_SOURCE}.txt after line {N_T0_SKIP}",
                           estimate_min=list(TIER0_MIN)),
                ini=dict(sat="dhu-sat.ini (exp4 dhu.ini + gps_satellite = true)", exp4="validation/DHU_NAVER_EXP4_2026-10-03/dhu.ini"),
+               garage=dict(duration_s=G_T, plateau_s=G_PLATEAU_S, transition_s=G_TRANS_S, speeds_kmh=list(G_SPEEDS_KMH),
+                           turns=[list(x) for x in G_TURNS], turn_s=G_TURN_S, ramp=G_RAMP, recovery_s=G_REC_S,
+                           check_tau=garage_checks(), photo_tau=sorted(G_PHOTOS)),
                budget_min=BUDGET_MIN, run_min=RUN_MIN, tiers=tiers, nosat_tier1=NOSAT_TIER1, runs=plans)
     if plan_path:
         with open(plan_path, "w") as f:
@@ -314,6 +444,10 @@ def main(argv):
     plan = argv[2] if len(argv) > 2 else os.path.join(HERE, "run-plan.json")
     _, doc = generate(out, plan)
     for tag, p in doc["runs"].items():
+        if p.get("kind") == "garage":
+            print(f"{tag}: {p['duration_s']} s garage ({p['form']}), sat {p['satellites_tunnel']}, acc {p['accuracy_tunnel']}, "
+                  f"headings {p['start_heading_deg']} -> {p['headings_deg']}, end offset {p['end_offset_m']} m, photos {len(p['frames'])}")
+            continue
         e = p["episode_end"]
         print(f"{tag}: {p['duration_s']} s, episode {p['episode_s']} s, sat {p['satellites_tunnel']}, acc {p['accuracy_tunnel']}, "
               f"rate {p['heading_error_rate_deg_s']} deg/s off {p['heading_offset_deg']}, end cross {e['cross_track_m']} m, heading err {e['heading_error_deg']}, "
