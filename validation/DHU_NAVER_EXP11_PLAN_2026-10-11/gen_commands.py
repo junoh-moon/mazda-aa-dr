@@ -10,6 +10,10 @@ proven experiment 9/10 route and changes one candidate mechanism at a time:
   V1 satellites in the tunnel: 5 (V1S5) / 0 (V1S0) / never sent (V1SN: same file, DHU sensor disabled), accuracy 20 m, cross-track 0
   V2 accuracy 40 m for 120 s (satellites 5, cross-track 0)        V3 cross-track drift 0 -> 120 m over 120 s (satellites 5, 20 m)
   V4 the real combination (ramp 30 -> 40 m cap, satellites 0, drift to 119 m over 111 s): positive control
+  V2C30 (v2, Tier 2): V2 with the 40 m held for 30 s only, then 20 m (does following come back after the accuracy drops?)
+v2 (2026-10-11, a second real tunnel: 53 s, 40 m cap within 4 s for 49 s, return error only 24-35 m, owner: 'it worked a bit inside
+the tunnel and then stopped'): the cross-track candidate V3 is weakened, the time at the 40 m cap (V2) and the satellites (V1) lead.
+Tier 1 order V4 -> V1S0 -> V2 -> V3 (V3 last, so the time rule truncates V3, not V2). Every v1 command file is unchanged.
   V5 V4 with cross-track 0                                        V4T60 / V4T14: V4 shape for 60 s (52 m) / 14 s (24 m)
 Proven procedure reused byte for byte (rule 1 of the owner's DHU rules):
   * preparation = experiment 10 v5 commands/prep/ (search -> 모라역 row (tap 230 y) -> route start -> gate), condition B2 (true bearing,
@@ -54,6 +58,7 @@ SHOT = "../../../../experiment11/"
 ACC_GPS = 1.0  # exp 10 v5: every preparation / pre-tunnel / recovery fix at 1 m (the phone's own fix beat 5 m after a reconnect)
 ACC_BASE = 20.0  # V1/V3 tunnel accuracy (exp3 C3: 20 m moving fixes followed in the mapped tunnel)
 ACC_CAP = 40.0  # product tunnel cap (TUNNEL_UNBOUNDED_2026-10-09)
+CAP30_S = 30  # V2C30: seconds at 40 m before the drop to 20 m
 RAMP = dict(start=30.0, rate=0.72)  # V4 accuracy ceil(30 + 0.72 tau) capped at 40 (honest-budget growth 0.3 m/s + 0.03 rad * 14 m/s)
 SAT_FIX, SAT_LOST = 5, 0  # number_in_use with a fix / in a tunnel (coordinator brief on the beta.10 drive)
 V_APPROACH = E7.SPEED  # 14 m/s
@@ -80,7 +85,8 @@ CONDS = {
     "V4": dict(T=111, sat=SAT_LOST, acc="ramp", xt=119.0, ini="sat", q="real combination (positive control)"),
     "V1S0": dict(T=120, sat=SAT_LOST, acc="base", xt=0.0, ini="sat", q="satellites 0 alone"),
     "V3": dict(T=120, sat=SAT_FIX, acc="base", xt=120.0, ini="sat", q="cross-track drift alone"),
-    "V2": dict(T=120, sat=SAT_FIX, acc="cap", xt=0.0, ini="sat", q="40 m cap for 120 s alone"),
+    "V2": dict(T=120, sat=SAT_FIX, acc="cap", xt=0.0, ini="sat", q="40 m cap for 120 s alone (time to the first non-following sign)"),
+    "V2C30": dict(T=120, sat=SAT_FIX, acc="cap30", xt=0.0, ini="sat", q="40 m for 30 s, then 20 m: does following come back"),
     "V1S5": dict(T=120, sat=SAT_FIX, acc="base", xt=0.0, ini="sat", q="baseline (satellites 5, 20 m, no drift)"),
     "V5": dict(T=111, sat=SAT_LOST, acc="ramp", xt=0.0, ini="sat", q="real combination without the drift"),
     "V1SN": dict(T=120, sat=SAT_FIX, acc="base", xt=0.0, ini="exp4", q="satellite sensor never sent (V1S5 file, sensor off)"),
@@ -88,10 +94,10 @@ CONDS = {
     "V4T14": dict(T=14, sat=SAT_LOST, acc="ramp", xt=24.0, ini="sat", model="seed", q="real combination, 14 s episode (seed-limited)"),
 }
 TIERS = [
-    ["V4-r1", "V1S0-r1", "V3-r1", "V2-r1"],
-    ["V1S5-r1", "V5-r1", "V1SN-r1", "V4-r2", "V4T60-r1", "V4T14-r1", "V1S0-r2", "V3-r2", "V2-r2", "V1S5-r2"],
+    ["V4-r1", "V1S0-r1", "V2-r1", "V3-r1"],
+    ["V1S5-r1", "V2C30-r1", "V5-r1", "V1SN-r1", "V4-r2", "V4T60-r1", "V4T14-r1", "V1S0-r2", "V2-r2", "V3-r2", "V1S5-r2"],
 ]
-NOSAT_TIER1 = ["V4-r1", "V3-r1", "V2-r1"]  # Tier 0 fallback: run with the exp4 ini (gps_satellite lines are ignored by the DHU)
+NOSAT_TIER1 = ["V4-r1", "V2-r1", "V3-r1"]  # Tier 0 fallback: run with the exp4 ini (gps_satellite lines are ignored by the DHU)
 RUN_MIN = 4.5  # exp 10 v4 measured: preparation + 130 s body about 4 min; body here up to 159 s
 TIER0_MIN = (5.0, 7.0)
 BUDGET_MIN = 25
@@ -114,11 +120,18 @@ def plateau_of(tau):
     return None
 
 
+def freeze_detectable_from():
+    """First tau whose sent speed differs from the approach speed by >= 10 km/h (a frozen display becomes readable)."""
+    return next(t for t in range(120) if abs(speed(t) - V_APPROACH) * 3.6 >= 10.0)
+
+
 def tunnel_acc(kind, tau):
     if kind == "base":
         return ACC_BASE
     if kind == "cap":
         return ACC_CAP
+    if kind == "cap30":
+        return ACC_CAP if tau < CAP30_S else ACC_BASE
     return min(ACC_CAP, float(math.ceil(RAMP["start"] + RAMP["rate"] * tau)))
 
 
@@ -279,7 +292,8 @@ def generate(out_dir, plan_path=None):
                          tunnel_length_m=round(route.exit - route.entrance, 1), expected_d0_km=list(EXPECTED_D0_KM)),
                timeline=dict(approach_t=[0, APPROACH_N - 1], tunnel_first_t=APPROACH_N, recovery_s=REC_S,
                              speed_profile_kmh=[[a, b, round(v * 3.6, 1)] for a, b, v in PLATEAUS], transition_s=5,
-                             check_tau=list(CHECK_TAU), accuracy_gps_m=ACC_GPS, accuracy_base_m=ACC_BASE, accuracy_cap_m=ACC_CAP,
+                             check_tau=list(CHECK_TAU), freeze_detectable_from_tau=freeze_detectable_from(),
+                             t_stop_photo_tau=sorted(t for t in EPISODE_PHOTOS if t >= freeze_detectable_from()), accuracy_gps_m=ACC_GPS, accuracy_base_m=ACC_BASE, accuracy_cap_m=ACC_CAP,
                              ramp=RAMP, satellites=dict(fix=SAT_FIX, lost=SAT_LOST)),
                prep=dict(source="validation/DHU_NAVER_EXP10_PLAN_2026-10-11/commands/prep (v5, accuracy 1 m), byte copies",
                          files=[f"prep/{n}.txt" for n in PREP_FILES], condition="B2 (true bearing 328.9)",

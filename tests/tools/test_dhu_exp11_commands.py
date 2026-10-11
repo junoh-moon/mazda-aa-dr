@@ -202,9 +202,36 @@ class Exp11Commands(unittest.TestCase):
         self.assertLess(self.doc["runs"]["V3-r1"]["episode_end"]["truth_from_entrance_m"] + gen.REC_S * gen.V_REC,
                         self.doc["site"]["tunnel_length_m"])
 
+    def test_v2c30_is_v2_for_30_s_then_v1s5(self):
+        sec = {t: seconds(self.files[t]) for t in ("V2-r1", "V2C30-r1", "V1S5-r1")}
+        A = gen.APPROACH_N
+        for tau in range(120):
+            s2, w2 = sec["V2-r1"][A + tau]
+            sc, wc = sec["V2C30-r1"][A + tau]
+            ref = w2 if tau < gen.CAP30_S else sec["V1S5-r1"][A + tau][1]
+            self.assertEqual((sc, wc), (5, ref), tau)
+        self.assertEqual(sec["V2C30-r1"][:A], sec["V2-r1"][:A])
+        self.assertEqual(sec["V2C30-r1"][A + 120:], sec["V2-r1"][A + 120:])
+        self.assertIn(gen.CAP30_S, gen.EPISODE_PHOTOS)
+
+    def test_t_stop_resolution(self):
+        tl = self.doc["timeline"]
+        t0 = tl["freeze_detectable_from_tau"]
+        self.assertGreaterEqual(abs(gen.speed(t0) - gen.V_APPROACH) * 3.6, 10.0)
+        self.assertLess(abs(gen.speed(t0 - 1) - gen.V_APPROACH) * 3.6, 10.0)
+        photos = tl["t_stop_photo_tau"]
+        self.assertTrue(all(b - a == 5 for a, b in zip(photos, photos[1:])))  # every 5 s through the 120 s at 40 m
+        v2 = self.doc["runs"]["V2-r1"]
+        shot = {fr["tau"] for fr in v2["frames"] if fr["phase"] == "tunnel"}
+        self.assertTrue(set(photos) <= shot)
+        self.assertTrue({0, 2, 4, 6, 8, 10} <= shot)  # the grey indicator is readable from the first tunnel second
+
     def test_tiers_and_budget(self):
         tiers = self.doc["tiers"]
-        self.assertEqual(tiers[0]["runs"], ["V4-r1", "V1S0-r1", "V3-r1", "V2-r1"])
+        # v2: V2 before V3 so the 25 min rule truncates V3 (weakened by the 53 s drive), not V2
+        self.assertEqual(tiers[0]["runs"], ["V4-r1", "V1S0-r1", "V2-r1", "V3-r1"])
+        self.assertEqual(gen.NOSAT_TIER1, ["V4-r1", "V2-r1", "V3-r1"])
+        self.assertEqual(tiers[1]["runs"][:2], ["V1S5-r1", "V2C30-r1"])
         self.assertEqual(sorted(t for x in tiers for t in x["runs"]), sorted(self.doc["runs"]))
         self.assertLessEqual(gen.TIER0_MIN[1] + tiers[0]["estimate_min"], gen.BUDGET_MIN)
         self.assertTrue(set(gen.NOSAT_TIER1) <= set(tiers[0]["runs"]))
@@ -214,7 +241,8 @@ class Exp11Commands(unittest.TestCase):
         self.assertIn("COMMIT_TO_PIN", text.split("##")[1] if "##" in text else text)
         for tag in self.doc["runs"]:
             self.assertIn(tag, text)
-        for row in ("P-0", "P-1", "P-2", "A-1", "B-1", "C-1", "D-1", "IND-GREY", "SPEED-FROZEN", "NAV-STOPS"):
+        for row in ("P-0", "P-1", "P-2", "A-1", "B-1", "B-2", "B-3", "C-1", "D-1", "IND-GREY", "SPEED-FROZEN", "NAV-STOPS",
+                    "t_stop", "53"):
             self.assertIn(row, text)
         self.assertTrue((PLAN / "OWNER_SETUP_KO.md").exists())
 
