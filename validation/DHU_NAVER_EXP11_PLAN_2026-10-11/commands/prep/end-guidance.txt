@@ -1,0 +1,3 @@
+tap 55 347
+sleep 2
+screenshot ../../../../experiment10/@TAG@-end.png

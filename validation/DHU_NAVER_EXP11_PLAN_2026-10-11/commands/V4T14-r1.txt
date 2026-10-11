@@ -1,0 +1,202 @@
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 14.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-000.png
+sleep 0.8
+gps_satellite 5
+location 35.1698757 129.0266770 1.000 NAN 14.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1699834 129.0265973 1.000 NAN 14.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1700899 129.0265152 1.000 NAN 14.000 327.5
+sleep 1
+gps_satellite 5
+location 35.1701962 129.0264325 1.000 NAN 14.000 327.5
+sleep 1
+gps_satellite 5
+location 35.1703003 129.0263463 1.000 NAN 14.000 321.2
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-005.png
+sleep 0.8
+gps_satellite 5
+location 35.1703984 129.0262498 1.000 NAN 14.000 321.2
+sleep 1
+gps_satellite 5
+location 35.1704965 129.0261532 1.000 NAN 14.000 321.2
+sleep 1
+gps_satellite 5
+location 35.1705946 129.0260567 1.000 NAN 14.000 321.2
+sleep 1
+gps_satellite 5
+location 35.1706928 129.0259602 1.000 NAN 14.000 321.2
+sleep 1
+gps_satellite 5
+location 35.1707909 129.0258636 1.000 NAN 14.000 321.2
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-010.png
+sleep 0.8
+gps_satellite 5
+location 35.1708834 129.0257600 1.000 NAN 14.000 311.6
+sleep 1
+gps_satellite 5
+location 35.1709669 129.0256447 1.000 NAN 14.000 311.6
+sleep 1
+gps_satellite 5
+location 35.1710504 129.0255294 1.000 NAN 14.000 311.6
+sleep 1
+gps_satellite 5
+location 35.1711340 129.0254142 1.000 NAN 14.000 311.6
+sleep 1
+gps_satellite 5
+location 35.1712175 129.0252989 1.000 NAN 14.000 311.6
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-015.png
+sleep 0.8
+gps_satellite 5
+location 35.1713010 129.0251836 1.000 NAN 14.000 311.6
+sleep 1
+gps_satellite 5
+location 35.1713845 129.0250684 1.000 NAN 14.000 311.6
+sleep 1
+gps_satellite 5
+location 35.1714665 129.0249515 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1715464 129.0248325 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-019.png
+sleep 0.8
+gps_satellite 0
+location 35.1716264 129.0247136 30.000 NAN 14.000 301.9
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-020.png
+sleep 0.8
+gps_satellite 0
+location 35.1716929 129.0245827 31.000 NAN 14.000 301.9
+sleep 1
+gps_satellite 0
+location 35.1717593 129.0244519 32.000 NAN 14.000 301.9
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-022.png
+sleep 0.8
+gps_satellite 0
+location 35.1718257 129.0243210 33.000 NAN 14.000 301.9
+sleep 1
+gps_satellite 0
+location 35.1718922 129.0241902 33.000 NAN 14.000 301.9
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-024.png
+sleep 0.8
+gps_satellite 0
+location 35.1719586 129.0240593 34.000 NAN 14.000 301.9
+sleep 1
+gps_satellite 0
+location 35.1720251 129.0239285 35.000 NAN 14.000 301.9
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-026.png
+sleep 0.8
+gps_satellite 0
+location 35.1720915 129.0237977 36.000 NAN 14.000 301.9
+sleep 1
+gps_satellite 0
+location 35.1721580 129.0236668 36.000 NAN 14.000 301.9
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-028.png
+sleep 0.8
+gps_satellite 0
+location 35.1722244 129.0235360 37.000 NAN 14.000 301.9
+sleep 1
+gps_satellite 0
+location 35.1722909 129.0234051 38.000 NAN 14.000 301.9
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-030.png
+sleep 0.8
+gps_satellite 0
+location 35.1723573 129.0232743 38.000 NAN 14.000 301.9
+sleep 1
+gps_satellite 0
+location 35.1724238 129.0231435 39.000 NAN 14.000 301.9
+sleep 1
+gps_satellite 0
+location 35.1724902 129.0230126 40.000 NAN 14.000 301.9
+sleep 1
+gps_satellite 5
+location 35.1727460 129.0230479 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-034.png
+sleep 0.8
+gps_satellite 5
+location 35.1728259 129.0229289 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-035.png
+sleep 0.8
+gps_satellite 5
+location 35.1729059 129.0228099 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-036.png
+sleep 0.8
+gps_satellite 5
+location 35.1729859 129.0226909 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-037.png
+sleep 0.8
+gps_satellite 5
+location 35.1730658 129.0225720 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1731458 129.0224530 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-039.png
+sleep 0.8
+gps_satellite 5
+location 35.1732258 129.0223340 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1733057 129.0222150 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-041.png
+sleep 0.8
+gps_satellite 5
+location 35.1733857 129.0220960 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1734657 129.0219771 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1735456 129.0218581 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-044.png
+sleep 0.8
+gps_satellite 5
+location 35.1736256 129.0217391 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1737056 129.0216201 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1737855 129.0215011 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1738655 129.0213822 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1739455 129.0212632 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-049.png
+sleep 0.8
+gps_satellite 5
+location 35.1740254 129.0211442 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1741054 129.0210252 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1741854 129.0209063 1.000 NAN 14.000 309.4
+sleep 1
+gps_satellite 5
+location 35.1742654 129.0207873 1.000 NAN 14.000 309.4
+sleep 0.2
+screenshot ../../../../experiment11/V4T14-r1-053.png
+sleep 0.8

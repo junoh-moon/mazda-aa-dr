@@ -1,0 +1,64 @@
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/T0-SAT-010.png
+sleep 0.8
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/T0-SAT-020.png
+sleep 0.8
