@@ -741,6 +741,7 @@ public:
             }
             first_row(j,s,"course",course);
         }
+        reference(s);
         store(j,s,io_block);
     }
     // Writer handoff: the newest request, once. in_flight() until its result.
@@ -786,6 +787,14 @@ public:
             if(cancelled) { if(r.stage==G3_IO_STOPPED)store_on_=false; }
             else if(++failures_>=G3_WRITE_FAILURES_MAX)store_on_=false;
         }
+        char ref[96];
+        if(pending_ref_ns_ && now>=pending_ref_ns_)
+            snprintf(ref,sizeof ref,",\"ref_s\":%.1f",(now-pending_ref_ns_)/1e9);
+        else strcpy(ref,",\"ref_s\":null");
+        const size_t rn=strlen(ref);
+        if(pending_beta_valid_)snprintf(ref+rn,sizeof ref-rn,",\"beta\":[%ld,%ld]",
+            lround(g3_wrap360(pending_beta_deg_)*10),lround(pending_beta_unc_*10));
+        else snprintf(ref+rn,sizeof ref-rn,",\"beta\":null");
         char extra[160];
         if(published)extra[0]=0;
         else if(cancelled)snprintf(extra,sizeof extra,",\"reason\":\"%s\",\"at\":\"%s\",\"why\":\"%s\"%s",
@@ -795,11 +804,11 @@ public:
         else snprintf(extra,sizeof extra,",\"stage\":\"%s\",\"errno\":%d%s",g3_io_stage_name(r.stage),
                       r.error,store_on_?"":",\"disabled\":true");
         row(j,",\"mono_ns\":%llu,\"event\":\"%s\",\"seq\":%lu,\"st\":\"%c\",\"hv\":%u,\"h\":%ld,\"unc\":%ld,"
-              "\"sync\":%d,\"m_b\":%.1f,\"wait_s\":%.1f,\"lat_ms\":%.1f,\"start_ns\":%llu,\"end_ns\":%llu%s}",
+              "\"sync\":%d,\"m_b\":%.1f,\"wait_s\":%.1f,\"lat_ms\":%.1f,\"start_ns\":%llu,\"end_ns\":%llu%s%s}",
             "g3_store",(unsigned long long)now,published?"written":cancelled?"cancelled":"failed",(unsigned long)seq,
             pending_rec_.state,pending_rec_.flags&G3_FLAG_HEADING,lround(pending_rec_.heading_cdeg/10.0),
             lround(pending_rec_.unc_cdeg/10.0),pending_sync_?1:0,pending_m_,pending_wait_s_,r.latency_ns/1e6,
-            (unsigned long long)r.start_ns,(unsigned long long)r.end_ns,extra);
+            (unsigned long long)r.start_ns,(unsigned long long)r.end_ns,ref,extra);
     }
     // No store thread: the store is off for this boot (never written inline).
     template<class J> void store_unavailable(J& j,uint64_t now,const char* why) {
@@ -855,6 +864,16 @@ private:
     G3Record pending_rec_;
     char pending_line_[G3_RECORD_MAX];
     size_t pending_len_;
+    // Stored heading (G3_FIRST_DRIVE_2026-10-11): the BETA body heading at a
+    // reference tick, carried by the G3Motion yaw integral while moving (the
+    // rule-5 growth of propagate()) until the yaw chain breaks. ref_*: the
+    // reference; head_*: this tick's carried value; pending_beta_*: BETA's own
+    // value at the request (journal only).
+    bool ref_valid_, head_valid_, pending_beta_valid_;
+    double ref_deg_, ref_unc_, ref_turn_, ref_aturn_, ref_moving_s_;
+    uint32_t ref_breaks_;
+    uint64_t ref_ns_, pending_ref_ns_;
+    double head_deg_, head_unc_, pending_beta_deg_, pending_beta_unc_;
 
     void clear() {
         state_=G3_OFF;reason_="not_started";chain_="none";age_src_="none";pos_check_="none";
@@ -871,6 +890,9 @@ private:
         pending_wait_s_=0;turn_ref_=aturn_ref_=pending_turn_=pending_aturn_=0;written_ns_=0;
         m_ref_=pending_m_=0;last_request_ns_=0;next_seq_=1;failures_=0;writes_=dropped_=0;
         pending_rec_=g3_record();pending_line_[0]=0;pending_len_=0;
+        ref_valid_=head_valid_=pending_beta_valid_=false;
+        ref_deg_=ref_unc_=ref_turn_=ref_aturn_=ref_moving_s_=0;ref_breaks_=0;ref_ns_=pending_ref_ns_=0;
+        head_deg_=head_unc_=pending_beta_deg_=pending_beta_unc_=0;
     }
     static void copy(char* out,size_t cap,const char* in) {
         size_t n=strlen(in);if(n>=cap)n=cap-1;
@@ -899,6 +921,34 @@ private:
         const double grow=s.yaw_error_rad_s*(std::isfinite(m.moving_s)?m.moving_s:0)+
             s.rotation_per_rad*(std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0);
         prop_unc_=carried_unc_+grow*180.0/G3_PI;
+    }
+    // The heading a parked record stores. A BETA sample (re)sets the
+    // reference when its honest uncertainty is not larger than the carried
+    // one, or when the two disagree beyond both bounds; otherwise the carried
+    // value is kept (BETA's budget also grows at a standstill and in low-speed
+    // GPS blends, the carried one only while a wheel moves). With BETA invalid
+    // (unseeded after a cadence fence or before its first accepted course) the
+    // reference is carried. A yaw chain break (G3Motion::breaks) invalidates
+    // it until the next valid BETA sample: never seeded or broken = no heading.
+    void reference(const G3Sample& s) {
+        const navigation::G3Motion& m=s.motion;
+        if(ref_valid_ && m.breaks!=ref_breaks_)ref_valid_=false;
+        const double turn=std::isfinite(m.turn_rad)?m.turn_rad:0;
+        const double aturn=std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0;
+        const double moving=std::isfinite(m.moving_s)?m.moving_s:0;
+        head_valid_=false;
+        if(ref_valid_) {
+            head_deg_=g3_wrap360(ref_deg_+(turn-ref_turn_)*180.0/G3_PI);
+            const double grow=s.yaw_error_rad_s*(moving-ref_moving_s_)+s.rotation_per_rad*(aturn-ref_aturn_);
+            head_unc_=ref_unc_+(grow>0?grow:0)*180.0/G3_PI;
+            head_valid_=std::isfinite(head_deg_) && std::isfinite(head_unc_);
+        }
+        if(s.heading_valid && (!head_valid_ || s.unc_deg<=head_unc_ ||
+                               fabs(g3_wrap180(s.heading_deg-head_deg_))>s.unc_deg+head_unc_)) {
+            ref_valid_=true;ref_deg_=g3_wrap360(s.heading_deg);ref_unc_=s.unc_deg;
+            ref_turn_=turn;ref_aturn_=aturn;ref_moving_s_=moving;ref_breaks_=m.breaks;ref_ns_=s.now?s.now:1;
+            head_valid_=true;head_deg_=ref_deg_;head_unc_=ref_unc_;
+        }
     }
     // Travel direction of the carried heading: body + 180 deg while the
     // reverse latch says reverse; an unknown latch is journaled as forward.
@@ -992,8 +1042,8 @@ private:
         bool want=false,sync=false;
         if(!episode_done_) {
             const bool moved=std::isfinite(m.distance_m) && m.distance_m-m_ref_>=G3_MOVING_MARK_M;
-            const bool turned=s.heading_valid && (!(disk_flags_&G3_FLAG_HEADING) ||
-                fabs(g3_wrap180(s.heading_deg-disk_cdeg_/100.0))>=G3_HEADING_CHANGE_DEG);
+            const bool turned=head_valid_ && (!(disk_flags_&G3_FLAG_HEADING) ||
+                fabs(g3_wrap180(head_deg_-disk_cdeg_/100.0))>=G3_HEADING_CHANGE_DEG);
             if(!moved && !turned)episode_done_=true;   // nothing new to store
             else { episode_needed_=true;want=true;sync=long_stop; }
         }
@@ -1011,12 +1061,14 @@ private:
         G3Record r=g3_record();
         r.seq=next_seq_++;if(!next_seq_)next_seq_=1;
         copy(r.boot_id,sizeof r.boot_id,boot_id_);r.state=state;
-        if(s.heading_valid) {
+        if(head_valid_) {
             r.flags|=G3_FLAG_HEADING;
-            r.heading_cdeg=int32_t(lround(g3_wrap360(s.heading_deg)*100))%36000;
-            const double unc=s.unc_deg*100;
+            r.heading_cdeg=int32_t(lround(g3_wrap360(head_deg_)*100))%36000;
+            const double unc=head_unc_*100;
             r.unc_cdeg=unc>18000?18000:int32_t(lround(unc));
         }
+        pending_beta_valid_=s.heading_valid;pending_beta_deg_=s.heading_deg;pending_beta_unc_=s.unc_deg;
+        pending_ref_ns_=head_valid_?ref_ns_:0;
         if(s.position_valid) {
             r.flags|=G3_FLAG_POSITION;
             r.lat_e7=int32_t(lround(s.lat*1e7));r.lon_e7=int32_t(lround(s.lon*1e7));

@@ -132,6 +132,8 @@ struct FaultCalibration {
 static const uint64_t G3_WHEEL_GAP_NS=250000000ULL;
 static const uint64_t G3_SPEED_GAP_MAX_NS=500000000ULL;
 static const uint64_t G3_YAW_WINDOW_MAX_NS=1000000000ULL;
+// A gap between drained yaw windows above this while moving is a chain break.
+static const uint64_t G3_YAW_HOLE_NS=250000000ULL;
 struct G3Motion {
     double distance_m;       // wheel distance since boot
     double turn_rad;         // signed yaw integral while moving (body, clockwise positive)
@@ -143,6 +145,13 @@ struct G3Motion {
     uint64_t first_move_ns;  // first moving wheel event of the boot (0: none yet)
     uint64_t zero_since_ns;  // first event of the current gap-free all-zero run (0: none)
     int first_move_reverse;  // reverse latch at the first movement: -1 unknown, 0, 1
+    // Yaw chain breaks (G3_FIRST_DRIVE_2026-10-11): every pipeline reset
+    // (reset_state: a rejected/missing yaw window, a fault, a reconfigure) and
+    // every yaw window lost while moving (a hole before it, a window longer
+    // than G3_YAW_WINDOW_MAX_NS, a non-finite rate). turn_rad no longer
+    // describes the body rotation across a break.
+    uint32_t breaks;
+    uint64_t yaw_end_ns;     // newest drained yaw window end (0: none)
 };
 
 // Single worker, fixed capacity, no allocation/I/O. Raw ingestion ONLY enters

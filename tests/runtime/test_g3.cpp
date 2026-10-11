@@ -481,8 +481,10 @@ static void store_policy() {
       // The start of motion after a stored park (the M1 park at 202-220 s)
       // left one "left" row.
       CHECK(st.j.count("\"event\":\"left\"")>=2); }
-    // Heading not valid at a parked stop after moving: STOPPED without heading.
+    // Heading not valid at a parked stop after moving and the yaw chain
+    // broken since the last valid BETA heading: STOPPED without heading.
     G3Sample nohead=park(300*S,320,282*S);nohead.heading_valid=false;nohead.position_valid=false;
+    nohead.motion.breaks=1;
     st.tick(nohead);
     CHECK(g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.state=='S' && d.flags==0);
     // Failures: retried within the same stop after the rate limit; three in a
@@ -537,6 +539,67 @@ static void store_policy() {
     { Store s3;s3.dir=temp_dir();s3.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_OK,good_record());
       const G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};
       s3.t.store_result(s3.j,1,99,ok);CHECK(s3.j.lines.empty()); }
+}
+
+// G3_FIRST_DRIVE_2026-10-11: the stored heading is the BETA body heading
+// carried by the G3Motion yaw integral while BETA is unseeded (cadence fence)
+// or its budget grows faster than the carried one; a yaw chain break or a boot
+// that was never seeded stores no heading.
+static G3Sample moved(uint64_t now,double distance,double turn_deg,double aturn_deg,double moving_s,bool moving,
+                      bool beta,double h=100,double unc=4,uint32_t breaks=0) {
+    G3Sample s=sample(now,distance,turn_deg,moving_s,moving);
+    s.motion.abs_turn_rad=aturn_deg*G3_PI/180;s.motion.breaks=breaks;
+    s.heading_valid=beta;s.heading_deg=h;s.unc_deg=unc;
+    return s;
+}
+static G3Sample parked(G3Sample s,uint64_t stop_ns) {
+    s.motion.last_moving_ns=stop_ns;s.motion.zero_since_ns=stop_ns;s.motion.first_move_ns=1;return s;
+}
+static void carried_reference() {
+    // Never seeded this boot: parked records carry no heading.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record());
+      st.tick(moved(1*S,50,40,40,10,true,false));
+      st.tick(parked(moved(20*S,60,40,40,12,false,false),2*S));
+      CHECK(st.written.size()==1 && has(st.j.last("\"event\":\"written\""),"\"hv\":0,\"h\":0,\"unc\":0") &&
+            has(st.j.last("\"event\":\"written\""),"\"ref_s\":null,\"beta\":null")); }
+    Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record());
+    // BETA valid at 100.0 deg +- 4 at turn 0; then unseeded (fence) while the
+    // car turns +30 deg (|30| deg, 20 s moving): stored 130.0 +- (4 + (0.002*20
+    // + 0.10*pi/6) rad) = 9.29 deg.
+    st.tick(moved(1*S,10,0,0,0,true,true,100,4));
+    st.tick(moved(2*S,40,30,30,20,true,false));
+    st.tick(parked(moved(20*S,60,30,30,20,false,false),3*S));
+    G3Record d;
+    CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.flags==3 && d.heading_cdeg==13000 &&
+          d.unc_cdeg==929);
+    { const std::string w=st.j.last("\"event\":\"written\"");
+      CHECK(has(w,"\"hv\":1,\"h\":1300,\"unc\":93") && has(w,"\"ref_s\":19.0,\"beta\":null")); }
+    // BETA valid again with a larger (standstill-inflated) budget that agrees:
+    // the carried value is kept and BETA's own value is journaled.
+    st.tick(moved(21*S,70,40,40,25,true,true,141,40));
+    st.tick(parked(moved(40*S,80,40,40,25,false,true,141,45),22*S));
+    CHECK(st.written.size()==2 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.heading_cdeg==14000 &&
+          d.unc_cdeg>929 && d.unc_cdeg<1100);
+    CHECK(has(st.j.last("\"event\":\"written\""),"\"beta\":[1410,450]"));
+    // BETA disagrees beyond both bounds: BETA is adopted.
+    st.tick(moved(41*S,90,40,40,25,true,true,200,20));
+    st.tick(parked(moved(60*S,100,40,40,25,false,true,200,25),42*S));
+    CHECK(st.written.size()==3 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.heading_cdeg==20000 &&
+          d.unc_cdeg==2000);
+    // A smaller BETA budget is adopted (and later standstill growth is not).
+    st.tick(moved(61*S,110,40,40,25,true,true,203,3));
+    st.tick(parked(moved(80*S,120,40,40,25,false,true,203,30),62*S));
+    CHECK(st.written.size()==4 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.heading_cdeg==20300 &&
+          d.unc_cdeg==300);
+    // A yaw chain break while BETA is unseeded: no heading until BETA again.
+    st.tick(moved(81*S,130,50,50,30,true,false,0,0,1));
+    st.tick(parked(moved(100*S,140,50,50,30,false,false,0,0,1),82*S));
+    CHECK(st.written.size()==5 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.flags==2);
+    st.tick(moved(101*S,150,50,50,30,true,true,10,6,1));
+    st.tick(moved(102*S,160,60,60,31,true,false,0,0,1));
+    st.tick(parked(moved(120*S,170,60,60,31,false,false,0,0,1),103*S));
+    CHECK(st.written.size()==6 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.flags==3 && d.heading_cdeg==2000);
+    CHECK(!st.j.failed);
 }
 
 // fsync only for long stops (third review): the real writer skips the fsync
@@ -707,6 +770,7 @@ static void pipeline_motion() {
     // Without BETA nothing is observed.
     CHECK(p.g3_motion().distance_m==0 && p.g3_motion().first_move_reverse==-1);
     CHECK(p.enable_beta(beta_profile_tunnel()));
+    const uint32_t breaks0=p.g3_motion().breaks;
     uint64_t seq=0;
     // Reverse 1 at boot (latched), 3 s standstill with a large yaw offset
     // (must not integrate), then 5 s at 18 km/h turning at -0.1 rad/s raw...
@@ -738,8 +802,12 @@ static void pipeline_motion() {
     CHECK(fabs(m.turn_rad-applied*m.moving_s)<1e-6 && m.moving_s>4.5 && m.moving_s<5.0+1e-9);
     CHECK(fabs(m.abs_turn_rad-m.turn_rad)<1e-9 && fabs(m.speed_mps-5.0)<1e-9 && m.last_moving_ns==m.last_speed_ns);
     CHECK(!m.zero_since_ns);
-    // A reset does not clear the boot-lifetime observation.
+    CHECK(m.breaks==breaks0);   // contiguous 100 ms windows: no break
+    // A reset does not clear the boot-lifetime observation but breaks the
+    // yaw chain (G3_FIRST_DRIVE_2026-10-11).
+    const uint32_t breaks=m.breaks;
     const double before=m.distance_m;p.reset(x);CHECK(p.g3_motion().distance_m==before);
+    CHECK(p.g3_motion().breaks==breaks+1);
     // g3_sample on an unseeded BETA core: motion only, no heading.
     const G3Sample s=g3_sample(p,T(9000),RT);
     CHECK(!s.heading_valid && !s.position_valid && s.motion.distance_m==before && s.yaw_error_rad_s==0.002 &&
@@ -852,6 +920,7 @@ int main(int argc,char** argv) {
     course_and_session();
     io_rule();
     store_policy();
+    carried_reference();
     park_rules();
     fsync_policy();
     gated_write();

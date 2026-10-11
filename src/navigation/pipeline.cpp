@@ -218,6 +218,9 @@ void Pipeline::reset_state(mx5_dr_context x) {
         }
     }
     mx5_dr_reset(&core_,x); gyro_bias_.reset(); gps_wheel_.reset(); size_=0; watermark_=0; raw_epoch_=0;
+    // G3: queued/rejected yaw is lost; the boot-lifetime integral stays but
+    // its continuity ends here.
+    ++g3_.breaks;
     reset_beta(x);
     fault_calibration_.valid=false;
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
@@ -962,8 +965,12 @@ void Pipeline::g3_speed(const Event& e) {
     }
 }
 void Pipeline::g3_yaw(const Event& e,double rate) {
-    if (!finite(rate)||e.window_end<=e.time||!status_.have_speed||
-        !finite(speed_.wheel_max)||speed_.wheel_max<=0.0) return;
+    const bool moving=status_.have_speed&&finite(speed_.wheel_max)&&speed_.wheel_max>0.0;
+    // Rotation that is not integrated while moving breaks the yaw chain.
+    if (moving&&(!finite(rate)||e.window_end<=e.time||e.window_end-e.time>G3_YAW_WINDOW_MAX_NS||
+        (g3_.yaw_end_ns&&e.time>g3_.yaw_end_ns&&e.time-g3_.yaw_end_ns>G3_YAW_HOLE_NS))) ++g3_.breaks;
+    if (e.window_end>g3_.yaw_end_ns) g3_.yaw_end_ns=e.window_end;
+    if (!finite(rate)||e.window_end<=e.time||!moving) return;
     const double dt=double(min64(e.window_end-e.time,G3_YAW_WINDOW_MAX_NS))/1e9;
     g3_.turn_rad+=rate*dt; g3_.abs_turn_rad+=std::fabs(rate)*dt; g3_.moving_s+=dt;
 }
