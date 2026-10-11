@@ -50,6 +50,7 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     keep_latch_on_reset_(false), last_latch_clear_(LATCH_CLEAR_RESET), beta_reverse_fast_since_(0),
     beta_record_seq_(0), beta_yaw_size_(0), beta_yaw_next_(0) {
     std::memset(beta_records_,0,sizeof beta_records_);
+    std::memset(&g3_,0,sizeof g3_); g3_.first_move_reverse=-1;
     std::memset(latch_clears_,0,sizeof latch_clears_);
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
     std::memset(&beta_core_,0,sizeof beta_core_);
@@ -937,6 +938,35 @@ void Pipeline::beta_step(const mx5_dr_interval& base,double rate) {
         beta_rotation_budget_m_+=b.speed_mps*beta_.rotation_budget_per_rad*beta_rotation_rad_*dt;
     }
 }
+// G3 record-only observation (see G3Motion). Reads drained events only;
+// writes nothing but g3_.
+void Pipeline::g3_speed(const Event& e) {
+    if (!beta_enabled_||!finite(e.value)||e.value<0||!finite(e.wheel_max)) return;
+    // Exact-zero stop run: restarts after any gap above G3_WHEEL_GAP_NS (a
+    // single zero sample after a gap does not continue a stop).
+    if (e.wheel_max==0.0) {
+        if (!g3_.zero_since_ns||!g3_.last_speed_ns||e.time<g3_.last_speed_ns||
+            e.time-g3_.last_speed_ns>G3_WHEEL_GAP_NS) g3_.zero_since_ns=e.time;
+    } else g3_.zero_since_ns=0;
+    if (g3_.last_speed_ns&&e.time>g3_.last_speed_ns&&finite(g3_.speed_mps)) {
+        const uint64_t gap=min64(e.time-g3_.last_speed_ns,G3_SPEED_GAP_MAX_NS);
+        g3_.distance_m+=g3_.speed_mps*double(gap)/1e9;
+    }
+    if (e.time>=g3_.last_speed_ns) { g3_.last_speed_ns=e.time; g3_.speed_mps=e.value; }
+    if (e.wheel_max>0.0) {
+        if (e.time>g3_.last_moving_ns) g3_.last_moving_ns=e.time;
+        if (!g3_.first_move_ns) {
+            g3_.first_move_ns=e.time;
+            g3_.first_move_reverse=reverse_latch_&&latch_valid_?latch_value_:-1;
+        }
+    }
+}
+void Pipeline::g3_yaw(const Event& e,double rate) {
+    if (!finite(rate)||e.window_end<=e.time||!status_.have_speed||
+        !finite(speed_.wheel_max)||speed_.wheel_max<=0.0) return;
+    const double dt=double(min64(e.window_end-e.time,G3_YAW_WINDOW_MAX_NS))/1e9;
+    g3_.turn_rad+=rate*dt; g3_.abs_turn_rad+=std::fabs(rate)*dt; g3_.moving_s+=dt;
+}
 bool Pipeline::beta_pair_continues(const adapter::Observation& o) const {
     if (!beta_have_prev_) return false;
     const adapter::Observation& q=beta_prev_;
@@ -1433,6 +1463,7 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
         gps_wheel_.advance(e.time);
         switch(e.kind) {
         case SPEED_EVENT:
+            g3_speed(e);
             speed_=e; status_.have_speed=true;
             if(model_)remember(wheel_history_,e);
             gps_wheel_.wheels(e.time,e.received,e.value,e.wheel_spread); break;
@@ -1457,6 +1488,7 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
                 y.rate=(e.mean_counts-beta_.yaw_zero)*profile_.yaw_rad_per_count;
                 beta_yaw_next_=(beta_yaw_next_+1)%HISTORY_CAPACITY;
                 if(beta_yaw_size_<HISTORY_CAPACITY)++beta_yaw_size_;
+                g3_yaw(e,y.rate);
             }
             gps_wheel_.yaw(e.time,e.window_end,e.received,
                 (e.mean_counts-gyro_bias_.status().active_zero)*profile_.yaw_rad_per_count); break;

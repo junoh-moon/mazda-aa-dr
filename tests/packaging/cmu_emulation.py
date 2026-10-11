@@ -608,6 +608,18 @@ def startup_menu_flow(stock, bundle):
                 'Synthetic poll was not retained or missing AA runtime was overclaimed')
         require('reboot_check=new_boot_observed' in (usb / 'startup-result.txt').read_text(),
                 'Menu 2 did not save the startup comparison to USB')
+        # Menu 8 (G3 heading log owner switch) under the stock BusyBox: state
+        # first, the confirming digit, temp + rename, menu 2 line, and back.
+        g3_marker = base / 'g3-off'
+        toggled = run("printf '8\\n8\\n0\\n' | sh /tmp/mnt/sda1/trial")
+        require('Heading log (G3) now: ON' in toggled.stdout and 'Heading log set to OFF.' in toggled.stdout and
+                g3_marker.read_text() == 'off\n' and not list(base.glob('g3-off.new.*')),
+                'Stock BusyBox menu 8 did not write the g3-off marker')
+        marked = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
+        require('g3_marker=present' in marked.stdout, 'Stock BusyBox menu 2 missed g3_marker=present')
+        back = run("printf '8\\n8\\n0\\n' | sh /tmp/mnt/sda1/trial")
+        require('Heading log set to ON.' in back.stdout and not g3_marker.exists(),
+                'Stock BusyBox menu 8 did not remove the g3-off marker')
         config = base / 'mx5dr.conf'
         config_original = config.read_bytes()
         config.write_bytes(config_original + b'# changed after guard selection\n')
@@ -644,7 +656,7 @@ def startup_menu_flow(stock, bundle):
         missing_od = run("printf '2\\n0\\n' | sh /tmp/mnt/sda1/trial", ok=False)
         require('Invalid current boot ID' in missing_od.stdout + missing_od.stderr,
                 'Failed od was hidden by a successful tr pipeline')
-        print('PASS: stock ARM BusyBox menu1→5→2, same-boot retry refusal, '
+        print('PASS: stock ARM BusyBox menu1→5→2, menu 8 G3 marker on/off, same-boot retry refusal, '
               'real guard selection, authored reboot '
               'and collector witnesses, seven startup fields and corrupt-byte rejection; '
               'no PID 1/AA/VBS execution.',

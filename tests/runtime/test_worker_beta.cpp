@@ -67,7 +67,21 @@ static double kmh=36;
 static void* storage_a=&manager;
 static int storage_b_object;
 static void* storage=storage_a;
-static double latitude(unsigned ms) { return 35+kmh/3.6*(ms/1000.0)/111320; }
+// g3_park: the car parks; fixes keep this latitude (and report 0 km/h).
+static int frozen_ms=-1;
+static double latitude(unsigned ms) { return 35+kmh/3.6*((frozen_ms>=0?unsigned(frozen_ms):ms)/1000.0)/111320; }
+// G3 store latency injection: the store thread's fsync step blocks 3 s
+// (g3_fsync_hook runs inside the step, between its gates).
+// Only the fsync write of a stop of >= 60 s runs the hook (a 15-60 s stop is
+// written without fsync, third review).
+static std::atomic<int> hook_active(0);
+static std::atomic<int> hook_calls(0);
+static void slow_fsync() {
+    hook_calls.fetch_add(1);hook_active.store(1);
+    struct timespec t={3,0};nanosleep(&t,0);
+    hook_active.store(0);
+}
+static bool g3_scenario(const std::string& s) { return s=="g3_park" || s=="g3_cancel" || s=="g3_move" || s=="g3_stop"; }
 static bool replaced_overlay(const uint8_t* original);
 // One OEM position callback: POSITION enter, one LOCATION send, leave.
 // stored: the boot-time no-fix value (mode 1, utc 0, fixed coordinates,
@@ -77,7 +91,7 @@ static bool oem_call(unsigned ms,int mode,bool stored=false) {
     const double lat=stored?35.0:latitude(ms);
     put32(position,uint32_t(mode));put64(position+8,stored?0:1700000000ULL+ms/1000);
     putd(position+16,lat);putd(position+24,135.0);put32(position+32,30);
-    putd(position+40,stored?335.0:0.0);putd(position+48,stored?4.0:kmh);
+    putd(position+40,stored?335.0:0.0);putd(position+48,stored?4.0:frozen_ms>=0?0.0:kmh);
     putd(position+56,stored?4.4:mode?1.0:99.0);putd(position+64,stored?9.7:mode?1.0:99.0);
     uint8_t original[48];
     for(unsigned i=0;i<48;++i)original[i]=uint8_t(0xA0+i);
@@ -185,8 +199,14 @@ int main(int argc,char** argv) {
     assert(argc==2);const std::string scenario=argv[1];
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
-           scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed");
-    alarm(scenario=="budget"?80:scenario=="main"?80:60);
+           scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed"||
+           g3_scenario(scenario));
+    // G3 (validation/G3_RECORD_ONLY_2026-10-11.md): the parked store write
+    // takes 3 s inside its fsync step on its own thread. g3_cancel: the GPS
+    // is lost during it (cancel before the rename); g3_stop: the capture
+    // stops during it (stop flag before the rename, no wait).
+    if(g3_scenario(scenario))g3_fsync_hook=slow_fsync;
+    alarm(scenario=="budget"?80:scenario=="main"?80:g3_scenario(scenario)?150:60);
     if(scenario=="budget")kmh=59;
     char root[]="/tmp/mx5dr-worker-beta-XXXXXX";assert(mkdtemp(root));
     const std::string logs=std::string(root)+"/logs";
@@ -252,7 +272,7 @@ int main(int argc,char** argv) {
     const bool shifted=!nofix && !cadence && scenario!="no_anchor";
     const unsigned scenario_end=scenario=="budget"?20000:scenario=="main"?9600:
                                 scenario=="nofix_rearm"?17000:scenario=="cadence_gap"?30400:
-                                scenario=="cadence_gap_speed"?16000:6400;
+                                scenario=="cadence_gap_speed"?16000:scenario=="g3_park"?68000:scenario=="g3_cancel" || scenario=="g3_move"?70000:scenario=="g3_stop"?63000:6400;
     const unsigned end_ms=scenario_end+(shifted?PRELUDE:0)+(scenario=="main"?PRELUDE2:0);
     const uint64_t start=clock_ns(0);
     bool motion=true;
@@ -280,7 +300,8 @@ int main(int argc,char** argv) {
         }
         if(scenario=="silence" && !prelude && t==4000)motion=false;
         // nofix: the car drives, then stands still, all before the first fix.
-        const double wheel_kmh=scenario=="nofix" && ms>=2500?0.0:kmh;
+        const double wheel_kmh=(scenario=="nofix" && ms>=2500) || (g3_scenario(scenario) && !prelude && t>=2000 &&
+                                  !(scenario=="g3_move" && t>=63000))?0.0:kmh;
         for(unsigned kind=1;kind<=3 && motion;++kind) {
             if(kind==N::YAW && ms%100)continue;
             // Change-only producer: reverse at boot, then forward (a 1->0
@@ -296,6 +317,30 @@ int main(int argc,char** argv) {
             if(ms%500==0) {
                 const bool replaced=oem_call(ms,1);
                 assert(!replaced);
+            }
+            continue;
+        }
+        if(scenario=="g3_cancel" || scenario=="g3_move" || scenario=="g3_stop") {
+            // Parked from 2 s with real fixes (ARMED): the 15 s write (no
+            // fsync) at about 17 s, then the 60 s write at about 62 s blocks
+            // 3 s in its fsync step. g3_cancel: GPS lost from 63 s (BETA
+            // GPS_LOST/ENGAGED while it runs); g3_move: driving from 63 s;
+            // g3_stop: capture stop at 63 s.
+            if(t==2000)frozen_ms=int(ms);
+            const bool lost=scenario=="g3_cancel" && t>=63000;
+            if(lost ? t%200==0 : t%500==0)oem_call(ms,lost?0:1);
+            continue;
+        }
+        if(scenario=="g3_park") {
+            // Moving fixes until 2 s, then parked: the stored no-fix value
+            // (NO_FIX: BETA overlays speed 0, so the store must wait) until
+            // 19 s, then real fixes at the parked place (ARMED: the parked
+            // record is written, slowly, on the store thread).
+            if(t==2000)frozen_ms=int(ms);
+            if(t%500==0) {
+                const bool stored=t>=2000 && t<19000;
+                const bool replaced=oem_call(ms,1,stored);
+                if(!stored)assert(!replaced);
             }
             continue;
         }
@@ -432,8 +477,28 @@ int main(int argc,char** argv) {
         if(scenario=="disable" && replaced && t>=5200)++replaced_after_disable;
     }
     // capture.stop takes precedence: the adapter returns to OBSERVE.
+    const uint64_t stop_begin=clock_ns(0);
     assert(!mkdir((logs+"/capture.stop").c_str(),0700));
     assert(!pthread_join(worker_thread,0));
+    const uint64_t stop_ms=(clock_ns(0)-stop_begin)/1000000ULL;
+    if(scenario=="g3_stop") {
+        // Join-free exit: when the worker had stopped and been joined, the
+        // store thread was still inside the blocked fsync step of the 60 s
+        // write (hook active, that write not yet counted: runs equals the one
+        // earlier 15 s write). The worker never waits for the store thread.
+        const int active=hook_active.load();const unsigned long long runs=g3_mailbox.runs.load();
+        printf("g3_stop: worker stopped in %llu ms, store write in progress at join=%d, store runs at join=%llu\n",
+               (unsigned long long)stop_ms,active,runs);
+        assert(active==1 && hook_calls.load()==1 && runs==1 && g3_mailbox.stop.load());
+        // The write ends after its fsync step without a rename.
+        for(unsigned k=0;k<80 && g3_mailbox.runs.load()<2;++k) { struct timespec p={0,100000000};nanosleep(&p,0); }
+        assert(g3_mailbox.runs.load()==2 && g3_mailbox.done_stage.load()==mx5::runtime::G3_IO_STOPPED &&
+               g3_mailbox.done_step.load()==mx5::runtime::G3_STEP_RENAME);
+        // Only the earlier 15 s record (seq 1, no fsync) is on disk.
+        mx5::runtime::G3Record one;
+        assert(mx5::runtime::g3_load(logs.c_str(),&one)==mx5::runtime::G3_LOAD_OK && one.seq==1);
+        assert(access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0);
+    }
     assert(A::mode()==A::OBSERVE);
     for(unsigned i=0;i<3;++i) if(oem_call(end_ms+200+i*200,0))++replaced_after_stop;
     const Rows rows=read_rows(logs);
@@ -448,8 +513,10 @@ int main(int argc,char** argv) {
     }
     for(size_t i=0;i<calls.size();++i)if(calls[i].replaced) {
         ++replaced_total;assert(calls[i].mode==0);
-        // speed is the DR wheel speed (unscaled BETA): within 5% of the stream.
-        assert(fabs(double(calls[i].speed_e3)/1000.0-kmh/3.6)<0.05*kmh/3.6);
+        // speed is the DR wheel speed (unscaled BETA): within 5% of the stream
+        // (g3_cancel replaces while parked: 0).
+        if(scenario=="g3_cancel")assert(calls[i].speed_e3==0);
+        else assert(fabs(double(calls[i].speed_e3)/1000.0-kmh/3.6)<0.05*kmh/3.6);
     }
     printf("%s: calls=%zu replaced=%u rows_replaced=%u transitions=%zu hold=%u/%u storage_rows=%u summaries=%u last_replaced_ms=%u\n",
            scenario.c_str(),calls.size(),replaced_total,rows.replaced_rows,rows.transitions.size(),
@@ -481,7 +548,7 @@ int main(int argc,char** argv) {
     // Continuous position/heading maintenance needs a fresh pair, not the
     // historical 10 s settling period. Keep checking actual accepted rows.
     else assert(anchor_accepted>=1 && anchor_settling==0);
-    if(!nofix)assert(!overlay_total);
+    if(!nofix && scenario!="g3_park")assert(!overlay_total);
     unsigned fence_position=0,fence_send=0;
     for(size_t i=0;i<rows.lines.size();++i) if(rows.lines[i].find("\"kind\":\"beta_cadence_fence\"")!=std::string::npos) {
         assert(rows.lines[i].find("\"assist_ready\":false")!=std::string::npos &&
@@ -629,6 +696,14 @@ int main(int argc,char** argv) {
         expected.push_back("WITHDRAWN>ARMED:gps_returned");
         expected.push_back("ARMED>DISABLED:capture_stop");
         assert(ordered(rows,expected) && rows.transitions.size()==expected.size());
+    } else if(scenario=="g3_park") {
+        assert(!replaced_total && overlay_total>=10 && has(rows,"SPEED_ENGAGED>ARMED:gps_returned"));
+    } else if(scenario=="g3_cancel") {
+        assert(has(rows,"ARMED>GPS_LOST:gps_lost"));
+    } else if(scenario=="g3_move") {
+        assert(!replaced_total);
+    } else if(scenario=="g3_stop") {
+        assert(!replaced_total);
     } else if(scenario=="no_anchor") {
         assert(!replaced_total && has(rows,"ARMED>GPS_LOST:gps_lost") && !has(rows,"GPS_LOST>ENGAGED:published"));
         assert(has(rows,"GPS_LOST>DISABLED:capture_stop"));
@@ -644,6 +719,118 @@ int main(int argc,char** argv) {
             previous=calls[i].accuracy_e3;
         }
         assert(previous==40000);
+    }
+    {
+        // G3 record-only (validation/G3_RECORD_ONLY_2026-10-11.md). Every
+        // scenario: the boot decision is journaled and nothing was stored
+        // before; the sends above are checked by the unchanged assertions.
+        // No scenario but g3_park has a stop of >= 15 s, so none writes.
+        // g3_park: exactly one parked record, only after BETA left the NO_FIX
+        // overlay (never while replacing), written by the store thread in 3 s
+        // while the journal writer (no beta_journal_lag row) and the worker
+        // (beta_summary at most 1.6 s apart) carried on.
+        std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
+        bool boot_field=false,missing=false,failed=false,armed_after_nofix=false,written_while_replacing=false;
+        bool lagging=false;
+        unsigned written=0,written_sync=0,cancelled_rename=0;double latency_ms=0,cancel_latency_ms=0;
+        std::string cancel_why;
+        uint64_t lost_ns=0,cancel_end=0;
+        uint64_t armed_ns=0,state_ns=0;
+        uint64_t last_summary=0,max_summary_gap=0;
+        std::string state="DISABLED";
+        while(std::getline(f,line)) {
+            if(line.find("\"kind\":\"shadow_boot\"")!=std::string::npos &&
+               line.find(",\"g3\":{\"state\":\"UNKNOWN\",\"reason\":\"missing\"}")!=std::string::npos)boot_field=true;
+            if(line.find("{\"kind\":\"beta_state\"")==0) {
+                const std::string from=field(line,"from"),to=field(line,"to");
+                state_ns=strtoull(line.c_str()+line.find("\"mono_ns\":")+10,0,10);
+                if(to=="GPS_LOST" && !lost_ns)lost_ns=state_ns;
+                if(to=="ARMED" && (from=="SPEED_ENGAGED" || from=="NO_FIX") && !armed_after_nofix) {
+                    armed_after_nofix=true;armed_ns=state_ns;
+                }
+                state=to;
+            }
+            if(line.find("{\"kind\":\"beta_journal_lag\"")==0 && line.find("\"event\":\"lagging\"")!=std::string::npos)lagging=true;
+            if(line.find("{\"kind\":\"beta_summary\"")==0) {
+                const size_t at=line.find("\"mono_ns\":");
+                const uint64_t t=strtoull(line.c_str()+at+10,0,10);
+                if(last_summary && t-last_summary>max_summary_gap)max_summary_gap=t-last_summary;
+                last_summary=t;
+            }
+            if(line.find("{\"kind\":\"g3_store\"")!=0)continue;
+            if(line.find("\"event\":\"missing\"")!=std::string::npos)missing=true;
+            if(line.find("\"event\":\"failed\"")!=std::string::npos)failed=true;
+            if(line.find("\"event\":\"cancelled\"")!=std::string::npos &&
+               line.find("\"reason\":\"cancelled\",\"at\":\"rename\"")!=std::string::npos) {
+                ++cancelled_rename;
+                cancel_why=field(line,"why");
+                cancel_end=strtoull(line.c_str()+line.find("\"mono_ns\":")+10,0,10);
+                cancel_latency_ms=atof(line.c_str()+line.find("\"lat_ms\":")+9);
+            }
+            if(line.find("\"event\":\"written\"")!=std::string::npos) {
+                ++written;
+                if(line.find("\"sync\":1")!=std::string::npos)++written_sync;
+                const size_t at=line.find("\"lat_ms\":");
+                if(at!=std::string::npos)latency_ms=atof(line.c_str()+at+9);
+                // The write began at least lat_ms before its result row: it
+                // must have started after BETA left the replacing states.
+                const uint64_t end=strtoull(line.c_str()+line.find("\"mono_ns\":")+10,0,10);
+                const uint64_t begun=end-uint64_t(latency_ms*1e6);
+                if(state=="GPS_LOST" || state=="ENGAGED" || state=="NO_FIX" || state=="SPEED_ENGAGED" ||
+                   (scenario!="g3_cancel" && scenario!="g3_move" && scenario!="g3_stop" &&
+                    (!armed_after_nofix || begun<armed_ns)))
+                    written_while_replacing=true;
+            }
+        }
+        assert(boot_field && missing && !failed && !written_while_replacing);
+        mx5::runtime::G3Record stored;
+        const mx5::runtime::G3Load load=mx5::runtime::g3_load(logs.c_str(),&stored);
+        if(scenario=="g3_cancel") {
+            // The write was in flight when the GPS was lost and was cancelled
+            // before its rename; nothing was stored; writer and worker kept up.
+            const uint64_t begun=cancel_end-uint64_t(cancel_latency_ms*1e6);
+            printf("g3_cancel: cancelled_at_rename=%u why=%s latency_ms=%.0f begun_before_loss=%d short_writes=%u max_summary_gap_ms=%llu lagging=%d\n",
+                   cancelled_rename,cancel_why.c_str(),cancel_latency_ms,int(begun<lost_ns),written,
+                   (unsigned long long)(max_summary_gap/1000000ULL),int(lagging));
+            // The cancel reason is the condition injected: BETA replacing.
+            assert(cancelled_rename==1 && cancel_why=="beta_replacing" && cancel_latency_ms>=2900 && lost_ns &&
+                   begun<lost_ns);
+            // Only the 15 s record (no fsync) is stored; the 60 s fsync write was not renamed.
+            assert(written==1 && !written_sync && load==mx5::runtime::G3_LOAD_OK && stored.seq==1 &&
+                   access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0);
+            assert(!lagging && max_summary_gap<1600000000ULL);
+        } else if(scenario=="g3_move") {
+            // The car drove off (a wheel above zero) during the blocked fsync
+            // step: cancelled before the rename, nothing stored.
+            printf("g3_move: cancelled_at_rename=%u why=%s latency_ms=%.0f\n",cancelled_rename,cancel_why.c_str(),
+                   cancel_latency_ms);
+            assert(cancelled_rename==1 && cancel_why=="wheels_moving" && cancel_latency_ms>=2900);
+            assert(written==1 && !written_sync && load==mx5::runtime::G3_LOAD_OK && stored.seq==1 &&
+                   access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0);
+            assert(!lagging && max_summary_gap<1600000000ULL);
+        } else if(scenario=="g3_stop") {
+            assert(written==1 && !written_sync && load==mx5::runtime::G3_LOAD_OK && stored.seq==1);
+        } else if(scenario=="g3_park") {
+            printf("g3_park: written=%u with_fsync=%u hook_calls=%d last_latency_ms=%.0f max_summary_gap_ms=%llu lagging=%d\n",
+                   written,written_sync,hook_calls.load(),latency_ms,(unsigned long long)(max_summary_gap/1000000ULL),
+                   int(lagging));
+            // The 15 s write ran no fsync (no hook call), the 60 s write did.
+            assert(written==2 && written_sync==1 && hook_calls.load()==1 && latency_ms>=2900 &&
+                   load==mx5::runtime::G3_LOAD_OK && stored.state=='S' &&
+                   stored.seq==2 && stored.flags==(mx5::runtime::G3_FLAG_HEADING|mx5::runtime::G3_FLAG_POSITION));
+            assert(!lagging && max_summary_gap<1600000000ULL);
+            // The idle rule as the worker evaluates it (store thread running).
+            Journal plain(root);
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_ENGAGED,clock_ns(0)),"beta_replacing"));
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_GPS_LOST,clock_ns(0)),"beta_replacing"));
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_SPEED_ENGAGED,clock_ns(0)),"beta_replacing"));
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_NO_FIX,clock_ns(0)),"beta_replacing"));
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_ARMED,clock_ns(0)),"no_writer"));
+            journal_current.store(0);
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_ARMED,clock_ns(0)),"journal_lagging"));
+            journal_current.store(1);
+        } else assert(!written && load==mx5::runtime::G3_LOAD_MISSING);
+        unlink((logs+"/"+mx5::runtime::G3_STORE_NAME).c_str());
     }
     unlink((logs+"/capture.done").c_str());rmdir((logs+"/capture.stop").c_str());
     for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());

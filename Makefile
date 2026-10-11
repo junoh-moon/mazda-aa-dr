@@ -10,7 +10,7 @@ CORE = src/core/dr_core.c
 REQUEST = src/adapter/request_hooks.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp
 ADAPTER = src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $(REQUEST)
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
-NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h src/runtime/beta_profile.h src/runtime/core_bridge.h src/runtime/beta_controller.h src/runtime/motion_gap.h
+NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h src/runtime/beta_profile.h src/runtime/core_bridge.h src/runtime/beta_controller.h src/runtime/motion_gap.h src/runtime/g3_heading.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
 SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
@@ -66,7 +66,7 @@ $(BUILD)/test_request_status: tests/runtime/test_request_status.cpp src/runtime/
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
 $(BUILD)/test_journal_ring: tests/runtime/test_journal_ring.cpp src/runtime/journal_ring.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
-$(BUILD)/test_log_profile: tests/runtime/test_log_profile.cpp src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+$(BUILD)/test_log_profile: tests/runtime/test_log_profile.cpp src/runtime/log_profile.h src/runtime/journal_ring.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
 $(BUILD)/test_yaw_rows: tests/runtime/test_yaw_rows.cpp src/runtime/log_profile.h src/runtime/journal_ring.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
@@ -146,10 +146,14 @@ test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_po
 	$(BUILD)/test_bus_early_init
 	$(BUILD)/test_lds_bus_hooks
 	@set -e; for case in normal position_source position_sources_concurrent signal signal_reuse failure early_close unobserved overlap cancel readers capacity collision bad_callback throw_create throw_connect throw_disconnect throw_free throw_closed prediction_entry_create prediction_entry_connect prediction_entry_disconnect prediction_entry_free prediction_entry_closed prediction_entry_signal prediction_exit_create prediction_exit_connect prediction_exit_disconnect prediction_exit_free prediction_exit_closed prediction_exit_signal; do result=0; $(BUILD)/test_bus_hooks $$case || result=$$?; [ "$$result" -eq 0 ] || { [ "$$result" -eq 77 ] && [ "$$(uname -s)" = Darwin ]; }; done
+# G3 record-only heading carry-over (validation/G3_RECORD_ONLY_2026-10-11.md).
+$(BUILD)/test_g3: tests/runtime/test_g3.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 $(BUILD)/test_worker_thread: tests/runtime/test_worker_thread.cpp src/runtime/worker_thread.h | $(BUILD)
 	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_worker_thread.cpp -pthread -o $@
-test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 test-request-publication test-journal-boundaries
 	$(BUILD)/test_worker_thread
+	$(BUILD)/test_g3
 	@set -e; for scenario in adopted freeze audit journal_failure pre_stopped fork journal bounds drain_bus drain_session; do $(BUILD)/test_runtime_lds_association $$scenario; done
 	$(BUILD)/test_assist_worker
 	@set -e; for scenario in publication source_fault unqualified recovery audit journal_failure pre_stopped unhooked shadow; do $(BUILD)/test_runtime_assist $$scenario; done
@@ -174,7 +178,7 @@ test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association 
 	$(BUILD)/test_model_session_input
 	@set -e; for case in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session $$case; done
 	MX5DR_TEST_STALE_RAW=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session bus_reuse
-	@set -e; for case in main silence disable budget fault no_anchor nofix withdrawn_class nofix_rearm cadence_gap cadence_gap_speed; do $(BUILD)/test_worker_beta $$case; done
+	@set -e; for case in main silence disable budget fault no_anchor nofix withdrawn_class nofix_rearm cadence_gap cadence_gap_speed g3_park g3_cancel g3_move g3_stop; do $(BUILD)/test_worker_beta $$case; done
 	MX5DR_TEST_SLOW_YAW=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session bus_reuse
 	@set -e; for case in bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do MX5DR_TEST_PREGAP=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session $$case; done
 test-journal-boundaries:
@@ -183,8 +187,8 @@ test-request-publication:
 	@CXX="$(CXX)" MX5DR_PUBLICATION_BUILD="$(abspath $(BUILD))/request-publication" sh tests/runtime/run_request_publication.sh; result=$$?; test $$result -eq 0 -o $$result -eq 77
 test-packaging: $(BUILD)/test_collector
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/packaging -v
-test-tools: $(BUILD)/yaw_replay
-	MX5DR_YAW_REPLAY=$(abspath $(BUILD)/yaw_replay) $(PYTHON) -m unittest discover -s tests/tools -v
+test-tools: $(BUILD)/yaw_replay $(BUILD)/test_g3
+	MX5DR_YAW_REPLAY=$(abspath $(BUILD)/yaw_replay) MX5DR_G3_FIXTURE=$(abspath $(BUILD)/test_g3) $(PYTHON) -m unittest discover -s tests/tools -v
 test-build-deps:
 	$(PYTHON) -m unittest discover -s tests/build -v
 test-integration: $(BUILD)/test_pipeline $(BUILD)/test_assist_publication

@@ -29,6 +29,7 @@
 #include "runtime/beta_controller.h"
 #include "runtime/beta_profile.h"
 #include "runtime/core_bridge.h"
+#include "runtime/g3_heading.h"
 #include "runtime/motion_gap.h"
 #include "runtime/worker_tick.h"
 #include <algorithm>
@@ -393,6 +394,11 @@ bool load(const std::string& dir, const std::string& want_boot, double poll_hdop
 // ------------------------------------------------------------ options ----
 struct Options {
     std::string trip, report, csv, boot_id, corrupt, journal, position_source, engagement;
+    // G3 record-only tracker (validation/G3_RECORD_ONLY_2026-10-11.md): off,
+    // on (store results at once) or slow (each store write completes 3 s of
+    // replay time later). g3_store: a directory holding the real store file
+    // (read at start, written by the parent run); g3_out: its rows.
+    std::string g3, g3_store, g3_out;
     std::vector<double> t0s, durations;
     double sweep_from, sweep_to, sweep_step;
     bool sweep, check, real_only;
@@ -510,6 +516,34 @@ R::MotionGapTracker motion_gap;
 struct LatchExposure { uint64_t moving_ticks, moving_latched_ticks; };
 LatchExposure latch_exposure;
 bool count_latch = true;  // parent only; window children stop counting
+// G3 record-only tracker: rows in their own journal, so every BETA output
+// (journal, report, CSV) is the same with it off, on or slow.
+R::G3Tracker g3;
+Journal g3_journal;
+uint64_t g3_anchor_seen;
+struct G3Job { bool active, sync; uint32_t seq; uint64_t due; char line[R::G3_RECORD_MAX]; size_t n; } g3_job;
+bool g3_replacing(R::BetaState s) {
+    return s == R::BETA_GPS_LOST || s == R::BETA_ENGAGED || s == R::BETA_NO_FIX || s == R::BETA_SPEED_ENGAGED;
+}
+void g3_turn(uint64_t now) {
+    R::G3Course course;
+    const bool found = g3.wants_course() && R::g3_find_course(nav, &g3_anchor_seen, &course);
+    g3.tick(g3_journal, R::g3_sample(nav, now, 0), found ? &course : 0,
+            g3_replacing(beta->state()) ? "beta_replacing" : 0);
+    if (g3_job.active && now >= g3_job.due) {
+        const uint64_t began = g3_job.due - (opt.g3 == "slow" ? 3000000000ULL : 0);
+        R::G3IoResult r = {R::G3_IO_OK, 0, now - began, R::G3_STEP_NONE, began, now};
+        // Only the parent run writes the real store file.
+        if (count_latch && !opt.g3_store.empty())
+            r = R::g3_write_atomic(opt.g3_store.c_str(), g3_job.line, g3_job.n, 0, 0, 0, g3_job.sync);
+        g3.store_result(g3_journal, now, g3_job.seq, r);
+        g3_job.active = false;
+    }
+    if (!g3_job.active && g3.take_request(g3_job.line, sizeof g3_job.line, &g3_job.n, &g3_job.seq, &g3_job.sync)) {
+        g3_job.active = true;
+        g3_job.due = now + (opt.g3 == "slow" ? 3000000000ULL : 0);
+    }
+}
 // One worker turn at the tick grid, in runtime order: pop observations,
 // receive motion, drain on the MODEL tick, then the BETA tick.
 bool wheel_at(uint64_t t, double* mps);
@@ -518,9 +552,11 @@ void worker_turn(uint64_t now) {
     for (size_t i = 0; i < pending.size(); ++i) {
         const A::Observation& o = pending[i];
         if (o.kind == A::Observation::SEND) beta->send(o);
+        if (o.kind == A::Observation::SEND && g3.active()) g3.send(o);
         if (o.kind == A::Observation::POSITION) {
             if (o.reason != A::CONTEXT_UNAVAILABLE) nav.enqueue_position(o);
             beta->position(journal, o, now);
+            if (g3.active()) g3.position(g3_journal, o, nav.g3_motion());
         }
     }
     pending.clear();
@@ -550,6 +586,7 @@ void worker_turn(uint64_t now) {
         // runtime.cpp: the cadence fence (POSITION/SEND gap > 3 s) first.
         if (!fault && beta->cadence_fence(journal, now)) nav.fence_beta();
         beta->tick(journal, now, nav, true, nav.status().last_received_ns, 1, fault);
+        if (g3.active()) g3_turn(now);
         double w;
         if (count_latch && wheel_at(now, &w) && w > 1.0) {
             ++latch_exposure.moving_ticks;
@@ -588,7 +625,16 @@ bool start_product(uint64_t t) {
     // given stopped-accuracy constants (the pipeline does not read them).
     if (opt.stopped_rule_set() && !controller.set_profile(bridge_profile())) return false;
     g_now = t;
-    return beta->enable(journal, t, 0) && A::mode() == A::BETA;
+    if (!beta->enable(journal, t, 0) || A::mode() != A::BETA) return false;
+    if (opt.g3 == "on" || opt.g3 == "slow") {
+        R::G3Record stored = R::g3_record();
+        R::G3Load load = R::G3_LOAD_MISSING;
+        if (!opt.g3_store.empty()) load = R::g3_load(opt.g3_store.c_str(), &stored);
+        const std::string boot = in.boot_id.size() == 36 ? in.boot_id : std::string("unknown");
+        g3.start(t, true, "replay", boot.c_str(), "none", 0, load, stored);
+        g3.journal_start(g3_journal, t);
+    }
+    return true;
 }
 
 // ----------------------------------------------------------- evaluation ----
@@ -1008,6 +1054,7 @@ void usage() {
         "                   [--truth-gap-ms N] [--course-min-kmh K] [--coverage-min F]\n"
         "                   [--boot-id ID] [--poll-hdop H] [--position-source auto|adapter|poll] [--report FILE.json] [--csv FILE.csv] [--check]\n"
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
+        "                   [--g3 off|on|slow] [--g3-store DIR] [--g3-out FILE]\n"
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "Times are journal monotonic seconds. Without --t0/--sweep only recorded\n"
         "(real) outages are replayed.\n");
@@ -1022,6 +1069,7 @@ int main(int argc, char** argv) {
     opt.truth_gap_ns = 3000000000ULL; opt.course_min_kmh = 15; opt.coverage_min = 0.95;
     opt.poll_hdop = 1.0; opt.position_source = "auto";
     opt.engagement = "continuous";
+    opt.g3 = "off";
     opt.stopped_accuracy_m = opt.stopped_honest_max_m = opt.crawl_speed_mps = NAN;
     opt.durations = parse_list("10,20,30,45,60");
     for (int i = 1; i < argc; ++i) {
@@ -1056,6 +1104,12 @@ int main(int argc, char** argv) {
         }
         else if (a == "--self-test-corrupt" && more) opt.corrupt = argv[++i];
         else if (a == "--journal" && more) opt.journal = argv[++i];
+        else if (a == "--g3" && more) {
+            opt.g3 = argv[++i];
+            if (opt.g3 != "off" && opt.g3 != "on" && opt.g3 != "slow") { usage(); return 2; }
+        }
+        else if (a == "--g3-store" && more) opt.g3_store = argv[++i];
+        else if (a == "--g3-out" && more) opt.g3_out = argv[++i];
         else if (a == "--stopped-accuracy-m" && more) opt.stopped_accuracy_m = atof(argv[++i]);
         else if (a == "--stopped-honest-max-m" && more) opt.stopped_honest_max_m = atof(argv[++i]);
         else if (a == "--crawl-speed-mps" && more) opt.crawl_speed_mps = atof(argv[++i]);
@@ -1353,6 +1407,12 @@ int main(int argc, char** argv) {
         if (!f) { perror(opt.journal.c_str()); return 2; }
         for (size_t i = 0; i < journal.lines.size(); ++i) fprintf(f, "%s\n", journal.lines[i].c_str());
         if (fclose(f)) { perror(opt.journal.c_str()); return 2; }
+    }
+    if (!opt.g3_out.empty()) {
+        FILE* f = fopen(opt.g3_out.c_str(), "w");
+        if (!f) { perror(opt.g3_out.c_str()); return 2; }
+        for (size_t i = 0; i < g3_journal.lines.size(); ++i) fprintf(f, "%s\n", g3_journal.lines[i].c_str());
+        if (fclose(f)) { perror(opt.g3_out.c_str()); return 2; }
     }
     if (opt.check && !violations.empty()) {
         fprintf(stderr, "replay_beta --check failed: %zu violation(s)\n", violations.size());

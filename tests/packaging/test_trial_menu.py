@@ -145,6 +145,58 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('Cleared vimchan-off', result.stdout)
         self.assertFalse(marker.exists())
 
+    def test_menu_eight_toggles_the_g3_heading_marker(self):
+        # Owner switch of the record-only heading log G3 (2026-10-11): the
+        # same pattern as menu 7, 40-column text, mx5dr.conf untouched.
+        marker = self.base / 'g3-off'
+        result = self.menu('8\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('8 Heading log (G3) on/off (log only)', result.stdout)
+        self.assertIn('Heading log: package not installed;', result.stdout)
+        self.assertFalse(self.base.exists())
+        self.fixture.run_script('install.sh')
+        config = (self.base / 'mx5dr.conf').read_bytes()
+        for keys in ('8\n0\n', '8\n\n0\n', '8\n88\n0\n', '8\n7\n0\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('Heading log (G3) now: ON', result.stdout)
+                self.assertIn('Enter 8 again to switch it OFF,', result.stdout)
+                self.assertIn('Cancelled; nothing changed.', result.stdout)
+                self.assertFalse(marker.exists())
+        eof = self.menu('8\n')
+        self.assertIn('Cancelled; nothing changed.', eof.stdout)
+        self.assertFalse(marker.exists())
+        result = self.menu('8\n8\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Heading log set to OFF.', result.stdout)
+        self.assertEqual(marker.read_text(), 'off\n')
+        self.assertFalse(list(self.base.glob('g3-off.new.*')))
+        self.assertFalse((self.base / 'vimchan-off').exists())
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        out = result.stdout
+        start = out.index('Heading log (G3) now:')
+        for line in out[start:out.index('(parked reboot) for it to take effect.') + 40].splitlines():
+            self.assertLessEqual(len(line.replace('Number, then Enter: ', '')), 40, line)
+        status = self.menu('2\n0\n')
+        self.assertIn('g3_marker=present', status.stdout)
+        result = self.menu('8\n8\n0\n')
+        self.assertIn('Heading log (G3) now: OFF', result.stdout)
+        self.assertIn('Heading log set to ON.', result.stdout)
+        self.assertFalse(marker.exists())
+        self.assertIn('g3_marker=absent', self.menu('2\n0\n').stdout)
+        marker.mkdir()
+        result = self.menu('8\n8\n0\n')
+        self.assertIn('Heading log: OFF (g3-off is a dir).', result.stdout)
+        self.assertTrue(marker.is_dir())
+        marker.rmdir()
+        # Menu 1 (reinstall) clears the marker: the default is on again.
+        marker.write_text('off\n')
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Cleared g3-off', result.stdout)
+        self.assertFalse(marker.exists())
+
     def test_install_uses_bundle_mode_without_more_typed_commands(self):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         result = self.menu('1\n')
@@ -231,7 +283,7 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('2\n0\n')
         self.assertEqual(result.stdout.count('Parked USB trial menu'), 1)
         out = result.stdout
-        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-7 as listed before)'))
+        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-8 as listed before)'))
         self.assertIn('Startup check saved', out[:out.index('---- GO / NO-GO ----')])
         for line in out[out.index('---- GO / NO-GO ----'):].splitlines():
             self.assertLessEqual(len(line), 40, line)

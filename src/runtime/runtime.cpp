@@ -22,6 +22,7 @@
 #include "log_profile.h"
 #include "model_session.h"
 #include "beta_controller.h"
+#include "g3_heading.h"
 #include "motion_gap.h"
 #include "model_bus.h"
 #include "lds_sideband.h"
@@ -791,6 +792,7 @@ bool journal_writer_ok(JournalWriter* w) { return w->ok.load(std::memory_order_a
 // PersistentLog rate), so a later prompt row waits behind at most one
 // pump's rows (16), even on a writer slower than that rate (2026-10-08:
 // under QEMU about 90 rows/s).
+bool journal_writer_bulk_pending(JournalWriter* w) { return w->ring.stats().bulk_used!=0; }
 bool journal_writer_bulk_ready(JournalWriter* w) {
   const mx5::runtime::JournalRing::Stats s=w->ring.stats();
   return !s.oldest_push_ns && !s.bulk_used;
@@ -864,6 +866,64 @@ void journal_lag_guard(Journal& j,uint64_t now) {
       (unsigned long long)lag.unwritten_rows,(unsigned long long)(JOURNAL_LAG_LIMIT_NS/1000000ULL),
       (unsigned long long)(JOURNAL_LAG_CLEAR_NS/1000000ULL));
   if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+}
+// G3 record-only store (g3_heading.h, validation/G3_RECORD_ONLY_2026-10-11.md).
+// The parked heading record is written by its own detached slow thread, never
+// by the worker, an OEM thread or the journal writer (review H1): one-slot
+// lock-free mailbox, process lifetime, never joined. g3_fsync_hook: tests
+// only (a slow fsync), set before the worker starts. g3_epoch: the worker
+// generation carried in every hand-off (ABA).
+mx5::runtime::G3Mailbox g3_mailbox;
+mx5::runtime::G3FsyncHook g3_fsync_hook=0;
+std::atomic<uint32_t> g3_epoch(0);
+// Starts the store thread once per process; false: no store this boot (also
+// after a capture stop or a worker exit stopped it).
+bool g3_store_thread(const char* root) {
+  if(g3_mailbox.stop.load(std::memory_order_acquire))return false;
+  if(g3_mailbox.started.load(std::memory_order_acquire))return true;
+  char dir[512];
+  const int n=snprintf(dir,sizeof dir,"%s/logs",root);
+  if(n<=0 || size_t(n)>=sizeof dir || !mx5::runtime::g3_mailbox_init(g3_mailbox,dir,g3_fsync_hook))return false;
+  pthread_t thread;
+  if(!mx5::runtime::create_thread(&thread,mx5::runtime::g3_store_main,&g3_mailbox,64u<<10,true))return false;
+  g3_mailbox.started.store(1,std::memory_order_release);
+  return true;
+}
+// BETA states in which provenance (and so the replacement) depends on
+// journal_current: no store I/O then.
+bool g3_beta_replacing(mx5::runtime::BetaState s) {
+  return s==mx5::runtime::BETA_GPS_LOST || s==mx5::runtime::BETA_ENGAGED ||
+         s==mx5::runtime::BETA_NO_FIX || s==mx5::runtime::BETA_SPEED_ENGAGED;
+}
+bool journal_writer_bulk_pending(JournalWriter*);
+// The idle rule at this worker tick (0: a parked write may be handed over).
+// strict (before a hand-off): also waits while any journal row is queued.
+// Not strict (cancelling an in-flight write): a RAW-window drain or queued
+// bulk rows count, a momentarily queued prompt row does not (every worker
+// turn queues some), so the cancel follows real journal pressure only.
+const char* g3_io_block(const Journal& j,mx5::runtime::BetaState state,uint64_t now,bool strict=true) {
+  const JournalLag lag=journal_writer_lag(j.writer,now);
+  const bool draining=(j.filter && j.filter->draining()) ||
+      (j.writer && (strict?!journal_writer_bulk_ready(j.writer):journal_writer_bulk_pending(j.writer)));
+  return mx5::runtime::g3_io_block_reason(g3_mailbox.started.load(std::memory_order_acquire)!=0,
+      g3_beta_replacing(state),journal_current.load(std::memory_order_acquire)!=0,j.writer!=0 && !j.failed,
+      draining,lag.oldest_ns);
+}
+// Worker, after each G3 tick: cancel an in-flight write whose conditions no
+// longer hold (cancel: the idle rule failed, a wheel moved or the wheel
+// stream is stale), collect a finished write, or hand the tracker's request
+// to the store thread. Never blocks, never does file I/O.
+void g3_pump(Journal& j,mx5::runtime::G3Tracker& g3,uint32_t epoch,const char* cancel) {
+  uint32_t seq=0;
+  if(g3.in_flight(&seq)) {
+    if(cancel) { g3.note_cancel(cancel);g3_mailbox.cancel_gen.fetch_add(1,std::memory_order_acq_rel); }
+    mx5::runtime::G3IoResult r;
+    if(mx5::runtime::g3_mailbox_result(g3_mailbox,seq,epoch,&r))g3.store_result(j,clock_ns(0),seq,r);
+    return;
+  }
+  char line[mx5::runtime::G3_RECORD_MAX];size_t n=0;bool sync=false;
+  if(!mx5::runtime::g3_mailbox_idle(g3_mailbox) || !g3.take_request(line,sizeof line,&n,&seq,&sync))return;
+  if(!mx5::runtime::g3_mailbox_post(g3_mailbox,line,n,seq,epoch,clock_ns(0),sync))g3.post_failed();
 }
 // Why BETA stays disabled at startup (0: it may arm). A boot row that did
 // not reach the file in time is "journal_not_durable", distinct from a
@@ -1557,6 +1617,31 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       holdout.init_model(model,mx5_dr_default_config(),nav_context);
   const bool beta_core=shadow && beta_requested && navigation.enable_beta(mx5::runtime::beta_profile_tunnel());
   mx5::runtime::BetaController beta(beta_shared);
+  // G3 record-only heading carry-over (BETA only). One small file read here,
+  // at startup; the parked store write runs on the dedicated store thread.
+  mx5::runtime::G3Tracker g3;
+  uint64_t g3_anchor_seen=0;
+  const uint32_t g3_worker_epoch=g3_epoch.fetch_add(1,std::memory_order_acq_rel)+1;
+  // Capture stop and every worker exit stop the store thread: it never
+  // renames after this point (it re-checks the flag before the rename).
+  struct G3StopOnExit { ~G3StopOnExit() { g3_mailbox.stop.store(1,std::memory_order_release); } } g3_stop_on_exit;
+  (void)g3_stop_on_exit;
+  if(beta_requested) {
+    const bool g3_on=beta_core && mx5::runtime::g3_switch_on(root);
+    mx5::runtime::G3Record stored=mx5::runtime::g3_record();
+    mx5::runtime::G3Load load=mx5::runtime::G3_LOAD_MISSING;
+    char chain[9]="unread";
+    if(g3_on) {
+      char dir[512];
+      const int n=snprintf(dir,sizeof dir,"%s/logs",root);
+      load=n>0 && size_t(n)<sizeof dir?mx5::runtime::g3_load(dir,&stored):mx5::runtime::G3_LOAD_UNREADABLE;
+      mx5::runtime::g3_chain_token(root,chain);
+    }
+    g3.start(clock_ns(0),g3_on,!beta_core?"beta_core_unavailable":"marker",boot_id,chain,
+             mx5::runtime::g3_realtime_s(),load,stored);
+  }
+  char g3_fields[96]="";
+  if(beta_requested)g3.boot_fields(g3_fields,sizeof g3_fields);
   if(config.mode==4 || beta_requested) {
     snprintf(line,sizeof line,
         "{\"kind\":\"shadow_boot\",\"active\":%s,\"capture_active\":%s,\"domain\":\"model\","
@@ -1566,12 +1651,16 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         "\"gps_anchor_gate_model\":true,\"wheel_scale_model\":true,"
         "\"yaw_zero\":%.9g,\"yaw_rad_per_count\":%.9g,"
         "\"wheel_kmh_per_count\":%.9g,\"wheel_zero_kmh\":%.9g,"
-        "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu,\"vim_side_channel\":\"%s\"}",
+        "\"reverse_forward\":%d,\"reverse_reverse\":%d,\"reorder_ns\":%llu%s,\"vim_side_channel\":\"%s\"}",
         shadow?"true":"false",capture?"true":"false",model.yaw_zero,model.yaw_rad_per_count,
         model.wheel_kmh_per_count,model.wheel_zero_kmh,
         model.reverse_forward_value,model.reverse_reverse_value,
-        (unsigned long long)model.reorder_ns,side_state);
+        (unsigned long long)model.reorder_ns,g3_fields,side_state);
     j.line(line);j.flush();
+  }
+  if(beta_requested) {
+    g3.journal_start(j,clock_ns(0));
+    if(g3.active() && !g3_store_thread(root))g3.store_unavailable(j,clock_ns(0),"no_store_thread");
   }
   if (hook_installed && (config.mode == 2 || beta_requested) && !boot_durable && !j.failed) {
     // The boot row did not reach the file within the bound: SCRUB/BETA stay
@@ -1628,6 +1717,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         if(assist)assist->stop();
         source.reset(cutoff);source_disabled=true;
         freeze_capture();
+        g3_mailbox.stop.store(1,std::memory_order_release);
         // capture.stop takes precedence: OBSERVE is already set; drop any
         // stored BETA candidate and record why.
         beta.disable(j,cutoff,"capture_stop");
@@ -1652,6 +1742,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       if(!format_observation(line,sizeof line,o)) { j.fail();continue; }
       j.observation_line(line,o);
       if(o.kind==A::Observation::SEND)beta.send(o);
+      if(o.kind==A::Observation::SEND && g3.active())g3.send(o);
       if(o.kind==A::Observation::POSITION && o.reason==A::CONTEXT_UNAVAILABLE) {
         // A pool miss keeps the raw input but cannot establish a usable
         // POSITION context. Revoke mutation and all later MODEL/source input.
@@ -1689,6 +1780,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
           }
         }
         beta.position(j,o,clock_ns(0));
+        if(g3.active())g3.position(j,o,navigation.g3_motion());
       }
     }
     if(!adapter_fault_reported && A::faulted()) {
@@ -1771,6 +1863,21 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       if(!fault && beta.cadence_fence(j,now))navigation.fence_beta();
       beta.tick(j,now,navigation,model_session.available() && model_bus.available(),
                 navigation.status().last_received_ns,model_bus.epoch(),fault);
+    }
+    // G3 record-only: never changes a send; diagnostic rows, and a parked
+    // store request for the store thread only under the idle rule.
+    if(g3.active() && shadow && model_ticked && !j.failed) {
+      mx5::runtime::G3Course course;
+      const bool found=g3.wants_course() && mx5::runtime::g3_find_course(navigation,&g3_anchor_seen,&course);
+      const uint64_t g3_now=clock_ns(0);
+      const mx5::runtime::G3Sample g3_sample_now=
+          mx5::runtime::g3_sample(navigation,g3_now,mx5::runtime::g3_realtime_s());
+      const char* g3_block=g3_io_block(j,beta.state(),g3_now);
+      g3.tick(j,g3_sample_now,found?&course:0,g3_block);
+      const char* g3_cancel=g3_io_block(j,beta.state(),g3_now,false);
+      if(!g3_cancel && g3_sample_now.wheels_moving)g3_cancel="wheels_moving";
+      if(!g3_cancel && !g3_sample_now.wheels_fresh)g3_cancel="wheels_stale";
+      g3_pump(j,g3,g3_worker_epoch,g3_cancel);
     }
     j.pump(clock_ns(0));
     if (now - last_flush >= 1000000000ULL) {

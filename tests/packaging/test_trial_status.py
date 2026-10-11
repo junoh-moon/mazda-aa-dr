@@ -302,6 +302,11 @@ exec "$MX5DR_REAL_OD" "$@"
         self.assertIn('vim_side_channel_marker=present', result.stdout)
         self.assertIn('vim_side_channel=disabled', result.stdout)
 
+    def test_g3_marker(self):
+        self.assertIn('g3_marker=absent', self.run_status().stdout)
+        (self.base / 'g3-off').write_text('off\n')
+        self.assertIn('g3_marker=present', self.run_status().stdout)
+
     def test_runtime_disable_marker_blocks_old_boot_evidence(self):
         (self.logs / 'disable-next-start').write_text('restore_failed_fatal\n')
         result = self.run_status()

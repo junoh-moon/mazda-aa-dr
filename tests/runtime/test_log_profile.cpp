@@ -2,6 +2,7 @@
 // rate-limited, digested or held in the RAW window, and the order in which an
 // event writes the window. Synthetic rows only.
 #include "runtime/log_profile.h"
+#include "runtime/journal_ring.h"
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -408,7 +409,31 @@ static void paced_window() {
     puts("persistent log: paced window drain, tags, classes, order and capture stop passed");
 }
 
+// G3 record-only rows (validation/G3_RECORD_ONLY_2026-10-11.md) are the
+// experiment's evidence: the persistent profile keeps every one of them (no
+// rate limit, no RAW window), queued as diagnostic rows by their kind (a full
+// ring drops them instead of failing the journal).
+static void g3_rows_kept() {
+    static unsigned char storage[PersistentLog::WINDOW_BYTES+PersistentLog::ROW_BYTES];
+    PersistentLog log;log.init(storage,model());out.clear();raw_flags.clear();classes.clear();
+    const char* rows[]={
+        "{\"kind\":\"g3_store\",\"mono_ns\":1,\"event\":\"loaded\",\"reason\":\"chain_ok\"}",
+        "{\"kind\":\"g3_store\",\"mono_ns\":2,\"event\":\"written\",\"seq\":1,\"st\":\"S\"}",
+        "{\"kind\":\"g3_first\",\"mono_ns\":3,\"event\":\"start\",\"g3\":\"CARRIED\"}",
+        "{\"kind\":\"g3_first\",\"mono_ns\":4,\"event\":\"course\",\"g3\":\"CONFIRMED\"}",
+        "{\"kind\":\"g3_since\",\"mono_ns\":5,\"event\":\"unstored\",\"reason\":\"beta_replacing\"}"};
+    for(unsigned t=0;t<10;++t)for(unsigned k=0;k<5;++k)log.row(rows[k],200*S+t*1000000ULL,emit,0);
+    assert(count("g3_store")==20 && count("g3_first")==20 && count("g3_since")==10);
+    for(size_t i=0;i<out.size();++i) {
+        if(out[i].compare(0,10,"{\"kind\":\"g")!=0)continue;
+        assert(classes[i]==PersistentLog::ROW_KEEP);
+        assert(!mx5::runtime::journal_evidence_row(out[i].c_str(),out[i].size()));
+    }
+    puts("persistent log: G3 rows kept as diagnostic rows passed");
+}
+
 int main() {
+    g3_rows_kept();
     rate_limits();
     window_and_events();
     digest_contents();

@@ -119,6 +119,31 @@ struct FaultCalibration {
     GyroBiasStatus gyro;
     WheelScaleStatus wheel;
 };
+// G3 record-only heading carry-over (validation/G3_RECORD_ONLY_2026-10-11.md):
+// boot-lifetime motion observed by the BETA-enabled pipeline, read by the
+// worker's G3 tracker. Pure observation: it never feeds a core, a gate or a
+// publication, and no reset/fence clears it. Yaw uses the fixed BETA zero and
+// is integrated only while some wheel moves (any wheel above exactly zero),
+// never at a standstill; distance is the drained mean wheel speed times the
+// gap to the next wheel event (capped at G3_SPEED_GAP_MAX_NS). A stop is a run
+// of wheel events with all four wheels EXACTLY zero (the beta.8 stop-latch
+// definition) whose consecutive events are at most G3_WHEEL_GAP_NS apart; a
+// gap or a moving wheel ends it. MODEL evidence only.
+static const uint64_t G3_WHEEL_GAP_NS=250000000ULL;
+static const uint64_t G3_SPEED_GAP_MAX_NS=500000000ULL;
+static const uint64_t G3_YAW_WINDOW_MAX_NS=1000000000ULL;
+struct G3Motion {
+    double distance_m;       // wheel distance since boot
+    double turn_rad;         // signed yaw integral while moving (body, clockwise positive)
+    double abs_turn_rad;     // integral of |yaw| while moving
+    double moving_s;         // yaw-window time while moving
+    double speed_mps;        // newest drained mean wheel speed
+    uint64_t last_speed_ns;  // newest drained wheel event (0: none)
+    uint64_t last_moving_ns; // newest drained wheel event with a moving wheel (0: none)
+    uint64_t first_move_ns;  // first moving wheel event of the boot (0: none yet)
+    uint64_t zero_since_ns;  // first event of the current gap-free all-zero run (0: none)
+    int first_move_reverse;  // reverse latch at the first movement: -1 unknown, 0, 1
+};
 
 // Single worker, fixed capacity, no allocation/I/O. Raw ingestion ONLY enters
 // MODEL domain. A separate qualified Pipeline requires externally verified
@@ -256,6 +281,16 @@ public:
     const GyroBiasStatus& calibration() const { return gyro_bias_.status(); }
     const WheelScaleStatus& wheel_calibration() const { return gps_wheel_.status(); }
     const FaultCalibration& fault_calibration() const { return fault_calibration_; }
+    // G3 record-only inputs (read-only views; see G3Motion).
+    const G3Motion& g3_motion() const { return g3_; }
+    bool beta_seeded() const { return beta_enabled_&&beta_core_.configured&&beta_core_.seeded; }
+    const mx5_dr_snapshot& beta_estimate() const { return beta_core_.estimate; }
+    // Honest BETA heading budget: core budget + rotation part (as carried by
+    // the continuous policy, Pipeline::evaluate_beta_tracking).
+    double beta_heading_budget_rad() const {
+        return beta_core_.estimate.heading_budget_rad+beta_.rotation_budget_per_rad*beta_rotation_rad_;
+    }
+    const runtime::BetaProfile& beta_profile_in_use() const { return beta_; }
     GpsAnchorGate anchor_gate() const { return gps_wheel_.gate(); }
     mx5_dr_context context() const { return core_.estimate.context; }
     uint64_t reorder_ns() const { return profile_.reorder_ns; }
@@ -348,6 +383,9 @@ private:
     uint64_t beta_record_seq_;
     YawRecord beta_yaw_[HISTORY_CAPACITY];
     size_t beta_yaw_size_, beta_yaw_next_;
+    G3Motion g3_;
+    void g3_speed(const Event&);
+    void g3_yaw(const Event&,double rate);
     PipelineResult enqueue_raw_event(const RawEvent&);
     void clear_latch();
     void drop_latch(LatchClear);

@@ -266,6 +266,18 @@ qemu-arm -L "$QEMU_SYSROOT" "$build/shadow-log-test"
 MX5DR_SHADOW_FIXTURE="qemu-arm -L $QEMU_SYSROOT $build/shadow-log-test" \
     python3 -m unittest discover -s tests/journal -p test_calibration_logs.py -v
 
+# G3 record-only heading store (validation/G3_RECORD_ONLY_2026-10-11.md).
+# test_g3 includes the dedicated store thread with a 3 s fsync-step hook and
+# wall-clock assertions (post < 50 ms, polling < 5 ms): timing class. The
+# worker_beta G3 scenarios drive the real worker, journal writer and store
+# thread against the wall clock (summary cadence, lag guard): timing class.
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc tests/runtime/test_g3.cpp src/navigation/pipeline.cpp src/navigation/holdout.cpp src/navigation/channel.cpp src/runtime/core_bridge.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp "$build/core.o" -lm -ldl -pthread -lrt -o "$build/g3-test"
+$timing "g3-test" env TMPDIR="$build" qemu-arm -L "$QEMU_SYSROOT" "$build/g3-test"
+"${CROSS_COMPILE}g++" -std=c++11 $warn $arch -Isrc src/runtime/assist_worker.cpp src/runtime/config.cpp src/runtime/sha256.cpp src/runtime/lds_sideband.cpp src/runtime/lds_request_source.cpp src/runtime/lds_association_channel.cpp src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/arm_veneer.S src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp src/adapter/request_hooks.cpp src/adapter/request_veneer.S src/runtime/request_observer.cpp src/runtime/request_trace.cpp src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp src/runtime/core_bridge.cpp "$build/core.o" src/runtime/loader.cpp tests/runtime/test_worker_beta.cpp -ldl -pthread -lrt -lm -o "$build/worker-beta-test"
+for scenario in g3_park g3_cancel g3_move g3_stop; do
+    $timing "worker-beta-test $scenario" qemu-arm -L "$QEMU_SYSROOT" "$build/worker-beta-test" "$scenario"
+done
+
 # The runtime-assist cases drive the real worker thread and poll its output
 # against the wall clock (80 ms per window): timing class.
 $timing "run_unwind_dso runtime-assist" python3 tests/adapter/run_unwind_dso.py --library "$preload" \

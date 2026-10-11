@@ -161,6 +161,12 @@ if [ -e "$BASE/vimchan-off" ] || [ -L "$BASE/vimchan-off" ]; then
     rm -f "$BASE/vimchan-off" || fail 'Cannot clear the vimchan-off marker'
     echo 'Cleared vimchan-off: the VIM side-channel log is on again from the next start.'
 fi
+# Likewise the record-only heading log (G3) marker from menu 8.
+if [ -e "$BASE/g3-off" ] || [ -L "$BASE/g3-off" ]; then
+    if [ -d "$BASE/g3-off" ] && [ ! -L "$BASE/g3-off" ]; then fail 'Cannot clear g3-off: it is a directory'; fi
+    rm -f "$BASE/g3-off" || fail 'Cannot clear the g3-off marker'
+    echo 'Cleared g3-off: the heading log (G3) is on again from the next start.'
+fi
 if [ "$POLICY" = persistent ]; then
     # A failure from here on must not leave an enablement behind.
     PERSIST_PENDING=1

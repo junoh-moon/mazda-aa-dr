@@ -63,7 +63,16 @@ LOWER_BOUNDS = {
                 "like the digests, diagnostic class (droppable); an open standstill is lost on a reset",
     "chan_data": "chan_digest rows are diagnostic class (droppable), the side channel is lossy (tap 'lost' "
                  "counts) and the open period is lost on a reset",
+    "g3": "g3_store/g3_first rows are diagnostic class (droppable under a writer backlog); a reset loses rows "
+          "that were not yet written",
 }
+# G3 record-only heading carry-over (src/runtime/g3_heading.h,
+# validation/G3_RECORD_ONLY_2026-10-11.md). Headings and errors are 0.1 deg.
+G3_STATES = ("OFF", "UNKNOWN", "CARRIED", "CARRIED_UNVERIFIED", "CONFIRMED", "REJECTED")
+G3_STORE_EVENTS = ("off", "missing", "rejected", "loaded", "checked", "written", "failed", "unavailable",
+                   "cancelled")
+G3_SINCE_EVENTS = ("unstored", "left")
+G3_FIRST_EVENTS = ("start", "t30", "course")
 # Adapter PositionClass numbers carried as the send/position "class" field.
 POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
 BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor",
@@ -679,6 +688,8 @@ class Auditor:
         self.chan_speeds = []   # (session index, since_ns, mono_ns, speed_kmh_min, moving yaw sum, count)
         self.chan_side_states = []   # (session index, shadow_boot vim_side_channel value)
         self.chan_digest_spans = {}  # session index -> [first since_ns, last mono_ns, motion events]
+        self.g3_rows = []       # (session index, g3_store/g3_first row)
+        self.g3_events = []     # (session index, mono_ns, beta_journal_lag | GPS_LOST | ENGAGED)
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
@@ -882,6 +893,12 @@ class Auditor:
             return
         kind = row["kind"]
         self.counts[kind] += 1
+        # G3 write overlap check (pre-registered rule): journal lag and GPS
+        # loss events, per session, compared with g3_store write windows.
+        if kind == "beta_journal_lag" and row.get("event") == "lagging" and integer(row.get("mono_ns")):
+            self.g3_events.append((len(self.sessions), row["mono_ns"], "beta_journal_lag"))
+        elif kind == "beta_state" and row.get("to") in ("GPS_LOST", "ENGAGED") and integer(row.get("mono_ns")):
+            self.g3_events.append((len(self.sessions), row["mono_ns"], row["to"]))
         if kind == 'storage_stop':
             # These fixed diagnostics are separate from the failed journal,
             # including the collector's usual envelope. Never infer a complete
@@ -1092,6 +1109,8 @@ class Auditor:
             self.late_motion(row, source)
         elif kind == "chan_digest":
             self.chan_row(row, source)
+        elif kind in ("g3_store", "g3_first", "g3_since"):
+            self.g3_row(row, source)
         elif kind == "log_digest" or kind.endswith("_digest"):
             self.digest(row, source)
         elif kind == "raw_window":
@@ -1340,6 +1359,20 @@ class Auditor:
             self.issue("malformed_chan_row", source, "Invalid chan_digest row")
             return
         self.chan_rows.append((len(self.sessions), row))
+
+    def g3_row(self, row, source):
+        """G3 record-only rows (diagnostic; the heading the product WOULD send)."""
+        if not g3_row_valid(row):
+            self.issue("malformed_g3_row", source, "Invalid %s row" % row["kind"])
+            return
+        self.g3_rows.append((len(self.sessions), row))
+
+    def g3_report(self):
+        boots = {}
+        for index, session in enumerate(self.sessions):
+            boot = session.get("boot") or {}
+            boots[index + 1] = boot.get("boot_id") if isinstance(boot.get("boot_id"), str) else None
+        return g3_report(self.g3_rows, boots, self.g3_events)
 
     def chan_report(self):
         return chan_report(self.chan_rows, self.chan_speeds,
@@ -2946,6 +2979,7 @@ class Auditor:
                     journal_dropped=dict(self.journal_dropped, scope="diagnostic_rows_only"),
                     yaw_data=self.yaw_report(),
                     chan_data=self.chan_report(),
+                    g3=self.g3_report(),
                     journal_lag=dict(self.journal_lag),
                     lower_bounds=dict(LOWER_BOUNDS),
                     motion_rejected=dict(reasons=dict(self.motion_rejected_reasons),
@@ -3299,6 +3333,205 @@ def _accel_list(value):
                              (value[3] is None) == (value[4] == 0))
 
 
+def _deci(value):
+    """A 0.1-unit integer journal value (or None)."""
+    return value / 10.0 if type(value) is int else None
+
+
+def _pair(value):
+    return (isinstance(value, list) and len(value) == 2 and all(type(v) is int for v in value))
+
+
+def g3_row_valid(row):
+    if not bounded_int(row.get("mono_ns"), 0, 2**64 - 1):
+        return False
+    event = row.get("event")
+    if row["kind"] == "g3_store":
+        if event not in G3_STORE_EVENTS:
+            return False
+        if "g3" in row and row["g3"] not in G3_STATES:
+            return False
+        if event in ("written", "failed", "cancelled"):
+            return (bounded_int(row.get("seq"), 0, 2**32 - 1) and row.get("st") in ("S", "M") and
+                    all(type(row.get(k)) is int for k in ("hv", "h", "unc")))
+        return isinstance(row.get("reason"), str)
+    if row["kind"] == "g3_since":
+        return (event in G3_SINCE_EVENTS and isinstance(row.get("reason"), str) and
+                all(type(row.get(k)) is int for k in ("rot", "arot")) and type(row.get("m")) in (int, float))
+    if event not in G3_FIRST_EVENTS or row.get("g3") not in G3_STATES:
+        return False
+    for key in ("carried", "body"):
+        if row.get(key) is not None and not _pair(row[key]):
+            return False
+    rev = row.get("rev")
+    if not (isinstance(rev, list) and len(rev) == 2 and all(type(v) is int and -1 <= v <= 1 for v in rev)):
+        return False
+    if event == "course" and not (isinstance(row.get("course"), list) and len(row["course"]) == 3 and
+                                  all(type(v) is int for v in row["course"])):
+        return False
+    for key in ("err_c", "err_p", "err_s", "d_sp", "travel"):
+        if row.get(key) is not None and type(row[key]) is not int:
+            return False
+    return True
+
+
+def _abs_stats(values):
+    if not values:
+        return dict(count=0, median_abs=None, max_abs=None, mean=None)
+    mags = sorted(abs(v) for v in values)
+    return dict(count=len(values), median_abs=_median(mags), max_abs=mags[-1],
+                mean=round(sum(values) / len(values), 2))
+
+
+G3_OVERLAP_LAT_MS = 500.0
+G3_OVERLAP_TAIL_NS = 2 * 10**9
+
+
+def g3_write_overlap(rows, events):
+    """Pre-registered rule (validation/G3_RECORD_ONLY_2026-10-11.md): after the
+    first drive, any g3_store write with lat_ms > 500 or whose
+    [start_ns, end_ns + 2 s] window contains a beta_journal_lag 'lagging'
+    event or a GPS_LOST/ENGAGED transition makes the next build default the
+    store OFF (menu 8 opt-in)."""
+    writes, max_lat, slow, hits = 0, None, 0, []
+    for session, row in rows:
+        if row["kind"] != "g3_store" or row["event"] not in ("written", "failed", "cancelled"):
+            continue
+        start, end, lat = row.get("start_ns"), row.get("end_ns"), row.get("lat_ms")
+        if not (integer(start) and integer(end)) or start <= 0 or end < start:
+            continue
+        writes += 1
+        if type(lat) in (int, float):
+            max_lat = lat if max_lat is None else max(max_lat, lat)
+            if lat > G3_OVERLAP_LAT_MS:
+                slow += 1
+        for s, mono, label in events:
+            if s == session and start <= mono <= end + G3_OVERLAP_TAIL_NS:
+                hits.append(dict(session=session, seq=row.get("seq"), event=label, mono_ns=mono))
+    return dict(writes=writes, max_lat_ms=max_lat, lat_over_500=slow, overlaps=len(hits),
+                overlap_events=hits[:10], default_off_next_build=bool(slow or hits))
+
+
+def g3_report(rows, boots, events=()):
+    """Per boot: the restore decision, continuity checks, store writes and the
+    first-session rows; overall: the first-course error distribution (the
+    validation metric of the record-only build) and reverse starts."""
+    per = {}
+    order = []
+    for session, row in rows:
+        b = per.get(session)
+        if b is None:
+            boot_id = boots.get(session)
+            b = dict(session=session, boot_id=boot_id[:8] if boot_id else None, restore=None, checks=[],
+                     writes=0, failures=0, cancelled={}, unstored={}, since=[], unavailable=None, last_write=None,
+                     first={}, final_state=None,
+                     reverse_start=False)
+            per[session] = b
+            order.append(session)
+        event = row["event"]
+        if isinstance(row.get("g3"), str):
+            b["final_state"] = row["g3"]
+        if row["kind"] == "g3_since":
+            b["since"].append(dict(event=event, reason=row["reason"], m=row["m"], rot_deg=_deci(row["rot"]),
+                                   arot_deg=_deci(row["arot"]), age_s=row.get("age_s")))
+            if event == "unstored":
+                b["unstored"][row["reason"]] = b["unstored"].get(row["reason"], 0) + 1
+        elif row["kind"] == "g3_store":
+            if event in ("off", "missing", "rejected", "loaded") and b["restore"] is None:
+                b["restore"] = dict(event=event, reason=row.get("reason"), state=row.get("g3"),
+                                    heading_deg=_deci(row.get("h")), unc_deg=_deci(row.get("unc")),
+                                    age_s=row.get("age_s"), age_src=row.get("age_src"),
+                                    chain=row.get("chain"), stored_boot=row.get("boot"), seq=row.get("seq"))
+            elif event == "checked":
+                b["checks"].append(dict(reason=row.get("reason"), state=row.get("g3"), pos=row.get("pos"),
+                                        d_m=row.get("d_m"), limit_m=row.get("limit_m"), age_s=row.get("age_s"),
+                                        age_src=row.get("age_src")))
+            elif event == "written":
+                b["writes"] += 1
+                b["last_write"] = dict(seq=row["seq"], st=row["st"], hv=row["hv"], heading_deg=_deci(row["h"]),
+                                       unc_deg=_deci(row["unc"]), m_b=row.get("m_b"))
+            elif event == "failed":
+                b["failures"] += 1
+            elif event == "unavailable":
+                b["unavailable"] = row.get("reason")
+            elif event == "cancelled":
+                key = "%s@%s" % (row.get("reason"), row.get("at"))
+                b["cancelled"][key] = b["cancelled"].get(key, 0) + 1
+        else:
+            if row["rev"][0] == 1:
+                b["reverse_start"] = True
+            if event not in b["first"]:
+                entry = dict(state=row["g3"], t_s=row.get("t_s"), m_s=row.get("m_s"), m_b=row.get("m_b"),
+                             rev=row["rev"], carried=row.get("carried"), body=row.get("body"),
+                             travel_deg=_deci(row.get("travel")), stock=row.get("stock"),
+                             stock_n=row.get("stock_n"), stock_zero=row.get("stock_zero"))
+                if event == "course":
+                    entry.update(course_deg=_deci(row["course"][0]), course_kmh=_deci(row["course"][1]),
+                                 err_carried_deg=_deci(row.get("err_c")), err_prop_deg=_deci(row.get("err_p")),
+                                 err_stock_deg=_deci(row.get("err_s")))
+                else:
+                    entry.update(stock_minus_travel_deg=_deci(row.get("d_sp")))
+                b["first"][event] = entry
+    boots_out = [per[s] for s in order]
+    prop = [b["first"]["course"]["err_prop_deg"] for b in boots_out
+            if "course" in b["first"] and b["first"]["course"]["err_prop_deg"] is not None]
+    carried = [b["first"]["course"]["err_carried_deg"] for b in boots_out
+               if "course" in b["first"] and b["first"]["course"]["err_carried_deg"] is not None]
+    stock = [b["first"]["course"]["err_stock_deg"] for b in boots_out
+             if "course" in b["first"] and b["first"]["course"]["err_stock_deg"] is not None]
+    return dict(boots=boots_out,
+                restore_events=dict(Counter(b["restore"]["event"] for b in boots_out if b["restore"])),
+                restore_reasons=dict(Counter(b["restore"]["reason"] for b in boots_out if b["restore"])),
+                final_states=dict(Counter(b["final_state"] for b in boots_out if b["final_state"])),
+                first_course_error_deg=_abs_stats(prop),
+                carried_unpropagated_error_deg=_abs_stats(carried),
+                stock_bearing_error_deg=_abs_stats(stock),
+                reverse_starts=sum(1 for b in boots_out if b["reverse_start"]),
+                writes=sum(b["writes"] for b in boots_out), write_failures=sum(b["failures"] for b in boots_out),
+                parked_stops_unstored=sum(sum(b["unstored"].values()) for b in boots_out),
+                writes_cancelled=sum(sum(b["cancelled"].values()) for b in boots_out),
+                write_overlap=g3_write_overlap(rows, events),
+                scope="record_only_would_be_heading_not_sent; GPS course is a reference, not ground truth")
+
+
+def print_g3_data(g3):
+    """Text section: G3 record-only heading carry-over."""
+    if not g3["boots"]:
+        return
+    def f(value, fmt="%.1f"):
+        return "-" if value is None else fmt % value
+    e = g3["first_course_error_deg"]
+    print("G3 heading carry-over (record-only; nothing sent): %d boots, restore %s, final %s, writes %d "
+          "(failures %d, cancelled %d, parked stops not stored %d), reverse starts %d; first M course error |carried+yaw - course| n %d median %s max %s "
+          "deg; unpropagated carried n %d median %s; stock bearing n %d median %s" %
+          (len(g3["boots"]), g3["restore_events"], g3["final_states"], g3["writes"], g3["write_failures"],
+           g3["writes_cancelled"], g3["parked_stops_unstored"],
+           g3["reverse_starts"], e["count"], f(e["median_abs"]), f(e["max_abs"]),
+           g3["carried_unpropagated_error_deg"]["count"], f(g3["carried_unpropagated_error_deg"]["median_abs"]),
+           g3["stock_bearing_error_deg"]["count"], f(g3["stock_bearing_error_deg"]["median_abs"])))
+    o = g3["write_overlap"]
+    print("G3 write overlap check: %d writes, max lat_ms %s, overlaps with beta_journal_lag/GPS_LOST: %d%s" %
+          (o["writes"], f(o["max_lat_ms"]), o["overlaps"],
+           " -> pre-registered rule: next build defaults the store OFF (menu 8 opt-in)"
+           if o["default_off_next_build"] else ""))
+    for b in g3["boots"]:
+        r = b["restore"] or {}
+        lw = b["last_write"]
+        c = b["first"].get("course")
+        st = b["first"].get("start")
+        print("  boot %s: store %s/%s carried %s+-%s age %s s (%s) chain %s; checks %s; writes %d fails %d last %s; "
+              "start d(stock-travel) %s; course %s err carried %s prop %s stock %s at %s s %s m rev %s -> %s" %
+              (b["boot_id"] or "?", r.get("event", "-"), r.get("reason", "-"), f(r.get("heading_deg")),
+               f(r.get("unc_deg")), r.get("age_s", "-"), r.get("age_src", "-"), r.get("chain", "-"),
+               [x["reason"] for x in b["checks"]] or "-", b["writes"], b["failures"],
+               "%s %s" % (lw["st"], f(lw["heading_deg"])) if lw else "-",
+               f(st["stock_minus_travel_deg"]) if st else "-",
+               f(c["course_deg"]) if c else "-", f(c["err_carried_deg"]) if c else "-",
+               f(c["err_prop_deg"]) if c else "-", f(c["err_stock_deg"]) if c else "-",
+               f(c["t_s"]) if c else "-", f(c["m_s"]) if c else "-", c["rev"] if c else "-",
+               b["final_state"] or "-"))
+
+
 def chan_row_valid(row):
     if not bounded_int(row.get("schema"), 1, 1) or not bounded_int(row.get("mono_ns"), 0, 2**64-1):
         return False
@@ -3591,6 +3824,7 @@ def main(argv=None):
             print("Persistent-profile suppressed rows (lower bound): %s" % report["persistent_profile"]["suppressed"])
         print_yaw_data(report["yaw_data"])
         print_chan_data(report["chan_data"])
+        print_g3_data(report["g3"])
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")
