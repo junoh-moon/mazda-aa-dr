@@ -1,0 +1,898 @@
+gps_satellite 5
+location 35.1697679 129.0267566 1.000 NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-000.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-005.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-010.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-015.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-020.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-025.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-030.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-035.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-040.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-045.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-050.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-055.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-060.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-061.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-063.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-065.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-067.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-070.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-075.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-080.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-085.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-090.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-095.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-100.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-101.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-103.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-105.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-107.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-110.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-115.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-120.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-125.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-130.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-135.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-140.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-145.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-150.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-155.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-160.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-165.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-170.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-175.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-180.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-185.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-190.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-195.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-200.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-205.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-210.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-215.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-220.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-225.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-230.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-235.png
+sleep 0.8
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 0
+location 35.1697679 129.0267566 NAN NAN 0.000 328.9
+sleep 1
+gps_satellite 5
+location 35.1729275 129.0252720 1.000 NAN 2.222 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-240.png
+sleep 0.8
+gps_satellite 5
+location 35.1729446 129.0252593 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1729617 129.0252467 1.000 NAN 2.222 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-242.png
+sleep 0.8
+gps_satellite 5
+location 35.1729788 129.0252340 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1729959 129.0252214 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1730130 129.0252087 1.000 NAN 2.222 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-245.png
+sleep 0.8
+gps_satellite 5
+location 35.1730301 129.0251961 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1730472 129.0251835 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1730643 129.0251708 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1730814 129.0251582 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1730985 129.0251455 1.000 NAN 2.222 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-250.png
+sleep 0.8
+gps_satellite 5
+location 35.1731156 129.0251329 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1731327 129.0251202 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1731498 129.0251076 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1731670 129.0250949 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1731841 129.0250823 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1732012 129.0250697 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1732183 129.0250570 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1732354 129.0250444 1.000 NAN 2.222 328.9
+sleep 1
+gps_satellite 5
+location 35.1732525 129.0250317 1.000 NAN 2.222 328.9
+sleep 0.2
+screenshot ../../../../experiment11/V6SR-r1-259.png
+sleep 0.8

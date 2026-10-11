@@ -8,52 +8,150 @@
 바꿔 25분 규칙에 잘리는 회차가 V2가 아니라 V3가 되게 했고, V2에서 **처음 따라가지 않는 시점 `t_stop`**을 기록하며, Tier 2에 V2C30(40 m 30초 →
 20 m)을 더했습니다. v1의 명령 파일 17개는 바이트 그대로이고(재생성 diff로 확인) `V2C30-r1.txt` 하나만 새로 생겼습니다.
 
+**v4(2026-10-11): 위치 특성(M6) 시험으로 바꿈.** 시험 11 결과([결과](../DHU_NAVER_EXP11_RESULT_2026-10-11.md)): 이 DHU(2.0)는 `gps_satellite`를
+지원하지 않아 V1을 시험할 수 없었고, V4(위성 제외)는 85초 뒤 회색이 나왔지만 속도는 12/12 따라가 실차의 '속도 고정'을 재현하지 못했으며
+V2·V3는 정상이었습니다(D-2, 결론 불가). v4는 새 가설 M6을 봅니다: Mazda 헤드유닛은 위치 특성(location characterization)으로 RAW_GPS_ONLY(0x100)를
+알리고, DHU는 기본값이 다를 수 있어 시험 3~11 전체가 차와 다른 조건이었을 수 있습니다. DHU 설정 키 `locationcharacterization = rawgps` 한 줄을
+더한 `dhu-rawgps.ini`에서 V4·V2·V3의 **같은 명령 파일**(사진 태그만 다름)을 다시 돌립니다. 아래 "v4" 절이 이번 회기의 절차이고, 그 아래의 v1~v3
+절은 역사 기록입니다(준비·관문·라벨·업로드 규칙은 그대로 씀). 이전 명령 파일 21개는 바이트 그대로이고(재생성 diff로 확인) 새 파일은
+`T0-RAW.txt`와 R 회차 10개뿐입니다.
+
 **v3(2026-10-11): Tier 2에 지하 주차장(G2) 회차 3개만 더함.** V6S(순정 형태 대조), V6G0(BETA 같은 메시지: 정확도 램프 30 → 40 m, 위성 0),
 V6G5(같은 경로, 20 m, 위성 5)입니다. 동기는 아래 "주차장 관찰"입니다. 그 주행은 내보내기(메뉴 3, menu 3) **뒤**였고 내보내기는 그 부팅의
 나머지 동안 제품을 DISABLED(capture_stop)로 둡니다. 그러므로 소유자가 본 화면은 **순정 동작**이며 BETA의 실패가 아닙니다. Tier 1은 바뀌지
 않았습니다(V6S는 260초 본문이라 25분 안에 V4·V1S0·V2와 함께 들어가지 않아 Tier 2의 첫 회차로 둠). v1·v2의 명령 파일 18개는 바이트
 그대로이고(재생성 diff로 확인) `V6S-r1.txt`, `V6G0-r1.txt`, `V6G5-r1.txt`만 새로 생겼습니다.
 
-## 노트북 에이전트에게 붙여 넣을 지시문
+## 노트북 에이전트에게 붙여 넣을 지시문(v4)
 
 ```text
-DHU 시험 11(G1: 실제 터널에서 네이버가 회색 표시와 고정된 속도를 보인 원인)을 수행하십시오. 계획은 GitHub 레포 junoh-moon/mazda-aa-dr의
-커밋 COMMIT_TO_PIN에 있는 validation/DHU_NAVER_EXP11_PLAN_2026-10-11/README.md입니다. gh로 받아(git clone 후 git checkout COMMIT_TO_PIN)
-README를 끝까지 읽고 그대로 따르십시오. README가 이 지시문보다 자세하며, 둘이 다르면 README를 따르고 차이를 보고하십시오. 다른 DHU 시험이
-실행 중이면 시작하지 마십시오. 이전 결과(experiment10/ 포함)는 지우지 말고 새 폴더 results/exp11/과 사진 폴더 experiment11/을 쓰십시오.
+DHU 시험 11 v4(M6: 위치 특성 RAW_GPS_ONLY에서 네이버가 실차처럼 회색 + 속도 고정을 보이는지)를 수행하십시오. 계획은 GitHub 레포
+junoh-moon/mazda-aa-dr의 커밋 COMMIT_TO_PIN에 있는 validation/DHU_NAVER_EXP11_PLAN_2026-10-11/README.md입니다. gh로 받아(git clone 후
+git checkout COMMIT_TO_PIN) README의 "v4" 절과 validation/DHU_NAVER_EXP11_RESULT_2026-10-11.md를 끝까지 읽고 README를 그대로 따르십시오.
+README가 이 지시문보다 자세하며, 둘이 다르면 README를 따르고 차이를 보고하십시오. 다른 DHU 시험이 실행 중이면 시작하지 마십시오. 이전 결과
+(experiment10/, experiment11/, results/exp11/ 포함)는 지우지 말고 새 폴더 results/exp11v4/를 쓰십시오(사진 이름은 V4R-r1 같은 새 태그라
+덮어쓰지 않음).
 
-명령 파일의 글자는 하나도 바꾸지 마십시오. 준비는 시험 10 v5와 같이 commands/prep/ 단계 파일(B2, 정확도 1 m, @TAG@만 회차 이름으로)을
-사진으로 확인하며 보내고, 관문 G를 통과하면 회차 파일을 첫 줄부터 끝까지 그대로 보냅니다(시험 11 회차 파일에는 건너뛸 머리말이 없음).
+명령 파일의 글자는 하나도 바꾸지 마십시오. 준비는 시험 11과 같이 commands/prep/ 단계 파일(B2, 정확도 1 m, @TAG@만 회차 이름으로)을 사진으로
+확인하며 보내고, 관문 G를 통과하면 회차 파일을 첫 줄부터 끝까지 그대로 보냅니다. 회차 파일의 gps_satellite 줄에 DHU가 "not a known command"를
+내는 것은 시험 11 V4-r1과 같은 조건이므로 그대로 두십시오. SAT5와 dhu-sat.ini는 쓰지 않습니다(이 DHU 빌드에서 시험 불가).
 
-바뀐 절차는 하나입니다: DHU 설정 파일. 시험 11의 기본 설정은 validation/DHU_NAVER_EXP11_PLAN_2026-10-11/dhu-sat.ini(시험 4 dhu.ini에
-gps_satellite = true 한 줄 추가)이며, 회차마다 run-plan.json의 ini 값(sat 또는 exp4)대로 제어기가 -c로 읽는 파일을 DHU 시작 전에 바꿔
-놓습니다(시험 9 제어기 driver.py는 코드 수정 없이 그 경로의 파일만 교체). 관문 A 뒤 10초 안에 commands/SAT5.txt(gps_satellite 5 한 줄)를
-보내고 DHU 콘솔 로그에 오류가 있는지 적으십시오.
+바뀐 것은 DHU 설정 파일 하나입니다: 모든 v4 회차와 Tier 0은 validation/DHU_NAVER_EXP11_PLAN_2026-10-11/dhu-rawgps.ini(시험 4 dhu.ini에
+locationcharacterization = rawgps 한 줄 추가)를 씁니다. DHU 시작 전에 제어기가 -c로 읽는 파일(시험 9 제어기: ../../../../experiment9/dhu.ini)을
+이 파일로 바꾸고 시작마다 sha256을 run-log.csv에 적으십시오. 회기가 끝나면 그 경로를 시험 4 dhu.ini로 되돌리고 sha256을 적으십시오.
 
-소유자는 폰을 만지지 않습니다. 폰은 잠금이 풀린 채 USB로 연결되어 있고 헤드유닛 서버가 켜져 있습니다. 폰 설정(위치, GPS, USB 디버깅,
-헤드유닛 서버 포함)을 바꾸지 말고 소유자에게 손을 요청하지 마십시오(ADB 허용 창이 뜨면 그것만 알리십시오). 환경은 시험 10 v4/v5와 같습니다:
-이 노트북, Galaxy S25, adb forward tcp:5277 tcp:5277, DHU 2.0, 시험 9 제어기(driver.py), DHU는 TTY/PTY 아래.
+소유자는 폰을 만지지 않습니다. 폰은 잠금이 풀린 채 USB로 연결되어 있고 헤드유닛 서버가 켜져 있습니다. 폰 설정을 바꾸지 말고 소유자에게
+손을 요청하지 마십시오(ADB 허용 창이 뜨면 그것만 알리십시오). 폰에서는 읽기 전용 명령(adb logcat -d, dumpsys)만 쓰십시오. 환경은 시험 11과
+같습니다: 이 노트북, Galaxy S25, adb forward tcp:5277 tcp:5277, DHU 2.0, 시험 9 제어기(driver.py), DHU는 TTY/PTY 아래.
 
 실행: (1) python3 validation/DHU_NAVER_EXP11_PLAN_2026-10-11/gen_commands.py /tmp/exp11-check /tmp/exp11-check.json의 결과가 commands/
-(21개 + prep/ 9개)와 같은지 diff -r로 확인하고 python3 tests/tools/test_dhu_exp11_commands.py를 돌리십시오(다르거나 실패하면 멈추고 보고).
-(2) README "Tier 0"을 하십시오(약 4~6분). 끝나면 곧바로 Tier 0 결과와 그 사진을 따로 올리십시오. ABORT이면 진단 묶음을 올리고 멈추십시오.
-(3) PASS-SAT이면 Tier 1: V4-r1 → V1S0-r1 → V2-r1 → V3-r1. PASS-NOSAT이면 V4-r1 → V2-r1 → V3-r1을 exp4 설정으로(판정 표 P-0).
-V2에서는 README "t_stop"(처음 따라가지 않는 시점)을 5초 사진으로 꼭 적으십시오.
-시간 제한은 Tier 0 시작부터 25분이며, 남은 시간이 5분보다 적으면 새 회차를 시작하지 마십시오. 같은 원인으로 연속 2회차가 FAILED이면
-멈추십시오. Tier 2(V6S 주차장 대조부터)는 이번 회기에서 하지 않습니다. 진행은 progress.json에 시도마다 적으십시오.
+(32개 + prep/ 9개)와 같은지 diff -r로 확인하고 python3 tests/tools/test_dhu_exp11_commands.py를 돌리십시오(다르거나 실패하면 멈추고 보고).
+(2) README "Tier 0(v4)"를 하십시오(약 5~7분: 설정 적용 확인 + 준비 + 20초). 끝나면 곧바로 Tier 0 결과와 사진을 따로 올리십시오. ABORT이면
+진단 묶음을 올리고 멈추십시오. (3) PASS이면 Tier 1: V4R-r1 → V4R-r2 → V2R-r1 → V3R-r1(시간이 남을 때만). V2R에서는 t_stop을 5초 사진으로
+꼭 적으십시오. 시간 제한은 Tier 0 시작부터 25분이며, 남은 시간이 5분보다 적으면 새 회차를 시작하지 마십시오. 같은 원인으로 연속 2회차가
+FAILED이면 멈추십시오. Tier 2는 이번 회기에서 하지 않습니다. 진행은 progress.json에 시도마다 적으십시오.
 
-판독: 사진을 직접 보고 README "화면마다 기록할 것"을 frames.csv에, 미리 정한 라벨 이름만 evidence.json에 적고 판정 표를 README대로
-적용하십시오. 관찰과 해석을 구분하십시오.
+판독: 사진을 직접 보고 README "화면마다 기록할 것"을 frames.csv에, 미리 정한 라벨 이름만 evidence.json에 적고 README "판정 표(v4)"를
+적용하십시오. 비교 대상은 시험 11 V4-r1·V2-r1·V3-r1(기본 설정, exp4 ini)입니다. 관찰과 해석을 구분하십시오.
 
 결과물과 업로드: 결과가 준비되면 바로 올리십시오(Tier 0 직후, 그리고 실행이 끝나거나 멈춘 직후). 유일한 시간 제약은 전송 서버의 매일 약
 06:00 KST 삭제입니다. 05:55~06:10 KST 사이에는 업로드를 시작하거나 진행 중이게 하지 말고, 그 구간에 결과가 준비되면 06:10 KST에
-올리십시오. 텍스트 결과 ZIP(작게)과 모든 시도의 모든 screenshot을 담은 사진 ZIP(원본, frames.csv로 연결)을 따로 만들어 curl
---upload-file로 https://transfer.sixtyfive.me/에 올리십시오. 링크·sha256·로컬 경로를 마지막 답에 적고 로컬 사본은 지우지 마십시오.
-텍스트 결과물에 계정, ADB 키, 인증 토큰, 폰 일련번호를 넣지 마십시오. 레포에 커밋·푸시하지 마십시오. 차량이나 다른 기기는 건드리지
-마십시오.
+올리십시오. 텍스트 결과 ZIP(작게, dhu-exp11v4-results-<날짜>.zip)과 모든 시도의 모든 screenshot을 담은 사진 ZIP(원본, frames.csv로 연결,
+dhu-exp11v4-photos-<날짜>.zip)을 따로 만들어 curl --upload-file로 https://transfer.sixtyfive.me/에 올리십시오. 링크·sha256·로컬 경로를
+마지막 답에 적고 로컬 사본은 지우지 마십시오. 텍스트 결과물에 계정, ADB 키, 인증 토큰, 폰 일련번호를 넣지 마십시오. 레포에 커밋·푸시하지
+마십시오. 차량이나 다른 기기는 건드리지 마십시오.
 ```
 
-## 질문
+## v4: 위치 특성 RAW_GPS_ONLY(M6)
+
+**v1~v3 절(아래)과의 관계.** 아래의 준비 절차, 관문 A·S·L·G, "화면마다 기록할 것", 판정 이름(`IND-*`, `SPEED-*`, `NAV-*`, `t_stop`, 회차 분류
+REPRO/GREY-ONLY/FROZEN-ONLY/NORMAL), 결과물·업로드 규칙은 v4에도 그대로 적용합니다. 이번 회기에 적용하지 **않는** 것: v1~v3의 Tier 표,
+Tier 0(SAT/NOSAT), 위성 회차(V1S0·V1S5·V1SN, `SAT5`, `dhu-sat.ini`: **이 DHU 빌드에서 시험 불가**로 표시만 남김)와 판정 표 A 행.
+
+### 동기
+시험 11은 실차의 '속도 고정'을 재현하지 못했습니다(V4: 85초부터 회색·위성-X지만 속도 12/12 따라감, V2·V3 정상; D-2). 실차와 DHU 사이에 남은
+차이 중 하나가 헤드유닛이 세션 시작 때 알리는 **위치 특성**입니다. Mazda는 RAW_GPS_ONLY(0x100)를 알립니다. 위치가 날 GPS뿐이라고 알려진
+폰은 GPS가 끊기거나 부실해질 때 스스로 외삽(마지막 속도 고정)할 수 있다는 것이 가설 M6입니다. DHU가 기본으로 다른 값을 알리거나 아무것도
+알리지 않는다면 시험 3~11 전체가 차와 다른 조건에서 돌았을 수 있습니다.
+
+### 사실과 출처
+| 내용 | 분류 | 출처 |
+| --- | --- | --- |
+| Mazda 헤드유닛(74.00.324A)이 위치 특성 0x100 = RAW_GPS_ONLY를 알림. 광고는 세션 시작 때 aap_service의 서비스 발견 응답에서 만들어짐 | FIRMWARE FACT(조정자 전달) | 조정자·연구 메모. 이 레포 문서([TUNNEL_WIRE_FIELDS](../TUNNEL_WIRE_FIELDS_2026-10-11.md) 포함)에서 그 문장을 다시 찾지는 못했습니다 |
+| 열거형 값: PRIOR_LOCATIONS 1, GYROSCOPE_FUSION 2, ACCELEROMETER_FUSION 4, COMPASS_FUSION 8, WHEEL_SPEED_FUSION 16, STEERING_ANGLE_FUSION 32, CAR_SPEED_FUSION 64, DEAD_RECKONED 128, **RAW_GPS_ONLY 256** | 공개 배포 DHU 바이너리에서 읽은 사실 | DHU r2.0 macOS 바이너리의 `gal::LocationCharacterization_entries` 표(이름 길이와 값 9개). 실행하지 않고 파일만 읽음 |
+| 설정 키 `locationcharacterization`, 값 문자열 `rawgps`, `priorlocation`, `gyroscope`, `accelerometer`, `wheelspeed`, `steeringangle`, `deadreckoned` | 바이너리 문자열 | r2.0·r2.1(Linux·macOS) 네 빌드 모두 같은 키 문자열 1개. compass·carspeed에 해당하는 값 문자열은 없음 |
+| `rawgps` → RAW_GPS_ONLY(0x100) | INFERENCE | 이름의 대응(문자열 → 열거형 표 자체는 역어셈블하지 않음) |
+| 키는 `[general]` 절 | INFERENCE | 문자열 순서(`driverposition` 다음, `audiocodec` 앞, `sensors` 절 키보다 앞) |
+| 값은 목록으로 읽힘(`util::parseList<LocationCharacterization>(…, char)`) | 바이너리 기호 | 구분 문자는 모름. v4는 값 하나만 씀 |
+| 키가 없을 때 DHU의 기본값(필드를 안 보내는지, 어떤 값을 보내는지) | **모름** | 문자열만으로는 정할 수 없음. 시험 11의 DHU 시작 로그는 설정을 출력하지 않음(`Loaded configuration from …`만) |
+| 공식 DHU 문서에는 이 키가 없음, `gps_satellite`는 문서에 있지만 r2.0이 "not a known command"로 거부 | PUBLIC DOC + 시험 11 관찰 | developer.android.com DHU 페이지(2026-10-11), 시험 11 결과 |
+| `[sensors]`의 `sensorlogpath` 키 | 바이너리 문자열 | 형식을 모르고 두 번째 설정 변경이 되므로 v4에서 쓰지 않음 |
+
+**DHU 한계.** 이 DHU 빌드는 위성 센서(type 21)를 보낼 수 없어 실차의 '위성 0'을 재현하지 못합니다(r2.1도 도움말 문자열이 같음). 위치 특성은
+세션 시작 때 한 번 알려지므로 회차마다 DHU를 다시 시작하는 기존 절차에서 매번 적용됩니다. 위치 특성이 폰에 실제로 전달되었는지는 DHU 로그로
+확인할 수 없어 Tier 0이 폰의 읽기 전용 로그로 찾아봅니다.
+
+### 설정과 회차
+- `dhu-rawgps.ini` = 시험 4 `dhu.ini` + `[general]`의 `dpi` 줄 다음에 `locationcharacterization = rawgps` 한 줄(시험이 확인: 그 줄을 빼면 시험 4 파일과 같음).
+- R 회차는 기존 명령 파일과 **fix·대기 줄이 바이트 단위로 같고** 사진 이름의 태그만 다릅니다(시험이 확인, 사진 덮어쓰기 방지):
+  V4R-r1·V4R-r2 = `V4-r1.txt`, V2R-r1 = `V2-r1.txt`, V3R-r1 = `V3-r1.txt`. `T0-RAW.txt` = `T0-NOSAT.txt`(사진 태그만 다름). 비교 대상은 시험 11의
+  V4-r1·V2-r1·V3-r1(같은 파일, 시험 4 설정 sha256 5e57e7a2…).
+- 회차 파일의 `gps_satellite` 줄은 시험 11과 같이 DHU가 거부합니다(같은 조건 유지를 위해 남김).
+- 각 시도가 끝나면 그 시도의 사진을 `results/exp11v4/photos/<태그>-a<시도>/`로 **복사**합니다(재시도가 같은 이름을 덮어써도 원본이 남음).
+
+### Tier 0(v4, 약 5~7분)
+0. 환경(한 번): 시험 11과 같음(`env.txt`, `versions.csv`, 생성기 diff와 시험, `tier0/location-before.txt`: 정확도와 나이만).
+1. 제어기 설정 경로에 `dhu-rawgps.ini`를 복사(sha256) → DHU 시작 시각 기록 → DHU 로그에서 `connected` 전까지의 줄과 `[E]`/`[W]` 줄을
+   `tier0/dhu-start.txt`에. 설정 오류(키·값 거부) 줄이 있으면 `CHAR-REJECTED`.
+2. 연결 20초 뒤 폰에서 읽기 전용으로: `adb logcat -d`에서 DHU 시작 시각 이후 줄 중 `characteriz|RAW_GPS|LocationCharacter`(대소문자 무시)에
+   맞는 줄 → `tier0/logcat-characterization.txt`; `adb shell dumpsys activity service com.google.android.projection.gearhead`에서 같은 패턴 →
+   `tier0/dumpsys-characterization.txt`. `logcat -c` 등 지우는 명령은 쓰지 않습니다. 라벨: `CHAR-SEEN`(RAW_GPS_ONLY 또는 256이 보임),
+   `CHAR-OTHER`(다른 값이 보임), `CHAR-UNSEEN`(아무것도 안 보임: 적용 미확인).
+3. 관문 A → 준비 절차(B2, `@TAG@` = `T0-RAW`) → 관문 S·L·G → `T0-RAW.txt` 전체(20초, 사진 10·20초): 두 사진 모두 D0 ±0.1 km, ETA, 파란
+   화살표, 회색·위성-X 없음 → **PASS-RAW**.
+4. 3이 실패하면 `end-guidance` → DHU 재시작(rawgps) → 한 번 더. 다시 실패하면 제어기 설정을 시험 4 `dhu.ini`로 바꿔 같은 Tier 0을 한 번
+   (진단, 사진은 시도 폴더로 복사). 시험 4 설정이 통과하면 **RAW-BREAKS-PREP**(판정 표 P-1v4), 그것도 실패하면 **ABORT**(환경). 어느 쪽이든
+   실험 회차 없이 진단 묶음을 바로 올리고 멈춥니다.
+5. PASS-RAW이면 바로 Tier 0 업로드(`dhu-exp11v4-tier0-<날짜>.zip`: Tier 0 사진 전부, `tier0/`, `env.txt`, `versions.csv`).
+
+### 단계(v4)
+```text
+Tier 0 (약 5~7분): dhu-rawgps.ini → 적용 확인(CHAR-*) → 준비(B2, 1 m) → 관문 S·L·G → T0-RAW (20초)
+Tier 1 (약 18분, 4회 × 약 4.5분): V4R-r1 → V4R-r2 → V2R-r1 → V3R-r1(시간이 남을 때만)
+Tier 2 (다음 회기, 약 30분, 6회): V5R-r1 → V4T60R-r1 → V6SR-r1 → V6G0R-r1 → V2R-r2 → V3R-r2
+```
+순서의 근거: V4R-r1이 시험 11 V4-r1과 정확히 같은 파일의 직접 대조이고, 결론에 반복이 필요하므로 V4R-r2를 바로 잇습니다. V2R은 53초 실차
+터널(4초 안에 40 m, '조금 되다가 멈춤')과 `t_stop`을 비교합니다. V3R은 가장 약한 후보라 마지막이며 25분 규칙에 잘려도 됩니다. 환경 2분 +
+Tier 0 5~7분 + 18분 = 25~27분이므로 V3R은 대부분 잘릴 것으로 봅니다. V6SR(순정 주차장 형태 + RAW_GPS_ONLY)은 차의 순정 조건에 가장 가까운
+타당성 대조라 Tier 2에 둡니다.
+
+### 판정 표(v4, 데이터 전에 고정)
+위에서 처음 맞는 행을 씁니다. 기준 회차는 시험 11 V4-r1(OTHER: I-MIXED, 85초 회색, SPEED-FOLLOWS 12/12), V2-r1·V3-r1(NORMAL)입니다.
+
+| # | 패턴 | 결론 |
+| --- | --- | --- |
+| P-0v4 | Tier 0 `CHAR-OTHER` 또는 `CHAR-REJECTED` | 설정 값이 RAW_GPS_ONLY로 적용되지 않음: 회차는 돌리되 M6 결론 없음, 보이는 값과 오류를 보고 |
+| P-1v4 | RAW-BREAKS-PREP | RAW_GPS_ONLY만으로 세션 시작·준비가 달라짐: 그 자체가 M6의 강한 단서(어느 관문에서 무엇이 달랐는지 적음), 실험 회차 없음 |
+| P-2v4 | ABORT | 환경 문제, 결론 없음 |
+| M6-1 | V4R-r1과 V4R-r2가 모두 `SPEED-FROZEN`을 포함한 비정상(REPRO 또는 FROZEN-ONLY) | **위치 특성이 원인**(`CONFIRMED`): 같은 파일에서 기본 설정은 속도를 따라갔고 RAW_GPS_ONLY에서는 고정됨. `CHAR-UNSEEN`이어도 화면 변화가 적용의 증거로 적힘 |
+| M6-2 | V4R 두 회차 중 하나만 `SPEED-FROZEN` | `INCONCLUSIVE`: 다음 회기 첫 회차로 V4R 반복 |
+| M6-3 | V4R 두 회차 모두 속도를 따라감(`SPEED-FOLLOWS`) | `CHAR-SEEN`이면 **M6 기각**(DHU에서 RAW_GPS_ONLY만으로는 속도 고정이 생기지 않음), `CHAR-UNSEEN`이면 적용 미확인이라 기각하지 못함. 어느 쪽이든 시험 11의 D 행 결론(차량 기록 빌드)이 남음 |
+| M6-4 | V2R 또는 V3R이 비정상이고 시험 11의 같은 파일(V2-r1·V3-r1)은 NORMAL | 위치 특성 × 정확도(V2R) 또는 × 옆 오차(V3R)의 상호작용: 차는 늘 RAW_GPS_ONLY이므로 해당 제품 후보((b) 보고 정확도 낮추기, (c) 요 영점·시드)의 우선순위를 올림. V2R의 `t_stop`을 53초 터널과 비교 |
+
+`SINGLE` 회차 하나로는 제품 결론을 채택하지 않습니다(M6-1은 두 회차가 필요한 이유). 이 판정은 차량 방문·주행·ASSIST 활성화·배포를 승인하지 않습니다.
+
+### M6-1일 때 제품에서 할 수 있는 것(INFERENCE, 실행 전 별도 설계 기록 필요)
+- 위치 특성은 OEM 스택(aap_service)이 세션 시작 때 서비스 발견 응답에 넣는 값이며, 우리가 매초 보내는 LOCATION으로는 바꿀 수 없습니다.
+- 바꾸려면 aap_service의 서비스 발견(센서 소스 광고) 단계에 새 개입이 필요합니다. 예: BETA가 무장된 부팅에서만 DEAD_RECKONED |
+  WHEEL_SPEED_FUSION | GYROSCOPE_FUSION을 알리는 것. 우리 대체 송신이 실제로 바퀴·자이로 추측항법이므로 그 부분에는 사실에 맞습니다. 그러나
+  순정 대체(mode-0 재송신)나 시드 전 GPS-only fix에도 같은 표시가 붙습니다.
+- 위험: 광고는 세션 성립의 일부라 잘못 만들면 Android Auto 연결 자체가 실패할 수 있습니다(지금의 LOCATION 개입보다 실패 영향이 큼). 오프셋·구조는
+  이 레포에 기록되어 있지 않아 74.00.324A 전용 펌웨어 분석이 먼저 필요합니다. 정상 GPS 때 폰의 융합 방식도 바뀔 수 있습니다.
+- 그래서 순서는 (1) DHU에서 `deadreckoned`(또는 `deadreckoned,wheelspeed,gyroscope`) 설정으로 같은 V4 파일을 돌려 개선되는지 먼저 보고(새 계획
+  필요, 이 diff에 없음), (2) 펌웨어에서 광고 생성 위치와 구조를 찾고, (3) QEMU·DHU 검증 뒤에야 차량 시험을 제안하는 것입니다. 실현 가능성은
+  아직 판단할 근거가 없습니다(INFERENCE).
+
+## 질문(v1~v3, 역사 기록)
 
 첫 실제 beta.10 주행(trip8, [G1 첫 터널 기록](../G1_FIRST_TUNNELS_2026-10-11.md))에서 BETA가 터널 안 순정 mode-0 송신을 대신하는 동안
 소유자가 본 네이버 화면:
@@ -331,7 +429,12 @@ curl --upload-file ./<파일> https://transfer.sixtyfive.me/<파일>
   `commands/` 21개: `SAT5`, `T0-SAT`, `T0-NOSAT`, 회차 18개(V4-r1, V1S0-r1, V2-r1, V3-r1, V6S-r1, V1S5-r1, V2C30-r1, V6G0-r1, V6G5-r1, V5-r1,
   V1SN-r1, V4-r2, V4T60-r1, V4T14-r1, V1S0-r2, V2-r2, V3-r2, V1S5-r2). `commands/prep/` 9개: 시험 10 v5 B2 준비의 바이트 복사본.
 - `run-plan.json`: 장소, 시간 구성, 속도 형태, 단계, 회차별 변수·풀린 방위 오차율·에피소드 끝 오차, 사진마다의 보낸 값과 참값.
-- `dhu-sat.ini`: 시험 4 `dhu.ini` + `gps_satellite = true`. `geometry/route.json`: 시험 10 파일의 바이트 복사본.
+- v4: `dhu-rawgps.ini`(시험 4 `dhu.ini` + `locationcharacterization = rawgps`), `commands/T0-RAW.txt`, R 회차 10개(V4R-r1, V4R-r2, V2R-r1, V3R-r1,
+  V5R-r1, V4T60R-r1, V6SR-r1, V6G0R-r1, V2R-r2, V3R-r2: 원본 파일과 사진 태그만 다름). 명령 파일은 모두 32개.
+- `dhu-sat.ini`(이 DHU 빌드에서 시험 불가): 시험 4 `dhu.ini` + `gps_satellite = true`. `geometry/route.json`: 시험 10 파일의 바이트 복사본.
 - 시험: `python3 tests/tools/test_dhu_exp11_commands.py`(재생성 일치, 준비·T0·접근로의 바이트 출처, 설정 한 줄 차이, 조건 사이 차이가 변수뿐임,
   속도 형태, 정확도 램프·옆 오차 목표, 단계·시간).
 - `OWNER_SETUP_KO.md`: 소유자 준비 사항.
+
+
+> 확인 메모(2026-10-11, 제출자 정정): 마쯔다가 광고하는 위치 특성값은 `docs/archive/DESIGN_V1_KO.md` §4.5에 조건부로 적혀 있다(외장 DR 장착 0x87, DR·SD 없음 또는 region 5이면 0x100, 그 외 SD 분기 0x1B0). 이 차량(SD 내비 없음, 외장 DR 없음)은 0x100일 가능성이 높으나 실차에서 광고값을 직접 확인한 것은 아니다(분기 조건으로 추정).

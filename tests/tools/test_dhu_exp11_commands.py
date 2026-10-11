@@ -171,7 +171,8 @@ class Exp11Commands(unittest.TestCase):
         # V1SN is the V1S5 file (the DHU ignores gps_satellite with the exp4 ini)
         self.assertEqual(self.files["V1SN-r1"], [x.replace("V1S5-r1", "V1SN-r1") for x in self.files["V1S5-r1"]])
         self.assertEqual(self.doc["runs"]["V1SN-r1"]["ini"], "exp4")
-        self.assertEqual({p["ini"] for t, p in self.doc["runs"].items() if not t.startswith("V1SN")}, {"sat"})
+        self.assertEqual({p["ini"] for t, p in self.doc["runs"].items() if not t.startswith("V1SN") and t not in gen.RAW_RUNS}, {"sat"})
+        self.assertEqual({self.doc["runs"][t]["ini"] for t in gen.RAW_RUNS}, {"rawgps"})
         # r2 files equal r1 modulo the tag
         for t in self.doc["runs"]:
             if t.endswith("-r2"):
@@ -276,18 +277,53 @@ class Exp11Commands(unittest.TestCase):
         for t in sec:
             taus = {fr["tau"] for fr in runs[t]["frames"] if fr["phase"] == "garage"}
             self.assertTrue(set(range(0, gen.G_T, 5)) <= taus)
-        self.assertEqual(self.doc["tiers"][1]["runs"][0], "V6S-r1")
-        self.assertNotIn("V6S-r1", self.doc["tiers"][0]["runs"])
+        self.assertEqual(gen.TIERS_V3[1][0], "V6S-r1")
+        self.assertNotIn("V6S-r1", gen.TIERS_V3[0])
 
     def test_tiers_and_budget(self):
-        tiers = self.doc["tiers"]
+        tiers = [dict(runs=r) for r in gen.TIERS_V3]  # v1-v3 tiers (history; still generated)
         # v2: V2 before V3 so the 25 min rule truncates V3 (weakened by the 53 s drive), not V2
         self.assertEqual(tiers[0]["runs"], ["V4-r1", "V1S0-r1", "V2-r1", "V3-r1"])
         self.assertEqual(gen.NOSAT_TIER1, ["V4-r1", "V2-r1", "V3-r1"])
         self.assertEqual(tiers[1]["runs"][:3], ["V6S-r1", "V1S5-r1", "V2C30-r1"])
-        self.assertEqual(sorted(t for x in tiers for t in x["runs"]), sorted(self.doc["runs"]))
-        self.assertLessEqual(gen.TIER0_MIN[1] + tiers[0]["estimate_min"], gen.BUDGET_MIN)
+        self.assertEqual(sorted(t for x in tiers for t in x["runs"]) + sorted(gen.RAW_RUNS),
+                         sorted(t for t in self.doc["runs"] if t not in gen.RAW_RUNS) + sorted(gen.RAW_RUNS))
         self.assertTrue(set(gen.NOSAT_TIER1) <= set(tiers[0]["runs"]))
+        self.assertEqual(self.doc["v3_tiers"], gen.TIERS_V3)
+
+    def test_v4_rawgps_runs(self):
+        # the ini: exp4 dhu.ini plus exactly one line in [general]
+        raw = (PLAN / "dhu-rawgps.ini").read_text().splitlines()
+        exp4 = EXP4_INI.read_text().splitlines()
+        self.assertEqual([x for x in raw if x != gen.RAW_INI_LINE], exp4)
+        self.assertEqual(raw.count(gen.RAW_INI_LINE), 1)
+        self.assertLess(raw.index(gen.RAW_INI_LINE), raw.index("[sensors]"))
+        self.assertGreater(raw.index(gen.RAW_INI_LINE), raw.index("[general]"))
+        self.assertEqual(gen.RAW_INI_LINE, "locationcharacterization = rawgps")
+        ch = self.doc["characterization"]
+        self.assertEqual(ch["enum"]["RAW_GPS_ONLY"], 0x100)
+        self.assertEqual((ch["mazda"], ch["dhu_value"]), (0x100, "rawgps"))
+        # R runs = the source command files with only the screenshot tag renamed
+        for tag, src in gen.RAW_RUNS.items():
+            a, b = self.files[src], self.files[tag]
+            self.assertEqual(len(a), len(b))
+            for x, y in zip(a, b):
+                if x.startswith("screenshot "):
+                    self.assertEqual(y, x.replace("experiment11/" + src + "-", "experiment11/" + tag + "-"))
+                else:
+                    self.assertEqual(x, y)
+            self.assertEqual([fr["screenshot"] for fr in self.doc["runs"][tag]["frames"]],
+                             [x.split("/")[-1] for x in b if x.startswith("screenshot ")])
+        self.assertEqual(self.files["T0-RAW"], [x.replace("T0-NOSAT", "T0-RAW") for x in self.files["T0-NOSAT"]])
+        # v4 tiers: Tier 1 = V4R, its repeat, V2R, V3R (last, may be cut); fits the 25 min budget with Tier 0
+        t = self.doc["tiers"]
+        self.assertEqual(t[0]["runs"], ["V4R-r1", "V4R-r2", "V2R-r1", "V3R-r1"])
+        self.assertEqual(gen.TIERS[0], t[0]["runs"])
+        self.assertLessEqual(gen.TIER0_MIN[1] + t[0]["estimate_min"], gen.BUDGET_MIN)
+        self.assertEqual(sorted(x for tier in gen.TIERS for x in tier), sorted(gen.RAW_RUNS))
+        for x in t[0]["runs"] + t[1]["runs"]:
+            self.assertFalse(x.startswith("V1"), x)
+        self.assertTrue(all(n in self.doc["not_testable"] for n in ("V1S0-r1", "SAT5", "dhu-sat.ini")))
 
     def test_readme_prompt_and_rows(self):
         text = (PLAN / "README.md").read_text()
@@ -295,7 +331,9 @@ class Exp11Commands(unittest.TestCase):
         for tag in self.doc["runs"]:
             self.assertIn(tag, text)
         for row in ("P-0", "P-1", "P-2", "A-1", "B-1", "B-2", "B-3", "C-1", "D-1", "IND-GREY", "SPEED-FROZEN", "NAV-STOPS",
-                    "t_stop", "53", "G-1", "G-2", "G-3", "S-1", "S-2", "TURN-FOLLOWED", "menu 3"):
+                    "t_stop", "53", "G-1", "G-2", "G-3", "S-1", "S-2", "TURN-FOLLOWED", "menu 3",
+                    "M6-1", "M6-2", "M6-3", "M6-4", "rawgps", "locationcharacterization", "RAW_GPS_ONLY", "PUBLIC DOC",
+                    "FIRMWARE FACT", "INFERENCE"):
             self.assertIn(row, text)
         self.assertTrue((PLAN / "OWNER_SETUP_KO.md").exists())
 
