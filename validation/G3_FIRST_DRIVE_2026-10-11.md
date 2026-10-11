@@ -112,6 +112,14 @@ Rejected alternative: store BETA's heading with min(BETA unc, carried unc + |dif
 It reproduced BETA's smaller errors (-0.5 .. +0.6) but the |difference| term ratchets over many ticks of
 parking manoeuvres (final park 42.0 deg, over the restore limit).
 
+## Rule F taint (added 2026-10-11, validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md v4)
+A BETA heading seeded while the reverse state was only assumed (rule F) is tainted until a real forward message
+confirms it. If its origin ends unconfirmed (discard, BETA reset/fault, cadence fence), the pipeline counts
+`G3Motion::discards` and a yaw-chain break: G3 drops its reference, a pending request built before it, cancels an
+in-flight write before its rename, and rewrites a record of this boot with such a heading at the next parked
+tick. Residual record-only risk: a tainted heading stored before a power-off (no later parked tick, or never
+confirmed nor ended) can be restored as CARRIED by the next boot; the first M course check rejects a wrong one.
+
 ## Other observations (measured)
 
 - Cancelled seq 4: fsync write at 45 s, cancelled at the rename gate, `why` `writer_busy` (journal writer lag

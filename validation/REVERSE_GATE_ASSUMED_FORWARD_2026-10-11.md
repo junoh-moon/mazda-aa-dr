@@ -1,7 +1,7 @@
 # Rule F: unknown reverse assumed forward for the BETA gates (2026-10-11)
 
-Status: v2 (after the Opus/Codex reviews of v1), implemented in a scratch build on master 77e8d2b (the G3
-validity commit).
+Status: v5 (incremental on v3+v4 after the Codex check of v4: one G3 MEDIUM), scratch build on master 25c6025
++ v3 + v4.
 Host tests, mutation checks and offline replays of the private trips only. Not run on the vehicle, phone,
 DHU, exact ARM or QEMU. Not released. No coordinates or raw payloads are reproduced here; times are
 CLOCK_MONOTONIC seconds of the boot. GPS fixes are the reference, not ground truth.
@@ -58,11 +58,85 @@ reset) does not block. `clear_latch()` (every latch clear above)
 ends it; a cadence fence keeps it like the real latch; a different raw epoch ends it. It is re-derived by the
 same rule. The assumed interval evidence uses the raw source epoch and the shared local sequence, so a later
 real message continues the core's evidence sequence (tested).
+### v3: seed origin tracking (Codex re-review HIGH)
+v2 tied the discard to the assumption flag, but the flag and the seed it produced are decoupled: an excluded
+REVERSE message (e.g. received before the bus boundary) cleared the flag and kept the seed, and a later real
+reverse 1 whose transport time equalled the BETA frontier was drained after `advance()` returned early at
+`end <= frontier` (before the unknown-latch check), so the discard was skipped and the seed stayed with latch 1
+(integration and travel bearing opposite to the motion). v3:
+- `seed_from_assumption_`: set when an accepted fix takes its heading from a GPS course (seed or resync) while
+  the reverse state is assumed (a refresh under the assumption also marks it); cleared only by a real 0 (the
+  confirmation) or by a BETA reset (`reset_beta`: reset/fault, cadence fence, discard).
+- A real reverse 1 while `seed_from_assumption_` is set discards the seed (`discard_assumed_seed`, cause
+  `reverse_message`), however the assumption flag was cleared before.
+- Any loss of the assumption without a confirmation that does not reset BETA anyway (an excluded or rejected
+  REVERSE message, whose value may be 1; a raw epoch change) discards an assumption-derived seed at once (cause
+  `assumption_lost`). Chosen over keeping the origin armed: it leaves no interval in which an unconfirmed
+  seed lives with an unknown latch (and so no reliance on the next message arriving), and the cost is the same
+  carry loss as a contradiction. A seed confirmed by a real 0 is never discarded (flag already clear).
+- `advance()` disables a BETA-only core whose reverse state is unknown and not assumed before the
+  `end <= frontier` early return, so a real message drained at the frontier never finds it seeded.
+- The discard also breaks the G3 yaw chain and counts `G3Motion::discards` (see G3 below); the worker revokes
+  the stored candidate in the same turn (see journal).
+Remaining paths that clear the assumption: resets (reset_beta drops the seed anyway) and real messages.
+
+### v4: G3 taint rule (Codex final re-review)
+v3 broke the G3 chain only inside `discard_assumed_seed`, so (a) a cadence fence (or any reset) that dropped an
+assumption-derived seed cleared the origin without telling G3, and G3 kept carrying the reference into a parked
+store; (b) a rejected REVERSE message faults the pipeline, and `fault()` resets BETA before `assumption_lost()`
+runs, so the later check saw a cleared origin and skipped G3; (c) a write already in flight was not cancelled.
+v4:
+- Taint rule: while `seed_from_assumption_` is set, every BETA heading, and every G3 reference adopted or
+  carried from it, is tainted (derived from an unconfirmed assumption). The origin ends in exactly one place,
+  `Pipeline::end_assumed_origin(confirmed)`: a real 0 confirms it (no effect); every other end (discard on a real
+  1 or a lost assumption, BETA reset/fault via `reset_beta`, cadence fence, a new non-assumed course seed) counts
+  `G3Motion::discards` and breaks the yaw chain, independent of the order of the clearing paths.
+- G3 then drops its reference (break), drops a pending request with a heading built before the taint end,
+  cancels an in-flight write before its next gated step (`G3Tracker::discard_cancel`, added to the worker's
+  cancel reasons in runtime.cpp `g3_pump` and in the replay), and rewrites a record written in this boot with
+  such a heading at the next parked tick (>= 15 s exactly-zero stop, idle rule, 5 s rate limit) with the current,
+  normally invalid, heading. Over-approximation: any record with a heading written before the taint end is
+  treated as tainted (records from a confirmed reference are rewritten too; harmless, the car has moved).
+- Windows (record-only, never sent): a tainted heading stays on disk from its write until the next parked tick
+  after the taint end; a write past its last gated step (renamed) completes and is rewritten later; if the boot
+  ends before that parked tick (or the origin is neither confirmed nor ended, e.g. power-off with an
+  unconfirmed seed) the next boot can restore the tainted heading as CARRIED (journaled only; the first M
+  course check REJECTS a wrong one).
+- LOW: the stored candidate is now revoked BEFORE the `contradicted` row is written (then the ENGAGED
+  withdrawal). `adapter::invalidate()` is a lock-free generation bump: a send that starts after it cannot select
+  the old candidate. Residual race, stated precisely: the discard happens inside `Pipeline::drain` and the
+  revocation in the `BetaController::tick` that follows in the same worker turn; an OEM send that selects the
+  candidate in that interval (sub-millisecond on the host) can still go out with the old seed within its 500 ms
+  lease, as for every other worker-side withdrawal. Making it atomic would need the pipeline to touch the
+  adapter, which the layering forbids.
+
+### v5: G3 store stop on the permanent fault (Codex check of v4)
+A permanent fault (journal failure or audit fault, runtime.cpp worker) resets the pipeline, which ends an assumed
+seed origin (a G3 taint end), and then sets `shadow=false`; the G3 block is guarded by `shadow`, so v4's
+`discard_cancel()` and the pump never ran again and a write already past its fsync start kept the old cancel
+generation and could rename a tainted heading that was never rewritten. v5 delivers the end to the store
+thread unconditionally, outside the shadow-guarded block, whenever `j.failed` or `audit_fault` is seen: the
+cancel generation is bumped and the stop flag set, so the in-flight write stops before its next gated step
+(fsync or rename) and no later write is accepted. Other `shadow=false` paths: capture stop already sets the stop
+flag before it; the initial `shadow` (startup) never starts G3. Worker test `g3_fault` (no REVERSE message: the
+G3 headings are tainted; the 60 s write blocked 3 s in its fsync step; audit fault at 63 s): the write ends
+STOPPED at the rename, the store keeps seq 1. Residual (record-only, as for a power-off): seq 1, written at the
+15 s stop before the taint end, holds a tainted heading and cannot be rewritten after the fault (no further G3
+I/O in this boot); the next boot may restore it as CARRIED (journaled only; the first M course check rejects a
+wrong one).
+
 Journal: `beta_reverse_latch` row, `domain` "beta", `event` "assumed_forward", `reason` "reverse_assumed_forward",
 `fix_ns`, running total `assumed`, `fixes` = 3 x [age s before the last fix, GPS km/h, wheel km/h, |course change -
-yaw turn| deg or null], `min_kmh`, `wheel_tol_kmh`, BETA state; a contradiction adds `event` "contradicted",
-`reason` "assumed_forward_contradicted", `message_ns`, running total `contradicted`, `discarded` (a seeded core
-was reset). Every `beta_anchor` row evaluated under the assumption carries `"rev_assumed":true`. Written by `BetaController::tick` before the anchor
+yaw turn| deg or null], `min_kmh`, `wheel_tol_kmh`, BETA state; a discard adds `event` "contradicted",
+`reason` "assumed_forward_contradicted", `cause` (`reverse_message`|`assumption_lost`), `message_ns`, running total
+`contradicted`, `discarded` (a seeded core was reset). In the same `BetaController::tick` (which follows the
+drain in the same worker turn, before any publish of that tick) the stored candidate is revoked FIRST
+(`adapter::invalidate()`, a lock-free generation bump, and an empty candidate; a speed overlay is left alone: it
+does not use the heading), THEN the `contradicted` row is written, THEN an ENGAGED episode is withdrawn
+(`ENGAGED>WITHDRAWN:assumed_forward_contradicted`). Residual race: an OEM send that had already selected the old
+candidate before the revocation (between the discard inside the drain and the revocation in this tick, or
+concurrently with the generation bump) can still go out with the old seed within its 500 ms lease, as for every
+other worker-side withdrawal (e.g. model_not_ready); a send that starts after the revocation cannot. Worker test `contradict`: no replaced send after the row. Every `beta_anchor` row evaluated under the assumption carries `"rev_assumed":true`. Written by `BetaController::tick` before the anchor
 rows (always-kept class). No change to LOCATION content/format/timing, OEM forwarding, errno, send timing or the
 taps; BETA can only seed (and then engage) earlier.
 
@@ -89,34 +163,60 @@ taps; BETA can only seed (and then engage) earlier.
    the M1 turn test (run restarts).
 3. beta.8 stopped-accuracy rule and the E_FRAME fix: unchanged code paths; under the assumption the interval
    has `reverse_active` 0 as with a real forward latch. Private E_FRAME replay passes.
-4. G3: a rule F seed makes `heading_valid` true earlier, as intended; a contradiction discard makes it false
-   at once (BETA unseeded). G3 still reads the latch as unknown (-1, treated as forward).
-5. Cost of the discard: a correct assumption followed by a real engagement of reverse also loses the carry
-   (trip4 4209.4 s below: the reverse-entry loss at 4212.6 s is no longer engaged).
+4. G3: a rule F seed makes `heading_valid` true earlier, as intended. v3: a discard is a yaw-chain break
+   (`G3Motion::breaks`), so G3's carried reference is dropped (v2's `fence_beta()` alone kept it, and G3 carried
+   a possibly 180 deg wrong heading into a parked store). G3 also counts `G3Motion::discards`: a pending request
+   whose heading was built before a discard is dropped and requested again; a record written in this boot with
+   such a heading is rewritten at the next parked tick (rate limit 5 s) with the current, normally invalid,
+   heading. Record-only risk: if the boot ends before that parked tick (no 15 s stop after the discard), the
+   store keeps the wrong heading and the next boot restores it as CARRIED (journaled only, never sent; the first
+   M course would REJECT it). A record from a previous boot is never touched. G3 reads the latch as unknown (-1,
+   treated as forward).
+5. Cost of the discard: a normal parking reverse after a correct assumption (no real 0 seen yet) also discards
+   the carry; a tunnel entered before BETA re-seeds (after the 1->0 transition and a course with fixes) then
+   gets the stock behaviour (trip4 4209.4 s below: the reverse-entry loss at 4212.6 s is no longer engaged).
+6. The 5-7 s resync figure (1b) comes from one synthetic test case (straight, steady 25 km/h, 1 Hz fixes, quiet
+   yaw); it is not a recovery bound. Turning, slow driving, fix gaps or HDOP rejections lengthen it.
 - MODEL isolation: the MODEL core still needs a real message.
 
-## Tests (host, scratch build on 77e8d2b)
-- `make test-navigation`: `test_beta` 71975 checks (65580 before rule F; existing tests unchanged), test_navigation
+## Tests (host, scratch build on 7c8829e, v3)
+- `make test-navigation`: `test_beta` 72345 checks (65580 before rule F; existing tests unchanged), test_navigation
   3977, test_live_pipeline 819, gyro_bias, gps_wheel, holdout, channel tests pass. Rule F tests: v1 set (seeding,
   2 fixes, 19.9/20 km/h, 4.5/3.5 km/h wheel mismatch, repeated utc, course step/across displacement/yaw turn,
   early real 0/1 = records identical to rule F off, forward message continuity, reverse start + resync, course
-  flip, reset/fence/exclusion) plus v2: contradiction discards the seed (and a consistent 0 keeps it); the
-  existing override test now also asserts the discard; latch cleared at 1 blocks rule F (reset and excluded
-  message), at 0 does not, a real message lifts the block; raw epoch change clears the assumption after a
-  latch-keeping reset.
-- `test_g3` 834 checks: new `yaw_chain_breaks` (a 500 ms yaw silence while moving: the MISSING_SENSOR reset plus
-  the hole after it = 2 breaks; stationary = 1). The window > 1 s and non-finite-rate checks cannot be reached
-  from raw input (the core limits sample_age_max to 250 ms, which faults first; rates are finite by
-  construction): defensive, untested.
-- `test_worker_beta`: all 16 cases incl. `main_no_reverse` (one assumption row before the first seed row).
-- `test-replay-beta` (17 tests incl. the private E_FRAME trip6 replay; 1 private G3 skip) with the new
-  `test_replay_reverse_fence.py`; tools tests 164 (2 skips) incl. the analyzer rule F test.
-- Mutations (all fail the named test; each restored): discard removed (published opposite bearing), mitigation
-  removed, raw-epoch clear removed, G3 hole check removed (`test_g3`), replay boundary sort removed (fence test),
-  analyzer reason from an earlier row instead of the seed row; v1 set re-run: profile off, 20 km/h bound, M1
-  turn, wheel check, reset keeps the assumption. v1-only results kept: chord check, 3->2 fixes, override paths.
-  Removing only the drain-side clear of the assumption is not detected (the `latch_valid_` guards make it
-  redundant).
+  flip, reset/fence/exclusion), v2 set (contradiction discard, consistent 0 keeps the seed, mitigation, raw epoch)
+  and v3: `excluded_message_then_reverse_at_the_frontier_discards` (the review path exactly: 25 km/h reverse seed,
+  10 km/h, an excluded message, then a valid reverse 1 whose transport time equals the BETA frontier: the seed
+  is discarded at the exclusion (`assumption_lost`), the message is accepted, no replacement after the GPS loss,
+  one G3 discard) and `unknown_latch_disables_beta_even_at_the_frontier` (a confirmed seed, an excluded
+  message, a drain that integrates nothing: BETA disabled, no discard).
+- `test_g3` 843 checks: `yaw_chain_breaks` (v2) and v3 `rule_f_discard` (a record written with a heading is
+  rewritten without it at the same stop after a discard; a pending request with such a heading is dropped and
+  re-requested without it).
+- `test_worker_beta`: 17 cases incl. `main_no_reverse` and v3 `contradict` (assumed seed, ENGAGED outage, real
+  reverse 1: `contradicted` row (cause `reverse_message`, discarded) immediately followed by
+  `ENGAGED>WITHDRAWN:assumed_forward_contradicted`; 6 replaced sends before the row, 0 after).
+- `test-replay-beta` 17 tests (private E_FRAME trip6 replay included; 1 private G3 skip); tools tests 175
+  (2 skips) incl. the analyzer rule F test.
+- v4 tests: `g3_taint_ends_on_every_unconfirmed_origin_loss` (test_beta: cadence fence, rejected REVERSE message
+  with the fault-before-notification order, reset: one taint end and a break each; a real 0 first: none);
+  `rule_f_discard` / `rule_f_discard_in_flight` (test_g3: rewrite of a stored record, drop of a pending request,
+  a taint end inside the fsync step cancels the rename of the in-flight write). test_beta 73051, test_g3 854.
+  v4 mutations (each fails, each restored): taint count removed from `end_assumed_origin`; v3 placement
+  (counted only in `discard_assumed_seed`, order-dependent) -> fence/reject/reset paths fail; `discard_cancel`
+  disabled -> in-flight test (rename not cancelled); stored-record rewrite disabled -> `rule_f_discard`. The
+  revoke-before-row order (LOW) has no deterministic test (the race is between threads); it is a code-order
+  guarantee. v4 runs: test-navigation, test_worker_beta 17 cases, test_g3 854, test-replay-beta 17 (1 skip),
+  tools 177 (2 skips) pass; the nine private replays give byte-identical reports to v3 (54 reports; v4 changes
+  only G3 state and the order of the revocation).
+- Mutations (each fails the named test, each restored): v3 origin tracking removed (v2 flag check, no
+  `assumption_lost`) -> boundary test; early-return order restored -> frontier test; pipeline G3 break/discard
+  removed -> boundary test; G3 tracker pending/stale handling removed -> `rule_f_discard`; worker
+  withdrawal/revocation removed -> worker `contradict`; discard on a real 1 removed -> override test; mitigation
+  removed; 20 km/h bound; M1 turn test. Earlier runs (v1/v2, code unchanged there): profile off, wheel check, chord
+  check, 3->2 fixes, reset keeps the assumption, raw-epoch clear, G3 hole check, replay boundary sort, analyzer
+  reason. Removing only the drain-side clear of the assumption flag is not detected (redundant with the
+  `latch_valid_` guards).
 - Not run: full `make test`, ARM suite, QEMU, DHU, vehicle.
 
 ## Replay (tools/replay_beta, --real-only, product tunnel profile)
@@ -143,16 +243,18 @@ Default (feed) feeds every recorded message. trip4 is a beta.3 recording replaye
 | trip8 0914e18f | none -> 186.4 (runtime); 182.3 both (feed) | 0 -> 10.2 (40.1) | 1 (runtime) | 0 -> 0 |
 | trip8 5a9f9b2b | 639.7 -> 83.2 | 230.7 -> 516.8 (652.1) | 6 | 4 -> 5 ((a) 132.2 new) |
 
-- Changed against v1: trip4 only. The real reverse 1 at 4209.4 s contradicted the assumption of 4160.5 s, the
-  seed was discarded, and the reverse-entry loss at 4212.6 s is no longer engaged (v1: engaged through the
-  reverse refresh path); replaced sends 69 -> 58, moving seeded 194.2 -> 188.9 s. The runtime fence gives the
-  same numbers as feed except trip8 0914e18f (its only early message was received before the bus admitted input).
-- Byte identity (new build default vs base build, report and journal) holds only for the non-applicable boots
-  trip2, trip3, trip7, trip8 1c1de788 and 0914e18f. Elsewhere rule F applied; note that an early real message
-  does not prevent it: after a later reset/gap the latch is unknown again and rule F can fire (trip8 794.9 s
-  after the 638.3 s message, trip6 82d37f8a after the 72 s messages), and every send after the first applied
-  assumption can differ (different carry). With `--assume-forward off` the report equals the base report (minus
-  `beta_seed`) in all nine boots. 0 violations everywhere.
+- Which mode: every row of the table is `feed` except the 0914e18f "runtime" cell; `runtime` gave the same
+  numbers as `feed` in the other eight boots. v3 changed no report against v2 (54 reports compared
+  byte for byte); only the trip4 journal differs (the `cause` field of its `contradicted` row and the following
+  summaries). Changed against v1: trip4 only (the real reverse 1 at 4209.4 s contradicted the assumption of
+  4160.5 s; the reverse-entry loss at 4212.6 s is no longer engaged; replaced sends 69 -> 58).
+- Byte identity is an execution result per drive, not a general property: the new build's default (`feed`)
+  report and journal equalled the pre-rule-F base build (77e8d2b logic) for trip2 07987d33, trip3 843d1bbf,
+  trip7 e5584f62, trip8 1c1de788 and trip8 0914e18f, where rule F never applied. In the other four boots it
+  applied; an early real message does not prevent it (after a later reset/gap the latch is unknown again: trip8
+  794.9 s after the 638.3 s message, trip6 82d37f8a after the 72 s messages), and every send after the first
+  applied assumption can differ (different carry). With `--assume-forward off` the report equalled the base
+  report (minus `beta_seed`) in all nine boots. 0 violations everywhere.
 - trip8 (a): engaged 132.3 s, 2 replaced sends, return jump 4.3 m; assumption at 82.2 s from 20/21/21 km/h fixes
   (wheel 21.6/21.6/21.5, turn errors 0.8/0.6 deg); reassumed at 594.4, 794.9, 1973.9, 2037.1 (11 s after the
   BAD_INPUT reset at 2026.7, whose latch was 0: not blocked; vehicle reseed 2382.0) and 2330.8 s. Later return
@@ -168,8 +270,15 @@ the seed row itself (`"rev_assumed":true`), not from an earlier assumption row (
 after a real forward message is `reverse_latch`).
 
 ## Limits
-- Fast reverse travel without any real message is not detected (failure mode 1b): 5-7 s residual window.
-- The discard also drops a correct carry when reverse is really engaged after a correct assumption.
+- Fast reverse travel without any real message is not detected (failure mode 1b); the 5-7 s resync seen in one
+  synthetic case is not a recovery bound. A late real reverse 1, an excluded or rejected message corrects it at
+  once (discard).
+- The discard also drops a correct carry when reverse is really engaged (normal parking) after a correct
+  assumption that no real 0 had confirmed: a tunnel entered before BETA re-seeds gets the stock behaviour.
+- The candidate revocation happens in the worker turn of the discard, after the drain; a concurrent OEM send in
+  between can still use the old candidate (500 ms lease), as for other worker-side withdrawals.
+- G3 (record-only): a heading stored before a discard stays on disk if the boot ends before the next parked
+  tick, and the next boot would restore it (journaled only).
 - Thresholds are existing constants; 3 fixes is a choice, not derived from data.
 - Replay coverage is window-limited, not vehicle coverage; the runtime fence is reproduced for REVERSE only.
 - Offline only; one car, one firmware.
@@ -179,7 +288,9 @@ after a real forward message is `reverse_latch`).
   driving with GPS after the session start (and after a BAD_INPUT reset whose latch was 0), three fixes with
   wheel/GPS within 4 km/h; the first seed row (`h`[0] = 1, `"rev_assumed":true`) about 1 s later.
 - Analyzer: `BETA seed: boot N first seed at t s (reason reverse_assumed_forward)` near the first fast driving.
-- Any `contradicted` row: check `discarded`, the wheel speed at `message_ns` and whether it was a parking
-  reverse (expected cost) or a fast-reverse seed (the protected case).
+- Any `contradicted` row: check `cause`, `discarded`, the wheel speed at `message_ns` and whether it was a parking
+  reverse (expected cost) or a fast-reverse seed (the protected case); when ENGAGED, the next row must be
+  `ENGAGED>WITHDRAWN:assumed_forward_contradicted` and no replaced send may follow it in that outage.
+- After a discard, a `g3_store` `written` row with `hv` 0 at the next parked stop if a heading had been stored.
 - No assumption row after a reset whose cleared latch was 1 until a real message (mitigation).
 - A `resync` heading source shortly after a boot-time seed: candidate failure-mode-1b event.

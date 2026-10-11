@@ -81,7 +81,9 @@ static void slow_fsync() {
     struct timespec t={3,0};nanosleep(&t,0);
     hook_active.store(0);
 }
-static bool g3_scenario(const std::string& s) { return s=="g3_park" || s=="g3_cancel" || s=="g3_move" || s=="g3_stop"; }
+static bool g3_scenario(const std::string& s) {
+    return s=="g3_park" || s=="g3_cancel" || s=="g3_move" || s=="g3_stop" || s=="g3_fault";
+}
 static bool replaced_overlay(const uint8_t* original);
 // One OEM position callback: POSITION enter, one LOCATION send, leave.
 // stored: the boot-time no-fix value (mode 1, utc 0, fixed coordinates,
@@ -205,7 +207,13 @@ int main(int argc,char** argv) {
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
            scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed"||
-           g3_scenario(scenario));
+           scenario=="contradict"||g3_scenario(scenario));
+    // contradict (rule F v3): no REVERSE message at boot (the BETA seed comes
+    // from the assumed forward state), GPS lost from t 3.2 s (ENGAGED), then a
+    // real reverse 1 at t 4.4 s: the episode is withdrawn for the contradiction
+    // (journal: contradicted row, then the transition) and no replaced send
+    // may use the old seed after the contradicted row.
+    const bool contradict=scenario=="contradict";
     // G3 (validation/G3_RECORD_ONLY_2026-10-11.md): the parked store write
     // takes 3 s inside its fsync step on its own thread. g3_cancel: the GPS
     // is lost during it (cancel before the rename); g3_stop: the capture
@@ -277,7 +285,7 @@ int main(int argc,char** argv) {
     const bool shifted=!nofix && !cadence && scenario!="no_anchor";
     const unsigned scenario_end=scenario=="budget"?20000:scenario=="main"?9600:
                                 scenario=="nofix_rearm"?17000:scenario=="cadence_gap"?30400:
-                                scenario=="cadence_gap_speed"?16000:scenario=="g3_park"?68000:scenario=="g3_cancel" || scenario=="g3_move"?70000:scenario=="g3_stop"?63000:6400;
+                                scenario=="cadence_gap_speed"?16000:scenario=="g3_park"?68000:scenario=="g3_cancel" || scenario=="g3_move"?70000:scenario=="g3_stop"?63000:scenario=="g3_fault"?66000:6400;
     const unsigned end_ms=scenario_end+(shifted?PRELUDE:0)+(scenario=="main"?PRELUDE2:0);
     const uint64_t start=clock_ns(0);
     bool motion=true;
@@ -311,9 +319,12 @@ int main(int argc,char** argv) {
             if(kind==N::YAW && ms%100)continue;
             // Change-only producer: reverse at boot, then forward (a 1->0
             // transition, BETA_DECISIONS 3.4), nothing else.
-            if(kind==N::REVERSE && (no_reverse || (ms!=0 && ms!=100)))continue;
+            // g3_fault (rule F v5): no REVERSE message at all, so the BETA seed
+            // and every G3 heading of this boot derive from the assumption.
+            if(kind==N::REVERSE && (contradict ? ms!=8000+4400 :
+                                    (no_reverse || scenario=="g3_fault" || (ms!=0 && ms!=100))))continue;
             N::RawEvent r=N::RawEvent();r.kind=static_cast<N::SensorKind>(kind);
-            r.epoch=1;r.receive_seq=++sequence;r.received_ns=now;r.count=1;r.reverse=ms==0?1:0;
+            r.epoch=1;r.receive_seq=++sequence;r.received_ns=now;r.count=1;r.reverse=contradict || ms==0?1:0;
             // The BETA yaw zero is 2048 (straight); the MODEL keeps its own.
             for(unsigned i=0;i<4;++i)r.raw[i]=kind==N::WHEELS?uint16_t(lround(wheel_kmh*100+10000)):2048;
             if(!sender.send_event(r)) { fprintf(stderr,"motion send failed at %u errno=%d\n",ms,errno);assert(0); }
@@ -325,7 +336,11 @@ int main(int argc,char** argv) {
             }
             continue;
         }
-        if(scenario=="g3_cancel" || scenario=="g3_move" || scenario=="g3_stop") {
+        // g3_fault (rule F v5): at 63 s, inside the blocked fsync step of the
+        // 60 s write (a tainted heading), a permanent audit fault resets the
+        // pipeline (ending the assumed origin) and stops MODEL/G3 computation.
+        if(scenario=="g3_fault" && !prelude && t==63000)audit_fault=1;
+        if(scenario=="g3_cancel" || scenario=="g3_move" || scenario=="g3_stop" || scenario=="g3_fault") {
             // Parked from 2 s with real fixes (ARMED): the 15 s write (no
             // fsync) at about 17 s, then the 60 s write at about 62 s blocks
             // 3 s in its fsync step. g3_cancel: GPS lost from 63 s (BETA
@@ -560,8 +575,31 @@ int main(int argc,char** argv) {
            l.find("\"gate\":\"ACCEPTED\"")!=std::string::npos && l.find("\"h\":[1,")!=std::string::npos)seed_at=i;
     }
     printf("reverse assumed rows: %u\n",assumed_rows);
-    if(no_reverse)assert(assumed_rows==1 && assumed_at<seed_at && seed_at<rows.lines.size());
+    if(no_reverse || contradict)assert(assumed_rows==1 && assumed_at<seed_at && seed_at<rows.lines.size());
+    else if(scenario=="g3_fault")assert(assumed_rows==1 && assumed_at<seed_at);   // the G3 headings are tainted
     else assert(!assumed_rows);
+    if(contradict) {
+        size_t row_at=rows.lines.size(),withdraw_at=rows.lines.size();unsigned long long row_ns=0;
+        for(size_t i=0;i<rows.lines.size();++i) {
+            const std::string& l=rows.lines[i];
+            if(row_at==rows.lines.size() && l.find("\"event\":\"contradicted\"")!=std::string::npos) {
+                assert(l.find("\"cause\":\"reverse_message\"")!=std::string::npos &&
+                       l.find("\"discarded\":true")!=std::string::npos);
+                row_at=i;assert(sscanf(l.c_str()+l.find("\"mono_ns\":")+10,"%llu",&row_ns)==1);
+            }
+            if(l.find("\"kind\":\"beta_state\"")!=std::string::npos &&
+               l.find("\"to\":\"WITHDRAWN\",\"reason\":\"assumed_forward_contradicted\"")!=std::string::npos)withdraw_at=i;
+        }
+        printf("contradicted row %zu, withdrawal row %zu\n",row_at,withdraw_at);
+        assert(row_at<withdraw_at && withdraw_at<rows.lines.size());
+        assert(has(rows,"ENGAGED>WITHDRAWN:assumed_forward_contradicted"));
+        unsigned before=0,after=0;
+        for(size_t i=0;i<calls.size();++i) if(calls[i].replaced) {
+            if(start+uint64_t(calls[i].ms)*1000000ULL>row_ns)++after;else ++before;
+        }
+        printf("replaced sends before/after the contradicted row: %u/%u\n",before,after);
+        assert(before>=2 && !after);
+    }
     if(nofix)assert(anchor_bad_fix>=5 && !anchor_accepted);
     else if(cadence)assert(anchor_accepted>=2);
     else if(scenario=="no_anchor")assert(!anchor_accepted);
@@ -722,8 +760,11 @@ int main(int argc,char** argv) {
         assert(has(rows,"ARMED>GPS_LOST:gps_lost"));
     } else if(scenario=="g3_move") {
         assert(!replaced_total);
-    } else if(scenario=="g3_stop") {
+    } else if(scenario=="g3_stop" || scenario=="g3_fault") {
         assert(!replaced_total);
+    } else if(contradict) {
+        // Checked above (contradicted row, withdrawal, no replaced send after it).
+        assert(has(rows,"GPS_LOST>ENGAGED:published") && has(rows,"WITHDRAWN>DISABLED:capture_stop"));
     } else if(scenario=="no_anchor") {
         assert(!replaced_total && has(rows,"ARMED>GPS_LOST:gps_lost") && !has(rows,"GPS_LOST>ENGAGED:published"));
         assert(has(rows,"GPS_LOST>DISABLED:capture_stop"));
@@ -797,7 +838,7 @@ int main(int argc,char** argv) {
                 const uint64_t end=strtoull(line.c_str()+line.find("\"mono_ns\":")+10,0,10);
                 const uint64_t begun=end-uint64_t(latency_ms*1e6);
                 if(state=="GPS_LOST" || state=="ENGAGED" || state=="NO_FIX" || state=="SPEED_ENGAGED" ||
-                   (scenario!="g3_cancel" && scenario!="g3_move" && scenario!="g3_stop" &&
+                   (scenario!="g3_cancel" && scenario!="g3_move" && scenario!="g3_stop" && scenario!="g3_fault" &&
                     (!armed_after_nofix || begun<armed_ns)))
                     written_while_replacing=true;
             }
@@ -830,6 +871,21 @@ int main(int argc,char** argv) {
             assert(!lagging && max_summary_gap<1600000000ULL);
         } else if(scenario=="g3_stop") {
             assert(written==1 && !written_sync && load==mx5::runtime::G3_LOAD_OK && stored.seq==1);
+        } else if(scenario=="g3_fault") {
+            // The tainted 60 s write was stopped before its rename by the
+            // fault delivery; only the earlier 15 s record (written before the
+            // taint end) is on disk, no temporary file is left.
+            for(unsigned k=0;k<80 && g3_mailbox.runs.load()<2;++k) { struct timespec p={0,100000000};nanosleep(&p,0); }
+            printf("g3_fault: runs=%llu stage=%d step=%d stored seq=%u flags=%u\n",
+                   (unsigned long long)g3_mailbox.runs.load(),g3_mailbox.done_stage.load(),g3_mailbox.done_step.load(),
+                   unsigned(stored.seq),unsigned(stored.flags));
+            assert(g3_mailbox.runs.load()==2 && hook_calls.load()==1 &&
+                   (g3_mailbox.done_stage.load()==mx5::runtime::G3_IO_STOPPED ||
+                    g3_mailbox.done_stage.load()==mx5::runtime::G3_IO_CANCELLED) &&
+                   g3_mailbox.done_step.load()==mx5::runtime::G3_STEP_RENAME);
+            mx5::runtime::G3Record now_stored;
+            assert(mx5::runtime::g3_load(logs.c_str(),&now_stored)==mx5::runtime::G3_LOAD_OK && now_stored.seq==1 &&
+                   access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0);
         } else if(scenario=="g3_park") {
             printf("g3_park: written=%u with_fsync=%u hook_calls=%d last_latency_ms=%.0f max_summary_gap_ms=%llu lagging=%d\n",
                    written,written_sync,hook_calls.load(),latency_ms,(unsigned long long)(max_summary_gap/1000000ULL),

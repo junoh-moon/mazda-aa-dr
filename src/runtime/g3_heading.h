@@ -753,6 +753,14 @@ public:
         pending_=false;in_flight_=true;cancel_why_=0;
         return true;
     }
+    // Rule F taint end (v4): the in-flight write carries a heading built
+    // before a G3Motion::discards change. The worker adds this to its cancel
+    // reasons: the store thread then stops before its next gated step (the
+    // fsync or the rename); a write already renamed is rewritten by store().
+    const char* discard_cancel(const G3Sample& s) const {
+        return in_flight_ && (pending_rec_.flags&G3_FLAG_HEADING) && pending_discards_!=s.motion.discards?
+            "rule_f_discard":0;
+    }
     // The worker cancelled the in-flight write; the first reason is journaled.
     void note_cancel(const char* why) { if(in_flight_ && !cancel_why_)cancel_why_=why; }
     bool in_flight(uint32_t* seq) const { if(in_flight_)*seq=pending_rec_.seq;return in_flight_; }
@@ -777,6 +785,7 @@ public:
             failures_=0;disk_=pending_rec_.state;
             m_ref_=pending_m_;turn_ref_=pending_turn_;aturn_ref_=pending_aturn_;written_ns_=now?now:1;
             disk_flags_=pending_rec_.flags;disk_cdeg_=pending_rec_.heading_cdeg;written_=true;
+            disk_discards_=pending_discards_;
             disk_synced_=pending_sync_;episode_stored_=true;
             ++writes_;
         } else {
@@ -872,6 +881,10 @@ private:
     bool ref_valid_, head_valid_, pending_beta_valid_;
     double ref_deg_, ref_unc_, ref_turn_, ref_aturn_, ref_moving_s_;
     uint32_t ref_breaks_;
+    // Rule F discards (G3Motion::discards) when the pending / the published
+    // record was built: a heading built before a discard may come from a
+    // seed 180 deg wrong; it is dropped (pending) or rewritten (on disk).
+    uint32_t pending_discards_, disk_discards_;
     uint64_t ref_ns_, pending_ref_ns_;
     double head_deg_, head_unc_, pending_beta_deg_, pending_beta_unc_;
 
@@ -892,6 +905,7 @@ private:
         pending_rec_=g3_record();pending_line_[0]=0;pending_len_=0;
         ref_valid_=head_valid_=pending_beta_valid_=false;
         ref_deg_=ref_unc_=ref_turn_=ref_aturn_=ref_moving_s_=0;ref_breaks_=0;ref_ns_=pending_ref_ns_=0;
+        pending_discards_=disk_discards_=0;
         head_deg_=head_unc_=pending_beta_deg_=pending_beta_unc_=0;
     }
     static void copy(char* out,size_t cap,const char* in) {
@@ -1024,6 +1038,11 @@ private:
         // A stop: a run of exactly-zero wheel samples without a gap above
         // G3_WHEEL_GAP_NS (pipeline G3Motion::zero_since_ns, 0 while moving).
         const uint64_t stop_id=m.zero_since_ns;
+        // Rule F discard (v3): a not yet handed-over request whose heading was
+        // built before the discard is dropped (this stop may request again).
+        if(pending_ && (pending_rec_.flags&G3_FLAG_HEADING) && pending_discards_!=m.discards) {
+            pending_=false;episode_done_=false;
+        }
         if(stop_id!=episode_id_) {
             // The previous stop ended. Review MEDIUM-2: one g3_since row (no
             // I/O) for a park that needed a record and never got one, and for
@@ -1040,11 +1059,17 @@ private:
         if(!parked)return;
         const bool long_stop=m.last_speed_ns-stop_id>=G3_FSYNC_MIN_STOP_NS;
         bool want=false,sync=false;
+        // Rule F discard (v3): the record on disk (written in this boot) holds
+        // a heading built before a discard: rewrite it at this stop, even
+        // after an earlier write of the same stop, with the current
+        // (normally invalid) heading.
+        const bool stale=(disk_flags_&G3_FLAG_HEADING) && written_ && disk_discards_!=m.discards;
+        if(stale && !pending_ && !in_flight_)episode_done_=false;
         if(!episode_done_) {
             const bool moved=std::isfinite(m.distance_m) && m.distance_m-m_ref_>=G3_MOVING_MARK_M;
             const bool turned=head_valid_ && (!(disk_flags_&G3_FLAG_HEADING) ||
                 fabs(g3_wrap180(head_deg_-disk_cdeg_/100.0))>=G3_HEADING_CHANGE_DEG);
-            if(!moved && !turned)episode_done_=true;   // nothing new to store
+            if(!moved && !turned && !stale)episode_done_=true;   // nothing new to store
             else { episode_needed_=true;want=true;sync=long_stop; }
         }
         // The stop passed 60 s: the record written in this boot without fsync
@@ -1068,6 +1093,7 @@ private:
             r.unc_cdeg=unc>18000?18000:int32_t(lround(unc));
         }
         pending_beta_valid_=s.heading_valid;pending_beta_deg_=s.heading_deg;pending_beta_unc_=s.unc_deg;
+        pending_discards_=m.discards;
         pending_ref_ns_=head_valid_?ref_ns_:0;
         if(s.position_valid) {
             r.flags|=G3_FLAG_POSITION;

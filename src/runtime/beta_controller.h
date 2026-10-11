@@ -381,23 +381,37 @@ private:
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
 
+    // Rule F (v3/v4): a seed made under the assumed forward state was
+    // discarded (Pipeline::discard_assumed_seed). In the worker turn of the
+    // discard, before any publish attempt of this tick: the stored candidate
+    // is revoked first (adapter::invalidate, empty snapshot; the speed
+    // overlay does not use the heading and is left alone), then the row is
+    // written, then an ENGAGED episode is withdrawn for the rest of the outage.
     template<class J> void journal_contradicted(J& j,uint64_t now,const navigation::Pipeline& nav) {
-        // A real reverse 1 contradicted an active assumption: the BETA anchor
-        // state was reset (seed discarded when "discarded" is true).
         const uint64_t contradictions=nav.reverse_contradictions();
-        if(contradictions!=seen_contradictions_) {
-            seen_contradictions_=contradictions;
-            char row[400];
-            const int m=snprintf(row,sizeof row,
-                "{\"kind\":\"beta_reverse_latch\",\"mono_ns\":%llu,\"domain\":\"beta\",\"event\":\"contradicted\","
-                "\"reason\":\"assumed_forward_contradicted\",\"message_ns\":%llu,\"contradicted\":%llu,"
-                "\"discarded\":%s,\"state\":\"%s\"}",
-                (unsigned long long)now,(unsigned long long)nav.last_contradiction_ns(),
-                (unsigned long long)contradictions,nav.last_contradiction_discarded_seed()?"true":"false",
-                beta_state_name(state_));
-            if(m>0 && size_t(m)<sizeof row)j.line(row);else j.fail();
+        if(contradictions==seen_contradictions_)return;
+        seen_contradictions_=contradictions;
+        const bool discarded=nav.last_contradiction_discarded_seed();
+        // v4: revoke before the row (adapter::invalidate is a lock-free
+        // generation bump; a send that starts after it cannot select the old
+        // candidate), then write the row, then withdraw an ENGAGED episode.
+        if(state_!=BETA_SPEED_ENGAGED) {
+            adapter::invalidate();
+            adapter::DrSnapshot empty=adapter::DrSnapshot();
+            empty.prediction_generation=adapter::generation();
+            adapter::publish_snapshot(empty);
         }
+        char row[400];
+        const int m=snprintf(row,sizeof row,
+            "{\"kind\":\"beta_reverse_latch\",\"mono_ns\":%llu,\"domain\":\"beta\",\"event\":\"contradicted\","
+            "\"reason\":\"assumed_forward_contradicted\",\"cause\":\"%s\",\"message_ns\":%llu,\"contradicted\":%llu,"
+            "\"discarded\":%s,\"state\":\"%s\"}",
+            (unsigned long long)now,nav.last_contradiction_cause(),(unsigned long long)nav.last_contradiction_ns(),
+            (unsigned long long)contradictions,discarded?"true":"false",beta_state_name(state_));
+        if(m>0 && size_t(m)<sizeof row)j.line(row);else { j.fail();return; }
+        if(state_==BETA_ENGAGED)withdraw_episode(j,now,"assumed_forward_contradicted");
     }
+
     // Rule F (runtime::BETA_ASSUME_FORWARD_*, validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md):
     // the BETA gates assumed forward while the MODEL reverse latch was unknown.
     // One row per assumption (the newest one if several happened since the

@@ -570,8 +570,19 @@ bool g3_replacing(R::BetaState s) {
 void g3_turn(uint64_t now) {
     R::G3Course course;
     const bool found = g3.wants_course() && R::g3_find_course(nav, &g3_anchor_seen, &course);
-    g3.tick(g3_journal, R::g3_sample(nav, now, 0), found ? &course : 0,
+    const R::G3Sample sample = R::g3_sample(nav, now, 0);
+    g3.tick(g3_journal, sample, found ? &course : 0,
             g3_replacing(beta->state()) ? "beta_replacing" : 0);
+    // runtime.cpp g3_pump: a rule F taint end cancels the in-flight write.
+    if (g3_job.active) {
+        const char* why = g3.discard_cancel(sample);
+        if (why) {
+            g3.note_cancel(why);
+            R::G3IoResult c = {R::G3_IO_CANCELLED, 0, 0, R::G3_STEP_RENAME, now, now};
+            g3.store_result(g3_journal, now, g3_job.seq, c);
+            g3_job.active = false;
+        }
+    }
     if (g3_job.active && now >= g3_job.due) {
         const uint64_t began = g3_job.due - (opt.g3 == "slow" ? 3000000000ULL : 0);
         R::G3IoResult r = {R::G3_IO_OK, 0, now - began, R::G3_STEP_NONE, began, now};

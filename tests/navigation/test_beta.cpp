@@ -1964,6 +1964,96 @@ static void raw_epoch_change_clears_the_assumption() {
     CHECK(p.enqueue_raw(w)==PIPELINE_OK);
     CHECK(!p.reverse_assumed());
 }
+
+// Review v3 (Codex re-review): the seed's origin is tracked apart from the
+// assumption flag. Path: 25 km/h reverse with an unknown latch -> assumed seed
+// -> 10 km/h -> a REVERSE message excluded before the bus boundary (it clears
+// the assumption; its value is unknown) -> a valid real reverse 1 whose
+// transport time equals the BETA frontier. The seed must be gone, no GPS loss
+// afterwards may be replaced with a reversed direction, and G3 sees a discard.
+static void excluded_message_then_reverse_at_the_frontier_discards() {
+    Pipeline p; tunnel(p);
+    Plan plan; plan.end_ms=11000;
+    plan.wheel=[](unsigned ms){return ms<5000?25.0:10.0;};
+    double lat=35;
+    for(unsigned ms=410;ms<=6410;ms+=1000) {
+        const double v=ms<5000?25.0:10.0;
+        plan.fixes.push_back(fix_at(ms,lat,v,180)); lat-=v/3.6/111320;
+    }
+    plan.fixes.push_back(fix(7620,0,10));
+    bool origin=false,discarded_at_exclusion=false; PipelineResult message=PIPELINE_BAD_INPUT;
+    unsigned published=0,opposite=0;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        if(ms==5500) {
+            origin=q.beta_seeded()&&q.seed_from_assumption();
+            const uint64_t frontier=q.beta_estimate().frontier_ns;
+            q.exclude_reverse();
+            discarded_at_exclusion=!q.beta_seeded()&&q.reverse_contradictions()==1&&
+                std::strcmp(q.last_contradiction_cause(),"assumption_lost")==0;
+            RawEvent r=raw(REVERSE,ms,1000000,1); r.reverse=1;
+            r.source_mono_ms=int64_t(frontier/1000000ULL);     // transport time == frontier
+            message=q.enqueue_raw(r);
+        }
+        if(ms<7700) return;
+        adapter::DrSnapshot s;
+        if(runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s)==runtime::CORE_BRIDGE_OK) {
+            ++published; if(angle_error(s.travel_bearing_deg,180)>90) ++opposite;
+        }
+    };
+    run(p,plan);
+    CHECK(origin && discarded_at_exclusion && message==PIPELINE_OK);
+    CHECK(p.reverse_latched() && p.latch_value()==1 && !p.beta_seeded() && !p.seed_from_assumption());
+    CHECK(opposite==0 && published==0);
+    CHECK(p.g3_motion().discards==1);
+}
+// The early return at end <= frontier (v3 order): a BETA-only core whose
+// reverse state became unknown (a seed confirmed by a real 0, then an
+// excluded message: no discard, the seed is not assumption-derived) is
+// disabled by a drain that integrates nothing.
+static void unknown_latch_disables_beta_even_at_the_frontier() {
+    Pipeline p; tunnel(p);
+    Plan plan=fast_plan(6000,36,36);
+    plan.reverse.push_back(std::make_pair(5000u,0));         // confirms the assumed seed
+    bool before=false,after=false; PipelineResult r=PIPELINE_BAD_INPUT; uint64_t resets=0;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        if(ms!=5200) return;
+        before=q.beta_seeded()&&!q.seed_from_assumption()&&q.reverse_latched()&&!q.diagnostic(T(ms)).snapshot.model_valid;
+        resets=q.status().resets;
+        q.exclude_reverse();
+        r=q.drain(q.beta_estimate().frontier_ns);
+        after=!q.beta_seeded()&&q.status().resets==resets&&q.reverse_contradictions()==0;
+    };
+    run(p,plan);
+    CHECK(before && r!=PIPELINE_CLOCK_RESET && after);
+}
+
+// Review v4 (G3 taint): every unconfirmed end of an assumption-derived seed
+// counts one G3 taint end (G3Motion::discards) and breaks the yaw chain, in
+// one place (Pipeline::end_assumed_origin), whatever path clears it: a cadence
+// fence, a fault caused by a rejected REVERSE message (BETA is reset before
+// the rejection is noticed), a reset. A real 0 confirms it: no taint end.
+static void g3_taint_ends_on_every_unconfirmed_origin_loss() {
+    for(unsigned path=0;path<4;++path) {
+        Pipeline p; tunnel(p);
+        Plan plan=fast_plan(8000,36,36);
+        if(path==3) plan.reverse.push_back(std::make_pair(5000u,0));   // confirmed first
+        uint32_t breaks_before=0,discards_before=0; bool origin=false;
+        plan.each=[&](Pipeline& q,unsigned ms){
+            if(ms!=6000) return;
+            origin=q.beta_seeded()&&q.seed_from_assumption()==(path!=3);
+            breaks_before=q.g3_motion().breaks; discards_before=q.g3_motion().discards;
+            if(path==0||path==3) q.fence_beta();                       // cadence fence
+            if(path==1) { RawEvent r=raw(REVERSE,ms,1000000,1); r.reverse=5;   // neither 0 nor 1
+                          CHECK(q.enqueue_raw(r)==PIPELINE_BAD_INPUT); }
+            if(path==2) q.reset(q.context());
+            if(path!=3) CHECK(q.g3_motion().discards==discards_before+1 && q.g3_motion().breaks>breaks_before);
+            else CHECK(q.g3_motion().discards==discards_before);
+            CHECK(!q.seed_from_assumption());
+        };
+        run(p,plan);
+        CHECK(origin);
+    }
+}
 int main() {
     tunnel_zero_wheel_yaw_holds_heading();
     tunnel_restart_with_yaw_leading_the_wheels_stays_engaged();
@@ -2013,6 +2103,9 @@ int main() {
     contradicting_reverse_message_discards_the_seed();
     reverse_latch_cleared_in_reverse_blocks_rule_f();
     raw_epoch_change_clears_the_assumption();
+    excluded_message_then_reverse_at_the_frontier_discards();
+    unknown_latch_disables_beta_even_at_the_frontier();
+    g3_taint_ends_on_every_unconfirmed_origin_loss();
     std::printf("beta tests passed (%u checks)\n",checks);
     return 0;
 }

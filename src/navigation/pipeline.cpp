@@ -42,7 +42,7 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     latch_received_(0), latch_epoch_(0), latch_seq_(0),
     assumed_forward_(false), assumed_time_(0), assumed_epoch_(0), assumptions_(0),
     af_count_(0), af_last_ns_(0), af_blocked_(false), contradiction_seeded_(false),
-    contradictions_(0), contradiction_ns_(0),
+    seed_from_assumption_(false), contradictions_(0), contradiction_ns_(0), contradiction_cause_("none"),
     beta_enabled_(false), beta_have_prev_(false), beta_gate_(BETA_GATE_DISABLED),
     beta_core_result_(MX5_DR_E_CONFIG), beta_core_failure_(MX5_DR_OK), beta_mode_(-1), beta_position_seq_(0),
     beta_conflict_since_(0), beta_rotation_rad_(0), beta_rotation_budget_m_(0),
@@ -99,7 +99,7 @@ bool Pipeline::init_model(const ModelProfile& p,const mx5_dr_config& c,mx5_dr_co
     if(!valid_profile)return false;
     model_=true; profile_=p; qualified_retired_=false;retired_from_generation_=0;
     reverse_latch_=reverse_latch; clear_latch(); reverse_exit_seen_=reverse_any_seen_=false;
-    af_blocked_=false;
+    af_blocked_=false; seed_from_assumption_=false;
     beta_enabled_=false; beta_gate_=BETA_GATE_DISABLED;
     qualified_stale_position_cutoff_ns_=0;
     qualified_stale_position_call_sequence_=0;
@@ -316,9 +316,11 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
         drop_latch(LATCH_CLEAR_SOURCE_EPOCH);reverse_exit_seen_=reverse_any_seen_=false;
     }
     // Rule F: an assumption belongs to its source epoch like the real latch.
-    if(reverse_latch_&&assumed_forward_&&r.epoch!=assumed_epoch_)clear_latch();
+    if(reverse_latch_&&assumed_forward_&&r.epoch!=assumed_epoch_) { clear_latch(); assumption_lost(); }
     const PipelineResult result=enqueue_raw_event(r);
-    if(reverse_latch_&&r.kind==REVERSE&&result!=PIPELINE_OK)drop_latch(LATCH_CLEAR_REJECTED_REVERSE);
+    if(reverse_latch_&&r.kind==REVERSE&&result!=PIPELINE_OK) {
+        drop_latch(LATCH_CLEAR_REJECTED_REVERSE); assumption_lost();
+    }
     return result;
 }
 PipelineResult Pipeline::enqueue_raw_event(const RawEvent& r) {
@@ -766,6 +768,10 @@ PipelineResult Pipeline::advance(uint64_t end) {
     if (!core_.seeded&&!beta_only) return PIPELINE_OK;
     if (core_.seeded&&beta_enabled_&&beta_core_.seeded&&
         beta_core_.estimate.frontier_ns!=core_.estimate.frontier_ns) beta_control(MX5_DR_DISABLE);
+    // Rule F (v3): a BETA-only core never stays seeded while the reverse state
+    // is unknown and not assumed, even when nothing is due (end <= frontier):
+    // a real message drained at the frontier must not find it still seeded.
+    if (beta_only&&!(reverse_known()||reverse_assumed())) { beta_control(MX5_DR_DISABLE); return PIPELINE_OK; }
     const uint64_t frontier=core_.seeded?core_.estimate.frontier_ns:beta_core_.estimate.frontier_ns;
     if(end<=frontier)return PIPELINE_OK;
     uint64_t begin=frontier;
@@ -927,6 +933,7 @@ void Pipeline::reset_beta(mx5_dr_context x) {
     beta_have_heading_ref_=false; beta_resync_count_=0; beta_resync_innovation_=0; beta_resync_ns_=0;
     beta_fix_ns_=0; beta_fix_agrees_=false;
     af_count_=0; af_last_ns_=0;  // rule F run (the assumption itself stays like the latch)
+    end_assumed_origin(false);   // the seed is gone (unconfirmed: G3 taint ends)
     if (!beta_enabled_) return;
     const mx5_dr_config c=runtime::beta_core_config(beta_);
     beta_core_result_=mx5_dr_init_model(&beta_core_,&c,x);
@@ -1042,7 +1049,37 @@ bool Pipeline::beta_anchor_record(uint64_t seq,BetaAnchorRecord* out) const {
     *out=r; return true;
 }
 void Pipeline::exclude_reverse(LatchClear why) {
-    if (reverse_latch_) drop_latch(why);
+    if (reverse_latch_) { drop_latch(why); assumption_lost(); }
+}
+// Rule F (v3): a seed made under the assumption whose reverse state became
+// unknown again without a real forward confirmation (an excluded or rejected
+// REVERSE message, whose value may be 1, or a raw epoch change) is discarded
+// at once; a confirmed seed (seed_from_assumption_ false) is never touched.
+// Resets do not come here: reset_beta() drops the seed anyway.
+void Pipeline::assumption_lost() {
+    if (seed_from_assumption_) discard_assumed_seed(status_.last_received_ns,"assumption_lost");
+}
+// G3 taint rule (v4): while seed_from_assumption_ is set, every BETA heading
+// (and so any G3 reference adopted or carried from it) derives from an
+// unconfirmed assumption. Its origin ends here and only here: confirmed by a
+// real forward message (nothing happens), or unconfirmed (discard, BETA
+// reset/fault, cadence fence, a new non-assumed course seed): the G3 yaw chain
+// breaks (the reference is dropped) and G3Motion::discards is counted, so G3
+// drops a pending request, cancels an in-flight write before its rename and
+// rewrites a stored record whose heading was built before it. Independent
+// of the order in which the clearing path runs (e.g. fault() resets BETA
+// before a rejected REVERSE message is noticed).
+void Pipeline::end_assumed_origin(bool confirmed) {
+    if (seed_from_assumption_&&!confirmed) { ++g3_.breaks; ++g3_.discards; }
+    seed_from_assumption_=false;
+}
+void Pipeline::discard_assumed_seed(uint64_t at_ns,const char* cause) {
+    ++contradictions_; contradiction_ns_=at_ns; contradiction_cause_=cause;
+    contradiction_seeded_=beta_enabled_&&beta_core_.seeded;
+    // fence_beta() -> reset_beta() -> end_assumed_origin(false): the G3
+    // chain breaks and G3Motion::discards counts it (one place for every path).
+    fence_beta();
+    end_assumed_origin(false);
 }
 void Pipeline::reset_keep_reverse(mx5_dr_context x) {
     keep_latch_on_reset_=true; reset(x); keep_latch_on_reset_=false;
@@ -1485,6 +1522,11 @@ void Pipeline::beta_position(const adapter::Observation& o) {
         beta_rotation_rad_=0; beta_rotation_budget_m_=0; beta_conflict_since_=0;
         beta_reverse_suspect_=false;
         beta_fix_ns_=o.mono_ns; beta_fix_agrees_=true;
+        // Rule F origin (v3): a heading taken from a GPS course (seed or
+        // resync) inherits the current reverse basis; a refresh keeps the
+        // carried heading's origin (and an assumed refresh marks it).
+        if (reverse_assumed()) seed_from_assumption_=true;
+        else if (!have_heading||check.resync) end_assumed_origin(false);
         // A reverse position refresh must not restart the sustained
         // reverse-contradiction timer (3.4).
         if (!(beta_.continuous_anchor&&check.reversing)) beta_reverse_fast_since_=0;
@@ -1574,18 +1616,16 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
                 latch_valid_=true; latch_value_=int(e.value); latch_time_=e.time;
                 latch_received_=e.received; latch_epoch_=e.evidence.source_epoch;
                 // Rule F: a real message always overrides (and ends) the assumption
-                // and lifts the reverse-at-clear block. A real reverse 1 while
-                // the assumption was active contradicts it: anything seeded
-                // under the assumed forward state (its body heading would be
-                // 180 deg wrong if the car was reversing) is discarded and
+                // and lifts the reverse-at-clear block. v3 origin tracking: a
+                // real 0 confirms a seed made under the assumption; a real 1
+                // while such a seed exists contradicts it (its body heading is
+                // 180 deg wrong if the car was reversing), however the
+                // assumption flag itself was cleared: the seed is discarded and
                 // BETA re-qualifies through the normal path with the real latch.
-                const bool contradicted=assumed_forward_&&int(e.value)==1;
+                const bool contradicted=seed_from_assumption_&&int(e.value)==1;
                 assumed_forward_=false; af_count_=0; af_last_ns_=0; af_blocked_=false;
-                if(contradicted) {
-                    ++contradictions_; contradiction_ns_=e.received;
-                    contradiction_seeded_=beta_enabled_&&beta_core_.seeded;
-                    fence_beta();
-                }
+                if(int(e.value)==0) end_assumed_origin(true);
+                if(contradicted) discard_assumed_seed(e.received,"reverse_message");
             }
             gps_wheel_.reverse(e.time,e.received,int(e.value)); break;
         case YAW_EVENT:

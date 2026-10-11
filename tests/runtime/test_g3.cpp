@@ -605,6 +605,38 @@ static void carried_reference() {
 // fsync only for long stops (third review): the real writer skips the fsync
 // step (and its hook) for sync=false; the tracker writes at 15 s without and
 // at 60 s with fsync, or once with fsync when the stop was blocked until 60 s.
+// Rule F v3 (validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md): a BETA
+// seed made under the assumed forward state was discarded (G3Motion::discards
+// and a yaw-chain break). A record written in this boot with a heading built
+// before the discard is rewritten at the next parked tick without it; a
+// pending request with such a heading is dropped and requested again.
+static G3Sample discarded(G3Sample s,uint32_t n) { s.motion.discards=n;s.motion.breaks+=n;return s; }
+static void rule_f_discard() {
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record());
+      // BETA (seeded under the assumption) says 100 deg; parked: written with it.
+      st.tick(moved(1*S,50,0,0,10,true,true,100,4));
+      st.tick(parked(moved(20*S,60,0,0,12,false,true,100,4),2*S));
+      G3Record d;
+      CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.flags==3 && d.heading_cdeg==10000);
+      // The real reverse 1 arrives while parked: discard. The same stop
+      // rewrites the record without a heading (after the 5 s rate limit).
+      st.tick(discarded(parked(moved(21*S,60,0,0,12,false,false),2*S),1));
+      st.tick(discarded(parked(moved(26*S,60,0,0,12,false,false),2*S),1));
+      CHECK(st.written.size()==2 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.flags==2);
+      // Nothing more for this stop.
+      st.tick(discarded(parked(moved(40*S,60,0,0,12,false,false),2*S),1));
+      CHECK(st.written.size()==2); }
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record());Rows j;
+      t.tick(j,moved(1*S,50,0,0,10,true,true,100,4),0,0);
+      t.tick(j,parked(moved(20*S,60,0,0,12,false,true,100,4),2*S),0,0);   // request pending, not handed over
+      t.tick(j,discarded(parked(moved(21*S,60,0,0,12,false,false),2*S),1),0,0);
+      char b[G3_RECORD_MAX];size_t n;uint32_t q;
+      CHECK(!t.take_request(b,sizeof b,&n,&q));                        // dropped
+      t.tick(j,discarded(parked(moved(26*S,60,0,0,12,false,false),2*S),1),0,0);
+      CHECK(t.take_request(b,sizeof b,&n,&q));
+      G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};t.store_result(j,26*S,q,ok);
+      CHECK(has(j.last("\"event\":\"written\""),"\"hv\":0")); }
+}
 static unsigned hook_calls;
 static void count_hook() { ++hook_calls; }
 static void fsync_policy() {
@@ -696,6 +728,44 @@ static bool wait_result(G3Mailbox& m,uint32_t seq,uint32_t epoch,G3IoResult* r,u
         struct timespec t={0,10000000};nanosleep(&t,0);
     }
     return false;
+}
+// Rule F v4: a taint end (G3Motion::discards) while a write with a heading
+// built before it is in flight. The worker adds discard_cancel() to its
+// cancel reasons (runtime.cpp g3_pump); a taint end that arrives after the
+// temporary write (here inside the fsync step) prevents the rename: the
+// previous record (none) stays, and the stop requests again without heading.
+static G3Tracker* inflight_tracker;
+static Rows* inflight_rows;
+static G3Mailbox* inflight_mailbox;
+static void discard_during_fsync() {
+    const G3Sample s=discarded(parked(moved(21*S,60,0,0,12,false,false),2*S),1);
+    inflight_tracker->tick(*inflight_rows,s,0,0);
+    if(const char* why=inflight_tracker->discard_cancel(s)) {
+        inflight_tracker->note_cancel(why);inflight_mailbox->cancel_gen.fetch_add(1);
+    }
+}
+static void rule_f_discard_in_flight() {
+    static G3Mailbox m;
+    const std::string dir=temp_dir();
+    CHECK(g3_mailbox_init(m,dir.c_str(),discard_during_fsync));
+    G3Tracker t;t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record());Rows j;
+    inflight_tracker=&t;inflight_rows=&j;inflight_mailbox=&m;
+    t.tick(j,moved(1*S,50,0,0,10,true,true,100,4),0,0);
+    t.tick(j,parked(moved(20*S,60,0,0,12,false,true,100,4),2*S),0,0);
+    char b[G3_RECORD_MAX];size_t n;uint32_t q;bool sync=false;
+    CHECK(t.take_request(b,sizeof b,&n,&q,&sync));
+    const uint64_t now=mono();
+    CHECK(g3_mailbox_post(m,b,n,q,1,now,true));
+    CHECK(g3_mailbox_run_once(m,now));                 // temp write, fsync (taint end), rename gated
+    G3IoResult r;CHECK(g3_mailbox_result(m,q,1,&r));
+    CHECK(r.stage==G3_IO_CANCELLED && r.step==G3_STEP_RENAME);
+    t.store_result(j,21*S,q,r);
+    CHECK(has(j.last("\"event\":\"cancelled\""),"\"why\":\"rule_f_discard\""));
+    G3Record d;CHECK(g3_load(dir.c_str(),&d)==G3_LOAD_MISSING);
+    t.tick(j,discarded(parked(moved(26*S,60,0,0,12,false,false),2*S),1),0,0);
+    CHECK(t.take_request(b,sizeof b,&n,&q));
+    G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};t.store_result(j,26*S,q,ok);
+    CHECK(has(j.last("\"event\":\"written\""),"\"hv\":0"));
 }
 static void store_thread() {
     static G3Mailbox m;
@@ -960,6 +1030,8 @@ int main(int argc,char** argv) {
     pipeline_motion();
     pipeline_park_detection();
     yaw_chain_breaks();
+    rule_f_discard();
+    rule_f_discard_in_flight();
     std::printf("test_g3: %u checks passed\n",checks);
     return 0;
 }

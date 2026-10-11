@@ -1795,6 +1795,16 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     if(!source_disabled && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
       source.reset(now);source_disabled=true;
     }
+    if(j.failed || __sync_fetch_and_add(&audit_fault,0)) {
+      // Rule F v5: the permanent fault ends the MODEL/G3 computation (the G3
+      // block below never runs again), and the reset ends any assumed seed
+      // origin (a G3 taint end). Deliver the end to the store thread here,
+      // unconditionally and outside the shadow-guarded block: an in-flight
+      // write (possibly a tainted heading) stops before its next gated step
+      // (fsync or rename), and no later write is accepted.
+      g3_mailbox.cancel_gen.fetch_add(1,std::memory_order_acq_rel);
+      g3_mailbox.stop.store(1,std::memory_order_release);
+    }
     if(shadow && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
           navigation.reset(navigation.context());
           holdout.reset(navigation.context(),N::HOLDOUT_AUDIT_RESET);
@@ -1877,6 +1887,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       const char* g3_cancel=g3_io_block(j,beta.state(),g3_now,false);
       if(!g3_cancel && g3_sample_now.wheels_moving)g3_cancel="wheels_moving";
       if(!g3_cancel && !g3_sample_now.wheels_fresh)g3_cancel="wheels_stale";
+      if(!g3_cancel)g3_cancel=g3.discard_cancel(g3_sample_now);   // rule F taint end (v4)
       g3_pump(j,g3,g3_worker_epoch,g3_cancel);
     }
     j.pump(clock_ns(0));

@@ -166,6 +166,12 @@ struct G3Motion {
     // describes the body rotation across a break.
     uint32_t breaks;
     uint64_t yaw_end_ns;     // newest drained yaw window end (0: none)
+    // Rule F taint ends (Pipeline::end_assumed_origin): the origin of a BETA
+    // heading derived from the assumed forward state ended without a real
+    // forward confirmation (discard on a real reverse 1 or a lost assumption,
+    // BETA reset/fault, cadence fence). Each one is also a yaw-chain break; G3
+    // drops/cancels/rewrites a pending, in-flight or stored heading made before it.
+    uint32_t discards;
 };
 
 // Single worker, fixed capacity, no allocation/I/O. Raw ingestion ONLY enters
@@ -307,14 +313,21 @@ public:
     // Number of rule F assumptions since init and the newest one.
     uint64_t reverse_assumptions() const { return assumptions_; }
     const ReverseAssumption& last_reverse_assumption() const { return assumption_; }
-    // A real REVERSE message 1 arrived while the assumption was active: the
-    // assumption was wrong (or reverse was engaged, which cannot be told
-    // apart); the BETA anchor state was reset (fence_beta) so nothing seeded
-    // under the wrong forward state survives. Count, newest receipt time and
-    // whether a seeded BETA core was discarded.
+    // Origin tracking (v3): the BETA heading in use was seeded (or reseeded
+    // from a GPS course) while the reverse state was only assumed, and no real
+    // forward (0) message has confirmed it since. Cleared by a real 0 and by a
+    // BETA reset (reset_beta, fence_beta); independent of the assumption flag.
+    bool seed_from_assumption() const { return seed_from_assumption_; }
+    // Discards of such a seed (discard_assumed_seed): a real reverse 1 arrived
+    // ("reverse_message": the assumption was wrong, or reverse was engaged,
+    // which cannot be told apart), or the assumption was lost unconfirmed by
+    // an excluded/rejected REVERSE message or a raw epoch change
+    // ("assumption_lost"). The BETA anchor state is reset (fence_beta) and the
+    // G3 chain broken. Count, time, whether a seeded core was dropped, cause.
     uint64_t reverse_contradictions() const { return contradictions_; }
     uint64_t last_contradiction_ns() const { return contradiction_ns_; }
     bool last_contradiction_discarded_seed() const { return contradiction_seeded_; }
+    const char* last_contradiction_cause() const { return contradiction_cause_; }
     // Mitigation: the real latch was 1 (reverse) when it was last cleared; rule
     // F stays off until a real REVERSE message is latched again.
     bool reverse_assumption_blocked() const { return af_blocked_; }
@@ -392,8 +405,12 @@ private:
     uint64_t assumed_time_, assumed_epoch_, assumptions_;
     unsigned af_count_;
     uint64_t af_last_ns_;
-    bool af_blocked_, contradiction_seeded_;
+    bool af_blocked_, contradiction_seeded_, seed_from_assumption_;
     uint64_t contradictions_, contradiction_ns_;
+    const char* contradiction_cause_;
+    void discard_assumed_seed(uint64_t at_ns,const char* cause);
+    void end_assumed_origin(bool confirmed);
+    void assumption_lost();
     ReverseAssumptionFix af_run_[3];
     ReverseAssumption assumption_;
     // BETA core and its anchor gate state.
