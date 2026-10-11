@@ -1,0 +1,5 @@
+tap 170 177
+sleep 1
+location 35.1697679 129.0267566 5 NAN 0 0.0
+sleep 1
+screenshot ../../../../experiment10/@TAG@-setup-guidance.png

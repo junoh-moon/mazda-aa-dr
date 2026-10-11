@@ -113,3 +113,56 @@ next night would again have changed several things at once. v3 (validation/DHU_N
   go uncropped in a separate photos ZIP with frames.csv; the results ZIP stays small and text-only; text artefacts must not contain
   accounts, ADB keys, auth tokens or phone serial numbers. The executing agent keeps local copies and commits or pushes nothing.
 - The owner must still re-enable USB debugging and accept the ADB prompt (the v1 cleanup disabled it and deleted the key).
+
+## v3 result (2026-10-11 09:01-09:13 KST): Tier 0 ABORT, location gate passed, guidance never started
+
+Analysed offline from the uploaded v3 bundle (report.md, commands-timed.jsonl, tier0/, run-log.csv, frames.csv, versions.csv,
+source/exp9-controller.py) and all 12 photos (read by the analyst), against the private exp3-exp9 bundles. Nothing was run on the DHU,
+the phone or ADB for this section.
+
+**What happened.** Plan 374630e. A first diagnostic pasted the files into a native DHU console: neither the location nor the taps had a
+visible effect (map stayed at the phone's real location; kept apart, not a scientific run). Re-run with the exp9 controller under a PTY:
+gate A passed; the 18 template lines (5 m fixes, `tap 200 50`, `tap 345 145`) moved the map to the synthetic Busan start (blue arrow,
+**gate L passed: the v1 failure was the 15 m accuracy**), but no route, no guidance (gate G failed). F2: `tap 600 44` sent at 00:06:54 and
+00:07:32 UTC, photos 4 s later: still the free map with the four buttons. T0-LPROBE then ABORT. Valid runs 0; no decision-table row evaluated.
+
+**Evidence that matters (primary files).**
+
+| Item | Source | Reading |
+| --- | --- | --- |
+| exp6 never sent the template taps: its preparation was a fix, `tap 600 44`, `tap 240 130`, `tap 345 145`, then the body; `trial-commands-timed.jsonl` contains no tap at all | exp6 methods/prepare.py, status.json, setup-observations.json ("recent Mora station selected") | the record's line "exp6 used the template taps as written" (photo addendum) is wrong |
+| exp7/8/9 started guidance in caller-reviewed stages (`route`: `tap 230 <row>`, `tap 345 145`, five fixes, photo; `gate`: `tap 170 177`, fix, photo) after a search tap `600,44`, and sent only the lines after the setup-guidance screenshot (`assert body == source[k+1:]`) | exp7 reset-log.txt, exp7/8/9 methods/prep_stage.py, exp9 methods/begin.py, preparation-deviations.json | **the template's 18 lines were never part of the procedure that worked in exp6-9**. The "CORRECTION" in hypothesis 1 above was itself wrong; the original line-24 reading was right |
+| the template comes from exp3 C3-setup ("DHU reconnected and guidance resumed"); exp4 R100-r1 "automatic resume left Naver on the non-guidance phone-position map ... first tap only revealed auto-hidden controls"; exp5 E5 "source resume taps did not resume guidance" | exp3 report.md line 19, exp4 evidence.json, exp5 report.md and evidence.json | the two taps were a resume path; they fail whenever no resumable route exists, which is every exp6-9-style run (previous guidance ended) |
+| v3 photos: buttons visible 4 s after each `tap 600 44`, although the previous tap was 45 s (first) and 38 s (retry) earlier; both LPROBE photos (40 s and 55 s after the last tap) show the buttons and zoom controls **hidden** and a driving-style map | experiment10/T0-F2-search*.png, T0-LPROBE-15m/05m.png, commands-timed.jsonl | Naver hides the free-map buttons after idle; the search taps were delivered but only revealed the buttons. If the taps had not been delivered, the F2 photos would have shown the hidden layout |
+| Naver 6.10.0.16 and Android Auto 17.7.663654 identical in exp9 and v3 | exp9 versions.csv, v3 versions.csv | no app change |
+| exp7 ran with the phone lockscreen on and taps worked; the "1" in the v3 rail is the AA notification count, no overlay in any photo | exp7 reset-log.txt, v3 photos | lock state and the badge are not the cause |
+
+**Ranked causes.**
+1. **Template = resume path, not the exp6-9 preparation (established from primary files).** Explains gate G failing after the 18 lines.
+   Whether a resume card sat at (200,50) in exp3 is not recorded in the files read; hypothesis (a) "the card only appears when the previous
+   session ended with guidance active" is consistent with exp3 vs exp4/5 but not verified.
+2. **Auto-hidden free-map buttons (strongly supported, not directly measured).** Explains the two failed search taps: each came 38-45 s
+   after the last input, revealed the buttons and nothing else. exp6 tapped search 1 s after the first fix right after the DHU start.
+3. **Console tap transport (weakened).** The F2 photos imply delivery; locations went through the same pipe. The native-console diagnostic
+   (no location effect either) is a separate, unexplained instrumentation failure; v4 forbids that path.
+4. **Phone lock / notification (unlikely)**, **app version (refuted)**.
+
+**2-minute owner test (separates 2 from 3).** Free map, 45 s untouched (buttons should disappear) → mouse-click the magnifier once (expect
+buttons only) → click again within 2 s (expect the search screen) → ask the agent to repeat with the exp9 controller (`tap 600 44` twice,
+2 s apart, photo after each). Same behaviour = auto-hide confirmed and console taps fine; no change at all via the controller = transport.
+
+**v4 changes (validation/DHU_NAVER_EXP10_PLAN_2026-10-11/README.md).**
+- The 18 template lines are no longer sent. `commands/prep/` (58 generated files) holds the exp6-9 preparation: `search` (fix, `tap 600 44`,
+  photo) within 10 s of gate A, `search-again` once if the free map is still shown, `route-y130/225/318` (exp7/8/9 `route` stage),
+  `route-retry` (exp8 ST0), `gate` (`tap 170 177`) or `gate-nopopup`, `end-guidance` (`tap 55 347`, exp6). For B2 the stages are
+  byte-identical to exp7/8/9 prep_stage.py (test); other conditions differ only in the bearing of the fix line (the v3 independent
+  variable). The body is the run file from line 19 (exp9 begin.py). Run files are byte-identical to v3.
+- New gate S (search screen with "모라역" in OCR, row chosen from the OCR box); gate G gets a machine check (OCR km value 3.9-4.7, ETA token,
+  "모라역" or "터널 진입").
+- Tier 0 reduced: preparation (B2) + 20 s, one retry in a new DHU session, else ABORT; no F2, no LPROBE (gate L is answered for 5 m).
+- Owner: make 모라역 (부산2호선) the first recent destination once; the optional 2-minute test. Leaving guidance active by hand was
+  rejected as the primary path: it turns every run into an RS (reconnect) case and removes the R label.
+- Decision table, conditions, body, photo times and upload rules unchanged (folder results/exp10v4/).
+
+**Limits.** v4 is not executed. The auto-hide timeout (10-40 s) is inferred from photo spacing. Row choice and retries rely on the
+executing agent reading photos, as in exp7-9.

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Generate DHU `location` command files for experiment 10 v3 (G3: bearing shown on a fresh Android Auto session at standstill).
+"""Generate DHU `location` command files for experiment 10 v4 (G3: bearing shown on a fresh Android Auto session at standstill).
+
+v4 (2026-10-11, after the v3 Tier 0 ABORT): the run files are unchanged from v3, but their first 18 lines (the setup-template.txt
+preamble) are NOT sent any more. Primary files show that experiments 6-9 never sent them: exp6 prepare.py and the exp7/8/9 prep_stage.py
+started guidance with search (600,44) -> observed 모라역 row (230, y) -> route start (345,145) -> popup dismissal (170,177) and then sent
+only the lines after the setup-guidance screenshot (exp9 begin.py: body == source[k+1:]). commands/prep/ holds those stages with the
+condition's own first fix (the v3 independent variable @BRG@); for B2 they are byte-identical to the exp7/8/9 prep_stage.py stages.
 
 v3 (2026-10-11, rework after the failed v1 night and the rejected v2, validation/DHU_NAVER_EXP10_FAILURE_2026-10-11.md).
 Principle: change only the independent variable. Every run file starts with the proven guidance-start preamble of experiments 6-9
@@ -67,6 +73,8 @@ MOVE_T = 80
 RAMP_S, V_MAX, MOVE_S = 10, 20 / 3.6, 40
 TAIL_S = 10
 RS_A_S = 35
+N_TEMPLATE = 18  # lines of setup-template.txt at the top of every non-RS run file and RS part a; v4 never sends them
+PREP_ROWS = (130, 225, 318)  # observed 모라역 rows of the recent list (exp7/exp9 preparation-deviations)
 
 
 def start_m(route):
@@ -212,6 +220,26 @@ def fallback_stream(template, route, base):
     return [s for _ in range(FB_S) for s in (fix, "sleep 1")]
 
 
+def prep_files(template, route, base):
+    """v4 preparation stages for one condition (exp6 prepare.py / exp7-9 prep_stage.py form, the condition's first fix).
+
+    @TAG@ in the screenshot lines is the only placeholder; the agent substitutes the run tag (e.g. B2-r1, T0-PRE, RS-B1-r1-a)."""
+    fix = fallback_stream(template, route, base)[0]
+    shot = lambda name: f"screenshot {SHOT}@TAG@-{name}.png"
+    five = [s for _ in range(5) for s in (fix, "sleep 1")]
+    out = {f"{base}-search": [fix, "sleep 1", "tap 600 44", "sleep 2", shot("prep-search")]}
+    for y in PREP_ROWS:  # exp7/8/9 prep_stage.py stage 'route'
+        out[f"{base}-route-y{y}"] = [f"tap 230 {y}", "sleep 5", "tap 345 145", "sleep 3"] + five + ["sleep 2", shot("pre-gate")]
+    out[f"{base}-route-retry"] = ["tap 345 145", "sleep 3"] + five + ["sleep 2", shot("pre-gate-2")]  # exp8 ST0 deviation
+    out[f"{base}-gate"] = ["tap 170 177", "sleep 1", fix, "sleep 1", shot("setup-guidance")]  # exp7/8/9 stage 'gate'
+    out[f"{base}-gate-nopopup"] = [fix, "sleep 1", shot("setup-guidance")]
+    return out
+
+
+PREP_SEARCH_AGAIN = ["tap 600 44", "sleep 2", f"screenshot {SHOT}@TAG@-prep-search-2.png"]
+PREP_END_GUIDANCE = ["tap 55 347", "sleep 2", f"screenshot {SHOT}@TAG@-end.png"]  # exp6 status.json: ETA-card X
+
+
 def tier0_files(template, route):
     lat, lon, road = route.at(start_m(route))
     pre = preamble(template, route, "T0-PRE", round(road, 1))
@@ -269,6 +297,15 @@ def generate(out_dir, plan_path=None):
         write(f"FB-{base}", fallback_stream(template, route, base))
     for name, lines in tier0_files(template, route).items():
         write(name, lines)
+    prep_dir = os.path.join(out_dir, "prep")
+    os.makedirs(prep_dir, exist_ok=True)
+    prep_names = []
+    stages = {"search-again": PREP_SEARCH_AGAIN, "end-guidance": PREP_END_GUIDANCE}
+    for base in BASES:
+        stages.update(prep_files(template, route, base))
+    for name, lines in stages.items():
+        write(os.path.join("prep", name), lines)
+        prep_names.append(f"prep/{name}.txt")
     assert sorted(t for tier in TIERS for t in tier) == sorted(plans), "TIERS must list every run exactly once"
     tiers = []
     for name, runs in zip(TIER_NAMES, TIERS):
@@ -290,7 +327,13 @@ def generate(out_dir, plan_path=None):
                tier0=dict(files=["T0-PRE.txt", "T0-COLD.txt", "T0-LPROBE.txt"], extra_s=T0_EXTRA_S, lprobe_s=LPROBE_S,
                           estimate_min=list(TIER0_MIN)),
                fallback=dict(files={b: f"FB-{b}.txt" for b in BASES}, stream_s=FB_S, ui_fallback=UI_FALLBACK,
-                             rule="only after the preamble's gate G failed"),
+                             rule="v3 only; not used in v4 (the screen-checked preparation is the primary path)"),
+               prep=dict(version="v4", files=sorted(prep_names), template_lines_not_sent=N_TEMPLATE,
+                         body_rule="send the run file from line 19 (after the setup-guidance screenshot line); exp9 begin.py",
+                         stages=["<base>-search", "search-again (if the search screen is not open)", "<base>-route-y<row>",
+                                 "<base>-route-retry (if no route)", "<base>-gate (popup) | <base>-gate-nopopup", "gate G"],
+                         rows_y=list(PREP_ROWS), placeholder="@TAG@ in screenshot lines only",
+                         source="exp6 prepare.py; exp7/8/9 prep_stage.py, begin.py, reset-log.txt, preparation-deviations.json"),
                budget_min=BUDGET_MIN, order=ORDER, tiers=tiers, runs=plans)
     if plan_path:
         with open(plan_path, "w") as f:

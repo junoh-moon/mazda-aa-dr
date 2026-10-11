@@ -58,13 +58,18 @@ class Exp10Commands(unittest.TestCase):
     def test_generator_is_deterministic_and_matches_the_committed_files(self):
         with tempfile.TemporaryDirectory() as other:
             gen.generate(other + "/c", other + "/p.json")
-            cmp = filecmp.dircmp(str(self.out), other + "/c")
-            self.assertEqual((cmp.left_only, cmp.right_only, cmp.diff_files), ([], [], []))
+            for sub in ("", "prep"):
+                cmp = filecmp.dircmp(str(self.out / sub), other + "/c/" + sub)
+                self.assertEqual((cmp.left_only, cmp.right_only, cmp.diff_files), ([], [], []), sub)
             self.assertEqual(self.plan_path.read_bytes(), pathlib.Path(other + "/p.json").read_bytes())
         committed = PLAN / "commands"
         self.assertEqual(sorted(p.name for p in committed.glob("*.txt")), sorted(p.name for p in self.out.glob("*.txt")))
         for p in self.out.glob("*.txt"):
             self.assertEqual(p.read_bytes(), (committed / p.name).read_bytes(), p.name)
+        self.assertEqual(sorted(p.name for p in (committed / "prep").glob("*.txt")),
+                         sorted(p.name for p in (self.out / "prep").glob("*.txt")))
+        for p in (self.out / "prep").glob("*.txt"):
+            self.assertEqual(p.read_bytes(), (committed / "prep" / p.name).read_bytes(), p.name)
         self.assertEqual(json.loads((PLAN / "run-plan.json").read_text()), self.json)
 
     def test_proven_preamble_geometry_and_start_of_experiment_9(self):
@@ -186,6 +191,41 @@ class Exp10Commands(unittest.TestCase):
         probe = locs(self.files["T0-LPROBE"])
         self.assertEqual([x[3] for x in probe], ["15.000"] * gen.LPROBE_S + ["5.000"] * gen.LPROBE_S)
         self.assertTrue(all(x[6] == "NAN" for x in probe))
+
+    def test_v4_preparation_is_the_exp7_9_prep_stage_with_the_condition_fix(self):
+        prep = {p.name[:-4]: p.read_text().splitlines() for p in (self.out / "prep").glob("*.txt")}
+        self.assertEqual(len(prep), 2 + 7 * len(gen.BASES))
+        fix9 = "location 35.1697679 129.0267566 5 NAN 0 328.9"  # exp7/8/9 prep_stage.py fix line
+        shot = "screenshot ../../../../experiment10/@TAG@-"
+        # exp7/8/9 prep_stage.py, stage 'route' (row 130) and stage 'gate', byte for byte except the screenshot prefix
+        route9 = ["tap 230 130", "sleep 5", "tap 345 145", "sleep 3"] + [fix9, "sleep 1"] * 5 + ["sleep 2", shot + "pre-gate.png"]
+        self.assertEqual(prep["B2-route-y130"], route9)
+        self.assertEqual(prep["B2-gate"], ["tap 170 177", "sleep 1", fix9, "sleep 1", shot + "setup-guidance.png"])
+        # exp6 prepare.py: first fix, sleep 1, search tap, sleep 2
+        self.assertEqual(prep["B2-search"][:4], [fix9, "sleep 1", "tap 600 44", "sleep 2"])
+        self.assertEqual(prep["search-again"], ["tap 600 44", "sleep 2", shot + "prep-search-2.png"])
+        self.assertEqual(prep["end-guidance"][0], "tap 55 347")
+        for base in gen.BASES:
+            first = self.files[f"{base}-r1"][0]  # the v3 preamble's first fix carries the condition bearing (@BRG@)
+            self.assertEqual(locs(self.files[f"{base}-r1"][:N_PRE])[0], first.split())
+            for name, lines in prep.items():
+                if not name.startswith(base + "-"):
+                    continue
+                self.assertEqual({x for x in lines if x.startswith("location ")} or {first}, {first}, name)
+                for x in lines:
+                    w = x.split()
+                    self.assertIn(w[0], ("location", "sleep", "tap", "screenshot"), (name, x))
+                    if w[0] == "screenshot":
+                        self.assertTrue(w[1].startswith("../../../../experiment10/@TAG@-"), (name, x))
+                    self.assertEqual(x.replace("@TAG@", "").count("@"), 0, (name, x))
+            for y in gen.PREP_ROWS:
+                self.assertEqual(prep[f"{base}-route-y{y}"][0], f"tap 230 {y}")
+        # the body sent after the preparation is the run file from line 19 (exp9 begin.py)
+        self.assertEqual(gen.N_TEMPLATE, N_PRE)
+        self.assertEqual(self.json["prep"]["template_lines_not_sent"], N_PRE)
+        for tag, plan in self.doc["runs"].items():
+            if not plan["reconnect"]:
+                self.assertTrue(self.files[tag][N_PRE - 1].endswith(f"{tag}-setup-guidance.png"), tag)
 
     def test_tiers(self):
         tiers = {t["tier"]: t for t in self.doc["tiers"]}
