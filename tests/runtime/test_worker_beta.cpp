@@ -198,6 +198,7 @@ static bool wait_rows(const std::string& logs,const char* const* needles,unsigne
 }
 
 int main(int argc,char** argv) {
+    setvbuf(stdout,0,_IOLBF,0);   // a failing assert must not lose the scenario's result line
     assert(argc==2);
     // main_no_reverse (rule F, validation/REVERSE_GATE_ASSUMED_FORWARD_2026-10-11.md):
     // the main scenario without any REVERSE message; BETA seeds from the
@@ -289,6 +290,7 @@ int main(int argc,char** argv) {
     const unsigned end_ms=scenario_end+(shifted?PRELUDE:0)+(scenario=="main"?PRELUDE2:0);
     const uint64_t start=clock_ns(0);
     bool motion=true;
+    int g3_inject_t=-1;
     unsigned first_outage_replaced=0,second_outage_replaced=0,after_hold_replaced=0,after_storage_replaced=0;
     unsigned replaced_after_silence=0,replaced_after_disable=0,replaced_after_stop=0;
     bool failed_once=false,storage_changed=false;
@@ -311,10 +313,18 @@ int main(int argc,char** argv) {
             if(ms<PRELUDE) { prelude=true;t=0; } else t=ms-PRELUDE;
             if(scenario=="main" && t>7500) { if(t<=7500+PRELUDE2) { prelude=true;t=7500; } else t-=PRELUDE2; }
         }
+        // G3 cancel scenarios inject their stimulus when the 60 s write is really
+        // inside its blocked fsync step (hook_active), not at a fixed simulated
+        // time: under load the write can start late and a fixed 63 s injection
+        // then missed it (the intermittent aborts of g3_cancel/g3_move).
+        if(g3_inject_t<0 && !prelude && t>=60000 && hook_active.load())g3_inject_t=int(t);
+        // 300 ms after the write is seen inside its blocked step (it blocks 3 s):
+        // the begin row must precede the injected state change with a margin.
+        const bool g3_injected=g3_inject_t>=0 && int(t)>=g3_inject_t+300;
         if(scenario=="silence" && !prelude && t==4000)motion=false;
         // nofix: the car drives, then stands still, all before the first fix.
         const double wheel_kmh=(scenario=="nofix" && ms>=2500) || (g3_scenario(scenario) && !prelude && t>=2000 &&
-                                  !(scenario=="g3_move" && t>=63000))?0.0:kmh;
+                                  !(scenario=="g3_move" && g3_injected))?0.0:kmh;
         for(unsigned kind=1;kind<=3 && motion;++kind) {
             if(kind==N::YAW && ms%100)continue;
             // Change-only producer: reverse at boot, then forward (a 1->0
@@ -339,7 +349,7 @@ int main(int argc,char** argv) {
         // g3_fault (rule F v5): at 63 s, inside the blocked fsync step of the
         // 60 s write (a tainted heading), a permanent audit fault resets the
         // pipeline (ending the assumed origin) and stops MODEL/G3 computation.
-        if(scenario=="g3_fault" && !prelude && t==63000)audit_fault=1;
+        if(scenario=="g3_fault" && !prelude && g3_injected)audit_fault=1;
         if(scenario=="g3_cancel" || scenario=="g3_move" || scenario=="g3_stop" || scenario=="g3_fault") {
             // Parked from 2 s with real fixes (ARMED): the 15 s write (no
             // fsync) at about 17 s, then the 60 s write at about 62 s blocks
@@ -347,7 +357,7 @@ int main(int argc,char** argv) {
             // GPS_LOST/ENGAGED while it runs); g3_move: driving from 63 s;
             // g3_stop: capture stop at 63 s.
             if(t==2000)frozen_ms=int(ms);
-            const bool lost=scenario=="g3_cancel" && t>=63000;
+            const bool lost=scenario=="g3_cancel" && g3_injected;
             if(lost ? t%200==0 : t%500==0)oem_call(ms,lost?0:1);
             continue;
         }
