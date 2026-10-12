@@ -1,0 +1,169 @@
+{
+ "version": 1,
+ "screen": [
+  800,
+  480
+ ],
+ "mazda": {
+  "sat_default": 5,
+  "speed_sensor": true
+ },
+ "scenarios": {
+  "R0-r1": {
+   "base": "../DHU_NAVER_EXP11_PLAN_2026-10-11/commands/V4-r1.txt",
+   "loss_t": [
+    20,
+    130
+   ],
+   "shot_tag": [
+    "V4-r1",
+    "R0-r1"
+   ],
+   "satellites_in_loss": 0,
+   "accuracy_cap_m": null,
+   "stock_head_s": 0,
+   "stock_whole": false,
+   "question": "control: V4 under the Mazda sensor set with satellites 0 (DHU V4: grey at 65-85 s in 3/3, speed followed 12/12)"
+  },
+  "R1-r1": {
+   "base": "../DHU_NAVER_EXP11_PLAN_2026-10-11/commands/V4-r1.txt",
+   "loss_t": [
+    20,
+    130
+   ],
+   "shot_tag": [
+    "V4-r1",
+    "R1-r1"
+   ],
+   "satellites_in_loss": 5,
+   "accuracy_cap_m": null,
+   "stock_head_s": 0,
+   "stock_whole": false,
+   "question": "R0 with satellites 5 in the loss (hypothesis G2/S)"
+  },
+  "R2-r1": {
+   "base": "../DHU_NAVER_EXP11_PLAN_2026-10-11/commands/V4-r1.txt",
+   "loss_t": [
+    20,
+    130
+   ],
+   "shot_tag": [
+    "V4-r1",
+    "R2-r1"
+   ],
+   "satellites_in_loss": 0,
+   "accuracy_cap_m": 20.0,
+   "stock_head_s": 0,
+   "stock_whole": false,
+   "question": "R0 with the accuracy capped at 20 m (A20, hypothesis G1/G3)"
+  },
+  "R3-r1": {
+   "base": "../DHU_NAVER_EXP11_PLAN_2026-10-11/commands/V2-r1.txt",
+   "loss_t": [
+    20,
+    139
+   ],
+   "shot_tag": [
+    "V2-r1",
+    "R3-r1"
+   ],
+   "satellites_in_loss": 0,
+   "accuracy_cap_m": null,
+   "stock_head_s": 0,
+   "stock_whole": false,
+   "question": "40 m for 120 s, no offset, satellites 0 (DHU V2 without a satellite sensor was normal)"
+  },
+  "R4-r1": {
+   "base": "commands/R4-r1.txt",
+   "loss_t": [
+    20,
+    130
+   ],
+   "satellites_in_loss": 0,
+   "accuracy_cap_m": null,
+   "stock_head_s": 1,
+   "stock_whole": false,
+   "question": "real-like 111 s tunnel with the Mazda cadence (stock first message, 30 -> 40 m in 4 s, satellites 0): frozen speed?"
+  },
+  "R5-r1": {
+   "base": "../DHU_NAVER_EXP11_PLAN_2026-10-11/commands/V4T60-r1.txt",
+   "loss_t": [
+    20,
+    79
+   ],
+   "shot_tag": [
+    "V4T60-r1",
+    "R5-r1"
+   ],
+   "satellites_in_loss": null,
+   "accuracy_cap_m": null,
+   "stock_head_s": 0,
+   "stock_whole": true,
+   "question": "the unmodified Mazda: stock mode-0 resend of the cached fix without accuracy, satellites 0, for 60 s"
+  },
+  "R0-r2": {
+   "base": "../DHU_NAVER_EXP11_PLAN_2026-10-11/commands/V4-r1.txt",
+   "loss_t": [
+    20,
+    130
+   ],
+   "shot_tag": [
+    "V4-r1",
+    "R0-r2"
+   ],
+   "satellites_in_loss": 0,
+   "accuracy_cap_m": null,
+   "stock_head_s": 0,
+   "stock_whole": false,
+   "question": "R0 repeated (session 2 opener: same rig as session 1?)"
+  },
+  "R1-r2": {
+   "base": "../DHU_NAVER_EXP11_PLAN_2026-10-11/commands/V4-r1.txt",
+   "loss_t": [
+    20,
+    130
+   ],
+   "shot_tag": [
+    "V4-r1",
+    "R1-r2"
+   ],
+   "satellites_in_loss": 5,
+   "accuracy_cap_m": null,
+   "stock_head_s": 0,
+   "stock_whole": false,
+   "question": "R1 repeated (session 3)"
+  },
+  "R2-r2": {
+   "base": "../DHU_NAVER_EXP11_PLAN_2026-10-11/commands/V4-r1.txt",
+   "loss_t": [
+    20,
+    130
+   ],
+   "shot_tag": [
+    "V4-r1",
+    "R2-r2"
+   ],
+   "satellites_in_loss": 0,
+   "accuracy_cap_m": 20.0,
+   "stock_head_s": 0,
+   "stock_whole": false,
+   "question": "R2 repeated (session 3)"
+  },
+  "R4-r2": {
+   "base": "commands/R4-r1.txt",
+   "loss_t": [
+    20,
+    130
+   ],
+   "shot_tag": [
+    "R4-r1",
+    "R4-r2"
+   ],
+   "satellites_in_loss": 0,
+   "accuracy_cap_m": null,
+   "stock_head_s": 1,
+   "stock_whole": false,
+   "question": "R4 repeated (session 3)"
+  }
+ }
+}
