@@ -442,13 +442,27 @@ struct Options {
     // Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md); NAN keeps
     // the product default of beta_profile_tunnel().
     double stopped_accuracy_m, stopped_honest_max_m, crawl_speed_mps;
-    // Diagnostic BETA build (validation/DIAG_BUILD_A20_S5_2026-10-12.md):
+    // Diagnostic BETA build, version 2 (validation/TUNNEL_REPORT_CAP_2026-10-12.md):
     // --diag SEED turns the diagnostic on with SEED as the boot id of the arm
-    // randomization, and every OEM call then also sends a GPS_SATELLITE
-    // (type 21, 864 bytes, number_in_use 5/3/0 for mode 1/2/other, the rest 0)
-    // after its LOCATION, like RequestSendPosition. --diag-out FILE: one JSON
-    // line per type-21 send. Without --diag nothing changes.
+    // randomization (CONTROL episodes publish without the tunnel reporting
+    // ceiling), and every OEM call then also sends a GPS_SATELLITE (type 21,
+    // 864 bytes, number_in_use 5/3/0 for mode 1/2/other, the rest 0) after its
+    // LOCATION, like RequestSendPosition (observed only, never rewritten).
+    // --diag-out FILE: one JSON line per type-21 send. Without --diag nothing
+    // changes. --acc-cap off turns --diag off (product: reason acc_cap_off).
     std::string diag, diag_out;
+    // --acc-cap off: the owner marker acc-cap-off (beta.12 numbers: no tunnel
+    // reporting ceiling). Default on: the product profile.
+    bool acc_cap_off;
+    // Yaw rail (validation/YAW_SATURATION_FIX_2026-10-12.md): --yaw-rail off
+    // is the replay-only beta.12 counterfactual (BetaProfile::yaw_rail_policy
+    // 0). --heading-trace FROM:TO:FILE writes one line per worker tick with
+    // FROM <= t <= TO (journal monotonic seconds): BETA seed state, body
+    // heading and honest heading/position budgets, the G3 yaw integral and
+    // breaks, pipeline resets and the rail counters. Default reports unchanged.
+    bool yaw_rail;
+    double trace_from, trace_to;
+    std::string trace_out;
     bool stopped_rule_set() const {
         return !std::isnan(stopped_accuracy_m) || !std::isnan(stopped_honest_max_m) || !std::isnan(crawl_speed_mps);
     }
@@ -459,6 +473,7 @@ R::BetaProfile bridge_profile() {
     if (!std::isnan(opt.stopped_accuracy_m)) p.stopped_accuracy_m = opt.stopped_accuracy_m;
     if (!std::isnan(opt.stopped_honest_max_m)) p.stopped_honest_max_m = opt.stopped_honest_max_m;
     if (!std::isnan(opt.crawl_speed_mps)) p.crawl_speed_mps = opt.crawl_speed_mps;
+    if (opt.acc_cap_off) p.tunnel_report_cap_m = 0.0;
     return p;
 }
 
@@ -639,6 +654,7 @@ void g3_turn(uint64_t now) {
 // One worker turn at the tick grid, in runtime order: pop observations,
 // receive motion, drain on the MODEL tick, then the BETA tick.
 bool wheel_at(uint64_t t, double* mps);
+void heading_trace(uint64_t now);
 void worker_turn(uint64_t now) {
     g_now = now;
     for (size_t i = 0; i < pending.size(); ++i) {
@@ -699,6 +715,7 @@ void worker_turn(uint64_t now) {
         if (!fault && beta->cadence_fence(journal, now)) nav.fence_beta();
         beta->tick(journal, now, nav, true, nav.status().last_received_ns, 1, fault);
         if (g3.active()) g3_turn(now);
+        if (!opt.trace_out.empty()) heading_trace(now);
         double w;
         if (count_latch && wheel_at(now, &w) && w > 1.0) {
             ++latch_exposure.moving_ticks;
@@ -710,6 +727,26 @@ void worker_turn(uint64_t now) {
             if (!seed_exposure.first_seed_ns) seed_exposure.first_seed_ns = now;
         }
     }
+}
+
+// --heading-trace: one line per worker tick inside the requested span.
+void heading_trace(uint64_t now) {
+    static FILE* out = 0;
+    const double t = now / 1e9;
+    if (t < opt.trace_from || t > opt.trace_to) return;
+    if (!out && !(out = fopen(opt.trace_out.c_str(), "w"))) return;
+    const mx5_dr_snapshot& e = nav.beta_estimate();
+    const N::G3Motion& m = nav.g3_motion();
+    const N::YawRailCounts& r = nav.yaw_rail();
+    fprintf(out, "%.2f seeded=%d heading=%.1f hb=%.1f err=%.1f g3_turn=%.1f g3_breaks=%u resets=%llu "
+            "latched=%d rail=%llu/%llu/%llu\n", t, int(nav.beta_seeded()),
+            nav.beta_seeded() ? e.body_heading_rad * 180 / PI : NAN,
+            nav.beta_seeded() ? nav.beta_heading_budget_rad() * 180 / PI : NAN,
+            nav.beta_seeded() ? e.error_budget_m + nav.beta_rotation_budget_m() : NAN,
+            m.turn_rad * 180 / PI, m.breaks, (unsigned long long)nav.status().resets,
+            int(nav.reverse_latched()), (unsigned long long)r.moving, (unsigned long long)r.parked,
+            (unsigned long long)r.reset);
+    fflush(out);
 }
 
 bool start_product(uint64_t t) {
@@ -728,6 +765,7 @@ bool start_product(uint64_t t) {
     // tunnel budgets; only the pipeline's engagement policy changes.
     if (opt.engagement=="legacy") profile.continuous_anchor=false;
     if (!opt.assume_forward) profile.assume_forward=false;
+    if (!opt.yaw_rail) profile.yaw_rail_policy=0;
     if (opt.engagement=="latest-course") {
         profile.course_weight_kmh=0.001;
         profile.course_innovation_rad=1e6;
@@ -741,7 +779,7 @@ bool start_product(uint64_t t) {
     beta = &controller;
     // Replay-only: the controller/bridge use the tunnel profile with the
     // given stopped-accuracy constants (the pipeline does not read them).
-    if (opt.stopped_rule_set() && !controller.set_profile(bridge_profile())) return false;
+    if ((opt.stopped_rule_set() || opt.acc_cap_off) && !controller.set_profile(bridge_profile())) return false;
     if (!opt.diag.empty()) {
         if (!controller.set_diag(true, opt.diag.c_str())) return false;
         A::set_diag(true);
@@ -1179,7 +1217,8 @@ void usage() {
         "                   [--g3 off|on|slow] [--g3-store DIR] [--g3-out FILE]\n"
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "                   [--assume-forward on|off] [--seed-report] [--reverse-fence feed|runtime]\n"
-        "                   [--diag SEED] [--diag-out FILE]\n"
+        "                   [--diag SEED] [--diag-out FILE] [--acc-cap on|off]\n"
+        "                   [--yaw-rail on|off] [--heading-trace FROM:TO:FILE]\n"
         "Times are journal monotonic seconds. Without --t0/--sweep only recorded\n"
         "(real) outages are replayed.\n");
     exit(2);
@@ -1195,6 +1234,8 @@ int main(int argc, char** argv) {
     opt.engagement = "continuous";
     opt.g3 = "off";
     opt.assume_forward = true; opt.seed_report = false; opt.reverse_fence = false;
+    opt.acc_cap_off = false;
+    opt.yaw_rail = true; opt.trace_from = opt.trace_to = 0;
     opt.stopped_accuracy_m = opt.stopped_honest_max_m = opt.crawl_speed_mps = NAN;
     opt.durations = parse_list("10,20,30,45,60");
     for (int i = 1; i < argc; ++i) {
@@ -1243,18 +1284,41 @@ int main(int argc, char** argv) {
             if (v != "on" && v != "off") usage();
             opt.assume_forward = v == "on";
         } else if (a == "--seed-report") opt.seed_report = true;
+        else if (a == "--yaw-rail" && more) {
+            const std::string v = argv[++i];
+            if (v != "on" && v != "off") usage();
+            opt.yaw_rail = v == "on";
+        } else if (a == "--heading-trace" && more) {
+            char file[512] = "";
+            if (sscanf(argv[++i], "%lf:%lf:%511s", &opt.trace_from, &opt.trace_to, file) != 3) usage();
+            opt.trace_out = file;
+        }
         else if (a == "--reverse-fence" && more) {
             const std::string v = argv[++i];
             if (v != "feed" && v != "runtime") usage();
             opt.reverse_fence = v == "runtime";
         }
         else if (a == "--diag" && more) opt.diag = argv[++i];
+        else if (a == "--acc-cap" && more) {
+            const std::string v = argv[++i];
+            if (v != "on" && v != "off") { usage(); return 2; }
+            opt.acc_cap_off = v == "off";
+        }
         else if (a == "--diag-out" && more) opt.diag_out = argv[++i];
         else if (a == "--check") opt.check = true;
         else if (a == "--real-only") opt.real_only = true;
         else usage();
     }
     if (opt.trip.empty() || !opt.cadence_ns) usage();
+    // Like the product (runtime.cpp: diag_active needs !acc_cap_off, diag_boot
+    // reason acc_cap_off): the blind comparison needs the ceiling, so --acc-cap
+    // off turns --diag off for the whole replay (no arm, no diagnostic row, no
+    // GPS_SATELLITE send).
+    if (opt.acc_cap_off && !opt.diag.empty()) {
+        fprintf(stderr, "replay_beta: --diag %s ignored with --acc-cap off (diag_boot reason acc_cap_off)\n",
+                opt.diag.c_str());
+        opt.diag.clear();
+    }
     for (size_t i = 0; i < opt.durations.size(); ++i)
         if (!(opt.durations[i] > 0)) usage();
     std::string error;

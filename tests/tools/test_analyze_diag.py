@@ -51,7 +51,7 @@ def episode(event, ns, arm="S5", index=0, boot_id=BOOT, **extra):
                    loc_nonzero=0, loc_original_mode0=1, sat=3,
                    sat_applied=2 if arm == "S5" else 0, sat_nonzero=0,
                    sat_outcomes={"no_replacement": 1,
-                                 {"S5": "applied", "A20": "arm_a20", "CONTROL": "arm_control"}[arm]: 2},
+                                 {"S5": "applied", "A20": "arm_a20", "CONTROL": "arm_control", "CAP": "arm_cap"}[arm]: 2},
                    first_sat=dict(before=0, presence=0, outcome="no_replacement", after_replacement=False))
     row.update(extra)
     return row
@@ -92,6 +92,49 @@ def diagnostic_drive(arm="S5", boot_id=BOOT):
                                  arm if row["choice"] else "NONE", outcome))
         if row["kind"] == "beta_state" and row["to"] == "ARMED" and row["reason"] == "gps_returned":
             out.append(episode("ended", row["mono_ns"], arm, boot_id=boot_id))
+    return out
+
+
+def diag_boot_v2(boot_id=BOOT, active=True, reason=None):
+    """The version 2 diag_boot row (validation/TUNNEL_REPORT_CAP_2026-10-12.md)."""
+    return dict(kind="diag_boot", mono_ns=11, domain="beta", assist_ready=False,
+                active=active, reason=reason or ("marker" if active else "acc_cap_off"),
+                boot_id=boot_id, version=2, arms=["CONTROL", "CAP"], block=3,
+                rejoin_ms=10000, cap_m=25, control_ceiling_m=40, sat_type=21, sat_length=864)
+
+
+def shadow_boot(acc_cap_m=25):
+    return dict(kind="shadow_boot", active=True, capture_active=True, domain="model",
+                source="existing_vbs_vim_callback", assist_ready=False, motion_sampling=False,
+                acc_cap_m=acc_cap_m)
+
+
+def diagnostic_drive_v2(arm="CAP", boot_id=BOOT):
+    """Version 2: CAP episodes send 25 m, CONTROL 40 m; type 21 observed only."""
+    rows = beta.drive(gps_offset_m=50, accuracy_e3=25000 if arm == "CAP" else 40000, honest_m=120)
+    rows[0]["boot_id"] = boot_id
+    rows.insert(1, shadow_boot())
+    rows.insert(2, diag_boot_v2(boot_id))
+    out = []
+    for row in rows:
+        if row["kind"] == "send" and row["choice"] == 3:
+            row["diag"] = dict(arm=arm)
+        out.append(row)
+        if row["kind"] == "beta_state" and row["to"] == "GPS_LOST":
+            assigned = episode("assigned", row["mono_ns"], arm, boot_id=boot_id)
+            for key in ("cap_m", "sat_in_use"):
+                del assigned[key]
+            assigned.update(perm=1, ceiling_m=25 if arm == "CAP" else 40)
+            out.append(assigned)
+        if row["kind"] == "send" and row["mode"] == 0:
+            outcome = "no_replacement" if row["choice"] == 0 else {"CAP": "arm_cap", "CONTROL": "arm_control"}[arm]
+            out.append(satellite(row["call"], row["mono_ns"] + 1, arm if row["choice"] else "NONE", outcome))
+        if row["kind"] == "beta_state" and row["to"] == "ARMED" and row["reason"] == "gps_returned":
+            out.append(episode("ended", row["mono_ns"], arm, boot_id=boot_id, capped=4 if arm == "CAP" else 0,
+                               reported_min_m=25 if arm == "CAP" else 40, reported_max_m=25 if arm == "CAP" else 40,
+                               sat_applied=0,
+                               sat_outcomes={"no_replacement": 1,
+                                             {"CAP": "arm_cap", "CONTROL": "arm_control"}[arm]: 2}))
     return out
 
 
@@ -296,6 +339,116 @@ class DiagnosticAnalyzeTests(unittest.TestCase):
                     dict(satellite(1, S), diag=["S5"])):
             report = consume([dict(beta.boot(), boot_id=BOOT), row])
             self.assertIn("malformed_diag_row", {i["code"] for i in report["issues"]}, row)
+
+    def test_version2_cap_episode_uses_honest_budget_and_new_arms(self):
+        report = consume(diagnostic_drive_v2("CAP"))
+        d = report["diagnostic"]
+        self.assertEqual(list(d["per_arm"]), ["CONTROL", "CAP"])
+        e, = d["episodes"]
+        self.assertEqual((e["arm"], e["assigned"], e["complete"]), ("CAP", True, True))
+        self.assertEqual((e["capped"], e["pubs"], e["sat_applied"]), (4, 4, 0))
+        self.assertEqual(e["sat_transitions"], {"0->0/no_replacement": 1, "0->0/arm_cap": 2})
+        self.assertEqual((e["sent_reported_min_m"], e["sent_reported_max_m"]), (25, 25))
+        check, = report["beta"]["gps_return_checks"]
+        self.assertEqual((check["honest_accuracy_m"], check["reported_accuracy_m"]), (120, 25))
+        self.assertTrue(check["reported_accuracy_clamped"] and check["within_honest_budget"])
+        codes = {i["code"] for i in report["issues"]}
+        self.assertNotIn("malformed_diag_row", codes)
+        self.assertNotIn("beta_return_exceeds_accuracy", codes)
+        self.assertNotIn("non_location_mutation", codes)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_diag_data(d)
+        self.assertIn("Version 2: CAP = 25 m", out.getvalue())
+        self.assertIn("per-arm CAP", out.getvalue())
+
+    def test_version2_control_episode_keeps_the_40_m_rule(self):
+        report = consume(diagnostic_drive_v2("CONTROL"))
+        e, = report["diagnostic"]["episodes"]
+        self.assertEqual((e["arm"], e["capped"]), ("CONTROL", 0))
+        check, = report["beta"]["gps_return_checks"]
+        self.assertEqual(check["reported_accuracy_m"], 40)
+        self.assertTrue(check["reported_accuracy_clamped"] and check["within_honest_budget"])
+        self.assertEqual(report["diagnostic"]["per_arm"]["CONTROL"]["assigned"], 1)
+
+    def test_version1_logs_keep_their_three_arms(self):
+        self.assertEqual(list(consume(diagnostic_drive("A20"))["diagnostic"]["per_arm"]), ["CONTROL", "A20", "S5"])
+
+    def text(self, d):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_diag_data(d)
+        return out.getvalue()
+
+    def test_version2_control_only_log_is_version2(self):
+        # Review finding (beta.13): about one third of version 2 episodes are
+        # CONTROL, so a short drive can hold only CONTROL episodes. The version
+        # comes from diag_boot.version, not from the arms that occurred.
+        d = consume(diagnostic_drive_v2("CONTROL"))["diagnostic"]
+        self.assertEqual(d["versions"], [2])
+        self.assertEqual(list(d["per_arm"]), ["CONTROL", "CAP"])
+        self.assertEqual((d["per_arm"]["CONTROL"]["assigned"], d["per_arm"]["CAP"]["assigned"]), (1, 0))
+        self.assertIn("Version 2: CAP = 25 m", self.text(d))
+        self.assertNotIn("per-arm A20", self.text(d))
+
+    def test_version2_without_diag_boot_row_uses_the_assigned_row(self):
+        # A lost diag_boot row: the version 2 assigned row (ceiling_m) decides.
+        rows = [r for r in diagnostic_drive_v2("CONTROL") if r["kind"] != "diag_boot"]
+        d = consume(rows)["diagnostic"]
+        self.assertEqual(d["versions"], [2])
+        self.assertEqual(list(d["per_arm"]), ["CONTROL", "CAP"])
+
+    def test_version2_inactive_boot_without_episodes_is_version2(self):
+        # acc-cap-off: diag_boot active=false reason acc_cap_off, no episode.
+        rows = [r for r in diagnostic_drive_v2("CAP") if r["kind"] not in ("diag_episode", "diag_boot")]
+        rows.insert(2, diag_boot_v2(active=False))
+        d = consume(rows)["diagnostic"]
+        self.assertEqual(d["versions"], [2])
+        self.assertEqual(list(d["per_arm"]), ["CONTROL", "CAP"])
+        self.assertIn("reason=acc_cap_off", self.text(d))
+        self.assertIn("Version 2: CAP = 25 m", self.text(d))
+
+    def test_version1_control_only_log_stays_version1(self):
+        for arm in ("CONTROL", "A20", "S5"):
+            d = consume(diagnostic_drive(arm))["diagnostic"]
+            self.assertEqual(d["versions"], [1])
+            self.assertEqual(list(d["per_arm"]), ["CONTROL", "A20", "S5"])
+            self.assertNotIn("Version 2:", self.text(d))
+
+    def test_product_ceiling_without_diagnostic_uses_honest_budget(self):
+        # Product default (no diag marker): shadow_boot acc_cap_m 25, a 25 m
+        # LOCATION with an honest 120 m budget; the GPS return 50 m off is
+        # judged against the honest budget, as for the 40 m clamp.
+        rows = beta.drive(gps_offset_m=50, accuracy_e3=25000, honest_m=120)
+        rows.insert(1, shadow_boot(25))
+        report = consume(rows)
+        check, = report["beta"]["gps_return_checks"]
+        self.assertTrue(check["reported_accuracy_clamped"] and check["within_honest_budget"])
+        self.assertEqual(check["honest_accuracy_m"], 120)
+        self.assertNotIn("beta_return_exceeds_accuracy", {i["code"] for i in report["issues"]})
+        self.assertNotIn("diagnostic", report)
+        # acc-cap-off (acc_cap_m 0) or an older boot without the field: 25 m is
+        # an honest report again and the return exceeds it.
+        for extra in ([shadow_boot(0)], []):
+            rows = beta.drive(gps_offset_m=50, accuracy_e3=25000, honest_m=120)
+            rows[1:1] = extra
+            report = consume(rows)
+            self.assertFalse(report["beta"]["gps_return_checks"][0]["reported_accuracy_clamped"])
+            self.assertIn("beta_return_exceeds_accuracy", {i["code"] for i in report["issues"]})
+
+    def test_version2_rows_are_strict(self):
+        assigned = episode("assigned", S, "CAP")
+        for key in ("cap_m", "sat_in_use"):
+            del assigned[key]
+        assigned.update(perm=0, ceiling_m=25)
+        self.assertTrue(audit.diag_row_valid(assigned))
+        self.assertTrue(audit.diag_row_valid(diag_boot_v2()))
+        for row in (dict(assigned, perm=3), dict(assigned, ceiling_m=41), dict(assigned, arm="S5"),
+                    dict(assigned, cap_m=20), dict(diag_boot_v2(), arms=["CONTROL", "A20", "S5"]),
+                    dict(diag_boot_v2(), version=3), dict(diag_boot_v2(), sat_in_use=5),
+                    dict(diag_boot_v2(), control_ceiling_m=25), dict(diag_boot(), arms=["CONTROL", "CAP"]),
+                    dict(episode("assigned", S, "CAP"))):
+            self.assertFalse(audit.diag_row_valid(row), row)
 
     def test_cli_json_and_text_with_synthetic_journal(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:

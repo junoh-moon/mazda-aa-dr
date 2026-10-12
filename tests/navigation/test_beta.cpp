@@ -115,6 +115,14 @@ static runtime::CoreBridgeResult publish(const Pipeline& p,unsigned ms,adapter::
     return runtime::map_model_publication(in,runtime::beta_profile(),out);
 }
 
+// The owner marker acc-cap-off (beta.12 numbers): the tunnel profile
+// without the tunnel reporting ceiling (validation/TUNNEL_REPORT_CAP_2026-10-12.md).
+static BetaProfile beta12_tunnel() {
+    BetaProfile p=runtime::beta_profile_tunnel();
+    p.tunnel_report_cap_m=0.0;
+    return p;
+}
+
 static void latch_seeds_from_change_only_stream() {
     // Reverse 1 then 0 at boot, a 1 s standstill, then motion: the latch is
     // not released at wheel speed 0 and both MODEL and BETA cores seed.
@@ -570,7 +578,7 @@ static void accuracy_boundary_and_heading_withdrawal() {
 // reported separately, the sent accuracy is clamped at accuracy_max_m and the
 // bounded profile still refuses.
 static void unbounded_profile_clamps_reported_accuracy() {
-    const BetaProfile t=runtime::beta_profile_tunnel(),b=runtime::beta_profile();
+    const BetaProfile t=beta12_tunnel(),b=runtime::beta_profile();
     CHECK(t.unbounded && !b.unbounded && t.accuracy_max_m==40.0);
     const double lease_term=(10+t.speed_error_mps)*0.5;
     adapter::DrSnapshot s; double honest=-1;
@@ -593,34 +601,54 @@ static void unbounded_profile_clamps_reported_accuracy() {
     // Core configuration: tunnel mode requests the extended limits.
     CHECK(runtime::beta_core_config(t).extended_limits==1 && runtime::beta_core_config(b).extended_limits==0);
 }
-// Diagnostic arm A20 (validation/DIAG_BUILD_A20_S5_2026-10-12.md): the cap only
-// ever lowers the reported accuracy, never changes the honest budget, never
-// raises a value, and 0 (the default) changes nothing.
-static void diag_a20_cap_lowers_only() {
-    const BetaProfile t=runtime::beta_profile_tunnel();
+// Tunnel reporting ceiling (validation/TUNNEL_REPORT_CAP_2026-10-12.md): the
+// product tunnel profile reports min(honest, 25 m) in every replacement; it
+// only ever lowers the reported accuracy, never changes the honest budget or
+// any other published field, never raises a value; 0 (acc-cap-off) restores
+// the beta.12 numbers; the bounded profile ignores it.
+static void tunnel_report_cap_lowers_only() {
+    const BetaProfile t=runtime::beta_profile_tunnel(),o=beta12_tunnel();
+    CHECK(t.tunnel_report_cap_m==25.0 && runtime::beta_profile().tunnel_report_cap_m==0.0);
     const double lease_term=(10+t.speed_error_mps)*0.5;
-    adapter::DrSnapshot s,ref; double honest=-1,honest_ref=-1; bool capped=true;
-    // Honest 400 m: 40 m without the cap (beta.11), 20 m with it.
-    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&ref,&honest_ref)==runtime::CORE_BRIDGE_OK);
-    CHECK(ref.accuracy_m==40.0);
-    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,20.0,&capped)==runtime::CORE_BRIDGE_OK);
-    CHECK(s.ready && s.beta && s.accuracy_m==20.0 && capped);
+    adapter::DrSnapshot s,ref; double honest=-1,honest_ref=-1; bool capped=false;
+    // Honest 400 m: 25 m with the ceiling, 40 m without it (beta.12).
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),o,&ref,&honest_ref,0,0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(ref.accuracy_m==40.0 && !capped);
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.ready && s.beta && s.accuracy_m==25.0 && capped);
     CHECK(std::fabs(honest-400.0)<1e-9 && honest==honest_ref);          // honest value untouched
-    // Below the cap the value is reported unchanged and not marked capped.
-    CHECK(runtime::map_model_publication(synthetic(12-lease_term,0.1),t,&s,&honest,0,0,20.0,&capped)==runtime::CORE_BRIDGE_OK);
-    CHECK(std::fabs(s.accuracy_m-12.0)<1e-9 && !capped);
-    // A cap above the profile ceiling never raises it; 0 and non-finite caps change nothing.
-    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,60.0,&capped)==runtime::CORE_BRIDGE_OK);
-    CHECK(s.accuracy_m==40.0 && !capped);
-    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,0.0,&capped)==runtime::CORE_BRIDGE_OK);
-    CHECK(s.accuracy_m==40.0 && !capped);
-    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,::nan(""),&capped)==runtime::CORE_BRIDGE_OK);
-    CHECK(s.accuracy_m==40.0 && !capped);
-    // Every other published field is identical with and without the cap.
-    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,20.0,&capped)==runtime::CORE_BRIDGE_OK);
+    // Every other published field is identical with and without the ceiling.
     CHECK(s.latitude_deg==ref.latitude_deg && s.longitude_deg==ref.longitude_deg &&
           s.speed_mps==ref.speed_mps && s.travel_bearing_deg==ref.travel_bearing_deg &&
-          s.valid_until_mono_ns==ref.valid_until_mono_ns && s.frontier_mono_ns==ref.frontier_mono_ns);
+          s.valid_until_mono_ns==ref.valid_until_mono_ns && s.frontier_mono_ns==ref.frontier_mono_ns &&
+          s.derived_utc_ns==ref.derived_utc_ns && s.stopped==ref.stopped);
+    // The first replacement of an outage sits at about 30 m: below the Naver 30 m threshold now.
+    CHECK(runtime::map_model_publication(synthetic(30-lease_term,0.1),t,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.accuracy_m==25.0 && capped && std::fabs(honest-30.0)<1e-9);
+    CHECK(runtime::map_model_publication(synthetic(30-lease_term,0.1),o,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(std::fabs(s.accuracy_m-30.0)<1e-9 && !capped);
+    // Below the ceiling the honest value is reported unchanged and not marked capped.
+    CHECK(runtime::map_model_publication(synthetic(12-lease_term,0.1),t,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(std::fabs(s.accuracy_m-12.0)<1e-9 && !capped);
+    // A ceiling above accuracy_max_m never raises the 40 m ceiling.
+    BetaProfile x=t; x.tunnel_report_cap_m=60.0;
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),x,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.accuracy_m==40.0 && !capped);
+    // A negative or non-finite ceiling is a profile error.
+    const double bad[]={-1.0,::nan(""),HUGE_VAL};
+    for(unsigned i=0;i<3;++i) { x=t; x.tunnel_report_cap_m=bad[i];
+        CHECK(runtime::map_model_publication(synthetic(25,0.1),x,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_LIMIT && !s.ready); }
+    // The bounded profile never under-reports, even with the field set.
+    BetaProfile b=runtime::beta_profile(); b.tunnel_report_cap_m=25.0;
+    CHECK(runtime::map_model_publication(synthetic(30-lease_term,0.1),b,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(std::fabs(s.accuracy_m-30.0)<1e-9 && !capped);
+    CHECK(runtime::map_model_publication(synthetic(41-lease_term,0.1),b,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_LIMIT);
+    // The serialized payload (hasAccuracy, ceil(accuracy*1000)) is 25000, inside
+    // the adapter's (0, 40000] range.
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,&capped)==runtime::CORE_BRIDGE_OK);
+    uint8_t original[48]={0},out[48];
+    CHECK(adapter::encode_beta_location(s,original,out) && out[16]==1);
+    CHECK((uint32_t(out[20])|(uint32_t(out[21])<<8)|(uint32_t(out[22])<<16)|(uint32_t(out[23])<<24))==25000u);
 }
 // The continuous policy replaces the b1ec29a stale-anchor entry veto with an
 // entry decision at the GPS loss (review M3, 2026-10-09): FRESH when the last
@@ -986,6 +1014,7 @@ static BetaProfile neutral_tunnel() {
     const BetaProfile b=runtime::beta_profile();
     p.stopped_accuracy_m=b.stopped_accuracy_m; p.stopped_honest_max_m=b.stopped_honest_max_m;
     p.crawl_speed_mps=b.crawl_speed_mps;
+    p.tunnel_report_cap_m=b.tunnel_report_cap_m;
     return p;
 }
 static BetaModelInput still_input(double honest,bool stopped=false) {
@@ -1016,8 +1045,9 @@ static double reported(const BetaModelInput& in,const BetaProfile& p,int* rule,d
 }
 static void stopped_accuracy_rules() {
     int rule; double honest;
-    // Production tunnel profile: 25 m while stopped up to an honest 150 m.
-    { const BetaProfile t=runtime::beta_profile_tunnel();
+    // Tunnel profile without the reporting ceiling (acc-cap-off, beta.12):
+    // 25 m while stopped up to an honest 150 m.
+    { const BetaProfile t=beta12_tunnel();
       CHECK(t.stopped_accuracy_m==25.0 && t.stopped_honest_max_m==150.0 && t.crawl_speed_mps==0.0 &&
             t.accuracy_max_m==40.0 && runtime::beta_stopped_rule_enabled(t));
       CHECK(reported(still_input(50),t,&rule,&honest)==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED &&
@@ -1042,14 +1072,17 @@ static void stopped_accuracy_rules() {
 
     BetaProfile a=d; a.stopped_accuracy_m=20.0;     // H_max infinite, crawl off
     CHECK(runtime::beta_stopped_rule_enabled(a));
-    // Diagnostic arm A20 next to the stopped rule (independent review 2026-10-12): the
-    // lower of the two ceilings wins and neither raises a value.
-    { BetaProfile s25=d; s25.stopped_accuracy_m=25.0; adapter::DrSnapshot ds; double hh=-1; int rr=-1; bool cap=true;
-      CHECK(runtime::map_model_publication(still_input(50),s25,&ds,&hh,&rr,0,20.0,&cap)==runtime::CORE_BRIDGE_OK);
+    // Tunnel reporting ceiling next to the stopped rule: the lower of the two
+    // ceilings wins and neither raises a value.
+    { BetaProfile s25=d; s25.stopped_accuracy_m=25.0; s25.tunnel_report_cap_m=20.0;
+      adapter::DrSnapshot ds; double hh=-1; int rr=-1; bool cap=true;
+      CHECK(runtime::map_model_publication(still_input(50),s25,&ds,&hh,&rr,0,&cap)==runtime::CORE_BRIDGE_OK);
       CHECK(ds.accuracy_m==20.0 && rr==runtime::BETA_ACC_RULE_STOPPED && cap && std::fabs(hh-50)<1e-9);   // 20 < 25
-      CHECK(runtime::map_model_publication(still_input(50),s25,&ds,&hh,&rr,0,30.0,&cap)==runtime::CORE_BRIDGE_OK);
+      s25.tunnel_report_cap_m=30.0;
+      CHECK(runtime::map_model_publication(still_input(50),s25,&ds,&hh,&rr,0,&cap)==runtime::CORE_BRIDGE_OK);
       CHECK(ds.accuracy_m==25.0 && rr==runtime::BETA_ACC_RULE_STOPPED && !cap);                              // 25 < 30
-      CHECK(runtime::map_model_publication(still_input(12),s25,&ds,&hh,&rr,0,20.0,&cap)==runtime::CORE_BRIDGE_OK);
+      s25.tunnel_report_cap_m=20.0;
+      CHECK(runtime::map_model_publication(still_input(12),s25,&ds,&hh,&rr,0,&cap)==runtime::CORE_BRIDGE_OK);
       CHECK(std::fabs(ds.accuracy_m-12.0)<1e-9 && !cap); }                                                   // never raised
     // Stopped at an honest budget of 50 m: A* is reported, honest kept.
     CHECK(reported(still_input(50),a,&rule,&honest)==20.0 && rule==runtime::BETA_ACC_RULE_STOPPED &&
@@ -1120,7 +1153,7 @@ static double latched(const BetaModelInput& in,const BetaProfile& p,runtime::Bet
     return s.accuracy_m;
 }
 static void stopped_accuracy_latch() {
-    const BetaProfile t=runtime::beta_profile_tunnel();
+    const BetaProfile t=beta12_tunnel();
     int rule;
     // A long stop whose honest budget crosses 150 m keeps 25 m throughout.
     { runtime::BetaStopLatch l;
@@ -1165,11 +1198,51 @@ static void stopped_accuracy_latch() {
       runtime::BetaStopLatch n;
       CHECK(latched(still_input(100),neutral_tunnel(),&n,&rule)==40.0 && !n.active); }
 }
+// The product profile: the tunnel reporting ceiling subsumes the stopped rule
+// (validation/TUNNEL_REPORT_CAP_2026-10-12.md). The rule, its H_max decision
+// and the stop latch keep working on the HONEST budget (acc_rule/acc_h0 rows
+// unchanged); only the reported value never exceeds 25 m.
+static void tunnel_report_cap_subsumes_the_stopped_rule() {
+    const BetaProfile t=runtime::beta_profile_tunnel();
+    CHECK(runtime::beta_stopped_rule_enabled(t) && t.stopped_accuracy_m==t.tunnel_report_cap_m);
+    int rule; double honest; adapter::DrSnapshot s; bool capped=true; runtime::BetaStopLatch l;
+    // Stopped within H_max: rule STOPPED decides 25 m; the ceiling adds nothing.
+    CHECK(runtime::map_model_publication(still_input(50),t,&s,&honest,&rule,0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.accuracy_m==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED && !capped && std::fabs(honest-50)<1e-9);
+    // Stopped above H_max (honest 150.5 m): rule NORMAL as before (beta.12 sent
+    // 40 m), now the ceiling reports 25 m; the honest value is unchanged.
+    CHECK(runtime::map_model_publication(still_input(150.5),t,&s,&honest,&rule,&l,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.accuracy_m==25.0 && rule==runtime::BETA_ACC_RULE_NORMAL && capped && std::fabs(honest-150.5)<1e-9);
+    // The H_max decision is latched on the honest budget, not the reported value.
+    CHECK(l.active && !l.allowed && std::fabs(l.honest0_m-150.5)<1e-9);
+    CHECK(latched(still_input(170,true),t,&l,&rule)==25.0 && rule==runtime::BETA_ACC_RULE_NORMAL && !l.allowed);
+    CHECK(reported(still_input(150.5),beta12_tunnel(),&rule)==40.0 && rule==runtime::BETA_ACC_RULE_NORMAL);
+    // An allowed stop keeps 25 m and rule STOPPED for its whole length.
+    { runtime::BetaStopLatch a;
+      CHECK(latched(still_input(125.7),t,&a,&rule)==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED && a.allowed);
+      CHECK(latched(still_input(900,true),t,&a,&rule)==25.0 && rule==runtime::BETA_ACC_RULE_STOPPED); }
+    // Moving: 25 m (beta.12: 40 m), honest below the ceiling unchanged.
+    CHECK(reported(moving_input(50,10),t,&rule,&honest)==25.0 && rule==runtime::BETA_ACC_RULE_NORMAL &&
+          std::fabs(honest-50)<1e-9);
+    CHECK(std::fabs(reported(moving_input(21,10),t,&rule)-21)<1e-9);
+    CHECK(reported(moving_input(50,10),beta12_tunnel(),&rule)==40.0);
+    // The stopped rule, honest values and latch are identical with and without
+    // the ceiling; only the reported value differs.
+    const double hs[]={12,24.9,25.1,50,149,150,151,400};
+    for(unsigned i=0;i<sizeof hs/sizeof hs[0];++i) for(unsigned still=0;still<2;++still) {
+        const BetaModelInput in=still?still_input(hs[i]):moving_input(hs[i],10);
+        adapter::DrSnapshot a,b; double ha=-1,hb=-1; int ra=-1,rb=-1; runtime::BetaStopLatch la,lb;
+        CHECK(runtime::map_model_publication(in,t,&a,&ha,&ra,&la)==runtime::CORE_BRIDGE_OK);
+        CHECK(runtime::map_model_publication(in,beta12_tunnel(),&b,&hb,&rb,&lb)==runtime::CORE_BRIDGE_OK);
+        CHECK(ha==hb && ra==rb && la.active==lb.active && la.allowed==lb.allowed && la.honest0_m==lb.honest0_m);
+        CHECK(a.accuracy_m==(b.accuracy_m<25.0?b.accuracy_m:25.0) && a.accuracy_m<=ha);
+    }
+}
 // Pipeline (review H1): a 6 min stop inside a tunnel. The honest budget
 // grows past 150 m during the stop; with the controller's latch the whole
 // stop stays at 25 m (without it the stop would switch to the rejected 40 m).
 static void long_stop_keeps_the_stopped_accuracy() {
-    const BetaProfile t=runtime::beta_profile_tunnel();
+    const BetaProfile t=beta12_tunnel();
     Pipeline p; init(p,true,false); CHECK(p.enable_beta(t));
     const unsigned stop=ANCHOR_MS+25000,go=ANCHOR_MS+385000;
     Plan plan=straight(go+5000);
@@ -1204,7 +1277,7 @@ static void stopped_accuracy_switches_at_stop_and_restart() {
         BetaProfile prof=neutral_tunnel();
         prof.stopped_accuracy_m=variants[v].a; prof.stopped_honest_max_m=variants[v].hmax;
         prof.crawl_speed_mps=variants[v].crawl;
-        if(v==4) { const BetaProfile t=runtime::beta_profile_tunnel();
+        if(v==4) { const BetaProfile t=beta12_tunnel();
             CHECK(t.stopped_accuracy_m==prof.stopped_accuracy_m && t.stopped_honest_max_m==prof.stopped_honest_max_m &&
                   t.crawl_speed_mps==prof.crawl_speed_mps); prof=t; }
         double honest_max=0;
@@ -2070,6 +2143,147 @@ static void unknown_latch_disables_beta_even_at_the_frontier() {
 // one place (Pipeline::end_assumed_origin), whatever path clears it: a cadence
 // fence, a fault caused by a rejected REVERSE message (BETA is reset before
 // the rejection is noticed), a reset. A real 0 confirms it: no taint end.
+// Yaw rail policy (validation/YAW_SATURATION_FIX_2026-10-12.md). Straight
+// 36 km/h tunnel plan with 5-sample yaw windows (raw[0] is their sum); the
+// windows ending in (from_ms, to_ms] carry `sum`, the others 5 x 2048.
+static const double RAIL_HIGH_RATE=(4095.0-2048.0)*-0.000658615;  // BETA rate at the upper rail
+static const double RAIL_LOW_RATE=(0.0-2048.0)*-0.000658615;      // ... and at the lower rail
+static const double RAIL_EXCESS=runtime::BETA_YAW_RAIL_EXCESS_DEG_S*3.14159265358979323846/180.0;
+struct RailRun {
+    bool seeded, latched;
+    double heading, budget, error_m, turn, excess;
+    uint64_t resets; uint32_t breaks; mx5_dr_result core_result;
+    YawRailCounts rail;
+};
+static RailRun rail_run(unsigned policy,unsigned sum,unsigned from_ms,unsigned to_ms,
+                        std::function<double(unsigned)> wheel=std::function<double(unsigned)>()) {
+    Pipeline p; init(p,true,false);
+    BetaProfile b=runtime::beta_profile_tunnel(); b.yaw_rail_policy=policy;
+    CHECK(p.enable_beta(b));
+    Plan plan=straight(ANCHOR_MS+5000);
+    plan.yaw_count=5;
+    plan.yaw=[=](unsigned ms){ return ms>from_ms&&ms<=to_ms?sum:5*STRAIGHT; };
+    if(wheel) plan.wheel=wheel;
+    run(p,plan);
+    RailRun r;
+    r.seeded=p.beta_seeded(); r.latched=p.reverse_latched();
+    r.heading=p.beta_estimate().body_heading_rad; r.budget=p.beta_heading_budget_rad();
+    r.error_m=p.beta_estimate().error_budget_m+p.beta_rotation_budget_m();
+    r.turn=p.g3_motion().turn_rad; r.excess=p.g3_motion().rail_excess_rad;
+    r.resets=p.status().resets; r.breaks=p.g3_motion().breaks; r.core_result=p.status().core_result;
+    r.rail=p.yaw_rail();
+    return r;
+}
+static double wrapped(double a) {
+    const double two_pi=6.28318530717958647692;
+    a=std::fmod(a,two_pi); if(a>two_pi/2) a-=two_pi; if(a<-two_pi/2) a+=two_pi;
+    return a;
+}
+static void yaw_rail_saturation_while_driving_keeps_the_chain() {
+    // The product tunnel profile opts in; the bounded/legacy profile and the
+    // SHADOW/QUALIFIED cores do not.
+    CHECK(runtime::beta_profile_tunnel().yaw_rail_policy==1 && runtime::beta_profile().yaw_rail_policy==0);
+    CHECK(runtime::beta_core_config(runtime::beta_profile()).yaw_rail_excess_rad_s==0);
+    CHECK(std::fabs(runtime::beta_core_config(runtime::beta_profile_tunnel()).yaw_rail_excess_rad_s-RAIL_EXCESS)<1e-15);
+    CHECK(mx5_dr_default_config().yaw_rail_excess_rad_s==0);
+    { mx5_dr_config c=mx5_dr_default_config(); c.yaw_rail_excess_rad_s=RAIL_EXCESS;
+      mx5_dr_context x={1,1,1}; mx5_dr_core core;
+      CHECK(mx5_dr_init(&core,&c,x)==MX5_DR_E_CONFIG);              // never QUALIFIED
+      c.yaw_rail_excess_rad_s=0; CHECK(mx5_dr_init(&core,&c,x)==MX5_DR_OK);
+      c=runtime::beta_core_config(runtime::beta_profile_tunnel()); c.yaw_rail_excess_rad_s=-1;
+      CHECK(mx5_dr_init_model(&core,&c,x)==MX5_DR_E_CONFIG); }
+    { Pipeline p; init(p,true,false); BetaProfile b=runtime::beta_profile_tunnel(); b.yaw_rail_policy=2;
+      CHECK(!p.enable_beta(b)); }
+    // 1.0 s (ten windows) at the upper rail while driving at 36 km/h, after
+    // the GPS loss: no reset, the BETA heading turns by the rail rate, the
+    // reverse latch and the G3 yaw chain stay, and the heading budget gains
+    // the excess allowance (compared with a window just below the rail).
+    const RailRun ref=rail_run(1,5*STRAIGHT,0,0);
+    const RailRun high=rail_run(1,5*4095,12000,13000);
+    const RailRun near=rail_run(1,5*4093,12000,13000);
+    CHECK(ref.seeded && high.seeded && near.seeded && high.latched && ref.resets==0);
+    CHECK(high.resets==0 && high.breaks==ref.breaks);
+    CHECK(std::fabs(wrapped(high.heading-ref.heading)-RAIL_HIGH_RATE*1.0)<1e-6);
+    CHECK(std::fabs(high.turn-ref.turn-RAIL_HIGH_RATE*1.0)<1e-9);
+    CHECK(std::fabs(high.excess-RAIL_EXCESS*1.0)<1e-9 && near.excess==0 && ref.excess==0);
+    const double rotation_extra=0.10*(std::fabs(RAIL_HIGH_RATE)-(4093.0-2048.0)*0.000658615);
+    CHECK(std::fabs(high.budget-near.budget-RAIL_EXCESS-rotation_extra)<1e-6);
+    CHECK(high.error_m>near.error_m);                 // the heading allowance reaches the position budget
+    CHECK(high.rail.moving==10 && high.rail.parked==0 && high.rail.reset==0);
+    CHECK(std::fabs(high.rail.rail_s-1.0)<1e-9 && !near.rail.moving && !ref.rail.moving);
+    // The MODEL core keeps its own raw-encoding guard (a core rejection, not
+    // a pipeline reset); the near-rail window is an ordinary window for it.
+    CHECK(high.core_result==MX5_DR_E_QUALITY && near.core_result!=MX5_DR_E_QUALITY);
+    // The lower rail (mean 0) was already integrated by beta.12; policy 1
+    // only adds the excess allowance and the counter.
+    const RailRun low=rail_run(1,0,12000,13000),low0=rail_run(0,0,12000,13000);
+    CHECK(low.resets==0 && low0.resets==0 && low.seeded && low0.seeded);
+    CHECK(std::fabs(wrapped(low.heading-ref.heading)-RAIL_LOW_RATE*1.0)<1e-6 && low.heading==low0.heading);
+    CHECK(std::fabs(low.budget-low0.budget-RAIL_EXCESS)<1e-6 && low.rail.moving==10 && !low0.rail.moving);
+    CHECK(std::fabs(low.excess-RAIL_EXCESS)<1e-9 && low0.excess==0);
+}
+static void yaw_rail_parked_window_is_a_hold() {
+    // All four wheels exactly zero from 12.5 s to 13.5 s; one rail window
+    // (12.6-12.7 s) before the stop is confirmed (1.5 s): an init marker.
+    // No reset and no rotation: the heading equals a straight-window run.
+    const std::function<double(unsigned)> stop=[](unsigned ms){ return ms>12400&&ms<=13500?0.0:36.0; };
+    const RailRun ref=rail_run(1,5*STRAIGHT,0,0,stop);
+    const RailRun hold=rail_run(1,5*4095,12600,12700,stop);
+    CHECK(ref.seeded && hold.seeded && hold.latched && hold.resets==0 && hold.breaks==ref.breaks);
+    CHECK(hold.heading==ref.heading && hold.turn==ref.turn && hold.excess==0);
+    CHECK(hold.rail.parked==1 && hold.rail.moving==0 && hold.rail.reset==0 && hold.rail.rail_s==0);
+    // The BETA core still budgets the rail encoding of the interval (0.1 s).
+    CHECK(std::fabs(hold.budget-ref.budget-RAIL_EXCESS*0.1)<1e-6);
+}
+static void yaw_rail_policy_off_is_beta12() {
+    // Policy 0 (beta.12): an upper-rail window resets the pipeline, BETA and
+    // the reverse latch; policy 1 without a fresh wheel event does the same.
+    for(unsigned policy=0;policy<2;++policy) {
+        Pipeline p; init(p,true,false);
+        BetaProfile b=runtime::beta_profile_tunnel(); b.yaw_rail_policy=policy;
+        CHECK(p.enable_beta(b));
+        Plan plan=straight(ANCHOR_MS+1000); plan.yaw_count=5;
+        plan.yaw=[](unsigned){ return 5*STRAIGHT; };
+        run(p,plan);
+        CHECK(p.beta_seeded() && p.reverse_latched() && p.status().resets==0);
+        // policy 0: a fresh moving wheel event; policy 1: none for 400 ms.
+        const unsigned at=plan.end_ms+(policy?400:100);
+        if(!policy) {
+            RawEvent w=raw(WHEELS,at,9000000,1);
+            for(unsigned i=0;i<4;++i) w.raw[i]=uint16_t(wheel_raw(36));
+            CHECK(p.enqueue_raw(w)==PIPELINE_OK);
+        }
+        RawEvent y=raw(YAW,at,9000001,1); y.raw[0]=5*4095; y.count=5;
+        CHECK(p.enqueue_raw(y)==PIPELINE_BAD_INPUT);
+        CHECK(p.status().resets==1 && !p.beta_seeded() && !p.reverse_latched());
+        CHECK(p.yaw_rail().moving==0 && p.yaw_rail().parked==0 && p.yaw_rail().reset==policy);
+    }
+    // Without rail windows both policies are identical, window for window,
+    // including a near-rail window (mean 4093) and a stop.
+    std::vector<std::string> trace[2];
+    for(unsigned policy=0;policy<2;++policy) {
+        Pipeline p; init(p,true,false);
+        BetaProfile b=runtime::beta_profile_tunnel(); b.yaw_rail_policy=policy;
+        CHECK(p.enable_beta(b));
+        Plan plan=straight(ANCHOR_MS+5000); plan.yaw_count=5;
+        plan.yaw=[](unsigned ms){ return ms>12000&&ms<=12500?5*4093:5*STRAIGHT; };
+        plan.wheel=[](unsigned ms){ return ms>13000&&ms<=14500?0.0:36.0; };
+        plan.each=[&](Pipeline& q,unsigned ms) {
+            const BetaModelInput in=q.model_publication(T(ms));
+            const Diagnostic d=q.diagnostic(T(ms));
+            char line[400];
+            std::snprintf(line,sizeof line,"%u %d %d %.17g %.17g %.17g %.17g %.17g %.17g %d %.17g %.17g %llu %llu",
+                ms,int(in.result),int(q.beta_seeded()),in.snapshot.latitude_deg,in.snapshot.longitude_deg,
+                in.snapshot.body_heading_rad,in.snapshot.error_budget_m,in.heading_budget_rad,in.rotation_budget_m,
+                int(d.result),d.snapshot.latitude_deg,d.snapshot.heading_budget_rad,
+                (unsigned long long)d.status.intervals,(unsigned long long)d.status.resets);
+            trace[policy].push_back(line);
+        };
+        run(p,plan);
+        CHECK(p.status().resets==0);
+    }
+    CHECK(trace[0].size()>100 && trace[0]==trace[1]);
+}
 static void g3_taint_ends_on_every_unconfirmed_origin_loss() {
     for(unsigned path=0;path<4;++path) {
         Pipeline p; tunnel(p);
@@ -2116,7 +2330,7 @@ int main() {
     budget_formula_and_limit();
     accuracy_boundary_and_heading_withdrawal();
     unbounded_profile_clamps_reported_accuracy();
-    diag_a20_cap_lowers_only();
+    tunnel_report_cap_lowers_only();
     stale_position_does_not_start_a_tunnel_episode();
     tunnel_wrong_course_does_not_stick();
     tunnel_short_multipath_burst_does_not_resync();
@@ -2127,6 +2341,7 @@ int main() {
     standstill_in_a_tunnel_episode_keeps_a_bearing();
     stopped_accuracy_rules();
     stopped_accuracy_latch();
+    tunnel_report_cap_subsumes_the_stopped_rule();
     long_stop_keeps_the_stopped_accuracy();
     stopped_accuracy_switches_at_stop_and_restart();
     yaw_window_mean_is_exact();
@@ -2145,6 +2360,9 @@ int main() {
     excluded_message_then_reverse_at_the_frontier_discards();
     unknown_latch_disables_beta_even_at_the_frontier();
     g3_taint_ends_on_every_unconfirmed_origin_loss();
+    yaw_rail_saturation_while_driving_keeps_the_chain();
+    yaw_rail_parked_window_is_a_hold();
+    yaw_rail_policy_off_is_beta12();
     std::printf("beta tests passed (%u checks)\n",checks);
     return 0;
 }

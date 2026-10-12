@@ -43,7 +43,10 @@ reorders, changed duplicates and gaps invalidate the estimate.
   signs, quality-code meanings, source freshness, or current profile from raw data.
 - Normalized yaw still carries averaged raw yaw and a nonzero count. Values
   4094/4095 and count zero are rejected even if an upstream adapter claims VALID.
-  This redundant guard is not proof that other raw values are usable.
+  This redundant guard is not proof that other raw values are usable. Only a
+  MODEL-domain core with `yaw_rail_excess_rad_s > 0` (the BETA tunnel profile,
+  validation/YAW_SATURATION_FIX_2026-10-12.md) accepts a rail encoding (4094/4095
+  or 0) and adds that rate to its heading budget for the interval.
 - The adapter supplies non-overlapping, completed [start,end] intervals, already
   split at speed/yaw/reverse events. Alignment and source measurement uncertainty
   must be accounted for by the adapter/profile. It must not fabricate fresh

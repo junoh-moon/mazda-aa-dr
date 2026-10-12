@@ -279,6 +279,11 @@ if [ -f "$BASE/diag" ] && [ ! -L "$BASE/diag" ] && [ "$(wc -c < "$BASE/diag")" -
    printf 'on\n' | cmp -s - "$BASE/diag"; then diag_marker=on
 elif [ -e "$BASE/diag" ] || [ -L "$BASE/diag" ]; then diag_marker=invalid; fi
 echo "diag_marker=$diag_marker (read at CMU start; on = tunnel test, invalid = off)"
+# Owner switch of the BETA tunnel accuracy ceiling (menu 10); read once at
+# start. Any marker type counts as present (fail closed to the 40 m values).
+acc_cap_marker=absent
+if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then acc_cap_marker=present; fi
+echo "acc_cap_marker=$acc_cap_marker (read at CMU start; present = 25 m tunnel cap off)"
 guard_config_binding=unconfirmed
 if [ "$startup_state" = guard_committed_after_new_boot ]; then
     # Row 3 of the validated v3 manifest is the configuration digest used by

@@ -172,7 +172,35 @@ struct G3Motion {
     // BETA reset/fault, cadence fence). Each one is also a yaw-chain break; G3
     // drops/cancels/rewrites a pending, in-flight or stored heading made before it.
     uint32_t discards;
+    // Yaw rail policy 1 (runtime::BETA_YAW_RAIL_EXCESS_DEG_S): the rail excess
+    // allowance (rad) of the rail windows integrated while moving. The G3
+    // heading uncertainty grows by it like by the rule-5 terms.
+    double rail_excess_rad;
+    // Start-up movement check (validation/NNG_G2_G3_LESSONS_2026-10-12.md,
+    // G3_BOOT_* flags): what the drained wheel stream says about motion the
+    // boot did not observe before its first moving wheel event.
+    unsigned boot_motion;
+    uint64_t boot_gap_ns;    // largest wheel-event gap before the first motion (0: none)
 };
+// G3Motion::boot_motion flags. FIRST_MOVING: the first drained wheel event of
+// the boot already had a moving wheel. GAP_INTO_MOTION: the first moving
+// wheel event came more than G3_WHEEL_GAP_NS after the previous wheel event
+// (the start of motion was not observed). LONG_GAP: a gap between wheel
+// events before the first motion exceeded G3_BOOT_GAP_MAX_NS (long enough to
+// drive off and stop again unobserved). Any flag: rotation during an
+// unobserved interval is unknown, so a carried G3 heading is rejected
+// (moving_at_boot). G3_BOOT_GAP_MAX_NS: the largest stream gap before the
+// first motion in the private boots with startup raw rows was 1.6 s (trip8a,
+// 1c1de788, parked, see validation/YAW_SATURATION_FIX_2026-10-12.md); 2 s is
+// above that and too short to start, turn and stop again at ordinary
+// parking acceleration (about 1.5 m/s^2: under 2 m of travel).
+enum { G3_BOOT_FIRST_MOVING=1, G3_BOOT_GAP_INTO_MOTION=2, G3_BOOT_LONG_GAP=4 };
+static const uint64_t G3_BOOT_GAP_MAX_NS=2000000000ULL;
+// Yaw rail windows seen by a pipeline with yaw rail policy 1 (boot lifetime,
+// never cleared by a reset). moving: rail rate integrated; parked: zero-
+// rotation hold; reset: no fresh wheel sample, beta.12 reset. rail_s: total
+// duration of the integrated (moving) rail windows.
+struct YawRailCounts { uint64_t moving, parked, reset; double rail_s; };
 
 // Single worker, fixed capacity, no allocation/I/O. Raw ingestion ONLY enters
 // MODEL domain. A separate qualified Pipeline requires externally verified
@@ -337,6 +365,7 @@ public:
     const FaultCalibration& fault_calibration() const { return fault_calibration_; }
     // G3 record-only inputs (read-only views; see G3Motion).
     const G3Motion& g3_motion() const { return g3_; }
+    const YawRailCounts& yaw_rail() const { return yaw_rail_; }
     bool beta_seeded() const { return beta_enabled_&&beta_core_.configured&&beta_core_.seeded; }
     const mx5_dr_snapshot& beta_estimate() const { return beta_core_.estimate; }
     // Honest BETA heading budget: core budget + rotation part (as carried by
@@ -360,6 +389,9 @@ private:
         // Exact window mean (sum/count). raw is the truncated integer kept
         // only for the core's raw-encoding guard; rates use mean_counts.
         double mean_counts;
+        // YAW_EVENT only (yaw rail policy 1): YAW_RAIL_MOVING integrates the
+        // rail rate, YAW_RAIL_HOLD is a zero-rotation hold (rate 0).
+        unsigned yaw_rail;
         mx5_dr_anchor anchor;
         uint64_t anchor_call_sequence;
         adapter::Observation observation;
@@ -379,6 +411,12 @@ private:
     uint64_t watermark_, raw_epoch_, raw_seq_[4], raw_time_[4];
     int raw_transport_[4];
     uint64_t last_yaw_time_, interval_seq_, position_seq_, wheel_conflict_since_;
+    // Yaw rail policy: the newest enqueued wheel event (time, any wheel moving).
+    uint64_t rail_wheel_time_;
+    bool rail_wheel_moving_;
+    YawRailCounts yaw_rail_;
+    enum { YAW_RAIL_NONE=0, YAW_RAIL_MOVING, YAW_RAIL_HOLD };
+    double event_rate(const Event&,double zero) const;
     uint64_t qualified_anchor_call_sequence_, last_qualified_position_call_sequence_;
     // Retained across candidate retirement within one source/session epoch.
     uint64_t qualified_observed_position_call_sequence_;

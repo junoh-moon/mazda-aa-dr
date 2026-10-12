@@ -122,9 +122,9 @@ CoreBridgeResult prepare_core_publication(const mx5_dr_core& core,
 CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfile& p,
                                       adapter::DrSnapshot* out,double* honest_accuracy_m,
                                       int* accuracy_rule,BetaStopLatch* stop_latch,
-                                      double diag_cap_m,bool* diag_capped) {
+                                      bool* report_capped) {
     if (accuracy_rule) *accuracy_rule=BETA_ACC_RULE_NORMAL;
-    if (diag_capped) *diag_capped=false;
+    if (report_capped) *report_capped=false;
     if (!out) return CORE_BRIDGE_NO_OUTPUT;
     if (honest_accuracy_m) *honest_accuracy_m=0.0;
     *out=adapter::DrSnapshot();
@@ -149,7 +149,9 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
         // Stopped accuracy: A* in (0, inf) (clamped to accuracy_max_m below),
         // H_max >= 0 (may be +infinity), v_c finite and >= 0.
         !(p.stopped_accuracy_m>0.0) || !std::isfinite(p.stopped_accuracy_m) ||
-        !(p.stopped_honest_max_m>=0.0) || !nonnegative(p.crawl_speed_mps))
+        !(p.stopped_honest_max_m>=0.0) || !nonnegative(p.crawl_speed_mps) ||
+        // Tunnel reporting ceiling: 0 (off) or finite and positive.
+        !nonnegative(p.tunnel_report_cap_m))
         return CORE_BRIDGE_LIMIT;
     if (!s.frontier_ns || !s.derived_utc_ns || in.query_mono_ns<s.frontier_ns ||
         in.now_mono_ns<s.frontier_ns) return CORE_BRIDGE_TIME;
@@ -233,18 +235,20 @@ CoreBridgeResult map_model_publication(const BetaModelInput& in,const BetaProfil
         if (rule!=BETA_ACC_RULE_NORMAL && p.stopped_accuracy_m<ceiling) ceiling=p.stopped_accuracy_m;
     }
     if (stop_latch) *stop_latch=latch;
-    // Diagnostic arm A20: the lower ceiling wins; it never raises a value.
+    // Tunnel reporting ceiling (unbounded only): the lower ceiling wins; it
+    // never raises a value and never touches the honest budget above.
     bool capped=false;
-    if (diag_cap_m>0.0 && std::isfinite(diag_cap_m) && diag_cap_m<ceiling) {
-        capped=accuracy>diag_cap_m;
-        ceiling=diag_cap_m;
+    const double cap=p.tunnel_report_cap_m;
+    if (p.unbounded && cap>0.0 && cap<ceiling) {
+        capped=accuracy>cap;
+        ceiling=cap;
     }
     mapped.accuracy_m=accuracy>ceiling?ceiling:accuracy; mapped.beta=true;
     uint8_t bytes[48];
     if (!adapter::encode_location(mapped,bytes)) return CORE_BRIDGE_NUMERIC;
     *out=mapped;
     if (accuracy_rule) *accuracy_rule=rule;
-    if (diag_capped) *diag_capped=capped;
+    if (report_capped) *report_capped=capped;
     return CORE_BRIDGE_OK;
 }
 const char* core_bridge_result_name(CoreBridgeResult r) {

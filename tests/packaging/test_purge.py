@@ -117,6 +117,18 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.base.exists())
 
+    def test_purge_removes_an_acc_cap_marker_left_behind(self):
+        # Menu 10 marker (2026-10-12): uninstall removes a file marker; a
+        # directory of that name is removed by menu 6.
+        self.fixture.run_script('install.sh', '--mode=SHADOW')
+        (self.base / 'acc-cap-off').write_text('off\n')
+        self.fixture.run_script('uninstall.sh')
+        self.assertFalse((self.base / 'acc-cap-off').exists())
+        (self.base / 'acc-cap-off').mkdir()
+        result = self.menu('6\n6\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.base.exists())
+
     def test_menu_lists_six_and_runs_purge(self):
         clean = tree(self.root, self.skip)
         result = self.menu('0\n')

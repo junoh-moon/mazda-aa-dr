@@ -236,6 +236,7 @@ static void check_beta_bytes(uint32_t accuracy_e3) {
 
 // Diagnostic build (set_diag): GPS_SATELLITE type 21, 864 bytes, number_in_use
 // at offset 0, presence word at offset 4 (validation/DIAG_BUILD_A20_S5_2026-10-12.md).
+// Version 2 (validation/TUNNEL_REPORT_CAP_2026-10-12.md) only observes it.
 static uint8_t diag_arm_now;
 static void m_diag_arm(DrSnapshot& s){s.diag_arm=diag_arm_now;}
 static uint8_t sat_payload[864];
@@ -244,31 +245,22 @@ static void sat_fill(uint32_t in_use,uint32_t presence) {
     put32(sat_payload,in_use);put32(sat_payload+4,presence);
     for(unsigned i=8;i<sizeof sat_payload;++i)sat_payload[i]=uint8_t(i*7+3); // untouched tail
 }
-// One type-21 send inside the current POSITION call; returns whether the OEM
-// send got a rewritten copy. The caller's buffer must never change.
-static bool sat_send(unsigned length,DiagSatOutcome expected) {
+// One type-21 send inside the current POSITION call: always the original
+// wrapper and payload, exactly one OEM call, errno preserved, the caller's
+// buffer unchanged; only the observation records the outcome.
+static void sat_send(unsigned length,DiagSatOutcome expected) {
     uint8_t before[864];std::memcpy(before,sat_payload,sizeof before);
     VehicleData data={21,sat_payload,length};
     sat_seen=false;std::memset(sent_sat,0xee,sizeof sent_sat);
-    const bool rewrite=expected==DIAG_SAT_APPLIED;
-    original_wrapper=&data;expect_original=!rewrite;errno=17;
+    original_wrapper=&data;expect_original=true;errno=17;
     const unsigned before_calls=calls;
     assert(send_vehicle_data(expected_session,&data)==next_result);
     assert(calls==before_calls+1);assert(errno==EDOM);
     assert(!std::memcmp(sat_payload,before,sizeof before));          // OEM memory untouched
     assert(last_event.diag_sat && last_event.diag_sat_outcome==expected);
-    assert(last_event.type==21);
-    if(sat_seen) {
-        if(rewrite) {
-            assert(get32(sent_sat)==5 && last_event.diag_sat_before==0 && last_event.diag_sat_after==5);
-            assert(!std::memcmp(sent_sat+4,before+4,sizeof before-4)); // every other byte as the OEM built it
-            assert(last_event.choice==DIAG_SATELLITE);
-        } else {
-            assert(!std::memcmp(sent_sat,before,sizeof before));
-            assert(last_event.choice==ORIGINAL);
-        }
-    }
-    return rewrite;
+    assert(last_event.type==21 && last_event.choice==ORIGINAL);
+    assert(last_event.diag_sat_before==get32(before) && last_event.diag_sat_after==get32(before));
+    if(sat_seen) assert(!std::memcmp(sent_sat,before,sizeof before));
 }
 // LOCATION (original mode 0, BETA candidate with the given arm) then n type-21
 // sends in the same POSITION call.
@@ -503,7 +495,7 @@ static int beta_main(const char* test) {
         // Marker absent (set_diag never called): a type-21 send is forwarded
         // as the original and leaves no diagnostic trace on the observation.
         sat_fill(0,0);position_enter(0,position);
-        diag_arm_now=DIAG_ARM_S5;
+        diag_arm_now=DIAG_ARM_CAP;
         { VehicleData d={1,beta_payload,48};mutate_snapshot=m_diag_arm;
           original_wrapper=&d;expect_original=false;errno=17;
           assert(send_vehicle_data(expected_session,&d)==0);mutate_snapshot=0;
@@ -514,67 +506,43 @@ static int beta_main(const char* test) {
           assert(!last_event.diag_sat && last_event.choice==ORIGINAL && sat_seen && get32(sent_sat)==0); }
         position_leave();
         set_diag(true);assert(diag());
-        // S5 arm: the first type-21 send after the accepted replacement is
-        // rewritten exactly once; the second one in the same call is not.
-        sat_fill(0,0);diag_enter(position,DIAG_ARM_S5);
-        diag_location(DIAG_ARM_S5,0);
-        assert(sat_send(864,DIAG_SAT_APPLIED));
-        assert(!sat_send(864,DIAG_SAT_EXHAUSTED));
+        // CAP and CONTROL: the arm is recorded; every type-21 send of the call
+        // is observed and forwarded unchanged (nothing is consumed or rewritten).
+        sat_fill(0,0);diag_enter(position,DIAG_ARM_CAP);diag_location(DIAG_ARM_CAP,0);
+        sat_send(864,DIAG_SAT_ARM_CAP);sat_send(864,DIAG_SAT_ARM_CAP);
         position_leave();
-        // A new call needs its own accepted replacement.
-        position_enter(0,position);
-        assert(!sat_send(864,DIAG_SAT_NO_REPLACEMENT));
-        position_leave();
-        // CONTROL and A20 episodes never rewrite the satellite message.
         diag_enter(position,DIAG_ARM_CONTROL);diag_location(DIAG_ARM_CONTROL,0);
-        assert(!sat_send(864,DIAG_SAT_ARM_CONTROL));position_leave();
-        diag_enter(position,DIAG_ARM_A20);diag_location(DIAG_ARM_A20,0);
-        assert(!sat_send(864,DIAG_SAT_ARM_A20));position_leave();
-        // Any layout doubt leaves the original untouched.
-        diag_enter(position,DIAG_ARM_S5);diag_location(DIAG_ARM_S5,0);
-        assert(!sat_send(863,DIAG_SAT_BAD_LENGTH));
-        // A refused attempt still consumes the latch: a valid second send of the
-        // same call is never rewritten (exactly one attempt per replacement).
-        sat_fill(0,0);assert(!sat_send(864,DIAG_SAT_EXHAUSTED));position_leave();
-        sat_fill(0,1);diag_enter(position,DIAG_ARM_S5);diag_location(DIAG_ARM_S5,0);
-        assert(!sat_send(864,DIAG_SAT_BAD_PRESENCE));position_leave();
-        sat_fill(3,0);diag_enter(position,DIAG_ARM_S5);diag_location(DIAG_ARM_S5,0);
-        assert(!sat_send(864,DIAG_SAT_UNEXPECTED_VALUE));position_leave();
-        // The adapter generation changes between the replaced LOCATION and the
-        // satellite send (revocation): the latch no longer matches, original sent.
-        sat_fill(0,0);diag_enter(position,DIAG_ARM_S5);diag_location(DIAG_ARM_S5,0);
-        invalidate();
-        assert(!sat_send(864,DIAG_SAT_CONTEXT_MISMATCH));position_leave();
-        // A failed replaced LOCATION latches nothing (and holds BETA, as before).
-        sat_fill(0,0);diag_enter(position,DIAG_ARM_S5);diag_location(DIAG_ARM_S5,-5);
-        assert(!sat_send(864,DIAG_SAT_LOCATION_FAILED));position_leave();
+        sat_send(864,DIAG_SAT_ARM_CONTROL);position_leave();
+        // A new call without its own replacement.
+        position_enter(0,position);sat_send(864,DIAG_SAT_NO_REPLACEMENT);position_leave();
+        // The retired beta.12 S5 value (3) on a snapshot never arms a rewrite:
+        // the satellite message still leaves as the OEM built it.
+        diag_enter(position,3);diag_location(3,0);
+        sat_send(864,DIAG_SAT_NO_REPLACEMENT);sat_send(864,DIAG_SAT_NO_REPLACEMENT);position_leave();
+        // Unusual layouts are only recorded.
+        diag_enter(position,DIAG_ARM_CAP);diag_location(DIAG_ARM_CAP,0);
+        sat_send(863,DIAG_SAT_ARM_CAP);
+        sat_fill(0,1);sat_send(864,DIAG_SAT_ARM_CAP);assert(last_event.diag_sat_presence==1);
+        sat_fill(3,0);sat_send(864,DIAG_SAT_ARM_CAP);assert(last_event.diag_sat_before==3);
+        position_leave();
+        // A failed replaced LOCATION holds BETA as before; the satellite send
+        // of that call is only observed.
+        sat_fill(0,0);diag_enter(position,DIAG_ARM_CAP);diag_location(DIAG_ARM_CAP,-5);
+        sat_send(864,DIAG_SAT_ARM_CAP);position_leave();
         next_result=0;
         { VehicleData other={1,beta_payload,48};uint8_t p2[72]={};put32(p2,1);
           position_enter(0,p2);original_wrapper=&other;expect_original=true;errno=17;
           assert(send_vehicle_data(expected_session,&other)==0);position_leave(); }
         assert(!beta_held());
         // Outside any POSITION call there is no context.
-        { VehicleData sat={21,sat_payload,864};sat_seen=false;
-          original_wrapper=&sat;expect_original=true;errno=17;
-          assert(send_vehicle_data(expected_session,&sat)==0);
-          assert(last_event.diag_sat && last_event.diag_sat_outcome==DIAG_SAT_NO_CONTEXT && get32(sent_sat)==0); }
-        // A rewritten send that the OEM path refused disables the rewrite for
-        // the rest of the process (fail closed), later ones are DISABLED.
-        diag_enter(position,DIAG_ARM_S5);diag_location(DIAG_ARM_S5,0);
-        next_result=-9;
-        { uint8_t before[864];std::memcpy(before,sat_payload,sizeof before);
-          VehicleData sat={21,sat_payload,864};sat_seen=false;
-          original_wrapper=&sat;expect_original=false;errno=17;
-          assert(send_vehicle_data(expected_session,&sat)==-9);
-          assert(last_event.diag_sat_outcome==DIAG_SAT_APPLIED && get32(sent_sat)==5);
-          assert(!std::memcmp(sat_payload,before,sizeof before)); }
-        position_leave();
-        next_result=0;
-        diag_enter(position,DIAG_ARM_S5);diag_location(DIAG_ARM_S5,0);
-        assert(!sat_send(864,DIAG_SAT_DISABLED));position_leave();
-        // Switching the diagnostic off restores the original forwarding.
+        sat_send(864,DIAG_SAT_NO_CONTEXT);
+        // A refused satellite send changes nothing for the next one.
+        diag_enter(position,DIAG_ARM_CAP);diag_location(DIAG_ARM_CAP,0);
+        next_result=-9;sat_send(864,DIAG_SAT_ARM_CAP);
+        next_result=0;sat_send(864,DIAG_SAT_ARM_CAP);position_leave();
+        // Switching the diagnostic off restores the plain forwarding.
         set_diag(false);assert(!diag());
-        diag_enter(position,DIAG_ARM_S5);
+        diag_enter(position,DIAG_ARM_CAP);
         { VehicleData loc={1,beta_payload,48};next_result=0;
           original_wrapper=&loc;expect_original=false;errno=17;
           assert(send_vehicle_data(expected_session,&loc)==0);mutate_snapshot=0;

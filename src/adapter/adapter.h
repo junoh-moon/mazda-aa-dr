@@ -13,22 +13,22 @@ namespace mx5 { namespace adapter {
 enum Mode { OFF = 0, OBSERVE = 1, SCRUB_STALE = 2, ASSIST = 3, BETA = 4 };
 // BETA_SPEED_OVERLAY (BETA_DECISIONS_2026-10-05.md 2, NO_FIX only): the
 // original 48 bytes with only hasSpeed (32) and speed_e3 (36..39) replaced.
-// DIAG_SATELLITE (diagnostic BETA build only, validation/DIAG_BUILD_A20_S5_2026-10-12.md):
-// a GPS_SATELLITE (type 21) send of the same POSITION call whose LOCATION was
-// BETA_REPLACEMENT, in an S5 episode, sent with number_in_use 5 instead of 0.
+// Choice 5 (DIAG_SATELLITE) was the beta.12 S5 satellite rewrite
+// (validation/DIAG_BUILD_A20_S5_2026-10-12.md). Retired by the diagnostic
+// version 2 (validation/TUNNEL_REPORT_CAP_2026-10-12.md): never produced; the
+// value stays reserved so old journals keep their meaning.
 enum Choice { ORIGINAL = 0, SCRUBBED = 1, DR_REPLACEMENT = 2, BETA_REPLACEMENT = 3,
-              BETA_SPEED_OVERLAY = 4, DIAG_SATELLITE = 5 };
+              BETA_SPEED_OVERLAY = 4, DIAG_SATELLITE_RETIRED = 5 };
 // Diagnostic arms (one per GPS-lost episode, runtime/diag_arms.h). NONE: the
-// diagnostic marker is absent (beta.11 behaviour) or no episode is open.
-enum DiagArm { DIAG_ARM_NONE = 0, DIAG_ARM_CONTROL = 1, DIAG_ARM_A20 = 2, DIAG_ARM_S5 = 3 };
+// diagnostic marker is absent or no episode is open. Values 2 (A20) and 3
+// (S5) were the beta.12 arms; retired, never assigned (journal names only).
+enum DiagArm { DIAG_ARM_NONE = 0, DIAG_ARM_CONTROL = 1, DIAG_ARM_CAP = 4 };
 // Outcome of one type-21 send while the diagnostic is on (journal only).
-// APPLIED is the only outcome that changes bytes; every other one forwards
-// the original wrapper and payload untouched.
-enum DiagSatOutcome { DIAG_SAT_NONE = 0, DIAG_SAT_APPLIED, DIAG_SAT_ARM_CONTROL, DIAG_SAT_ARM_A20,
-                      DIAG_SAT_NO_REPLACEMENT, DIAG_SAT_NO_CONTEXT, DIAG_SAT_NESTED,
-                      DIAG_SAT_EXHAUSTED, DIAG_SAT_CONTEXT_MISMATCH, DIAG_SAT_BAD_LENGTH,
-                      DIAG_SAT_BAD_PRESENCE, DIAG_SAT_UNEXPECTED_VALUE, DIAG_SAT_LOCATION_FAILED,
-                      DIAG_SAT_BUSY, DIAG_SAT_DISABLED };
+// Observation only: every outcome forwards the original wrapper and payload
+// untouched. Values 1 and 7..14 were beta.12 S5 rewrite outcomes (retired,
+// never produced; names kept for old journals).
+enum DiagSatOutcome { DIAG_SAT_NONE = 0, DIAG_SAT_ARM_CONTROL = 2, DIAG_SAT_NO_REPLACEMENT = 4,
+                      DIAG_SAT_NO_CONTEXT = 5, DIAG_SAT_NESTED = 6, DIAG_SAT_ARM_CAP = 15 };
 const char* diag_sat_outcome_name(DiagSatOutcome);
 const char* diag_arm_name(DiagArm);
 // GPS_SATELLITE (AA sensor type 21) as RequestSendPosition sends it on the
@@ -36,8 +36,8 @@ const char* diag_arm_name(DiagArm);
 // an 864-byte structure; bytes 0..3 number_in_use (int32), bytes 4..7 the
 // number_in_view presence flag (only byte 4 is read), then number_in_view and
 // the satellite arrays. For mode 0 the BLM zeroes all 864 bytes and writes
-// number_in_use 0; for mode 1 it writes 5.
-enum { DIAG_SAT_TYPE = 21, DIAG_SAT_LENGTH = 864, DIAG_SAT_IN_USE = 5 };
+// number_in_use 0; for mode 1 it writes 5. Observed (read) only.
+enum { DIAG_SAT_TYPE = 21, DIAG_SAT_LENGTH = 864 };
 enum Reason { PASS = 0, NO_CONTEXT, NESTED_CALL, EXTRA_LOCATION,
               BAD_LENGTH, DISABLED, LOCK_BUSY, NOT_UNKNOWN, NOT_READY,
               EPOCH_MISMATCH, EXPIRED, BAD_ENCODING, BAD_PROVENANCE,
@@ -128,7 +128,8 @@ struct Observation {
     // Diagnostic build only (set_diag(true)); all zero otherwise, so the
     // journal row stays byte-identical. diag_arm: the arm latched by this
     // call's BETA LOCATION replacement (DiagArm). diag_sat: a type-21 send
-    // with its outcome, number_in_use before/after and the 32-bit word at
+    // with its outcome, number_in_use before/after (always equal since the
+    // diagnostic version 2: nothing is rewritten) and the 32-bit word at
     // offset 4 (presence flag of number_in_view); values are 0 when the
     // payload is shorter than 8 bytes (diag_sat_short).
     uint8_t diag_arm;
@@ -200,11 +201,10 @@ struct Options {
 bool configure(SendFunction next, const Options& options);
 bool set_mode(Mode mode);
 // Diagnostic BETA build (owner marker <root>/diag, read once by the worker
-// before BETA is enabled). false (default): the send path is byte-identical
-// to v1.0.0-beta.11. true: type-21 sends are observed (diag_sat) and, in an
-// S5 episode, rewritten exactly once after a BETA LOCATION replacement of the
-// same call (see send_vehicle_data). Sticky per process once a rewritten send
-// returned non-zero: later rewrites are refused (DIAG_SAT_DISABLED).
+// before BETA is enabled). false (default): no diagnostic work on the send
+// path. true: a BETA LOCATION replacement records its episode arm and
+// type-21 sends are observed (diag_sat). No payload is ever rewritten: every
+// non-LOCATION send forwards the original wrapper and payload.
 void set_diag(bool on);
 bool diag();
 Mode mode();

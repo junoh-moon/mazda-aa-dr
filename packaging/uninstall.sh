@@ -12,6 +12,8 @@ rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 # The diagnostic tunnel test (menu 9) never survives an uninstall; a
 # directory of that name is not a marker (off) and menu 6 removes it.
 if [ -f "$BASE/diag" ] || [ -L "$BASE/diag" ]; then rm -f "$BASE/diag" || echo 'Warning: cannot remove the diag marker; menu 6 removes it.'; fi
+# Likewise the tunnel accuracy ceiling off switch (menu 10).
+if [ -f "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then rm -f "$BASE/acc-cap-off" || echo 'Warning: cannot remove the acc-cap-off marker; menu 6 removes it.'; fi
 sync
 file=$ROOT/usr/bin/autostart
 regular "$file"

@@ -609,16 +609,22 @@ class LdsLinks:
                     producer_time_status='unknown', association_only=True, assist_ready=False)
 
 
-DIAG_ARMS = ("CONTROL", "A20", "S5")
+# Diagnostic version 1 (beta.12: A20/S5) and version 2 (2026-10-12,
+# validation/TUNNEL_REPORT_CAP_2026-10-12.md: CONTROL = no tunnel reporting
+# ceiling, CAP = the 25 m ceiling; type-21 sends observed only).
+DIAG_ARMS_V1 = ("CONTROL", "A20", "S5")
+DIAG_ARMS_V2 = ("CONTROL", "CAP")
+DIAG_ARMS = ("CONTROL", "A20", "S5", "CAP")
 DIAG_SAT_OUTCOMES = ("none", "applied", "arm_control", "arm_a20", "no_replacement",
                      "no_context", "nested", "exhausted", "context_mismatch", "bad_length",
-                     "bad_presence", "unexpected_value", "location_failed", "busy", "disabled")
+                     "bad_presence", "unexpected_value", "location_failed", "busy", "disabled",
+                     "arm_cap")
 DIAG_COUNTERS = ("pubs", "capped", "loc_replaced", "loc_nonzero", "loc_original_mode0",
                  "sat", "sat_applied", "sat_nonzero")
 
 
 def diag_row_valid(row):
-    """Only the diagnostic schema emitted by the beta.12 candidate diff."""
+    """Only the diagnostic schemas emitted by beta.12 (version 1) and version 2."""
     if not bounded_int(row.get("mono_ns"), 0, 2**64-1):
         return False
     if row["kind"] == "send":
@@ -636,17 +642,27 @@ def diag_row_valid(row):
             not isinstance(row.get("boot_id"), str)):
         return False
     if row["kind"] == "diag_boot":
-        return (type(row.get("active")) is bool and isinstance(row.get("reason"), str) and
-                row.get("arms") == list(DIAG_ARMS) and row.get("block") == 3 and
-                row.get("rejoin_ms") == 10000 and row.get("cap_m") == 20 and
-                row.get("sat_type") == 21 and row.get("sat_length") == 864 and row.get("sat_in_use") == 5)
+        common = (type(row.get("active")) is bool and isinstance(row.get("reason"), str) and
+                  row.get("block") == 3 and row.get("rejoin_ms") == 10000 and
+                  row.get("sat_type") == 21 and row.get("sat_length") == 864)
+        if "version" not in row:
+            return (common and row.get("arms") == list(DIAG_ARMS_V1) and row.get("cap_m") == 20 and
+                    row.get("sat_in_use") == 5)
+        return (common and row.get("version") == 2 and row.get("arms") == list(DIAG_ARMS_V2) and
+                "sat_in_use" not in row and bounded_number(row.get("cap_m"), 0, 40) and
+                row.get("control_ceiling_m") == 40)
     if (row.get("event") not in ("assigned", "continued", "ended") or
             row.get("arm") not in DIAG_ARMS or not bounded_int(row.get("episode"), 0, 2**32-1) or
             not all(isinstance(row.get(k), str) for k in ("reason", "state")) or
             not all(bounded_int(row.get(k), 0, 2**32-1) for k in ("session_epoch", "generation"))):
         return False
     if row["event"] == "assigned":
-        return (bounded_int(row.get("block"), 0, 2**32-1) and bounded_int(row.get("perm"), 0, 5) and
+        if not bounded_int(row.get("block"), 0, 2**32-1):
+            return False
+        if "ceiling_m" in row:   # version 2: perm is the position of CONTROL
+            return (row["arm"] in DIAG_ARMS_V2 and bounded_int(row.get("perm"), 0, 2) and
+                    bounded_number(row["ceiling_m"], 0, 40) and "cap_m" not in row)
+        return (row["arm"] in DIAG_ARMS_V1 and bounded_int(row.get("perm"), 0, 5) and
                 row.get("cap_m") == 20 and row.get("sat_in_use") == 5)
     if row["event"] == "continued":
         return bounded_int(row.get("gap_ms"), 0, 2**64-1)
@@ -832,7 +848,22 @@ class DiagnosticTrace:
                 e["sampled_stops"] = stops if speeds else None
                 episodes.append(e)
         per_arm = {}
-        for arm in DIAG_ARMS:
+        # The schema version comes from diag_boot.version (beta.12 version 1
+        # rows lack the field), never from the arms that happened to occur: a
+        # version 2 log with only CONTROL episodes is still version 2. Without
+        # a diag_boot row, an assigned row decides (version 2 carries
+        # ceiling_m); without either, the arms seen (the earlier fallback).
+        versions = sorted({boot.get("version", 1) for boot in boots})
+        if not versions:
+            versions = sorted({2 if "ceiling_m" in row else 1 for rows in self.rows.values()
+                               for row, _, _ in rows
+                               if row["kind"] == "diag_episode" and row["event"] == "assigned"})
+        seen = {e["arm"] for e in episodes}
+        if not versions:
+            versions = [2] if seen & {"CAP"} else [1]
+        arms = [a for a in DIAG_ARMS if a in seen or (a in DIAG_ARMS_V1 and 1 in versions) or
+                (a in DIAG_ARMS_V2 and 2 in versions)]
+        for arm in arms:
             es = [e for e in episodes if e["arm"] == arm]
             per_arm[arm] = dict(assigned=sum(e["assigned"] for e in es), observed_episodes=len(es),
                                complete=sum(e["complete"] for e in es),
@@ -841,7 +872,7 @@ class DiagnosticTrace:
                                sat_applied_episodes=sum((e["sat_applied"] or e["observed_sat_applied"]) > 0 for e in es),
                                nonzero_episodes=sum((e["loc_nonzero"] or e["sat_nonzero"] or e["observed_nonzero"]) > 0
                                                     for e in es))
-        return dict(boots=boots, episodes=episodes, per_arm=per_arm, unassigned_sends=unassigned,
+        return dict(boots=boots, versions=versions, episodes=episodes, per_arm=per_arm, unassigned_sends=unassigned,
                     scope="recorded_diagnostic_evidence_only; incomplete_rows_are_lower_bounds",
                     phone_outcomes="unknown; pair with parked owner notes", gps_is_ground_truth=False)
 
@@ -879,6 +910,9 @@ def print_diag_data(diag):
           "direction give two-sided p~0.03 (before multiple comparisons). W (wireless dongle) and P (phone GNSS) "
           "remain possible. Grey icon/speed frozen require owner notes; null S5 cannot reject S: the first stock "
           "mode-0 satellite message stays 0.")
+    if 2 in diag.get("versions", ()):
+        print("  Version 2: CAP = 25 m tunnel reporting ceiling (a deliberate under-report; honest budget journaled), "
+              "CONTROL = no ceiling (40 m). About one third of episodes are CONTROL; S5/A20 are retired.")
 
 
 class Auditor:
@@ -1430,6 +1464,9 @@ class Auditor:
             if (kind == "shadow_boot" and bounded_number(row.get("wheel_kmh_per_count"), 0.0001, 1) and
                     bounded_number(row.get("wheel_zero_kmh"), -1000, 1000)):
                 self.session["beta"]["wheel_profile"] = (row["wheel_kmh_per_count"], row["wheel_zero_kmh"])
+            # Tunnel reporting ceiling of this boot (absent before 2026-10-12; 0: acc-cap-off).
+            if kind == "shadow_boot" and bounded_number(row.get("acc_cap_m"), 0, 40):
+                self.session["beta"]["report_cap_m"] = row["acc_cap_m"]
             self.shadow(row, source)
         elif kind == "beta_reverse_latch":
             self.reverse_latch(row, source)
@@ -3109,12 +3146,16 @@ class Auditor:
         rule = last.get("acc_rule", 0)
         if beta["rule_build"]:
             rule = 1 if last["speed_mps"] == 0.0 else (2 if rule == 2 else 0)
-        a20 = last.get("diag_arm") == "A20"
+        # A20 (beta.12) and the tunnel reporting ceiling (shadow_boot acc_cap_m,
+        # diagnostic arm CAP) can be below 40 m even while moving.
+        cap = beta.get("report_cap_m")
+        reduced = last.get("diag_arm") in ("A20", "CAP") or (
+            last.get("diag_arm") != "CONTROL" and finite_number(cap) and cap > 0 and accuracy >= cap - 0.01)
         clamped = finite_number(honest) and honest > accuracy + 0.01 and \
-            (accuracy >= BETA_MAX_ACCURACY_E3 / 1000.0 - 0.01 or rule in (1, 2) or a20)
-        # A20 can be below 40 m even while moving. If its honest budget is
-        # missing, do not silently substitute the intentionally reduced value.
-        limit = (honest if finite_number(honest) else None) if a20 else (honest if clamped else accuracy)
+            (accuracy >= BETA_MAX_ACCURACY_E3 / 1000.0 - 0.01 or rule in (1, 2) or reduced)
+        # If the honest budget is missing, do not silently substitute the
+        # intentionally reduced value.
+        limit = (honest if finite_number(honest) else None) if reduced else (honest if clamped else accuracy)
         check = dict(dr_send=last["source"], gps_position=source, gap_s=round(gap, 3),
                      distance_m=round(raw, 2), time_aligned_distance_m=round(aligned, 2),
                      reported_accuracy_m=accuracy, within_reported_accuracy=aligned <= accuracy,

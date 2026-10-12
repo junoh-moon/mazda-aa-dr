@@ -204,7 +204,10 @@ int main(int argc,char** argv) {
     // the main scenario without any REVERSE message; BETA seeds from the
     // assumed forward state and journals the assumption before the seed.
     const bool no_reverse=std::string(argv[1])=="main_no_reverse";
-    const std::string scenario=no_reverse?std::string("main"):std::string(argv[1]);
+    // budget_cap_off (validation/TUNNEL_REPORT_CAP_2026-10-12.md): the budget
+    // scenario with the owner marker acc-cap-off (beta.12 numbers, 40 m).
+    const bool cap_off=std::string(argv[1])=="budget_cap_off";
+    const std::string scenario=no_reverse?std::string("main"):cap_off?std::string("budget"):std::string(argv[1]);
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
            scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed"||
@@ -225,6 +228,7 @@ int main(int argc,char** argv) {
     char root[]="/tmp/mx5dr-worker-beta-XXXXXX";assert(mkdtemp(root));
     const std::string logs=std::string(root)+"/logs";
     assert(!mkdir(logs.c_str(),0700));
+    if(cap_off) { const int fd=open((std::string(root)+"/acc-cap-off").c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);assert(fd>=0);close(fd); }
     // Startup-only fixture injection, as loader_enabled()/bootstrap set them.
     config.mode=5;config.valid=true;config.max_log_bytes=41943040;config.max_log_files=1;
     hook_installed=true;boot_result="ok";
@@ -267,11 +271,14 @@ int main(int argc,char** argv) {
                line.find("\"result\":\"unobserved\"")!=std::string::npos)session=true;
         assert(session); // The declined fence admits MODEL input.
         // The full profile binds no VIM side channel (log-only, persistent profile only).
-        std::ifstream g((logs+"/trace.0.jsonl").c_str());bool side=false;
+        std::ifstream g((logs+"/trace.0.jsonl").c_str());bool side=false,cap=false;
         while(std::getline(g,line))
-            if(line.find("\"kind\":\"shadow_boot\"")!=std::string::npos &&
-               line.find(",\"vim_side_channel\":\"not_persistent\"}")!=std::string::npos)side=true;
-        assert(side);
+            if(line.find("\"kind\":\"shadow_boot\"")!=std::string::npos) {
+                if(line.find(",\"vim_side_channel\":\"not_persistent\"}")!=std::string::npos)side=true;
+                // The tunnel reporting ceiling of this boot (0: acc-cap-off).
+                if(line.find(cap_off?",\"acc_cap_m\":0,":",\"acc_cap_m\":25,")!=std::string::npos)cap=true;
+            }
+        assert(side && cap);
     }
     assert(A::mode()==A::BETA);
     N::MotionSender sender;assert(sender.open_channel(motion_channel));uint64_t sequence=0;
@@ -781,15 +788,17 @@ int main(int argc,char** argv) {
     } else {
         // Tunnel mode (v1.0.0-beta.6, owner decision 2026-10-09): the honest
         // budget passing 40 m no longer withdraws the outage; the replacement
-        // continues and the REPORTED accuracy is clamped at 40 m (the honest
-        // budget is journaled as accuracy_honest_m).
+        // continues and the REPORTED accuracy is clamped (the honest budget is
+        // journaled as accuracy_honest_m): at the 25 m tunnel reporting ceiling
+        // (2026-10-12), or at 40 m with the owner marker acc-cap-off.
         assert(replaced_total>=5 && !has(rows,"ENGAGED>WITHDRAWN:budget_limit"));
+        const uint32_t ceiling=cap_off?40000:25000;
         uint32_t previous=0;
         for(size_t i=0;i<calls.size();++i)if(calls[i].replaced) {
-            assert(calls[i].accuracy_e3<=40000 && calls[i].accuracy_e3+500>=previous);
+            assert(calls[i].accuracy_e3<=ceiling && calls[i].accuracy_e3+500>=previous);
             previous=calls[i].accuracy_e3;
         }
-        assert(previous==40000);
+        assert(previous==ceiling);
     }
     {
         // G3 record-only (validation/G3_RECORD_ONLY_2026-10-11.md). Every
@@ -920,6 +929,7 @@ int main(int argc,char** argv) {
     }
     unlink((logs+"/capture.done").c_str());rmdir((logs+"/capture.stop").c_str());
     for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
+    if(cap_off)unlink((std::string(root)+"/acc-cap-off").c_str());
     assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);
     puts("BETA runtime wiring checks passed");
     return 0;

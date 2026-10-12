@@ -59,6 +59,19 @@ static const uint64_t BETA_POSITION_MAX_AGE_NS=3000000000ULL;
 // The MODEL core and the MODEL latch never use the assumption.
 static const unsigned BETA_ASSUME_FORWARD_FIXES=3;
 static const double BETA_ASSUME_FORWARD_MIN_KMH=20.0;
+// Yaw rail (validation/YAW_SATURATION_2026-10-12.md and
+// validation/YAW_SATURATION_FIX_2026-10-12.md). A yaw window whose truncated
+// mean is 4094/4095 (every sample 0xFFF: the VIP sums 0xFFF, it drops only
+// 0xFFE) or 0 is at a rail of the 12-bit range (about -/+77.2 deg/s with the
+// research scale). While a wheel moves it is genuine sensor saturation
+// (trip8c 2026.7-2027.6 s, trip6a 1631.9-1632.1 s); with all four wheels
+// exactly zero it is the sensor's initialisation marker. With
+// yaw_rail_policy 1 the pipeline integrates the rail rate (the true rate is
+// at least that large) and the BETA core adds BETA_YAW_RAIL_EXCESS_DEG_S per
+// second of rail window to the heading budget: the wheel-differential
+// estimate exceeded the rail by up to 12 deg/s in the saturated trip8c
+// windows. MODEL heuristic, not a qualified bound.
+static const double BETA_YAW_RAIL_EXCESS_DEG_S=12.0;
 
 struct BetaProfile {
     // Rule 1 / decision 3: reported accuracy =
@@ -136,6 +149,24 @@ struct BetaProfile {
     // Rule F (BETA_ASSUME_FORWARD_*; continuous policy only): false in
     // beta_profile() (legacy gate unchanged), true in beta_profile_tunnel().
     bool assume_forward;
+    // Tunnel reporting ceiling (validation/TUNNEL_REPORT_CAP_2026-10-12.md;
+    // Naver Map accepts a car location only below 30 m). Unbounded profile
+    // only: every replaced LOCATION reports min(honest, this) after the
+    // stopped rule, so the stopped 25 m rule is subsumed while its rule/latch
+    // bookkeeping is kept. A deliberate BETA under-report like the stopped
+    // rule; the honest budget stays in accuracy_honest_m and every limit or
+    // withdrawal decision keeps using the honest value. 0: off (beta_profile(),
+    // and the owner marker acc-cap-off: beta.12 numbers, 40 m ceiling).
+    double tunnel_report_cap_m;
+    // Yaw rail policy (BETA_YAW_RAIL_EXCESS_DEG_S above; MODEL pipeline,
+    // Pipeline::enqueue_raw_event). 0: beta.12 behaviour, a window at the
+    // upper rail is BAD_INPUT and resets the whole pipeline (MODEL, BETA,
+    // reverse latch). 1: no reset; while a wheel moves the rail rate is
+    // integrated with the excess budget, with all four wheels exactly zero the
+    // window is a zero-rotation hold, without a fresh wheel sample it is the
+    // beta.12 reset. 0 in beta_profile() (bounded, legacy), 1 in
+    // beta_profile_tunnel().
+    unsigned yaw_rail_policy;
 };
 // The stopped-accuracy rule can change a reported value (and is journaled).
 inline bool beta_stopped_rule_enabled(const BetaProfile& p) {
@@ -183,6 +214,8 @@ inline BetaProfile beta_profile() {
     p.stopped_honest_max_m=std::numeric_limits<double>::infinity();
     p.crawl_speed_mps=0.0;
     p.assume_forward=false;
+    p.tunnel_report_cap_m=0.0;
+    p.yaw_rail_policy=0;
     return p;
 }
 
@@ -206,6 +239,11 @@ inline BetaProfile beta_profile_tunnel() {
     // Rule F (2026-10-11): unknown reverse is assumed forward after
     // BETA_ASSUME_FORWARD_FIXES fast, wheel-consistent fixes.
     p.assume_forward=true;
+    // Tunnel reporting ceiling (2026-10-12): 25 m, the stopped value; the
+    // Naver threshold is < 30 m and the twin found 20/25/29 m equivalent.
+    p.tunnel_report_cap_m=25.0;
+    // Yaw rail policy 1 (2026-10-12): saturation no longer resets the chain.
+    p.yaw_rail_policy=1;
     return p;
 }
 
@@ -228,6 +266,9 @@ inline mx5_dr_config beta_core_config(const BetaProfile& p) {
     // A closed mean-yaw window can precede the first moving wheel callback.
     // Bounded BETA, SHADOW and QUALIFIED retain the strict stationary guard.
     c.hold_stopped_yaw=p.unbounded?1:0;
+    // Yaw rail policy 1: the BETA core accepts rail windows and budgets them.
+    c.yaw_rail_excess_rad_s=p.yaw_rail_policy==1?
+        BETA_YAW_RAIL_EXCESS_DEG_S*3.14159265358979323846/180.0:0.0;
     return c;
 }
 

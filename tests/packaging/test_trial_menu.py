@@ -291,6 +291,87 @@ class TrialMenuTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(marker.exists())
 
+    def test_menu_ten_toggles_the_acc_cap_off_marker(self):
+        # Tunnel accuracy ceiling (2026-10-12, validation/TUNNEL_REPORT_CAP_2026-10-12.md):
+        # the menu 7/8 pattern (present = off), 40-column text, mx5dr.conf
+        # untouched, cleared by menu 1 and menu 4.
+        marker = self.base / 'acc-cap-off'
+        result = self.menu('10\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('10 Tunnel 25 m cap on/off (BETA)', result.stdout)
+        self.assertIn('Tunnel 25 m cap: package not installed;', result.stdout)
+        self.assertFalse(self.base.exists())
+        self.fixture.run_script('install.sh')
+        config = (self.base / 'mx5dr.conf').read_bytes()
+        for keys in ('10\n0\n', '10\n\n0\n', '10\n1\n0\n', '10\n100\n0\n', '10\n9\n0\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('Tunnel 25 m cap now: ON', result.stdout)
+                self.assertIn('Enter 10 again to switch it OFF,', result.stdout)
+                self.assertIn('Cancelled; nothing changed.', result.stdout)
+                self.assertFalse(marker.exists())
+        eof = self.menu('10\n')
+        self.assertIn('Cancelled; nothing changed.', eof.stdout)
+        self.assertFalse(marker.exists())
+        result = self.menu('10\n10\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Tunnel 25 m cap set to OFF.', result.stdout)
+        self.assertEqual(marker.read_bytes(), b'off\n')
+        self.assertFalse(list(self.base.glob('acc-cap-off.new.*')))
+        for other in ('diag', 'g3-off', 'vimchan-off'):
+            self.assertFalse((self.base / other).exists())
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        out = result.stdout
+        start = out.index('Tunnel 25 m cap now:')
+        for line in out[start:out.index('(parked reboot) for it to take effect.') + 40].splitlines():
+            self.assertLessEqual(len(line.replace('Number, then Enter: ', '')), 40, line)
+        status = self.menu('2\n0\n')
+        self.assertIn('acc_cap_marker=present', status.stdout)
+        self.assertIn('CAP 25 m tunnel cap OFF (menu 10)', status.stdout)
+        result = self.menu('10\n10\n0\n')
+        self.assertIn('Tunnel 25 m cap now: OFF', result.stdout)
+        self.assertIn('Tunnel 25 m cap set to ON.', result.stdout)
+        self.assertFalse(marker.exists())
+        status = self.menu('2\n0\n')
+        self.assertIn('acc_cap_marker=absent', status.stdout)
+        self.assertNotIn('CAP 25 m', status.stdout)
+        # A directory is not changed here (menu 6 removes it).
+        marker.mkdir()
+        result = self.menu('10\n10\n0\n')
+        self.assertIn('Tunnel 25 m cap: OFF (marker is a dir).', result.stdout)
+        self.assertTrue(marker.is_dir())
+        marker.rmdir()
+        # A symlink (even to a directory) counts as present; switching ON
+        # removes the link itself and never touches its target.
+        outside = self.base.parent / 'acc-cap-outside-dir'
+        outside.mkdir()
+        (outside / 'keep').write_text('x')
+        marker.symlink_to(outside, target_is_directory=True)
+        self.assertIn('acc_cap_marker=present', self.menu('2\n0\n').stdout)
+        result = self.menu('10\n10\n0\n')
+        self.assertIn('Tunnel 25 m cap now: OFF', result.stdout)
+        self.assertIn('Tunnel 25 m cap set to ON.', result.stdout)
+        self.assertFalse(marker.is_symlink() or marker.exists())
+        self.assertEqual(sorted(p.name for p in outside.iterdir()), ['keep'])
+        (outside / 'keep').unlink()
+        outside.rmdir()
+        # Content does not matter (NUL bytes included): present = off.
+        marker.write_bytes(b'on\x00')
+        self.assertIn('acc_cap_marker=present', self.menu('2\n0\n').stdout)
+        marker.unlink()
+        # Menu 1 (reinstall) clears the marker: the default is on again.
+        marker.write_text('off\n')
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Cleared acc-cap-off', result.stdout)
+        self.assertFalse(marker.exists())
+        # Menu 4 (uninstall) removes it too.
+        marker.write_text('off\n')
+        result = self.menu('4\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+
     def test_install_uses_bundle_mode_without_more_typed_commands(self):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         result = self.menu('1\n')
@@ -377,7 +458,7 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('2\n0\n')
         self.assertEqual(result.stdout.count('Parked USB trial menu'), 1)
         out = result.stdout
-        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-9 as listed before)'))
+        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-10 as listed before)'))
         self.assertIn('Startup check saved', out[:out.index('---- GO / NO-GO ----')])
         for line in out[out.index('---- GO / NO-GO ----'):].splitlines():
             self.assertLessEqual(len(line), 40, line)

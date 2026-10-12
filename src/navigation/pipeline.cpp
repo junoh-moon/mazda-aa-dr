@@ -31,6 +31,7 @@ ModelProfile research_model_profile() {
 }
 Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     last_yaw_time_(0), interval_seq_(0), position_seq_(0), wheel_conflict_since_(0),
+    rail_wheel_time_(0), rail_wheel_moving_(false),
     qualified_anchor_call_sequence_(0), last_qualified_position_call_sequence_(0),
     qualified_observed_position_call_sequence_(0), qualified_stale_position_cutoff_ns_(0),
     qualified_stale_position_call_sequence_(0),
@@ -57,6 +58,7 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     std::memset(latch_clears_,0,sizeof latch_clears_);
     std::memset(af_run_,0,sizeof af_run_); std::memset(&assumption_,0,sizeof assumption_);
     std::memset(&core_,0,sizeof core_); std::memset(&status_,0,sizeof status_);
+    std::memset(&yaw_rail_,0,sizeof yaw_rail_);
     std::memset(&beta_core_,0,sizeof beta_core_);
     beta_=runtime::beta_profile_tunnel(); beta_prev_=adapter::Observation();
     fault_calibration_=FaultCalibration();
@@ -231,6 +233,7 @@ void Pipeline::reset_state(mx5_dr_context x) {
     std::memset(raw_seq_,0,sizeof raw_seq_); std::memset(raw_time_,0,sizeof raw_time_);
     for (unsigned i=0;i<4;++i) raw_transport_[i]=-1;
     last_yaw_time_=0; interval_seq_=0; position_seq_=0; position_mode_=-1;
+    rail_wheel_time_=0; rail_wheel_moving_=false;
     qualified_anchor_call_sequence_=last_qualified_position_call_sequence_=0;
     qualified_anchor_paired_=false;
     wheel_conflict_since_=0;clear_history();
@@ -378,6 +381,9 @@ PipelineResult Pipeline::enqueue_raw_event(const RawEvent& r) {
         const double moving_tolerance=moving_sum/3*0.05;
         e.wheel_zero_conflict=stopped==1&&moving_low>=2.0&&
             moving_high-moving_low<=(moving_tolerance>0.3?moving_tolerance:0.3);
+        // Yaw rail policy: any wheel above EXACTLY zero is moving (the BETA
+        // stop definition, G3Motion), judged at the newest enqueued event.
+        rail_wheel_time_=time; rail_wheel_moving_=high>0.0;
         gyro_bias_.wheels(time,r.received_ns,r.source_mono_ms!=0,wheels);
     } else if (r.kind==REVERSE) {
         e.kind=REVERSE_EVENT;
@@ -400,7 +406,29 @@ PipelineResult Pipeline::enqueue_raw_event(const RawEvent& r) {
         // Passing this bound does not rule out count wrap, skipped inputs,
         // stale samples or invalid constituents; this remains MODEL-only.
         unsigned mean=unsigned(r.raw[0])/r.count;
-        if (mean>=4094) return fault(PIPELINE_BAD_INPUT);
+        // Yaw rail (validation/YAW_SATURATION_FIX_2026-10-12.md). The VIP sums
+        // 0xFFF samples (it drops only 0xFFE), so a truncated mean of
+        // 4094/4095 is a window at the upper rail and 0 one at the lower
+        // rail; the value cannot tell saturation from the init marker.
+        // Policy 0 (and every pipeline without BETA) keeps the upper-rail
+        // reset and integrates the lower rail as before. Policy 1 decides
+        // by the newest wheel event (fresh within the sample age): moving =
+        // saturation, integrate the rail rate (the BETA core budgets the
+        // excess); all four wheels exactly zero = init marker, a zero-rotation
+        // hold (no reset, the value is not integrated); no fresh wheel event =
+        // unknown, the upper-rail reset as before (a lower rail is then kept
+        // as an ordinary window, as before).
+        unsigned rail=YAW_RAIL_NONE;
+        if (beta_enabled_&&beta_.yaw_rail_policy==1&&(mean>=4094||mean==0)) {
+            const bool fresh=rail_wheel_time_&&
+                (rail_wheel_time_>time?rail_wheel_time_-time:time-rail_wheel_time_)<=
+                core_.config.sample_age_max_ns;
+            if (fresh) {
+                rail=rail_wheel_moving_?YAW_RAIL_MOVING:YAW_RAIL_HOLD;
+                ++(rail==YAW_RAIL_MOVING?yaw_rail_.moving:yaw_rail_.parked);
+            } else if (mean>=4094) ++yaw_rail_.reset;
+        }
+        if (mean>=4094&&rail==YAW_RAIL_NONE) return fault(PIPELINE_BAD_INPUT);
         if (!last_yaw_time_) { last_yaw_time_=time; return PIPELINE_WAITING; }
         if (time==last_yaw_time_) return PIPELINE_WAITING;
         if (time-last_yaw_time_>core_.config.sample_age_max_ns) return fault(PIPELINE_MISSING_SENSOR);
@@ -408,10 +436,15 @@ PipelineResult Pipeline::enqueue_raw_event(const RawEvent& r) {
         // noisy sensor that is a ~0.4-count zero shift, with a constant input a
         // rate-dependent bias. Keep the exact mean for every rate.
         const double exact=double(r.raw[0])/double(r.count);
-        gyro_bias_.yaw(last_yaw_time_,time,r.received_ns,r.source_mono_ms!=0,exact);
+        // An init marker never reaches the stationary zero learner (its next
+        // window then starts a new run: GyroBias continuity check).
+        if (rail!=YAW_RAIL_HOLD)
+            gyro_bias_.yaw(last_yaw_time_,time,r.received_ns,r.source_mono_ms!=0,exact);
         e.kind=YAW_EVENT; e.time=last_yaw_time_; e.window_end=time;
         e.value=(exact-profile_.yaw_zero)*profile_.yaw_rad_per_count;
         e.raw=uint16_t(mean); e.mean_counts=exact; e.count=r.count; last_yaw_time_=time;
+        e.yaw_rail=rail;
+        if (rail==YAW_RAIL_MOVING) yaw_rail_.rail_s+=double(e.window_end-e.time)/1e9;
         status_.uncertainties|=YAW_WINDOW_MODEL;
     }
     return insert(e);
@@ -783,10 +816,9 @@ PipelineResult Pipeline::advance(uint64_t end) {
         if (beta_only) { beta_control(MX5_DR_DISABLE); return PIPELINE_OK; }
         return PIPELINE_WAITING;
     }
-    const double yaw_rate=model_?(yaw_.mean_counts-gyro_bias_.status().active_zero)*
-        profile_.yaw_rad_per_count:yaw_.value;
+    const double yaw_rate=model_?event_rate(yaw_,gyro_bias_.status().active_zero):yaw_.value;
     // BETA rule 4: the fixed profile zero, never the stationary auto-bias.
-    const double beta_rate=(yaw_.mean_counts-beta_.yaw_zero)*profile_.yaw_rad_per_count;
+    const double beta_rate=event_rate(yaw_,beta_.yaw_zero);
     // Do not apply the straight GPS-training wheel-spread gate to cornering.
     // This narrower MODEL contradiction needs exactly one stopped wheel, three
     // agreeing moving wheels, and the yaw window for this integration interval.
@@ -910,7 +942,7 @@ bool Pipeline::enable_beta(const runtime::BetaProfile& p) {
         p.displacement_ratio_max<p.displacement_ratio_min||!p.reverse_suspect_ns||
         !(p.course_weight_kmh>0)||!(p.course_innovation_rad>0)||
         !(p.course_correction_rad>0)||!(p.position_slack_m>0)||
-        (p.continuous_anchor&&!(p.wheel_gps_speed_max_diff_kmh>0))) return false;
+        (p.continuous_anchor&&!(p.wheel_gps_speed_max_diff_kmh>0))||p.yaw_rail_policy>1) return false;
     const mx5_dr_config c=runtime::beta_core_config(p);
     mx5_dr_core probe;
     if (mx5_dr_init_model(&probe,&c,context())!=MX5_DR_OK) return false;
@@ -982,6 +1014,17 @@ void Pipeline::beta_step(const mx5_dr_interval& base,double rate) {
 // writes nothing but g3_.
 void Pipeline::g3_speed(const Event& e) {
     if (!beta_enabled_||!finite(e.value)||e.value<0||!finite(e.wheel_max)) return;
+    // Start-up movement check (G3_BOOT_* in pipeline.h): until the first
+    // moving wheel event, record whether motion may have been missed.
+    if (!g3_.first_move_ns) {
+        if (!g3_.last_speed_ns) { if (e.wheel_max>0.0) g3_.boot_motion|=G3_BOOT_FIRST_MOVING; }
+        else if (e.time>g3_.last_speed_ns) {
+            const uint64_t gap=e.time-g3_.last_speed_ns;
+            if (gap>g3_.boot_gap_ns) g3_.boot_gap_ns=gap;
+            if (e.wheel_max>0.0&&gap>G3_WHEEL_GAP_NS) g3_.boot_motion|=G3_BOOT_GAP_INTO_MOTION;
+            if (gap>G3_BOOT_GAP_MAX_NS) g3_.boot_motion|=G3_BOOT_LONG_GAP;
+        }
+    }
     // Exact-zero stop run: restarts after any gap above G3_WHEEL_GAP_NS (a
     // single zero sample after a gap does not continue a stop).
     if (e.wheel_max==0.0) {
@@ -1010,6 +1053,13 @@ void Pipeline::g3_yaw(const Event& e,double rate) {
     if (!finite(rate)||e.window_end<=e.time||!moving) return;
     const double dt=double(min64(e.window_end-e.time,G3_YAW_WINDOW_MAX_NS))/1e9;
     g3_.turn_rad+=rate*dt; g3_.abs_turn_rad+=std::fabs(rate)*dt; g3_.moving_s+=dt;
+    if (e.yaw_rail==YAW_RAIL_MOVING)
+        g3_.rail_excess_rad+=runtime::BETA_YAW_RAIL_EXCESS_DEG_S*PI/180*dt;
+}
+// MODEL rate of a drained yaw window (rad/s) for a yaw zero. A yaw rail hold
+// (an init marker with all four wheels exactly zero) rotates nothing.
+double Pipeline::event_rate(const Event& e,double zero) const {
+    return e.yaw_rail==YAW_RAIL_HOLD?0.0:(e.mean_counts-zero)*profile_.yaw_rad_per_count;
 }
 bool Pipeline::beta_pair_continues(const adapter::Observation& o) const {
     if (!beta_have_prev_) return false;
@@ -1633,13 +1683,13 @@ PipelineResult Pipeline::drain(uint64_t watermark) {
             if(beta_enabled_) {
                 YawRecord& y=beta_yaw_[beta_yaw_next_];
                 y.begin=e.time; y.end=e.window_end;
-                y.rate=(e.mean_counts-beta_.yaw_zero)*profile_.yaw_rad_per_count;
+                y.rate=event_rate(e,beta_.yaw_zero);
                 beta_yaw_next_=(beta_yaw_next_+1)%HISTORY_CAPACITY;
                 if(beta_yaw_size_<HISTORY_CAPACITY)++beta_yaw_size_;
                 g3_yaw(e,y.rate);
             }
             gps_wheel_.yaw(e.time,e.window_end,e.received,
-                (e.mean_counts-gyro_bias_.status().active_zero)*profile_.yaw_rad_per_count); break;
+                event_rate(e,gyro_bias_.status().active_zero)); break;
         case ANCHOR_EVENT:
             if (core_.estimate.state==MX5_DR_ACTIVE||core_.estimate.state==MX5_DR_NATIVE||
                 e.anchor.context.generation>context().generation) {

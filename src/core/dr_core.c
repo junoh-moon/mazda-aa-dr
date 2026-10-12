@@ -56,6 +56,8 @@ static int valid_config(const mx5_dr_config *p, int allow_extended) {
     const int ext = p && p->extended_limits == 1;
     if (p && (p->extended_limits > 1 || p->reserved_zero)) return 0;
     if (p && (p->hold_stopped_yaw > 1 || (p->hold_stopped_yaw && !allow_extended))) return 0;
+    if (p && (!finite_value(p->yaw_rail_excess_rad_s) || p->yaw_rail_excess_rad_s < 0.0 ||
+              (p->yaw_rail_excess_rad_s > 0.0 && !allow_extended))) return 0;
     if (ext && !allow_extended) return 0;
     return p && finite_value(p->duration_max_s) && p->duration_max_s > 0.0 && p->duration_max_s <= (ext ? EXT_DURATION_MAX_S : 60.0) &&
         finite_value(p->distance_max_m) && p->distance_max_m > 0.0 && p->distance_max_m <= (ext ? EXT_DISTANCE_MAX_M : 1500.0) &&
@@ -216,7 +218,7 @@ static int move_wgs84(mx5_dr_snapshot *s, double east, double north) {
 }
 mx5_dr_result mx5_dr_step(mx5_dr_core *c, const mx5_dr_interval *i) {
     mx5_dr_result r; mx5_dr_snapshot s; double remaining, dwell;
-    uint64_t elapsed_ns;
+    uint64_t elapsed_ns; int rail;
     if (!c || !c->configured || !i) return MX5_DR_E_CONFIG;
     if (!context_equal(i->context,c->estimate.context)) return MX5_DR_E_CONTEXT;
     if (!c->seeded || (c->estimate.state != MX5_DR_READY && c->estimate.state != MX5_DR_ACTIVE)) return MX5_DR_E_NO_SEED;
@@ -227,7 +229,11 @@ mx5_dr_result mx5_dr_step(mx5_dr_core *c, const mx5_dr_interval *i) {
         i->end_ns-i->start_ns > c->config.interval_max_ns || i->received_ns < i->end_ns ||
         i->received_ns-i->end_ns > c->config.sample_age_max_ns ||
         (c->have_interval && i->received_ns < c->last_interval.received_ns)) return fail(c,MX5_DR_E_TIME);
-    if (i->raw_yaw >= 4094 || !i->yaw_count) return fail(c,MX5_DR_E_QUALITY);
+    /* A rail encoding (4094/4095 high, 0 low) is accepted only by the
+     * MODEL-domain rail opt-in, which budgets it below. */
+    rail = c->config.yaw_rail_excess_rad_s > 0.0 && (i->raw_yaw == 0 ||
+           (i->raw_yaw >= 4094 && i->raw_yaw <= 4095));
+    if ((i->raw_yaw >= 4094 && !rail) || !i->yaw_count) return fail(c,MX5_DR_E_QUALITY);
     if (i->reverse_active != 0 && i->reverse_active != 1) return fail(c,MX5_DR_E_FRAME);
     if (i->yaw_is_mean != 0 && i->yaw_is_mean != 1) return fail(c,MX5_DR_E_TIME);
     if (i->yaw_is_mean && (i->yaw_window_start_ns >= i->yaw_window_end_ns ||
@@ -273,6 +279,7 @@ mx5_dr_result mx5_dr_step(mx5_dr_core *c, const mx5_dr_interval *i) {
         if (!s.stopped && candidate) dt=minimum(dt,c->config.stop_hold_s-dwell);
         if (dt < 1e-12) { s.stopped=1; continue; }
         s.heading_budget_rad += c->config.yaw_error_rad_s*dt;
+        if (rail) s.heading_budget_rad += c->config.yaw_rail_excess_rad_s*dt;
         s.error_budget_m += c->config.speed_error_mps*dt;
         if (s.stopped) {
             s.heading_budget_rad += fabs(i->yaw_rad_s)*dt;

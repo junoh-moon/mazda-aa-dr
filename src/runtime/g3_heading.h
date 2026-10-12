@@ -728,6 +728,16 @@ public:
                 "g3_store",(unsigned long long)s.now,reason_,g3_state_name(state_),lround(prop_unc_*10),
                 s.motion.distance_m);
         }
+        // Start-up movement check (NNG: a first sensor epoch at speed resets the
+        // saved state): the car may have turned while the boot was not
+        // observing it (G3Motion::boot_motion), so the carried heading is unknown.
+        if((state_==G3_CARRIED || state_==G3_CARRIED_UNVERIFIED) && s.motion.boot_motion) {
+            state_=G3_REJECTED;reason_="moving_at_boot";
+            row(j,",\"mono_ns\":%llu,\"event\":\"checked\",\"reason\":\"%s\",\"g3\":\"%s\",\"boot_motion\":%u,"
+                  "\"gap_ms\":%llu,\"m_b\":%.1f}",
+                "g3_store",(unsigned long long)s.now,reason_,g3_state_name(state_),s.motion.boot_motion,
+                (unsigned long long)(s.motion.boot_gap_ns/1000000ULL),s.motion.distance_m);
+        }
         if(session_ns_ && !start_done_) { start_done_=true;session_m0_=s.motion.distance_m;first_row(j,s,"start",0); }
         if(start_done_ && !t30_done_ && s.now>=session_ns_ && s.now-session_ns_>=G3_FIRST_WINDOW_NS) {
             t30_done_=true;first_row(j,s,"t30",0);
@@ -879,7 +889,7 @@ private:
     // reference; head_*: this tick's carried value; pending_beta_*: BETA's own
     // value at the request (journal only).
     bool ref_valid_, head_valid_, pending_beta_valid_;
-    double ref_deg_, ref_unc_, ref_turn_, ref_aturn_, ref_moving_s_;
+    double ref_deg_, ref_unc_, ref_turn_, ref_aturn_, ref_moving_s_, ref_rail_;
     uint32_t ref_breaks_;
     // Rule F discards (G3Motion::discards) when the pending / the published
     // record was built: a heading built before a discard may come from a
@@ -904,7 +914,7 @@ private:
         m_ref_=pending_m_=0;last_request_ns_=0;next_seq_=1;failures_=0;writes_=dropped_=0;
         pending_rec_=g3_record();pending_line_[0]=0;pending_len_=0;
         ref_valid_=head_valid_=pending_beta_valid_=false;
-        ref_deg_=ref_unc_=ref_turn_=ref_aturn_=ref_moving_s_=0;ref_breaks_=0;ref_ns_=pending_ref_ns_=0;
+        ref_deg_=ref_unc_=ref_turn_=ref_aturn_=ref_moving_s_=ref_rail_=0;ref_breaks_=0;ref_ns_=pending_ref_ns_=0;
         pending_discards_=disk_discards_=0;
         head_deg_=head_unc_=pending_beta_deg_=pending_beta_unc_=0;
     }
@@ -933,7 +943,8 @@ private:
         const double turn=std::isfinite(m.turn_rad)?m.turn_rad:0;
         prop_body_=g3_wrap360(carried_deg_+turn*180.0/G3_PI);
         const double grow=s.yaw_error_rad_s*(std::isfinite(m.moving_s)?m.moving_s:0)+
-            s.rotation_per_rad*(std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0);
+            s.rotation_per_rad*(std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0)+
+            (std::isfinite(m.rail_excess_rad)?m.rail_excess_rad:0);   // yaw rail allowance
         prop_unc_=carried_unc_+grow*180.0/G3_PI;
     }
     // The heading a parked record stores. A BETA sample (re)sets the
@@ -950,17 +961,19 @@ private:
         const double turn=std::isfinite(m.turn_rad)?m.turn_rad:0;
         const double aturn=std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0;
         const double moving=std::isfinite(m.moving_s)?m.moving_s:0;
+        const double rail=std::isfinite(m.rail_excess_rad)?m.rail_excess_rad:0;
         head_valid_=false;
         if(ref_valid_) {
             head_deg_=g3_wrap360(ref_deg_+(turn-ref_turn_)*180.0/G3_PI);
-            const double grow=s.yaw_error_rad_s*(moving-ref_moving_s_)+s.rotation_per_rad*(aturn-ref_aturn_);
+            const double grow=s.yaw_error_rad_s*(moving-ref_moving_s_)+s.rotation_per_rad*(aturn-ref_aturn_)+
+                (rail-ref_rail_);
             head_unc_=ref_unc_+(grow>0?grow:0)*180.0/G3_PI;
             head_valid_=std::isfinite(head_deg_) && std::isfinite(head_unc_);
         }
         if(s.heading_valid && (!head_valid_ || s.unc_deg<=head_unc_ ||
                                fabs(g3_wrap180(s.heading_deg-head_deg_))>s.unc_deg+head_unc_)) {
             ref_valid_=true;ref_deg_=g3_wrap360(s.heading_deg);ref_unc_=s.unc_deg;
-            ref_turn_=turn;ref_aturn_=aturn;ref_moving_s_=moving;ref_breaks_=m.breaks;ref_ns_=s.now?s.now:1;
+            ref_turn_=turn;ref_aturn_=aturn;ref_moving_s_=moving;ref_rail_=rail;ref_breaks_=m.breaks;ref_ns_=s.now?s.now:1;
             head_valid_=true;head_deg_=ref_deg_;head_unc_=ref_unc_;
         }
     }

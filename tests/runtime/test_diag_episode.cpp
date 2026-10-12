@@ -1,8 +1,8 @@
-// Diagnostic BETA build (validation/DIAG_BUILD_A20_S5_2026-10-12.md): the
-// controller's episode boundaries and arm assignment, driven through the
+// Diagnostic BETA build, version 2 (validation/TUNNEL_REPORT_CAP_2026-10-12.md):
+// the controller's episode boundaries and arm assignment, driven through the
 // position stream only (no OEM code). Pairs with test_diag (pure assignment),
-// the adapter case beta_diag_sat (satellite rewrite) and the A20 cap checks in
-// test_beta.
+// the adapter case beta_diag_sat (satellite observation) and the ceiling
+// checks in test_beta.
 #include "runtime/beta_controller.h"
 #include <assert.h>
 #include <stdio.h>
@@ -46,8 +46,25 @@ int main(int argc, char** argv) {
     pos(c, j, 25 * S, A::POSITION_FIX);
     pos(c, j, 35 * S, A::POSITION_LOST); const A::DiagArm a3 = c.diag_arm(); assert(c.diag_episodes() == 3);
     pos(c, j, 36 * S, A::POSITION_FIX);
-    // The first block of three episodes holds each arm exactly once.
-    assert(a1 != a2 && a2 != a3 && a1 != a3);
+    // The first block of three episodes holds one CONTROL and two CAP.
+    assert((a1 == A::DIAG_ARM_CONTROL) + (a2 == A::DIAG_ARM_CONTROL) + (a3 == A::DIAG_ARM_CONTROL) == 1);
+    assert((a1 == A::DIAG_ARM_CAP) + (a2 == A::DIAG_ARM_CAP) + (a3 == A::DIAG_ARM_CAP) == 2);
+    // The assigned rows carry the arm's reporting ceiling (CONTROL 40, CAP 25).
+    assert(count(j, "\"arm\":\"CONTROL\",\"reason\":\"gps_lost\",") >= 1);
+    assert(count(j, "\"ceiling_m\":40") == 1 && count(j, "\"ceiling_m\":25") == 2);
+    assert(count(j, "A20") == 0 && count(j, "S5") == 0 && count(j, "sat_in_use") == 0);
+    // The publication profile follows the arm of the open episode: CONTROL has
+    // no ceiling, CAP and closed episodes keep the product 25 m.
+    { R::BetaShared shp = {}; R::BetaController g(shp); J jp;
+      assert(g.set_diag(true, "episode-boot")); assert(g.enable(jp, 1, 0));
+      assert(g.publication_profile().tunnel_report_cap_m == 25.0);
+      const A::DiagArm arms[3] = {a1, a2, a3};
+      for (unsigned k = 0; k < 3; ++k) {
+          pos(g, jp, (100 + 20 * k) * S, A::POSITION_LOST); assert(g.diag_arm() == arms[k]);
+          assert(g.publication_profile().tunnel_report_cap_m == (arms[k] == A::DIAG_ARM_CONTROL ? 0.0 : 25.0));
+          pos(g, jp, (101 + 20 * k) * S, A::POSITION_FIX);
+          assert(g.publication_profile().tunnel_report_cap_m == 25.0);
+      } }
     // Rows: three assignments, one continuation, an end row per closed episode.
     assert(count(j, "\"kind\":\"diag_episode\"") >= 7);
     assert(count(j, "\"event\":\"assigned\"") == 3);
@@ -63,6 +80,7 @@ int main(int argc, char** argv) {
     { R::BetaShared sh3 = {}; R::BetaController e(sh3); J j3; assert(e.enable(j3, 1, 0));
       pos(e, j3, 1 * S, A::POSITION_LOST);
       assert(!e.diag() && e.diag_arm() == A::DIAG_ARM_NONE && e.diag_episodes() == 0);
+      assert(e.publication_profile().tunnel_report_cap_m == 25.0);   // the product default
       assert(count(j3, "diag_episode") == 0); }
     // set_diag only before enable().
     { R::BetaShared sh4 = {}; R::BetaController f(sh4); J j4; assert(f.enable(j4, 1, 0)); assert(!f.set_diag(true, "x")); }

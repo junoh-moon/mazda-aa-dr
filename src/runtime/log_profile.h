@@ -216,8 +216,9 @@ public:
             if(o.choice!=adapter::ORIGINAL) { ++send_changed_;keep(s,emit,context);return; }
             // Diagnostic BETA build only (adapter::set_diag(true); diag_sat is
             // never set otherwise): every GPS_SATELLITE send of a LOST call is
-            // kept in every arm, so CONTROL/A20/S5 episodes carry the same rows
-            // (validation/DIAG_BUILD_A20_S5_2026-10-12.md).
+            // kept in every arm, so CONTROL/CAP episodes (version 2; beta.12:
+            // CONTROL/A20/S5) carry the same rows
+            // (validation/TUNNEL_REPORT_CAP_2026-10-12.md).
             if(o.diag_sat && o.position_class==adapter::POSITION_LOST) { keep(s,emit,context);return; }
             if(o.type==1) { ++send_location_;raw(s,now,emit,context); }
             else ++suppressed_[S_SEND];

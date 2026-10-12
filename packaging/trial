@@ -194,6 +194,8 @@ startup_verdict() {
         v=field("diag_marker=")
         if (v=="on") print "TEST tunnel test on (menu 9)"
         else if (v=="invalid") print "TEST marker invalid: test off"
+        # Menu 10 tunnel ceiling: shown only when switched off (not a GO condition).
+        if (field("acc_cap_marker=")=="present") print "CAP 25 m tunnel cap OFF (menu 10)"
         for (i=1;i<=NR;i++) if (index(line[i],"BETA NO_FIX: ")==1) print substr(line[i],1,40)
         # The owner-facing BETA count line, folded to the small screen.
         for (i=1;i<=NR;i++) if (index(line[i],"BETA: ")==1) fold40(line[i])
@@ -420,6 +422,52 @@ diag_toggle() {
     return 0
 }
 
+# Menu 10 (2026-10-12, validation/TUNNEL_REPORT_CAP_2026-10-12.md): the
+# owner switch of the BETA tunnel accuracy ceiling (25 m, the product
+# default). While BASE/acc-cap-off exists (any type) the BETA worker reports
+# the beta.12 values (40 m ceiling, 25 m only when stopped); read once at CMU
+# start. Never touches mx5dr.conf. Shows the state first, then one numeric
+# confirmation (10 again).
+acc_cap_toggle() {
+    marker=$BASE/acc-cap-off
+    if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
+        echo 'Tunnel 25 m cap: package not installed;'
+        echo 'nothing changed.'
+        return 0
+    fi
+    if [ -d "$marker" ] && [ ! -L "$marker" ]; then
+        echo 'Tunnel 25 m cap: OFF (marker is a dir).'
+        echo 'Not changed here; menu 6 removes it.'
+        return 0
+    fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then state=OFF; next=ON
+    else state=ON; next=OFF; fi
+    printf '%s\n' "Tunnel 25 m cap now: $state" \
+        'BETA only. OFF = old 40 m tunnel value.' \
+        "Enter 10 again to switch it $next," \
+        'anything else cancels.'
+    printf 'Number, then Enter: '
+    if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
+    if [ "$confirm" != 10 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
+    if [ "$next" = OFF ]; then
+        marker_tmp=$BASE/acc-cap-off.new.$$
+        rm -f "$marker_tmp" || fail 'Cannot stage the acc-cap-off marker'
+        if ! printf 'off\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
+            rm -f "$marker_tmp" || :
+            fail 'Cannot write the acc-cap-off marker'
+        fi
+    else
+        # The marker itself (also a symlink, even to a directory) is removed;
+        # nothing is written through it.
+        rm -f "$marker" || fail 'Cannot remove the acc-cap-off marker'
+    fi
+    sync
+    echo "Tunnel 25 m cap set to $next."
+    echo 'Read once at CMU start: choose 5'
+    echo '(parked reboot) for it to take effect.'
+    return 0
+}
+
 # Display only: install.sh validates the same marker again before any write.
 bundle_mode() {
     marker=$HERE/bundle-default-mode
@@ -452,7 +500,7 @@ short_menu=0
 while :; do
     if [ "$short_menu" = 1 ]; then
         short_menu=0
-        printf '\n%s\n' '0 Exit (1-9 as listed before)'
+        printf '\n%s\n' '0 Exit (1-10 as listed before)'
     else
         printf '\n%s\n' 'Parked USB trial menu' \
             "This USB installs mode $BUNDLE_MODE: $mode_text" \
@@ -465,6 +513,7 @@ while :; do
             '7 VIM side-channel log on/off (log only)' \
             '8 Heading log (G3) on/off (log only)' \
             '9 Tunnel test on/off (BETA diagnostic)' \
+            '10 Tunnel 25 m cap on/off (BETA)' \
             '0 Exit'
         echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
@@ -492,6 +541,7 @@ while :; do
         7) if ! vim_side_toggle; then exit "$last_rc"; fi;;
         8) if ! g3_toggle; then exit "$last_rc"; fi;;
         9) if ! diag_toggle; then exit "$last_rc"; fi;;
+        10) if ! acc_cap_toggle; then exit "$last_rc"; fi;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac

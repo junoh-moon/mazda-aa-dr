@@ -270,6 +270,43 @@ static G3Tracker started(const G3Record& r,G3Load load=G3_LOAD_OK,const char* ch
     G3Tracker t;t.start(0,true,"marker",boot,chain,rt,load,r);return t;
 }
 
+// Start-up movement check (validation/NNG_G2_G3_LESSONS_2026-10-12.md,
+// validation/YAW_SATURATION_FIX_2026-10-12.md): a carried heading is rejected
+// (moving_at_boot) when the boot may have missed rotation before its first
+// observed motion; the yaw rail allowance grows the carried uncertainty.
+static void moving_at_boot() {
+    const G3Record r=good_record();
+    const unsigned flags[]={navigation::G3_BOOT_FIRST_MOVING,navigation::G3_BOOT_GAP_INTO_MOTION,
+                            navigation::G3_BOOT_LONG_GAP};
+    for(unsigned k=0;k<3;++k) {
+        G3Tracker t=started(r);CHECK(t.state()==G3_CARRIED);
+        Rows j;G3Sample s=sample(2*S,3,0,1,true);s.motion.boot_motion=flags[k];s.motion.boot_gap_ns=400000000ULL;
+        t.tick(j,s,0,0);
+        CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"moving_at_boot") &&
+              j.count("\"event\":\"checked\",\"reason\":\"moving_at_boot\"")==1);
+        char want[48];snprintf(want,sizeof want,"\"boot_motion\":%u,\"gap_ms\":400",flags[k]);
+        CHECK(has(j.last("\"event\":\"checked\""),want));
+        // Once rejected it stays rejected; a course only records the error.
+        G3Course c={3*S,197.0,20.0,1};t.tick(j,sample(3*S,10,0,2,true),&c,0);
+        CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"moving_at_boot") &&
+              j.count("\"event\":\"checked\",\"reason\":\"moving_at_boot\"")==1);
+    }
+    // CARRIED_UNVERIFIED is rejected too; nothing carried: no row.
+    { G3Tracker t=started(r,G3_LOAD_OK,"unread");CHECK(t.state()==G3_CARRIED_UNVERIFIED);
+      Rows j;G3Sample s=sample(2*S);s.motion.boot_motion=navigation::G3_BOOT_LONG_GAP;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"moving_at_boot")); }
+    { G3Tracker t=started(r,G3_LOAD_MISSING);Rows j;G3Sample s=sample(2*S);s.motion.boot_motion=1;
+      t.tick(j,s,0,0);CHECK(t.state()==G3_UNKNOWN && !j.count("moving_at_boot")); }
+    // A clean start keeps the carried heading (and its course confirmation).
+    { G3Tracker t=started(r);Rows j;t.tick(j,sample(2*S,3,0,1,true),0,0);CHECK(t.state()==G3_CARRIED);
+      G3Course c={3*S,197.0,20.0,1};t.tick(j,sample(3*S,10,0,2,true),&c,0);CHECK(t.state()==G3_CONFIRMED); }
+    // Yaw rail allowance: 4.5 deg carried + 25.4 deg stays within 30 deg,
+    // + 25.6 deg is rejected as unc_grew.
+    { G3Tracker t=started(r);Rows j;G3Sample s=sample(2*S);s.motion.rail_excess_rad=25.4*G3_PI/180;
+      t.tick(j,s,0,0);CHECK(t.state()==G3_CARRIED);
+      s.motion.rail_excess_rad=25.6*G3_PI/180;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"unc_grew")); }
+}
 static void restore_rules() {
     G3Record r=good_record();
     { G3Tracker t;t.start(0,false,"marker",BOOT_B,"none",RT,G3_LOAD_OK,r);
@@ -884,6 +921,44 @@ static void pipeline_motion() {
           s.rotation_per_rad==0.10);
     uint64_t seen=0;G3Course c;CHECK(!g3_find_course(p,&seen,&c));
 }
+// The pipeline's start-up movement observation (G3Motion::boot_motion).
+// wheel(ms): km/h, or a negative value for no wheel event at that ms.
+static navigation::G3Motion boot_motion_run(double (*wheel)(unsigned),unsigned end_ms) {
+    navigation::Pipeline p;mx5_dr_context x={1,1,1};
+    CHECK(p.init_model(navigation::research_model_profile(),mx5_dr_default_config(),x,false,false,true));
+    CHECK(p.enable_beta(beta_profile_tunnel()));
+    uint64_t seq=0;
+    for(unsigned ms=0;ms<=end_ms;ms+=100) {
+        const double kmh=wheel(ms);
+        if(kmh>=0) {
+            navigation::RawEvent w=raw(navigation::WHEELS,ms,++seq);
+            for(unsigned i=0;i<4;++i)w.raw[i]=uint16_t(lround(kmh*100+10000));
+            p.enqueue_raw(w);
+        }
+        navigation::RawEvent y=raw(navigation::YAW,ms,++seq);y.raw[0]=2048;
+        p.enqueue_raw(y);
+        if(ms>=100)p.drain(T(ms)-100000000ULL);
+    }
+    p.drain(T(end_ms+1000));
+    return p.g3_motion();
+}
+static double moving_first(unsigned) { return 18; }
+static double gap_into_motion(unsigned ms) { return ms<1000?0:ms<1400?-1:18; }    // 0.5 s gap, then moving
+static double short_gap(unsigned ms) { return ms<1000?0:ms<2500?-1:ms<3000?0:18; } // 1.6 s gap while parked
+static double long_gap(unsigned ms) { return ms<1000?0:ms<3100?-1:ms<3500?0:18; }  // 2.2 s gap while parked
+static double late_gap(unsigned ms) { return ms<1000?0:ms<1500?18:ms<4000?-1:18; } // gap after the first motion
+static void pipeline_boot_motion() {
+    navigation::G3Motion m=boot_motion_run(moving_first,1000);
+    CHECK(m.boot_motion==navigation::G3_BOOT_FIRST_MOVING && m.first_move_ns==T(0));
+    m=boot_motion_run(gap_into_motion,2000);
+    CHECK(m.boot_motion==navigation::G3_BOOT_GAP_INTO_MOTION && m.boot_gap_ns==500000000ULL && m.first_move_ns==T(1400));
+    m=boot_motion_run(short_gap,4000);
+    CHECK(m.boot_motion==0 && m.boot_gap_ns==1600000000ULL && m.first_move_ns==T(3000));
+    m=boot_motion_run(long_gap,4000);
+    CHECK(m.boot_motion==navigation::G3_BOOT_LONG_GAP && m.boot_gap_ns==2200000000ULL);
+    m=boot_motion_run(late_gap,5000);
+    CHECK(m.boot_motion==0 && m.first_move_ns==T(1000));
+}
 // Exact-zero stop runs in the pipeline: a crawl at 0.02 m/s is never a stop;
 // a 20 s wheel gap followed by one zero sample restarts the run there.
 // Review gap (2026-10-11): the G3 yaw-chain break conditions reachable from
@@ -1029,6 +1104,8 @@ int main(int argc,char** argv) {
     two_boot_roundtrip();
     pipeline_motion();
     pipeline_park_detection();
+    pipeline_boot_motion();
+    moving_at_boot();
     yaw_chain_breaks();
     rule_f_discard();
     rule_f_discard_in_flight();

@@ -173,6 +173,12 @@ if [ -e "$BASE/diag" ] || [ -L "$BASE/diag" ]; then
     rm -f "$BASE/diag" || fail 'Cannot clear the diag marker'
     echo 'Cleared diag: the tunnel test is off from the next start; menu 9 turns it on again.'
 fi
+# Likewise the tunnel accuracy ceiling off switch from menu 10 (default on).
+if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then
+    if [ -d "$BASE/acc-cap-off" ] && [ ! -L "$BASE/acc-cap-off" ]; then fail 'Cannot clear acc-cap-off: it is a directory'; fi
+    rm -f "$BASE/acc-cap-off" || fail 'Cannot clear the acc-cap-off marker'
+    echo 'Cleared acc-cap-off: the 25 m tunnel cap is on again from the next start.'
+fi
 if [ "$POLICY" = persistent ]; then
     # A failure from here on must not leave an enablement behind.
     PERSIST_PENDING=1

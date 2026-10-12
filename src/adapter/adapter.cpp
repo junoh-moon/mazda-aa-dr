@@ -35,14 +35,9 @@ struct Context {
     int32_t latitude_e7, longitude_e7;
     bool coordinates_e7;
     // Diagnostic build (set_diag(true)) only. diag_arm: the arm of the BETA
-    // candidate that replaced this call's LOCATION. sat_state: the S5 latch
-    // for the type-21 send of this same call (SAT_*), with the send storage
-    // and adapter generation of the replaced LOCATION send.
-    uint8_t diag_arm, sat_state;
-    const void* sat_storage;
-    uint32_t sat_generation;
+    // candidate that replaced this call's LOCATION.
+    uint8_t diag_arm;
 };
-enum { SAT_IDLE = 0, SAT_LATCHED, SAT_CONSUMED, SAT_LOCATION_FAILED };
 // Each active POSITION owns exactly one slot. A flat pool preserves the full
 // request trace across the OEM call without allocating it on a small OEM stack
 // or reserving eight large frames in every thread's initial-exec TLS image.
@@ -113,12 +108,9 @@ static const double BETA_MAX_SPEED_MPS = 100.0;
 static const double BETA_MAX_ACCURACY_M = 40.0;
 static pthread_mutex_t snapshot_mutex = PTHREAD_MUTEX_INITIALIZER;
 static DrSnapshot candidate = DrSnapshot();
-// Diagnostic build (validation/DIAG_BUILD_A20_S5_2026-10-12.md). diag_on is
-// written by the worker before BETA is enabled. sat_buffer is the one bounded
-// copy of a rewritten type-21 payload; sat_busy is its one-shot claim, held
-// across next() so the copy outlives the OEM send. sat_fault is sticky.
-static std::atomic<unsigned> diag_on(0), sat_busy(0), sat_fault(0);
-static uint8_t sat_buffer[DIAG_SAT_LENGTH];
+// Diagnostic build (validation/TUNNEL_REPORT_CAP_2026-10-12.md). diag_on is
+// written by the worker before BETA is enabled.
+static std::atomic<unsigned> diag_on(0);
 
 uint32_t get32(const uint8_t* p) {
     return uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
@@ -296,7 +288,9 @@ Reason choose_beta(Context& ctx, uint64_t time,
     if (!s.ready || !s.beta || s.speed_only) return NOT_READY;
     if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
         time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
-    // Never clamp or under-report: above the limit the original passes.
+    // Never clamp here: above the limit the original passes. Any reduced
+    // report (stopped rule, tunnel reporting ceiling) is decided and
+    // journaled by the worker before publication; it is always <= this limit.
     if (!(s.accuracy_m <= BETA_MAX_ACCURACY_M)) return NOT_READY;
     if (!encode_beta_location(s, original, bytes)) return BAD_ENCODING;
     if (prediction_generation.load(std::memory_order_acquire) != live_generation)
@@ -340,15 +334,11 @@ Reason choose_beta_speed(Context& ctx, uint64_t time,
         return EPOCH_MISMATCH;
     return PASS;
 }
-// Diagnostic S5 (validation/DIAG_BUILD_A20_S5_2026-10-12.md): one type-21
-// send while set_diag(true). Records the original number_in_use and presence
-// word; rewrites number_in_use 0 -> 5 into the bounded static copy only for the
-// first type-21 send after this call's accepted BETA LOCATION replacement in
-// an S5 episode, with the same send storage and adapter generation, exactly
-// 864 bytes, presence word 0 and original value 0. Every other case forwards
-// the original wrapper. true: sat_buffer was claimed (release after next()).
-bool diag_satellite(Context* ctx, bool reentrant, const void* storage, VehicleData* data,
-                    VehicleData* local, VehicleData** selected, Observation* event) {
+// Diagnostic observation of one type-21 send while set_diag(true): records
+// the original number_in_use, the presence word and the arm of this call's
+// BETA LOCATION replacement. Never changes the send (the beta.12 S5 rewrite
+// is retired, validation/TUNNEL_REPORT_CAP_2026-10-12.md).
+void diag_satellite(const Context* ctx, bool reentrant, const VehicleData* data, Observation* event) {
     event->diag_sat = true;
     const uint8_t* p = static_cast<const uint8_t*>(data->payload);
     if (p && data->length >= 8) {
@@ -359,38 +349,9 @@ bool diag_satellite(Context* ctx, bool reentrant, const void* storage, VehicleDa
     DiagSatOutcome outcome;
     if (!ctx) outcome = DIAG_SAT_NO_CONTEXT;
     else if (reentrant || tls.depth != 1) outcome = DIAG_SAT_NESTED;
-    else if (ctx->sat_state == SAT_CONSUMED) outcome = DIAG_SAT_EXHAUSTED;
-    else if (ctx->sat_state == SAT_LOCATION_FAILED) outcome = DIAG_SAT_LOCATION_FAILED;
-    else if (ctx->sat_state != SAT_LATCHED)
-        outcome = ctx->diag_arm == DIAG_ARM_CONTROL ? DIAG_SAT_ARM_CONTROL :
-            ctx->diag_arm == DIAG_ARM_A20 ? DIAG_SAT_ARM_A20 : DIAG_SAT_NO_REPLACEMENT;
-    else {
-        ctx->sat_state = SAT_CONSUMED;   // exactly once, also when refused below
-        if (sat_fault.load(std::memory_order_acquire) || fault.load(std::memory_order_acquire) ||
-            mode() != BETA) outcome = DIAG_SAT_DISABLED;
-        else if (storage != ctx->sat_storage || generation() != ctx->sat_generation)
-            outcome = DIAG_SAT_CONTEXT_MISMATCH;
-        else if (!p || data->length != DIAG_SAT_LENGTH) outcome = DIAG_SAT_BAD_LENGTH;
-        else if (event->diag_sat_presence != 0) outcome = DIAG_SAT_BAD_PRESENCE;
-        else if (event->diag_sat_before != 0) outcome = DIAG_SAT_UNEXPECTED_VALUE;
-        else if (sat_busy.exchange(1, std::memory_order_acq_rel)) outcome = DIAG_SAT_BUSY;
-        else if (sat_fault.load(std::memory_order_acquire)) {
-            // A refused send released the buffer between the check above and
-            // this claim: give the claim back and forward the original.
-            sat_busy.store(0, std::memory_order_release);
-            outcome = DIAG_SAT_DISABLED;
-        } else {
-            std::memcpy(sat_buffer, p, DIAG_SAT_LENGTH);
-            put32(sat_buffer, DIAG_SAT_IN_USE);
-            *local = *data; local->payload = sat_buffer; *selected = local;
-            event->choice = DIAG_SATELLITE; event->reason = PASS;
-            event->diag_sat_after = DIAG_SAT_IN_USE;
-            event->diag_sat_outcome = DIAG_SAT_APPLIED;
-            return true;
-        }
-    }
+    else outcome = ctx->diag_arm == DIAG_ARM_CONTROL ? DIAG_SAT_ARM_CONTROL :
+        ctx->diag_arm == DIAG_ARM_CAP ? DIAG_SAT_ARM_CAP : DIAG_SAT_NO_REPLACEMENT;
     event->diag_sat_outcome = uint8_t(outcome);
-    return false;
 }
 void beta_signal(const char* what) {
     if (options.beta_event) options.beta_event(options.user, what);
@@ -428,13 +389,14 @@ Mode mode() { return static_cast<Mode>(run_mode.load(std::memory_order_acquire))
 void set_diag(bool on) { diag_on.store(on ? 1u : 0u, std::memory_order_release); }
 bool diag() { return diag_on.load(std::memory_order_acquire) != 0; }
 const char* diag_arm_name(DiagArm a) {
-    static const char* const names[]={"NONE","CONTROL","A20","S5"};
+    // A20 and S5: beta.12 values, retired (never assigned).
+    static const char* const names[]={"NONE","CONTROL","A20","S5","CAP"};
     return unsigned(a)<sizeof names/sizeof names[0]?names[a]:"UNKNOWN";
 }
 const char* diag_sat_outcome_name(DiagSatOutcome o) {
     static const char* const names[]={"none","applied","arm_control","arm_a20","no_replacement",
         "no_context","nested","exhausted","context_mismatch","bad_length","bad_presence",
-        "unexpected_value","location_failed","busy","disabled"};
+        "unexpected_value","location_failed","busy","disabled","arm_cap"};
     return unsigned(o)<sizeof names/sizeof names[0]?names[o]:"unknown";
 }
 uint32_t invalidate() {
@@ -680,9 +642,8 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     VehicleData* selected = data;
     const Mode current = mode();
     // Read once: the diagnostic path below runs only when the owner marker
-    // enabled it; otherwise this send is byte-identical to v1.0.0-beta.11.
+    // enabled it; it only records (arm, type-21 observation).
     const bool diagnostic = diag_on.load(std::memory_order_acquire) != 0;
-    bool sat_claimed = false;
     if (data) {
         event.type = data->type; event.length = data->length;
         // Decision G: the AA GEAR shape only (type 8, exactly 4 bytes), only
@@ -749,30 +710,12 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
         } else if (data->type == 1)
             event.reason = pool_unavailable?CONTEXT_UNAVAILABLE:BAD_LENGTH;
         else if (diagnostic && data->type == DIAG_SAT_TYPE)
-            sat_claimed = diag_satellite(ctx, reentrant, session_storage, data, &local, &selected, &event);
+            diag_satellite(ctx, reentrant, data, &event);
     }
     errno = entry_errno;
     const int32_t result = next(session_storage, selected); // Exactly one call.
     const int result_errno = errno;
     event.result = result;
-    if (sat_claimed) {
-        // Fail closed for the rest of this process: a rewritten send that
-        // the OEM path refused is never repeated (journaled as disabled).
-        // The sticky fault is set BEFORE the buffer is released, so another
-        // thread that claims the buffer next sees it (and rechecks it).
-        if (result != 0) sat_fault.store(1, std::memory_order_release);
-        // The OEM send has returned: the copy is no longer referenced.
-        sat_busy.store(0, std::memory_order_release);
-    }
-    // S5 latch: only a BETA LOCATION replacement of this call that the OEM
-    // send accepted (0) arms the rewrite of the following type-21 send.
-    if (diagnostic && ctx && data && data->type == 1 && event.choice == BETA_REPLACEMENT &&
-        !reentrant && ctx->diag_arm == DIAG_ARM_S5 && ctx->sat_state == SAT_IDLE) {
-        if (result == 0) {
-            ctx->sat_state = SAT_LATCHED; ctx->sat_storage = session_storage;
-            ctx->sat_generation = event.prediction_generation;
-        } else ctx->sat_state = SAT_LOCATION_FAILED;
-    }
     if (!event.mono_ns) event.mono_ns = now();
     if (current != OFF && !reentrant) emit(event);
     // BETA hold (design S4): a failed replaced send withdraws BETA until the

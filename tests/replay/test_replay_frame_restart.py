@@ -153,8 +153,11 @@ class ReplayRestartFromStandstill(unittest.TestCase):
             write_trip(d, boot, epoch, events)
             report = os.path.join(d, "r.json")
             table = os.path.join(d, "r.csv")
+            # --acc-cap off (beta.12 numbers): only without the tunnel
+            # reporting ceiling do the stop form (25 m) and the moving form
+            # (40 m) report different values.
             subprocess.run([TOOL, "--trip", d, "--real-only", "--report", report, "--csv", table,
-                            "--journal", os.path.join(d, "j.jsonl")],
+                            "--journal", os.path.join(d, "j.jsonl"), "--acc-cap", "off"],
                            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             with open(report) as f:
                 r = json.load(f)

@@ -130,7 +130,7 @@ public:
           counters_(),have_position_(false),position_mode_(-1),position_generation_(0),
           position_class_(adapter::POSITION_UNDECODED),
           seen_storage_epoch_(0),seen_hold_set_(0),seen_hold_cleared_(0),last_summary_(0),
-          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_honest_accuracy_(-1),last_acc_rule_(BETA_ACC_RULE_NORMAL),last_valid_until_(0),
+          last_bridge_(CORE_BRIDGE_NO_OUTPUT),last_accuracy_(0),last_honest_accuracy_(-1),last_acc_rule_(BETA_ACC_RULE_NORMAL),yaw_rail_(),last_valid_until_(0),
           last_frontier_(0),last_skip_("none"),payload_("none"),last_original_utc_(0),
           last_original_accuracy_(-1),last_speed_(-1),seen_anchor_seq_(0),anchor_rows_dropped_(0),
           seen_latch_clears_(0),seen_assumptions_(0),seen_contradictions_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
@@ -148,9 +148,10 @@ public:
         profile_=p;return true;
     }
     const BetaProfile& profile() const { return profile_; }
-    // Diagnostic BETA build (runtime/diag_arms.h): only before enable(), only
-    // when the owner marker is ON. Off (the default) keeps every row and
-    // every publication byte-identical to v1.0.0-beta.11.
+    // Diagnostic BETA build (runtime/diag_arms.h, version 2): only before
+    // enable(), only when the owner marker is ON. Off (the default) assigns
+    // no arm and writes no diagnostic row: every episode uses the profile's
+    // tunnel reporting ceiling. On: CONTROL episodes publish without it.
     bool set_diag(bool on,const char* boot_id) {
         if(state_!=BETA_DISABLED || strcmp(reason_,"not_enabled")) return false;
         diag_=on;
@@ -162,6 +163,14 @@ public:
     // The arm of the open GPS-lost episode (DIAG_ARM_NONE when closed/off).
     adapter::DiagArm diag_arm() const { return diag_ && diag_open_?adapter::DiagArm(diag_arm_):adapter::DIAG_ARM_NONE; }
     uint32_t diag_episodes() const { return diag_index_; }
+    // The profile of the next publication: a diagnostic CONTROL episode has
+    // no tunnel reporting ceiling (beta.12 numbers); without the marker every
+    // episode keeps the profile's ceiling.
+    BetaProfile publication_profile() const {
+        BetaProfile p=profile_;
+        if(diag_ && diag_open_ && diag_arm_==adapter::DIAG_ARM_CONTROL)p.tunnel_report_cap_m=0.0;
+        return p;
+    }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
     // Live means BETA may still publish in this boot.
@@ -280,6 +289,7 @@ public:
         const uint32_t source=bus_epoch && bus_epoch<=UINT32_MAX?uint32_t(bus_epoch):0;
         shared_.source_epoch.store(source,std::memory_order_release);
         journal_events(j,now);
+        yaw_rail_=nav.yaw_rail();
         // Before the anchor rows: a seed enabled by rule F follows its reason.
         journal_assumed(j,now,nav);
         journal_contradicted(j,now,nav);
@@ -311,6 +321,7 @@ private:
     double last_accuracy_;
     double last_honest_accuracy_; // honest budget at lease end; last_accuracy_ may be clamped to 40 m
     int last_acc_rule_;            // BetaAccuracyRule of the last publication (journaled when not NORMAL)
+    navigation::YawRailCounts yaw_rail_;  // newest pipeline view (summary "yaw_rail")
     // Stopped accuracy: the bridge's stop-episode latch (H_max decided once
     // per stop) and its value at the last publication (journaled as acc_h0).
     // Released at every transition other than into ENGAGED (new outage, GPS
@@ -386,7 +397,8 @@ private:
         }
         if(!o.diag_sat)return;
         ++c.sat;if(o.result)++c.sat_nonzero;
-        if(o.diag_sat_outcome==adapter::DIAG_SAT_APPLIED)++c.sat_applied;
+        // sat_applied stays 0 since version 2 (nothing is rewritten); the
+        // field is kept so the ended row keeps the beta.12 schema.
         ++c.outcomes[o.diag_sat_outcome<16?o.diag_sat_outcome:15];
         if(!c.first_sat_seen) {
             c.first_sat_seen=true;c.first_sat_after_replacement=c.loc_replaced!=0;
@@ -405,9 +417,14 @@ private:
         const DiagCounters& c=diag_count_;
         char extra[1200]={0};
         size_t at=0;
-        if(!strcmp(event,"assigned"))
-            append(extra,sizeof extra,&at,",\"block\":%u,\"perm\":%u,\"cap_m\":%.4g,\"sat_in_use\":%d",
-                   diag_block_,diag_perm_,DIAG_A20_CAP_M,int(adapter::DIAG_SAT_IN_USE));
+        if(!strcmp(event,"assigned")) {
+            // The reporting ceiling of this arm (perm: position of CONTROL).
+            const double cap=profile_.tunnel_report_cap_m;
+            const double ceiling=diag_arm_==adapter::DIAG_ARM_CAP && profile_.unbounded && cap>0.0 &&
+                cap<profile_.accuracy_max_m?cap:profile_.accuracy_max_m;
+            append(extra,sizeof extra,&at,",\"block\":%u,\"perm\":%u,\"ceiling_m\":%.4g",
+                   diag_block_,diag_perm_,ceiling);
+        }
         else if(!strcmp(event,"continued"))
             append(extra,sizeof extra,&at,",\"gap_ms\":%llu",
                    (unsigned long long)(now>diag_end_ns_?(now-diag_end_ns_)/1000000ULL:0));
@@ -749,9 +766,8 @@ private:
         bool capped=false;
         if(!withdrawn) {
             const BetaModelInput in=nav.model_publication(now);
-            // Diagnostic arm A20 only; 0 (no cap) whenever the marker is absent.
-            const double cap=diag_ && diag_open_ && diag_arm_==adapter::DIAG_ARM_A20?DIAG_A20_CAP_M:0.0;
-            last_bridge_=map_model_publication(in,profile_,&s,&honest,&rule,&stop_latch_,cap,&capped);
+            const BetaProfile use=publication_profile();
+            last_bridge_=map_model_publication(in,use,&s,&honest,&rule,&stop_latch_,&capped);
             // The MODEL sample-age guard (250 ms of the frontier) can fire
             // before the 300 ms receipt silence; both mean sensor silence.
             if(last_bridge_!=CORE_BRIDGE_OK)
@@ -848,6 +864,16 @@ private:
             snprintf(out,48,",\"acc_rule\":%d,\"acc_h0\":%.2f",last_acc_rule_,last_stop_.honest0_m);
         else if(last_acc_rule_!=BETA_ACC_RULE_NORMAL)snprintf(out,48,",\"acc_rule\":%d",last_acc_rule_);
     }
+    // Yaw rail windows of the pipeline (navigation::YawRailCounts, boot
+    // lifetime), only once one was seen: rows stay byte-identical otherwise.
+    // Rate-limited with the summary row (quiet persistent profile).
+    void yaw_rail_field(char out[160]) const {
+        out[0]=0;
+        if(yaw_rail_.moving || yaw_rail_.parked || yaw_rail_.reset)
+            snprintf(out,160,",\"yaw_rail\":{\"moving\":%llu,\"parked\":%llu,\"reset\":%llu,\"rail_s\":%.1f}",
+                     (unsigned long long)yaw_rail_.moving,(unsigned long long)yaw_rail_.parked,
+                     (unsigned long long)yaw_rail_.reset,yaw_rail_.rail_s);
+    }
     static void number_or_null(double v,char out[48]) {
         if(std::isfinite(v) && v>=0)snprintf(out,48,"%.17g",v);else strcpy(out,"null");
     }
@@ -895,7 +921,8 @@ private:
         number_or_null(last_original_accuracy_,original_accuracy);number_or_null(last_speed_,speed);
         number_or_null(last_honest_accuracy_,honest_acc);
         char acc_rule[48];acc_rule_field(acc_rule);
-        char line[1700];
+        char rail[160];yaw_rail_field(rail);
+        char line[1900];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"beta_summary\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
             "\"state\":\"%s\",\"reason\":\"%s\",\"adapter_mode\":%u,\"held\":%s,"
@@ -907,7 +934,7 @@ private:
             "\"position_class\":\"%s\",\"payload\":\"%s\",\"original_utc_s\":%llu,"
             "\"original_accuracy_m\":%s,\"speed_mps\":%s,\"speed_publications\":%llu,"
             "\"speed_overlay_sends\":%llu,\"speed_overlay_nonzero\":%llu,\"original_nofix_sends\":%llu,"
-            "\"accuracy_honest_m\":%s%s}",
+            "\"accuracy_honest_m\":%s%s%s}",
             (unsigned long long)now,beta_state_name(state_),reason_,unsigned(adapter::mode()),
             adapter::beta_held()?"true":"false",
             (unsigned long long)counters_.publications,(unsigned long long)counters_.publish_skipped,
@@ -922,7 +949,7 @@ private:
             original_accuracy,speed,(unsigned long long)counters_.speed_publications,
             (unsigned long long)counters_.speed_overlay_sends,
             (unsigned long long)counters_.speed_overlay_nonzero,
-            (unsigned long long)counters_.original_nofix_sends,honest_acc,acc_rule);
+            (unsigned long long)counters_.original_nofix_sends,honest_acc,acc_rule,rail);
         if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
     }
 };

@@ -299,12 +299,16 @@ class ReplayBetaStoppedAccuracy(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def run_tool(self, *args):
+    def run_tool(self, *args, cap=False):
+        # The stopped-rule cases run with --acc-cap off (the owner marker
+        # acc-cap-off, beta.12 numbers): the tunnel reporting ceiling (25 m)
+        # would make the stop and the moving form report the same value.
+        # cap=True runs the product default (validation/TUNNEL_REPORT_CAP_2026-10-12.md).
         report = os.path.join(self.tmp.name, "report.json")
         rows = os.path.join(self.tmp.name, "sends.csv")
         journal = os.path.join(self.tmp.name, "beta.jsonl")
         p = subprocess.run([TOOL, "--trip", self.trip, "--real-only", "--check", "--report", report, "--csv", rows,
-                            "--journal", journal] + list(args),
+                            "--journal", journal] + list(args) + ([] if cap else ["--acc-cap", "off"]),
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=300)
         self.assertEqual(p.returncode, 0, p.stderr)
         with open(report) as f:
@@ -340,6 +344,25 @@ class ReplayBetaStoppedAccuracy(unittest.TestCase):
         self.assertTrue(all(b["accuracy_m"] == 25 and 40 < b["accuracy_honest_m"] <= 150 for b in stopped))
         self.assertTrue(any(b["kind"] == "beta_summary" and "acc_rule" not in b and b["state"] == "ENGAGED"
                             and b["accuracy_m"] == 40 for b in beta))
+
+    def test_product_ceiling_reports_25_m_throughout_with_the_honest_budget_journaled(self):
+        # Tunnel reporting ceiling (product default): 25 m before, during and
+        # after the stop; the stopped rule keeps its acc_rule/acc_h0 rows, the
+        # honest budget stays in accuracy_honest_m, positions are unchanged.
+        r, replaced, beta = self.run_tool(cap=True)
+        r0, replaced0, beta0 = self.run_tool()
+        self.assertEqual(r["check"], "pass")
+        still, before, after = self.phases(replaced)
+        self.assertTrue(all(float(row["accuracy_m"]) == 25.0 for row in still + before + after))
+        same = ("t_s", "error_m", "speed_mps", "bearing_deg", "result")
+        self.assertEqual([tuple(row[k] for k in same) for row in replaced],
+                         [tuple(row[k] for k in same) for row in replaced0])
+        self.assertTrue(all(0 < float(row["accuracy_m"]) <= 25.0 for row in replaced))
+        self.assertEqual([b.get("acc_rule") for b in beta], [b.get("acc_rule") for b in beta0])
+        self.assertEqual([b.get("acc_h0") for b in beta], [b.get("acc_h0") for b in beta0])
+        self.assertEqual([b.get("accuracy_honest_m") for b in beta], [b.get("accuracy_honest_m") for b in beta0])
+        self.assertTrue(any(b["state"] == "ENGAGED" and b["accuracy_m"] == 25 and b["accuracy_honest_m"] > 40
+                            and "acc_rule" not in b for b in beta if b["kind"] == "beta_summary"))
 
     def stop_rows(self, beta):
         return [b for b in beta if b["kind"] == "beta_summary" and "acc_h0" in b]
@@ -389,6 +412,100 @@ class ReplayBetaStoppedAccuracy(unittest.TestCase):
         still, before, after = self.phases(replaced)
         self.assertTrue(all(float(row["accuracy_m"]) == 40.0 for row in still + before + after))
         self.assertTrue(all(b.get("acc_rule", 0) == 0 for b in beta))
+
+
+@unittest.skipUnless(os.access(TOOL, os.X_OK), "build/replay_beta not built (make test-replay-beta)")
+class ReplayBetaDiagnosticArms(unittest.TestCase):
+    """Diagnostic version 2 (validation/TUNNEL_REPORT_CAP_2026-10-12.md) through
+    the real publication path: a CONTROL episode publishes without the 25 m
+    tunnel reporting ceiling (beta.12: 40 m), a CAP episode with it; the honest
+    budget and the positions are the same in both arms. The arm of the single
+    tunnel episode is the seed's (diag-0 CONTROL, diag-1 CAP); each run checks
+    the assigned row, so a changed randomization fails loudly here."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix="mx5dr-replay-diag-")
+        cls.trip = os.path.join(cls.tmp.name, "logs")
+        os.mkdir(cls.trip)
+        write_fixture(cls.trip, speed=stop_speed_kmh, window=STOP_TUNNEL, end=STOP_END)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def run_tool(self, *args):
+        report = os.path.join(self.tmp.name, "report.json")
+        rows = os.path.join(self.tmp.name, "sends.csv")
+        journal = os.path.join(self.tmp.name, "beta.jsonl")
+        p = subprocess.run([TOOL, "--trip", self.trip, "--real-only", "--check", "--report", report, "--csv", rows,
+                            "--journal", journal] + list(args),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=300)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(report) as f:
+            self.assertEqual(json.load(f)["check"], "pass")
+        with open(rows) as f:
+            replaced = [r for r in csv.DictReader(f) if r["choice"] == "3"]
+        with open(journal) as f:
+            lines = list(map(json.loads, f))
+        self.assertTrue(len(replaced) > 40, len(replaced))
+        return replaced, [b for b in lines if b.get("kind") == "beta_summary"], \
+            [b for b in lines if b.get("kind") == "diag_episode"]
+
+    def arm(self, episodes):
+        assigned = [e for e in episodes if e["event"] == "assigned"]
+        self.assertEqual(len(assigned), 1, episodes)
+        return assigned[0]
+
+    def test_control_publishes_without_the_ceiling_and_cap_with_it(self):
+        control, control_beta, control_ep = self.run_tool("--diag", "diag-0")
+        cap, cap_beta, cap_ep = self.run_tool("--diag", "diag-1")
+        product, product_beta, product_ep = self.run_tool()
+        self.assertEqual(product_ep, [])
+        self.assertEqual(self.arm(control_ep)["arm"], "CONTROL")
+        self.assertEqual(self.arm(control_ep)["ceiling_m"], 40)
+        self.assertEqual(self.arm(cap_ep)["arm"], "CAP")
+        self.assertEqual(self.arm(cap_ep)["ceiling_m"], 25)
+        acc = lambda rows: [float(r["accuracy_m"]) for r in rows]
+        # CONTROL: the beta.12 numbers, the 40 m ceiling is reached while moving
+        # (the stopped rule still reports 25 m during the stop).
+        self.assertEqual(max(acc(control)), 40.0)
+        moving = [r for r in control if float(r["speed_mps"]) > 0.0]
+        self.assertTrue(len(moving) > 20 and sum(a > 25.0 for a in acc(moving)) > 20, acc(moving))
+        self.assertTrue(all(0 < a <= 40.0 for a in acc(control)))
+        # CAP: never above the 25 m ceiling, and it binds.
+        self.assertTrue(all(0 < a <= 25.0 for a in acc(cap)))
+        self.assertEqual(max(acc(cap)), 25.0)
+        self.assertEqual(acc(cap), acc(product))
+        # Same honest budget, positions, speeds and bearings in every arm.
+        same = ("t_s", "error_m", "speed_mps", "bearing_deg", "result")
+        key = lambda rows: [tuple(r[k] for k in same) for r in rows]
+        self.assertEqual(key(control), key(product))
+        self.assertEqual(key(cap), key(product))
+        honest = lambda beta: [b.get("accuracy_honest_m") for b in beta]
+        self.assertEqual(honest(control_beta), honest(product_beta))
+        self.assertEqual(honest(cap_beta), honest(product_beta))
+        self.assertTrue(any(h is not None and h > 40 for h in honest(product_beta)))
+        # The journaled reported accuracy follows the arm.
+        engaged = lambda beta: [b["accuracy_m"] for b in beta if b["state"] == "ENGAGED"]
+        self.assertIn(40, engaged(control_beta))
+        self.assertTrue(engaged(cap_beta) and max(engaged(cap_beta)) == 25)
+        # The ended rows carry the reported range of the episode.
+        ended = lambda ep: [e for e in ep if e["event"] == "ended"][0]
+        self.assertEqual(ended(control_ep)["reported_max_m"], 40)
+        self.assertEqual(ended(cap_ep)["reported_max_m"], 25)
+
+    def test_acc_cap_off_disables_the_diagnostic_like_the_product(self):
+        # runtime.cpp: the blind comparison needs the ceiling; acc-cap-off
+        # turns the diagnostic off for the boot (diag_boot reason acc_cap_off).
+        for seed in ("diag-0", "diag-1"):
+            off, off_beta, off_ep = self.run_tool("--diag", seed, "--acc-cap", "off")
+            plain, plain_beta, plain_ep = self.run_tool("--acc-cap", "off")
+            self.assertEqual(off_ep, [])
+            self.assertEqual(plain_ep, [])
+            self.assertEqual(off, plain)
+            self.assertEqual(off_beta, plain_beta)
+            self.assertEqual(max(float(r["accuracy_m"]) for r in off), 40.0)
 
 if __name__ == "__main__":
     unittest.main()

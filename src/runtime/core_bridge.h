@@ -84,16 +84,17 @@ CoreBridgeResult map_model_publication(const BetaModelInput& input,
                                       double* honest_accuracy_m=0,
                                       int* accuracy_rule=0,
                                       BetaStopLatch* stop_latch=0,
-                                      double diag_cap_m=0.0,
-                                      bool* diag_capped=0);
-// Diagnostic BETA build, arm A20 (validation/DIAG_BUILD_A20_S5_2026-10-12.md):
-// diag_cap_m > 0 lowers the reporting ceiling to min(ceiling, diag_cap_m)
-// after every other rule (the stopped 25 m rule included: the lower value
-// wins). The honest budget, the estimator, the refusal limits and the stop
-// latch are unchanged. *diag_capped (when given) is true when the cap made
-// the reported accuracy lower than it would have been without it. 0 (the
-// default and every product call without the diagnostic marker) changes
-// nothing.
+                                      bool* report_capped=0);
+// Tunnel reporting ceiling (profile.tunnel_report_cap_m > 0, unbounded
+// profile only; validation/TUNNEL_REPORT_CAP_2026-10-12.md): after every
+// other rule the ceiling is lowered to min(ceiling, tunnel_report_cap_m).
+// With the stopped rule the lower value wins (25 m == 25 m: the stopped rule
+// decides and the cap adds nothing). The honest budget, the estimator, the
+// refusal limits and the stop latch (H_max is decided on the honest value)
+// are unchanged. *report_capped (when given) is true when the cap made the
+// reported accuracy lower than it would have been without it. 0 (the bounded
+// profile and the owner marker acc-cap-off) changes nothing; a negative or
+// non-finite value is a profile error (LIMIT).
 // profile.unbounded (tunnel mode, v1.0.0-beta.6): the accuracy and heading
 // limits above do not refuse; the reported accuracy is min(honest, max) and
 // *honest_accuracy_m (when given) always carries the honest budget.

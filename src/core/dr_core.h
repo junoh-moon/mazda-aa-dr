@@ -51,6 +51,11 @@ typedef struct {
      * heading uncertainty; physical/time/quality guards remain mandatory. */
     uint32_t hold_stopped_yaw;
     uint32_t reserved_zero;
+    /* MODEL-only opt-in (0 = off, every QUALIFIED/SHADOW configuration):
+     * accept an interval whose averaged yaw encoding is at a rail of the
+     * 12-bit range (4094/4095 or 0) and add this rate (rad/s) to the heading
+     * budget for its duration, because the true rate may exceed the rail. */
+    double yaw_rail_excess_rad_s;
 } mx5_dr_config;
 
 typedef struct {
@@ -71,7 +76,7 @@ typedef struct {
     double speed_mps;             /* magnitude, never signed */
     double yaw_rad_s;             /* body, north=0 clockwise positive */
     int reverse_active;          /* exactly 0 or 1, not UNKNOWN */
-    uint16_t raw_yaw;             /* averaged encoding, 0..4093 only */
+    uint16_t raw_yaw;             /* averaged encoding, 0..4093 (rail opt-in: 0..4095) */
     uint16_t yaw_count;           /* nonzero even when already averaged */
     int yaw_is_mean;
     uint64_t yaw_window_start_ns, yaw_window_end_ns;
