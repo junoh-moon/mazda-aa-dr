@@ -609,6 +609,278 @@ class LdsLinks:
                     producer_time_status='unknown', association_only=True, assist_ready=False)
 
 
+DIAG_ARMS = ("CONTROL", "A20", "S5")
+DIAG_SAT_OUTCOMES = ("none", "applied", "arm_control", "arm_a20", "no_replacement",
+                     "no_context", "nested", "exhausted", "context_mismatch", "bad_length",
+                     "bad_presence", "unexpected_value", "location_failed", "busy", "disabled")
+DIAG_COUNTERS = ("pubs", "capped", "loc_replaced", "loc_nonzero", "loc_original_mode0",
+                 "sat", "sat_applied", "sat_nonzero")
+
+
+def diag_row_valid(row):
+    """Only the diagnostic schema emitted by the beta.12 candidate diff."""
+    if not bounded_int(row.get("mono_ns"), 0, 2**64-1):
+        return False
+    if row["kind"] == "send":
+        d = row.get("diag")
+        if not isinstance(d, dict) or d.get("arm") not in ("NONE", *DIAG_ARMS):
+            return False
+        if "sat" not in d:
+            return row.get("type") == 1 and d["arm"] in DIAG_ARMS
+        pair = d.get("in_use")
+        return (row.get("type") == 21 and d["sat"] in DIAG_SAT_OUTCOMES and
+                isinstance(pair, list) and len(pair) == 2 and
+                all(v is None or bounded_int(v, 0, 2**32-1) for v in pair) and
+                (d.get("presence") is None or bounded_int(d.get("presence"), 0, 2**32-1)))
+    if (row.get("domain") != "beta" or row.get("assist_ready") is not False or
+            not isinstance(row.get("boot_id"), str)):
+        return False
+    if row["kind"] == "diag_boot":
+        return (type(row.get("active")) is bool and isinstance(row.get("reason"), str) and
+                row.get("arms") == list(DIAG_ARMS) and row.get("block") == 3 and
+                row.get("rejoin_ms") == 10000 and row.get("cap_m") == 20 and
+                row.get("sat_type") == 21 and row.get("sat_length") == 864 and row.get("sat_in_use") == 5)
+    if (row.get("event") not in ("assigned", "continued", "ended") or
+            row.get("arm") not in DIAG_ARMS or not bounded_int(row.get("episode"), 0, 2**32-1) or
+            not all(isinstance(row.get(k), str) for k in ("reason", "state")) or
+            not all(bounded_int(row.get(k), 0, 2**32-1) for k in ("session_epoch", "generation"))):
+        return False
+    if row["event"] == "assigned":
+        return (bounded_int(row.get("block"), 0, 2**32-1) and bounded_int(row.get("perm"), 0, 5) and
+                row.get("cap_m") == 20 and row.get("sat_in_use") == 5)
+    if row["event"] == "continued":
+        return bounded_int(row.get("gap_ms"), 0, 2**64-1)
+    first, outcomes = row.get("first_sat"), row.get("sat_outcomes")
+    return (all(bounded_int(row.get(k), 0, 2**64-1) for k in (*DIAG_COUNTERS, "open_ms")) and
+            all(k in row and (row[k] is None or bounded_number(row[k], 0, 1e12))
+                for k in ("honest_max_m", "reported_min_m", "reported_max_m")) and
+            isinstance(outcomes, dict) and
+            all(k in DIAG_SAT_OUTCOMES and bounded_int(v, 0, 2**64-1) for k, v in outcomes.items()) and
+            (first is None or (isinstance(first, dict) and first.get("outcome") in DIAG_SAT_OUTCOMES and
+                              type(first.get("after_replacement")) is bool and
+                              all(k in first and (first[k] is None or bounded_int(first[k], 0, 2**32-1))
+                                  for k in ("before", "presence")))))
+
+
+def diag_sat_rewrite(row):
+    """Narrow forwarding-contract exception; the full 864 bytes are not logged."""
+    return (row.get("choice") == 5 and row.get("type") == 21 and row.get("length") == 864 and
+            row.get("mode") == 0 and row.get("class", POSITION_CLASS_LOST) == POSITION_CLASS_LOST and
+            row.get("reason") == 0 and diag_row_valid(row) and
+            row["diag"] == dict(arm="S5", sat="applied", in_use=[0, 5], presence=0))
+
+
+class DiagnosticTrace:
+    """Keep diagnostic sessions only. Episode counters are cumulative across
+    continued segments; raw-window rows are joined by hook time, not flush order.
+    Neither assignment nor a successful local send establishes phone adoption.
+    """
+    def __init__(self, issue):
+        self.issue = issue
+        self.rows = {}
+        self.returns = []
+        self.seen = False
+
+    def observe(self, session, row, source, window):
+        kind = row["kind"]
+        special = kind in ("diag_boot", "diag_episode") or (kind == "send" and "diag" in row)
+        if special:
+            self.seen = True
+            self.rows.setdefault(session, [])
+            if (not diag_row_valid(row) or
+                    (kind == "send" and row["diag"].get("sat") == "applied" and not diag_sat_rewrite(row))):
+                self.issue("malformed_diag_row", source, "Invalid diagnostic row/fields")
+                return
+        if session in self.rows and kind in ("diag_boot", "diag_episode", "position", "send",
+                                             "beta_state", "beta_summary") and integer(row.get("mono_ns")):
+            # The main auditor diagnoses malformed ordinary rows. Do not let
+            # its rejected fields become join keys in this optional report.
+            if kind == "send" and not all(integer(row.get(k)) for k in
+                                           ("call", "generation", "mode", "type", "length", "choice", "result")):
+                return
+            if kind == "position" and not integer(row.get("mode")):
+                return
+            self.rows[session].append((row, source, window))
+
+    def report(self):
+        episodes, boots, unassigned = [], [], 0
+        returns = {r["dr_send"]: r for r in self.returns}
+        for session, rows in self.rows.items():
+            per, segments = {}, []
+            positions = sorted((r for r, _, _ in rows if r["kind"] == "position"), key=lambda r: r["mono_ns"])
+            position_times = [r["mono_ns"] for r in positions]
+            for order, (row, source, window) in enumerate(rows):
+                kind = row["kind"]
+                if kind == "diag_boot":
+                    boots.append(dict(row, session=session))
+                if kind != "diag_episode":
+                    continue
+                key = (row["boot_id"], row["episode"])
+                if key not in per:
+                    per[key] = dict(session=session, boot_id=key[0], episode=key[1], arm=row["arm"],
+                                    assigned=False, complete=False, duration_s=None, segments=[], end=None,
+                                    last_event=None, sends=[], summaries=[], inconsistent=False)
+                e = per[key]
+                e["inconsistent"] |= e["arm"] != row["arm"]
+                e["last_event"] = row["event"]
+                if row["event"] in ("assigned", "continued"):
+                    e["assigned"] |= row["event"] == "assigned"
+                    start = row["mono_ns"]
+                    # A hook's first mode-0 send can precede the worker's
+                    # assignment time. Include delayed RAW-window POSITIONs.
+                    pos = bisect.bisect_right(position_times, start) - 1
+                    last_position = positions[pos] if pos >= 0 else None
+                    if last_position and last_position["mode"] == 0:
+                        start = last_position["mono_ns"]
+                    seg = dict(start=start, end=None, first=order, last=None, episode=e)
+                    e["segments"].append(seg)
+                    segments.append(seg)
+                else:
+                    e["end"] = row  # cumulative, never sum successive ended rows
+                    if e["segments"] and e["segments"][-1]["last"] is None:
+                        e["segments"][-1].update(last=order, end=row["mono_ns"])
+            seen = set()
+            for order, (row, source, window) in enumerate(rows):
+                kind = row["kind"]
+                if kind not in ("send", "beta_state", "beta_summary"):
+                    continue
+                ns = row["mono_ns"]
+                matches = [seg for seg in segments if
+                           ((not window and seg["first"] < order and
+                             (seg["last"] is None or order < seg["last"])) or
+                            (seg["start"] <= ns and (seg["end"] is None or ns < seg["end"])))]
+                if kind == "send":
+                    key = (row.get("type"), row.get("call"), row.get("generation"), ns)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if row.get("mode") != 0:
+                        continue
+                if len(matches) != 1:
+                    if kind == "send" and "diag" in row:
+                        unassigned += 1
+                    continue
+                seg = matches[0]
+                e = seg["episode"]
+                if kind == "send":
+                    d = row.get("diag", {})
+                    if d.get("arm", "NONE") not in ("NONE", e["arm"]):
+                        e["inconsistent"] = True
+                        unassigned += 1
+                    else:
+                        e["sends"].append((row, source, seg["first"]))
+                else:
+                    e["summaries"].append(row)
+            for e in per.values():
+                end = e.pop("end") or {}
+                e["complete"] = e["assigned"] and e.pop("last_event") == "ended" and not e["inconsistent"]
+                e["duration_s"] = end.get("open_ms", 0) / 1000.0 if e["complete"] else None
+                e["recorded_closed_s"] = end.get("open_ms", 0) / 1000.0 if end else None
+                for key in DIAG_COUNTERS:
+                    e[key] = end.get(key)  # None means no ended counter, not zero
+                e["first_sat"] = end.get("first_sat")
+                e["sat_outcomes"] = end.get("sat_outcomes", {})
+                e["withdrawn"] = end.get("withdrawn")
+                honest = [r["accuracy_honest_m"] for r in e.pop("summaries")
+                          if bounded_number(r.get("accuracy_honest_m"), 0, 1e12)]
+                if end.get("honest_max_m") is not None:
+                    honest.append(end["honest_max_m"])
+                e["honest_max_m"] = max(honest) if honest else None
+                e["reported_min_m"], e["reported_max_m"] = end.get("reported_min_m"), end.get("reported_max_m")
+                e["first_original"], e["gps_returns"] = None, []
+                speeds, accuracies, transitions = [], [], Counter()
+                e["observed_loc_replaced"] = e["observed_sat_applied"] = e["observed_sat"] = 0
+                e["observed_nonzero"] = 0
+                stops, stopped, last_segment = 0, False, None
+                for row, source, segment in sorted(e.pop("sends"), key=lambda item: item[0]["mono_ns"]):
+                    d = row.get("diag", {})
+                    if row.get("type") == 21 and "sat" in d:
+                        e["observed_sat"] += 1
+                        e["observed_sat_applied"] += d["sat"] == "applied"
+                        e["observed_nonzero"] += row.get("result", 0) != 0
+                        before, after = d["in_use"]
+                        transitions["%s->%s/%s" % (before, after, d["sat"])] += 1
+                    payload = row.get("outgoing_hex", "")
+                    if row.get("type") != 1 or not isinstance(payload, str) or not re.fullmatch(r"[0-9a-fA-F]{96}", payload):
+                        continue
+                    fields = beta_location(bytes.fromhex(payload))
+                    if row.get("choice") == 0 and e["first_original"] is None:
+                        e["first_original"] = dict(mono_ns=row["mono_ns"], source=source, result=row.get("result"),
+                                                   reported_accuracy_m=fields["accuracy_e3"] / 1000.0
+                                                   if fields["has_accuracy"] else None)
+                    if row.get("choice") != 3:
+                        continue
+                    e["observed_loc_replaced"] += 1
+                    e["observed_nonzero"] += row.get("result", 0) != 0
+                    if bytes.fromhex(payload)[32] == 1:
+                        speed = fields["speed_mps"]
+                        speeds.append(speed)
+                        if segment != last_segment:
+                            stopped = False
+                        stops += speed == 0 and not stopped
+                        stopped, last_segment = speed == 0, segment
+                    if fields["has_accuracy"]:
+                        accuracies.append(fields["accuracy_e3"] / 1000.0)
+                    if source in returns:
+                        e["gps_returns"].append(returns[source])
+                e.pop("segments")
+                e["sat_transitions"] = dict(transitions)
+                e["sent_reported_min_m"] = min(accuracies) if accuracies else None
+                e["sent_reported_max_m"] = max(accuracies) if accuracies else None
+                e["speed_min_mps"], e["speed_max_mps"] = (min(speeds), max(speeds)) if speeds else (None, None)
+                e["speed_change_mps"] = max(speeds) - min(speeds) if speeds else None
+                e["sampled_stops"] = stops if speeds else None
+                episodes.append(e)
+        per_arm = {}
+        for arm in DIAG_ARMS:
+            es = [e for e in episodes if e["arm"] == arm]
+            per_arm[arm] = dict(assigned=sum(e["assigned"] for e in es), observed_episodes=len(es),
+                               complete=sum(e["complete"] for e in es),
+                               replacement_episodes=sum((e["loc_replaced"] or e["observed_loc_replaced"]) > 0 for e in es),
+                               capped_publication_episodes=sum((e["capped"] or 0) > 0 for e in es),
+                               sat_applied_episodes=sum((e["sat_applied"] or e["observed_sat_applied"]) > 0 for e in es),
+                               nonzero_episodes=sum((e["loc_nonzero"] or e["sat_nonzero"] or e["observed_nonzero"]) > 0
+                                                    for e in es))
+        return dict(boots=boots, episodes=episodes, per_arm=per_arm, unassigned_sends=unassigned,
+                    scope="recorded_diagnostic_evidence_only; incomplete_rows_are_lower_bounds",
+                    phone_outcomes="unknown; pair with parked owner notes", gps_is_ground_truth=False)
+
+
+def print_diag_data(diag):
+    if diag is None:
+        return
+    def f(value):
+        return "?" if value is None else str(value)
+    print("Tunnel diagnostic (BETA; assigned arms are not proof of application or phone adoption)")
+    for boot in diag["boots"]:
+        print("  boot %s: active=%s reason=%s" % (boot["boot_id"], boot["active"], boot["reason"]))
+    print("  boot / session / episode / arm | duration_s | assigned | LOCATION replaced; capped/pubs; SAT applied/total | "
+          "honest_max_m | reported publication/sent min..max_m | speed min..max (change) m/s | sampled stops")
+    for e in diag["episodes"]:
+        print("  %s / %s / %s / %s | %s | %s | %s; %s/%s; %s/%s | %s | %s..%s / %s..%s | %s..%s (%s) | %s%s" %
+              (e["boot_id"], e["session"], e["episode"], e["arm"], f(e["duration_s"]), e["assigned"],
+               f(e["loc_replaced"]), f(e["capped"]), f(e["pubs"]), f(e["sat_applied"]), f(e["sat"]),
+               f(e["honest_max_m"]), f(e["reported_min_m"]), f(e["reported_max_m"]),
+               f(e["sent_reported_min_m"]), f(e["sent_reported_max_m"]), f(e["speed_min_mps"]), f(e["speed_max_mps"]),
+               f(e["speed_change_mps"]), f(e["sampled_stops"]), " (partial/inconsistent)" if not e["complete"] else ""))
+        print("    SAT before->after/outcome %s; ended outcomes %s; first_sat %s; nonzero LOCATION/SAT %s/%s" %
+              (e["sat_transitions"], e["sat_outcomes"], e["first_sat"], f(e["loc_nonzero"]), f(e["sat_nonzero"])))
+        print("    first original mode-0 LOCATION %s; observed LOCATION/SAT applied %d/%d; GPS-return deviation %s" %
+              (e["first_original"] or "unknown", e["observed_loc_replaced"], e["observed_sat_applied"],
+               [{k: r[k] for k in ("distance_m", "time_aligned_distance_m", "gap_s", "honest_accuracy_m",
+                                   "reported_accuracy_m", "within_honest_budget")} for r in e["gps_returns"]] or "unknown"))
+    for arm, summary in diag["per_arm"].items():
+        print("  per-arm %s: %s" % (arm, summary))
+    print("  Unassigned diagnostic sends: %d. ? = unavailable; stopped runs are sampled sent speed=0, not wheel qualification." %
+          diag["unassigned_sends"])
+    print("  Reduced reported accuracy is never the honest budget; GPS-return distance is not ground truth. "
+          "Capped publications do not prove a capped send. Missing rows and open episodes are incomplete evidence.")
+    print("  Small sample: 3-5 tunnels per arm are exploratory; about 6 independent discordant pairs all in the same "
+          "direction give two-sided p~0.03 (before multiple comparisons). W (wireless dongle) and P (phone GNSS) "
+          "remain possible. Grey icon/speed frozen require owner notes; null S5 cannot reject S: the first stock "
+          "mode-0 satellite message stays 0.")
+
+
 class Auditor:
     def __init__(self):
         self.counts = Counter()
@@ -633,6 +905,7 @@ class Auditor:
         self.issues = []
         self.issue_counts = Counter()
         self.lds = LdsLinks(self.issue)
+        self.diagnostic = DiagnosticTrace(self.issue)
         self.files = []
         self.ignored = []
         self.total_bytes = 0
@@ -971,6 +1244,8 @@ class Auditor:
         if not collector and kind != "journal_dropped" and integer(row.get("mono_ns")):
             # Window rows never close a gap.
             self.note_time(row["mono_ns"], closes=not window_row and kind not in GAP_NON_CLOSING_KINDS)
+        if not collector:
+            self.diagnostic.observe(len(self.sessions), row, source, window_row)
         if (not collector and self.session.get("capture_end_ns") is not None and
                 kind not in ("health", "capture_end")):
             self.issue("record_after_capture_end", source, kind)
@@ -1011,6 +1286,8 @@ class Auditor:
                 self.beta_position(row, source)
         elif kind in BETA_KINDS:
             self.beta(row, source)
+        elif kind in ("diag_boot", "diag_episode"):
+            pass  # validated and retained by DiagnosticTrace above
         elif kind == 'lds_sideband':
             self.lds.record(row, source)
         elif kind == 'lds_sideband_status':
@@ -2324,7 +2601,8 @@ class Auditor:
         s["sends"] += 1
         s["last_send_ns"] = max(s["last_send_ns"], row["mono_ns"])
         choice = row["choice"]
-        self.choices[CHOICES.get(choice, "UNKNOWN:" + str(choice))] += 1
+        diag_rewrite = diag_sat_rewrite(row)
+        self.choices["DIAG_SATELLITE" if diag_rewrite else CHOICES.get(choice, "UNKNOWN:" + str(choice))] += 1
         reason = row["reason"]
         self.reasons[REASONS[reason] if 0 <= reason < len(REASONS) else "UNKNOWN:" + str(reason)] += 1
         if ((row["call"], row["generation"]) in self.invalid_positions and
@@ -2342,10 +2620,16 @@ class Auditor:
         self.results[str(row["result"])] += 1
         if choice == 2:
             self.issue("dr_replacement_impossible", source, "DR_REPLACEMENT is disabled in the live runtime", True)
-        elif choice not in CHOICES:
+        elif choice not in CHOICES and not diag_rewrite:
             self.issue("unknown_send_choice", source, str(choice), True)
         if row["type"] != 1 or row["length"] != 48:
-            if choice != 0:
+            if diag_rewrite:
+                location = s.get("diag_locations", {}).pop((row["call"], row["generation"]), None)
+                if location is None or location[0] != 0 or location[1] > row["mono_ns"]:
+                    self.issue("diag_sat_location_unconfirmed", source,
+                               "No matching successful earlier S5 LOCATION in this call/generation",
+                               violation=location is not None)
+            if choice != 0 and not diag_rewrite:
                 self.issue("non_location_mutation", source, "Only type1 length48 LOCATION may be scrubbed", True)
             return
         p = self.positions.get((row["call"], row["generation"]))
@@ -2749,6 +3033,10 @@ class Auditor:
         add_difference(self.beta_accuracy_m, fields["accuracy_e3"] / 1000.0)
         beta["pending"] = dict(fields, mono_ns=row["mono_ns"], source=source,
                                acc_rule=int(beta["rule"]) if beta["rule"] in ("1", "2") else 0)
+        if "diag" in row and diag_row_valid(row):
+            beta["pending"]["diag_arm"] = row["diag"]["arm"]
+            if row["diag"]["arm"] == "S5":
+                s.setdefault("diag_locations", {})[(row["call"], row["generation"])] = (row["result"], row["mono_ns"])
         self.beta_stop_send(beta, fields, source)
 
     def beta_stop_send(self, beta, fields, source):
@@ -2821,23 +3109,28 @@ class Auditor:
         rule = last.get("acc_rule", 0)
         if beta["rule_build"]:
             rule = 1 if last["speed_mps"] == 0.0 else (2 if rule == 2 else 0)
+        a20 = last.get("diag_arm") == "A20"
         clamped = finite_number(honest) and honest > accuracy + 0.01 and \
-            (accuracy >= BETA_MAX_ACCURACY_E3 / 1000.0 - 0.01 or rule in (1, 2))
-        limit = honest if clamped else accuracy
+            (accuracy >= BETA_MAX_ACCURACY_E3 / 1000.0 - 0.01 or rule in (1, 2) or a20)
+        # A20 can be below 40 m even while moving. If its honest budget is
+        # missing, do not silently substitute the intentionally reduced value.
+        limit = (honest if finite_number(honest) else None) if a20 else (honest if clamped else accuracy)
         check = dict(dr_send=last["source"], gps_position=source, gap_s=round(gap, 3),
                      distance_m=round(raw, 2), time_aligned_distance_m=round(aligned, 2),
                      reported_accuracy_m=accuracy, within_reported_accuracy=aligned <= accuracy,
                      honest_accuracy_m=honest if clamped else None, reported_accuracy_clamped=bool(clamped),
-                     within_honest_budget=aligned <= limit,
+                     within_honest_budget=aligned <= limit if limit is not None else None,
                      dr_speed_mps=last["speed_mps"], gps_mode=row["mode"], gps_horizontal=row.get("horizontal"))
         if rule:
             check["accuracy_rule"] = rule
         self.beta_returns_total += 1
         if len(self.beta_returns) < 100:
             self.beta_returns.append(check)
+        if len(self.sessions) in self.diagnostic.rows:
+            self.diagnostic.returns.append(check)
         if gap < 0:
             self.issue("beta_clock_regressed", source, "GPS fix precedes the last replaced send")
-        elif aligned > limit:
+        elif limit is not None and aligned > limit:
             self.issue("beta_return_exceeds_accuracy", source,
                        "First GPS fix %.1f m from the time-aligned last BETA LOCATION; %s %.1f m"
                        % (aligned, "honest budget" if clamped else "reported", limit))
@@ -2991,7 +3284,7 @@ class Auditor:
                            re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", row["boot_id"])})
         aa_boot_ids = boot_ids(self.boots)
         collector_boot_ids = boot_ids(self.collector_boots)
-        return dict(report_schema=1, runtime_release="not_inferred_from_log_schema", status=status,
+        report = dict(report_schema=1, runtime_release="not_inferred_from_log_schema", status=status,
                     scope="recorded_window_local_invariants_only", phone_acceptance="not_established",
                     dr_accuracy="not_established", limitations=LIMITATIONS,
                     files=self.files, ignored_archive_members=self.ignored,
@@ -3127,6 +3420,9 @@ class Auditor:
                     receiver_counts=dict(self.receivers), install_counts=dict(self.installs), boots=self.boots,
                     issue_counts=dict(self.issue_counts), issues=self.issues,
                     omitted_issue_details=max(0, sum(self.issue_counts.values()) - len(self.issues)))
+        if self.diagnostic.seen:
+            report["diagnostic"] = self.diagnostic.report()
+        return report
 
 
 # ---- yaw-zero data rows (validation/YAW_DATA_COLLECTION_2026-10-09.md) ----
@@ -3864,6 +4160,7 @@ def main(argv=None):
         print_yaw_data(report["yaw_data"])
         print_chan_data(report["chan_data"])
         print_g3_data(report["g3"])
+        print_diag_data(report.get("diagnostic"))
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")

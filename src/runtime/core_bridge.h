@@ -83,7 +83,17 @@ CoreBridgeResult map_model_publication(const BetaModelInput& input,
                                       adapter::DrSnapshot* out,
                                       double* honest_accuracy_m=0,
                                       int* accuracy_rule=0,
-                                      BetaStopLatch* stop_latch=0);
+                                      BetaStopLatch* stop_latch=0,
+                                      double diag_cap_m=0.0,
+                                      bool* diag_capped=0);
+// Diagnostic BETA build, arm A20 (validation/DIAG_BUILD_A20_S5_2026-10-12.md):
+// diag_cap_m > 0 lowers the reporting ceiling to min(ceiling, diag_cap_m)
+// after every other rule (the stopped 25 m rule included: the lower value
+// wins). The honest budget, the estimator, the refusal limits and the stop
+// latch are unchanged. *diag_capped (when given) is true when the cap made
+// the reported accuracy lower than it would have been without it. 0 (the
+// default and every product call without the diagnostic marker) changes
+// nothing.
 // profile.unbounded (tunnel mode, v1.0.0-beta.6): the accuracy and heading
 // limits above do not refuse; the reported accuracy is min(honest, max) and
 // *honest_accuracy_m (when given) always carries the honest budget.

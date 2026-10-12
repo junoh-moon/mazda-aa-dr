@@ -105,6 +105,18 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(result.returncode, code, result.stdout + result.stderr)
         self.assertIn('Refused, nothing deleted: ' + reason, result.stdout)
 
+    def test_purge_removes_a_diag_marker_left_behind(self):
+        # Menu 9 marker (2026-10-12): uninstall removes a file marker; a
+        # directory of that name (never a marker) is removed by menu 6.
+        self.fixture.run_script('install.sh', '--mode=SHADOW')
+        (self.base / 'diag').write_text('on\n')
+        self.fixture.run_script('uninstall.sh')
+        self.assertFalse((self.base / 'diag').exists())
+        (self.base / 'diag').mkdir()
+        result = self.menu('6\n6\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.base.exists())
+
     def test_menu_lists_six_and_runs_purge(self):
         clean = tree(self.root, self.skip)
         result = self.menu('0\n')

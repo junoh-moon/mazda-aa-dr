@@ -130,7 +130,7 @@ $(BUILD)/test_install_policy: tests/adapter/test_install_policy.cpp src/adapter/
 	$(CXX) $(CXX_WARN) tests/adapter/test_install_policy.cpp -o $@
 test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_pool_association $(BUILD)/test_association_context $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_context_pool $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire $(BUILD)/test_install_policy
 	$(BUILD)/test_install_policy
-	@set -e; for case in small_payload small_payload_off observe scrub native malformed nested assist assist_beta epoch reacquire expiry encoder backend request beta_disallowed beta_replace beta_accuracy beta_branches beta_hold beta_send_storage beta_undeclined beta_overlay; do $(BUILD)/test_adapter $$case; done
+	@set -e; for case in small_payload small_payload_off observe scrub native malformed nested assist assist_beta epoch reacquire expiry encoder backend request beta_disallowed beta_replace beta_accuracy beta_branches beta_hold beta_diag_sat beta_send_storage beta_undeclined beta_overlay; do $(BUILD)/test_adapter $$case; done
 	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed presence_empty presence_present legacy_layout invalid_presence presence_without_origin status_empty status_a status_v status_other invalid_status status_without_origin legacy_layout_v2; do $(BUILD)/test_association_context $$scenario; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
 	$(BUILD)/test_context_pool saturation
@@ -149,11 +149,17 @@ test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_po
 # G3 record-only heading carry-over (validation/G3_RECORD_ONLY_2026-10-11.md).
 $(BUILD)/test_g3: tests/runtime/test_g3.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
+$(BUILD)/test_diag: tests/runtime/test_diag.cpp src/runtime/diag_arms.h src/adapter/adapter.h $(ADAPTER) | $(BUILD)
+	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_diag.cpp $(ADAPTER) -ldl -pthread -o $@
+$(BUILD)/test_diag_episode: tests/runtime/test_diag_episode.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o src/runtime/beta_controller.h src/runtime/diag_arms.h
+	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 $(BUILD)/test_worker_thread: tests/runtime/test_worker_thread.cpp src/runtime/worker_thread.h | $(BUILD)
 	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_worker_thread.cpp -pthread -o $@
-test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 $(BUILD)/test_diag $(BUILD)/test_diag_episode test-request-publication test-journal-boundaries
 	$(BUILD)/test_worker_thread
 	$(BUILD)/test_g3
+	$(BUILD)/test_diag
+	$(BUILD)/test_diag_episode
 	@set -e; for scenario in adopted freeze audit journal_failure pre_stopped fork journal bounds drain_bus drain_session; do $(BUILD)/test_runtime_lds_association $$scenario; done
 	$(BUILD)/test_assist_worker
 	@set -e; for scenario in publication source_fault unqualified recovery audit journal_failure pre_stopped unhooked shadow; do $(BUILD)/test_runtime_assist $$scenario; done
@@ -187,8 +193,8 @@ test-request-publication:
 	@CXX="$(CXX)" MX5DR_PUBLICATION_BUILD="$(abspath $(BUILD))/request-publication" sh tests/runtime/run_request_publication.sh; result=$$?; test $$result -eq 0 -o $$result -eq 77
 test-packaging: $(BUILD)/test_collector
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/packaging -v
-test-tools: $(BUILD)/yaw_replay $(BUILD)/test_g3
-	MX5DR_YAW_REPLAY=$(abspath $(BUILD)/yaw_replay) MX5DR_G3_FIXTURE=$(abspath $(BUILD)/test_g3) $(PYTHON) -m unittest discover -s tests/tools -v
+test-tools: $(BUILD)/yaw_replay $(BUILD)/test_g3 $(BUILD)/test_diag_episode
+	MX5DR_YAW_REPLAY=$(abspath $(BUILD)/yaw_replay) MX5DR_G3_FIXTURE=$(abspath $(BUILD)/test_g3) MX5DR_DIAG_EPISODE_FIXTURE=$(abspath $(BUILD)/test_diag_episode) $(PYTHON) -m unittest discover -s tests/tools -v
 test-build-deps:
 	$(PYTHON) -m unittest discover -s tests/build -v
 test-integration: $(BUILD)/test_pipeline $(BUILD)/test_assist_publication

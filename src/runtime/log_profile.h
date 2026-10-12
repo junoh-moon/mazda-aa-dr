@@ -53,6 +53,10 @@
 //    rate-limited per kind with the rest counted in the digest's suppressed
 //    map. set_yaw_rows(false) turns them off (tests: everything else is
 //    then byte-identical).
+//  * diagnostic BETA build (2026-10-12, validation/DIAG_BUILD_A20_S5_2026-10-12.md):
+//    with the owner marker, GPS_SATELLITE (type 21) SEND rows of LOST calls
+//    are kept instead of folded (every arm), and diag_boot/diag_episode rows
+//    are kept like every other unknown kind. Without the marker nothing changes.
 //  * VIM side-channel rows (2026-10-10, chan_digest_log.h and
 //    validation/VIM_CHANNEL_CAPTURE_2026-10-10.md): one chan_digest row per
 //    20 s with raw statistics of the longitudinal/lateral acceleration,
@@ -210,6 +214,11 @@ public:
             ++sends_;if(o.result)++send_nonzero_;
             ++send_types_[o.type<TYPE_SLOTS-1?o.type:TYPE_SLOTS-1];
             if(o.choice!=adapter::ORIGINAL) { ++send_changed_;keep(s,emit,context);return; }
+            // Diagnostic BETA build only (adapter::set_diag(true); diag_sat is
+            // never set otherwise): every GPS_SATELLITE send of a LOST call is
+            // kept in every arm, so CONTROL/A20/S5 episodes carry the same rows
+            // (validation/DIAG_BUILD_A20_S5_2026-10-12.md).
+            if(o.diag_sat && o.position_class==adapter::POSITION_LOST) { keep(s,emit,context);return; }
             if(o.type==1) { ++send_location_;raw(s,now,emit,context); }
             else ++suppressed_[S_SEND];
             return;

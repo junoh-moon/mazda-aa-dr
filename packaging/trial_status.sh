@@ -271,6 +271,14 @@ echo "vim_side_channel_marker=$vim_side_channel_marker (read at CMU start; prese
 g3_marker=absent
 if [ -e "$BASE/g3-off" ] || [ -L "$BASE/g3-off" ]; then g3_marker=present; fi
 echo "g3_marker=$g3_marker (read at CMU start; present = heading log off)"
+# Owner switch of the diagnostic tunnel test (menu 9); read once at start.
+# Only a regular file holding exactly "on" turns it on. The arm of each
+# tunnel is in the exported journal only, never in this status (blind test).
+diag_marker=absent
+if [ -f "$BASE/diag" ] && [ ! -L "$BASE/diag" ] && [ "$(wc -c < "$BASE/diag")" -eq 3 ] &&
+   printf 'on\n' | cmp -s - "$BASE/diag"; then diag_marker=on
+elif [ -e "$BASE/diag" ] || [ -L "$BASE/diag" ]; then diag_marker=invalid; fi
+echo "diag_marker=$diag_marker (read at CMU start; on = tunnel test, invalid = off)"
 guard_config_binding=unconfirmed
 if [ "$startup_state" = guard_committed_after_new_boot ]; then
     # Row 3 of the validated v3 manifest is the configuration digest used by

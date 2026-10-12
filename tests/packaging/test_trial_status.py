@@ -307,6 +307,23 @@ exec "$MX5DR_REAL_OD" "$@"
         (self.base / 'g3-off').write_text('off\n')
         self.assertIn('g3_marker=present', self.run_status().stdout)
 
+    def test_diag_marker(self):
+        # Menu 9 tunnel test: only a regular file holding exactly "on" is on.
+        self.assertIn('diag_marker=absent', self.run_status().stdout)
+        marker = self.base / 'diag'
+        marker.write_text('on\n')
+        self.assertIn('diag_marker=on', self.run_status().stdout)
+        for data in ('on', 'off\n', 'on\n\n', 'ON\n'):
+            with self.subTest(data=data):
+                marker.write_text(data)
+                self.assertIn('diag_marker=invalid', self.run_status().stdout)
+        marker.unlink()
+        marker.symlink_to('elsewhere')
+        self.assertIn('diag_marker=invalid', self.run_status().stdout)
+        marker.unlink()
+        marker.mkdir()
+        self.assertIn('diag_marker=invalid', self.run_status().stdout)
+
     def test_runtime_disable_marker_blocks_old_boot_evidence(self):
         (self.logs / 'disable-next-start').write_text('restore_failed_fatal\n')
         result = self.run_status()

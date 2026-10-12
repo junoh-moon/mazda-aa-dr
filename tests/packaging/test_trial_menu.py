@@ -197,6 +197,100 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('Cleared g3-off', result.stdout)
         self.assertFalse(marker.exists())
 
+    def test_menu_nine_toggles_the_diag_marker(self):
+        # Diagnostic tunnel test (2026-10-12, validation/DIAG_BUILD_A20_S5_2026-10-12.md):
+        # the menu 7/8 pattern with the opposite polarity (present "on" =
+        # test on), 40-column text, mx5dr.conf untouched, no arm shown.
+        marker = self.base / 'diag'
+        result = self.menu('9\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('9 Tunnel test on/off (BETA diagnostic)', result.stdout)
+        self.assertIn('Tunnel test: package not installed;', result.stdout)
+        self.assertFalse(self.base.exists())
+        self.fixture.run_script('install.sh')
+        config = (self.base / 'mx5dr.conf').read_bytes()
+        for keys in ('9\n0\n', '9\n\n0\n', '9\n99\n0\n', '9\n8\n0\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('Tunnel test now: OFF', result.stdout)
+                self.assertIn('Enter 9 again to switch it ON,', result.stdout)
+                self.assertIn('Cancelled; nothing changed.', result.stdout)
+                self.assertFalse(marker.exists())
+        eof = self.menu('9\n')
+        self.assertIn('Cancelled; nothing changed.', eof.stdout)
+        self.assertFalse(marker.exists())
+        result = self.menu('9\n9\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Tunnel test set to ON.', result.stdout)
+        self.assertEqual(marker.read_bytes(), b'on\n')
+        self.assertFalse(list(self.base.glob('diag.new.*')))
+        self.assertFalse((self.base / 'g3-off').exists())
+        self.assertFalse((self.base / 'vimchan-off').exists())
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        out = result.stdout
+        start = out.index('Tunnel test now:')
+        for line in out[start:out.index('(parked reboot) for it to take effect.') + 40].splitlines():
+            self.assertLessEqual(len(line.replace('Number, then Enter: ', '')), 40, line)
+        for word in ('CONTROL', 'A20', 'S5'):
+            self.assertNotIn(word, out)
+        status = self.menu('2\n0\n')
+        self.assertIn('diag_marker=on', status.stdout)
+        self.assertIn('TEST tunnel test on (menu 9)', status.stdout)
+        result = self.menu('9\n9\n0\n')
+        self.assertIn('Tunnel test now: ON', result.stdout)
+        self.assertIn('Tunnel test set to OFF.', result.stdout)
+        self.assertFalse(marker.exists())
+        self.assertIn('diag_marker=absent', self.menu('2\n0\n').stdout)
+        # Any other content is not a marker: shown as invalid (test off);
+        # menu 9 then writes a valid one.
+        marker.write_text('off\n')
+        status = self.menu('2\n0\n')
+        self.assertIn('diag_marker=invalid', status.stdout)
+        self.assertIn('TEST marker invalid: test off', status.stdout)
+        result = self.menu('9\n9\n0\n')
+        self.assertIn('Tunnel test now: OFF (invalid marker)', result.stdout)
+        self.assertEqual(marker.read_bytes(), b'on\n')
+        marker.unlink()
+        marker.mkdir()
+        result = self.menu('9\n9\n0\n')
+        self.assertIn('Tunnel test: OFF (diag is a dir).', result.stdout)
+        self.assertTrue(marker.is_dir())
+        marker.rmdir()
+        # Independent review (2026-10-12): a marker that is a symlink to a
+        # directory must be replaced by the link's removal, never written
+        # INTO the directory it points to (mv -f would do that).
+        outside = self.base.parent / 'diag-outside-dir'
+        outside.mkdir()
+        marker.symlink_to(outside, target_is_directory=True)
+        result = self.menu('9\n9\n0\n')
+        self.assertIn('Tunnel test now: OFF (invalid marker)', result.stdout)
+        self.assertFalse(marker.is_symlink())
+        self.assertEqual(marker.read_bytes(), b'on\n')
+        self.assertEqual(list(outside.iterdir()), [])
+        marker.unlink()
+        outside.rmdir()
+        # A three-byte marker that only looks like 'on' after NUL stripping is
+        # invalid in menu and status alike (the runtime needs exact bytes).
+        marker.write_bytes(b'on\x00')
+        status = self.menu('2\n0\n')
+        self.assertIn('diag_marker=invalid', status.stdout)
+        result = self.menu('9\n9\n0\n')
+        self.assertIn('Tunnel test now: OFF (invalid marker)', result.stdout)
+        self.assertEqual(marker.read_bytes(), b'on\n')
+        marker.unlink()
+        # Menu 1 (reinstall) clears the marker: the default is off.
+        marker.write_text('on\n')
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Cleared diag', result.stdout)
+        self.assertFalse(marker.exists())
+        # Menu 4 (uninstall) removes it too.
+        marker.write_text('on\n')
+        result = self.menu('4\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+
     def test_install_uses_bundle_mode_without_more_typed_commands(self):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         result = self.menu('1\n')
@@ -283,7 +377,7 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('2\n0\n')
         self.assertEqual(result.stdout.count('Parked USB trial menu'), 1)
         out = result.stdout
-        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-8 as listed before)'))
+        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-9 as listed before)'))
         self.assertIn('Startup check saved', out[:out.index('---- GO / NO-GO ----')])
         for line in out[out.index('---- GO / NO-GO ----'):].splitlines():
             self.assertLessEqual(len(line), 40, line)

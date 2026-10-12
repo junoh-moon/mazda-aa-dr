@@ -593,6 +593,35 @@ static void unbounded_profile_clamps_reported_accuracy() {
     // Core configuration: tunnel mode requests the extended limits.
     CHECK(runtime::beta_core_config(t).extended_limits==1 && runtime::beta_core_config(b).extended_limits==0);
 }
+// Diagnostic arm A20 (validation/DIAG_BUILD_A20_S5_2026-10-12.md): the cap only
+// ever lowers the reported accuracy, never changes the honest budget, never
+// raises a value, and 0 (the default) changes nothing.
+static void diag_a20_cap_lowers_only() {
+    const BetaProfile t=runtime::beta_profile_tunnel();
+    const double lease_term=(10+t.speed_error_mps)*0.5;
+    adapter::DrSnapshot s,ref; double honest=-1,honest_ref=-1; bool capped=true;
+    // Honest 400 m: 40 m without the cap (beta.11), 20 m with it.
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&ref,&honest_ref)==runtime::CORE_BRIDGE_OK);
+    CHECK(ref.accuracy_m==40.0);
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,20.0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.ready && s.beta && s.accuracy_m==20.0 && capped);
+    CHECK(std::fabs(honest-400.0)<1e-9 && honest==honest_ref);          // honest value untouched
+    // Below the cap the value is reported unchanged and not marked capped.
+    CHECK(runtime::map_model_publication(synthetic(12-lease_term,0.1),t,&s,&honest,0,0,20.0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(std::fabs(s.accuracy_m-12.0)<1e-9 && !capped);
+    // A cap above the profile ceiling never raises it; 0 and non-finite caps change nothing.
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,60.0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.accuracy_m==40.0 && !capped);
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,0.0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.accuracy_m==40.0 && !capped);
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,::nan(""),&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.accuracy_m==40.0 && !capped);
+    // Every other published field is identical with and without the cap.
+    CHECK(runtime::map_model_publication(synthetic(400-lease_term,1.0),t,&s,&honest,0,0,20.0,&capped)==runtime::CORE_BRIDGE_OK);
+    CHECK(s.latitude_deg==ref.latitude_deg && s.longitude_deg==ref.longitude_deg &&
+          s.speed_mps==ref.speed_mps && s.travel_bearing_deg==ref.travel_bearing_deg &&
+          s.valid_until_mono_ns==ref.valid_until_mono_ns && s.frontier_mono_ns==ref.frontier_mono_ns);
+}
 // The continuous policy replaces the b1ec29a stale-anchor entry veto with an
 // entry decision at the GPS loss (review M3, 2026-10-09): FRESH when the last
 // accepted position is at most BETA_POSITION_MAX_AGE_NS old; otherwise FALLBACK
@@ -1013,6 +1042,15 @@ static void stopped_accuracy_rules() {
 
     BetaProfile a=d; a.stopped_accuracy_m=20.0;     // H_max infinite, crawl off
     CHECK(runtime::beta_stopped_rule_enabled(a));
+    // Diagnostic arm A20 next to the stopped rule (independent review 2026-10-12): the
+    // lower of the two ceilings wins and neither raises a value.
+    { BetaProfile s25=d; s25.stopped_accuracy_m=25.0; adapter::DrSnapshot ds; double hh=-1; int rr=-1; bool cap=true;
+      CHECK(runtime::map_model_publication(still_input(50),s25,&ds,&hh,&rr,0,20.0,&cap)==runtime::CORE_BRIDGE_OK);
+      CHECK(ds.accuracy_m==20.0 && rr==runtime::BETA_ACC_RULE_STOPPED && cap && std::fabs(hh-50)<1e-9);   // 20 < 25
+      CHECK(runtime::map_model_publication(still_input(50),s25,&ds,&hh,&rr,0,30.0,&cap)==runtime::CORE_BRIDGE_OK);
+      CHECK(ds.accuracy_m==25.0 && rr==runtime::BETA_ACC_RULE_STOPPED && !cap);                              // 25 < 30
+      CHECK(runtime::map_model_publication(still_input(12),s25,&ds,&hh,&rr,0,20.0,&cap)==runtime::CORE_BRIDGE_OK);
+      CHECK(std::fabs(ds.accuracy_m-12.0)<1e-9 && !cap); }                                                   // never raised
     // Stopped at an honest budget of 50 m: A* is reported, honest kept.
     CHECK(reported(still_input(50),a,&rule,&honest)==20.0 && rule==runtime::BETA_ACC_RULE_STOPPED &&
           std::fabs(honest-50)<1e-9);
@@ -2078,6 +2116,7 @@ int main() {
     budget_formula_and_limit();
     accuracy_boundary_and_heading_withdrawal();
     unbounded_profile_clamps_reported_accuracy();
+    diag_a20_cap_lowers_only();
     stale_position_does_not_start_a_tunnel_episode();
     tunnel_wrong_course_does_not_stick();
     tunnel_short_multipath_burst_does_not_resync();

@@ -13,6 +13,7 @@
 #include "navigation/pipeline.h"
 #include "runtime/beta_profile.h"
 #include "runtime/core_bridge.h"
+#include "runtime/diag_arms.h"
 #include <atomic>
 #include <cstdarg>
 #include <cmath>
@@ -135,7 +136,10 @@ public:
           seen_latch_clears_(0),seen_assumptions_(0),seen_contradictions_(0),last_core_(MX5_DR_OK),rearm_pending_(false),
           rearm_needs_hold_clear_(false),rearm_not_before_(0),rearm_reason_("none"),
           last_position_ns_(0),last_send_ns_(0),position_gap_(false),send_gap_(false),
-          position_gap_seen_ns_(0),send_gap_seen_ns_(0),cadence_fences_(0) {}
+          position_gap_seen_ns_(0),send_gap_seen_ns_(0),cadence_fences_(0),
+          diag_(false),diag_seed_(0),diag_index_(0),diag_have_(false),diag_open_(false),
+          diag_arm_(adapter::DIAG_ARM_NONE),diag_block_(0),diag_perm_(0),diag_open_ns_(0),
+          diag_end_ns_(0),diag_count_() { diag_boot_[0]=0; }
     BetaState state() const { return state_; }
     // Replay/test hook: the product keeps beta_profile_tunnel(). Only before
     // enable(); the pipeline's own profile is set by Pipeline::enable_beta.
@@ -144,6 +148,20 @@ public:
         profile_=p;return true;
     }
     const BetaProfile& profile() const { return profile_; }
+    // Diagnostic BETA build (runtime/diag_arms.h): only before enable(), only
+    // when the owner marker is ON. Off (the default) keeps every row and
+    // every publication byte-identical to v1.0.0-beta.11.
+    bool set_diag(bool on,const char* boot_id) {
+        if(state_!=BETA_DISABLED || strcmp(reason_,"not_enabled")) return false;
+        diag_=on;
+        snprintf(diag_boot_,sizeof diag_boot_,"%s",boot_id?boot_id:"unknown");
+        diag_seed_=diag_seed(diag_boot_);
+        return true;
+    }
+    bool diag() const { return diag_; }
+    // The arm of the open GPS-lost episode (DIAG_ARM_NONE when closed/off).
+    adapter::DiagArm diag_arm() const { return diag_ && diag_open_?adapter::DiagArm(diag_arm_):adapter::DIAG_ARM_NONE; }
+    uint32_t diag_episodes() const { return diag_index_; }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
     // Live means BETA may still publish in this boot.
@@ -207,6 +225,7 @@ public:
     void send(const adapter::Observation& o) {
         if(o.kind==adapter::Observation::SEND)
             note_cadence(o.mono_ns,&last_send_ns_,&send_gap_,&send_gap_seen_ns_);
+        if(diag_ && diag_open_ && o.kind==adapter::Observation::SEND)diag_send(o);
         if(o.kind!=adapter::Observation::SEND || o.type!=1 || !o.has_payload)return;
         last_original_accuracy_=o.original[16]?double(uint32_t(o.original[20])|(uint32_t(o.original[21])<<8)|
             (uint32_t(o.original[22])<<16)|(uint32_t(o.original[23])<<24))/1000.0:-1;
@@ -316,6 +335,121 @@ private:
     bool position_gap_,send_gap_;
     uint64_t position_gap_seen_ns_,send_gap_seen_ns_;
     uint64_t cadence_fences_;
+    // Diagnostic episode state (runtime/diag_arms.h). An episode opens at a
+    // transition into GPS_LOST, stays open through ENGAGED/WITHDRAWN and
+    // closes at any other transition; a GPS loss within DIAG_REJOIN_NS of
+    // the close continues it. Counters accumulate over the whole episode.
+    struct DiagCounters {
+        uint64_t pubs,capped,loc_replaced,loc_nonzero,loc_original_mode0,sat,sat_applied,sat_nonzero;
+        uint64_t outcomes[16];
+        double honest_max,reported_min,reported_max;
+        bool first_sat_seen,first_sat_after_replacement,first_sat_short;
+        uint32_t first_sat_before,first_sat_presence;
+        uint8_t first_sat_outcome;
+        const char* withdrawn;
+        uint64_t open_total_ns;
+    };
+    bool diag_;
+    char diag_boot_[40];
+    uint32_t diag_seed_,diag_index_;
+    bool diag_have_,diag_open_;
+    uint8_t diag_arm_;
+    unsigned diag_block_,diag_perm_;
+    uint64_t diag_open_ns_,diag_end_ns_;
+    DiagCounters diag_count_;
+
+    static bool diag_family(BetaState s) { return s==BETA_GPS_LOST || s==BETA_ENGAGED || s==BETA_WITHDRAWN; }
+    // After the beta_state row of every transition (diagnostic only).
+    template<class J> void diag_transition(J& j,uint64_t now,BetaState to,const char* reason) {
+        if(diag_open_ && !diag_family(to)) {
+            diag_open_=false;diag_end_ns_=now?now:1;
+            diag_count_.open_total_ns+=now>diag_open_ns_?now-diag_open_ns_:0;
+            diag_row(j,now,"ended",reason);
+        } else if(diag_open_ && to==BETA_WITHDRAWN && !diag_count_.withdrawn) diag_count_.withdrawn=reason;
+        if(to!=BETA_GPS_LOST || diag_open_)return;
+        if(diag_have_ && now>=diag_end_ns_ && now-diag_end_ns_<DIAG_REJOIN_NS) {
+            diag_open_=true;diag_open_ns_=now;
+            diag_row(j,now,"continued",reason);
+            return;
+        }
+        diag_arm_=uint8_t(diag_arm_for(diag_seed_,diag_index_,&diag_block_,&diag_perm_));
+        ++diag_index_;diag_have_=true;diag_open_=true;diag_open_ns_=now;
+        diag_count_=DiagCounters();diag_count_.honest_max=-1;diag_count_.reported_min=-1;diag_count_.reported_max=-1;
+        diag_row(j,now,"assigned",reason);
+    }
+    // Every SEND observation while an episode is open (journal counters only).
+    void diag_send(const adapter::Observation& o) {
+        DiagCounters& c=diag_count_;
+        if(o.type==1 && o.has_payload) {
+            if(o.choice==adapter::BETA_REPLACEMENT) { ++c.loc_replaced;if(o.result)++c.loc_nonzero; }
+            else if(o.original_mode==0)++c.loc_original_mode0;
+        }
+        if(!o.diag_sat)return;
+        ++c.sat;if(o.result)++c.sat_nonzero;
+        if(o.diag_sat_outcome==adapter::DIAG_SAT_APPLIED)++c.sat_applied;
+        ++c.outcomes[o.diag_sat_outcome<16?o.diag_sat_outcome:15];
+        if(!c.first_sat_seen) {
+            c.first_sat_seen=true;c.first_sat_after_replacement=c.loc_replaced!=0;
+            c.first_sat_short=o.diag_sat_short;c.first_sat_before=o.diag_sat_before;
+            c.first_sat_presence=o.diag_sat_presence;c.first_sat_outcome=o.diag_sat_outcome;
+        }
+    }
+    void diag_publication(double honest,double reported,bool capped) {
+        DiagCounters& c=diag_count_;
+        ++c.pubs;if(capped)++c.capped;
+        if(honest>c.honest_max)c.honest_max=honest;
+        if(c.reported_min<0 || reported<c.reported_min)c.reported_min=reported;
+        if(reported>c.reported_max)c.reported_max=reported;
+    }
+    template<class J> void diag_row(J& j,uint64_t now,const char* event,const char* reason) {
+        const DiagCounters& c=diag_count_;
+        char extra[1200]={0};
+        size_t at=0;
+        if(!strcmp(event,"assigned"))
+            append(extra,sizeof extra,&at,",\"block\":%u,\"perm\":%u,\"cap_m\":%.4g,\"sat_in_use\":%d",
+                   diag_block_,diag_perm_,DIAG_A20_CAP_M,int(adapter::DIAG_SAT_IN_USE));
+        else if(!strcmp(event,"continued"))
+            append(extra,sizeof extra,&at,",\"gap_ms\":%llu",
+                   (unsigned long long)(now>diag_end_ns_?(now-diag_end_ns_)/1000000ULL:0));
+        else {
+            char honest[48],rmin[48],rmax[48];
+            number_or_null(c.honest_max,honest);number_or_null(c.reported_min,rmin);number_or_null(c.reported_max,rmax);
+            append(extra,sizeof extra,&at,
+                ",\"open_ms\":%llu,\"pubs\":%llu,\"capped\":%llu,\"honest_max_m\":%s,"
+                "\"reported_min_m\":%s,\"reported_max_m\":%s,\"loc_replaced\":%llu,\"loc_nonzero\":%llu,"
+                "\"loc_original_mode0\":%llu,\"sat\":%llu,\"sat_applied\":%llu,\"sat_nonzero\":%llu,\"sat_outcomes\":{",
+                (unsigned long long)(c.open_total_ns/1000000ULL),(unsigned long long)c.pubs,
+                (unsigned long long)c.capped,honest,rmin,rmax,(unsigned long long)c.loc_replaced,
+                (unsigned long long)c.loc_nonzero,(unsigned long long)c.loc_original_mode0,
+                (unsigned long long)c.sat,(unsigned long long)c.sat_applied,(unsigned long long)c.sat_nonzero);
+            bool first=true;
+            for(unsigned k=0;k<16;++k) if(c.outcomes[k]) {
+                append(extra,sizeof extra,&at,"%s\"%s\":%llu",first?"":",",
+                       adapter::diag_sat_outcome_name(adapter::DiagSatOutcome(k)),(unsigned long long)c.outcomes[k]);
+                first=false;
+            }
+            append(extra,sizeof extra,&at,"}");
+            if(c.first_sat_seen)
+                append(extra,sizeof extra,&at,",\"first_sat\":{\"before\":%s,\"presence\":%s,\"outcome\":\"%s\","
+                       "\"after_replacement\":%s}",
+                       c.first_sat_short?"null":u32(c.first_sat_before,rmin),
+                       c.first_sat_short?"null":u32(c.first_sat_presence,rmax),
+                       adapter::diag_sat_outcome_name(adapter::DiagSatOutcome(c.first_sat_outcome)),
+                       c.first_sat_after_replacement?"true":"false");
+            else append(extra,sizeof extra,&at,",\"first_sat\":null");
+            if(c.withdrawn)append(extra,sizeof extra,&at,",\"withdrawn\":\"%s\"",c.withdrawn);
+        }
+        char line[1700];
+        const int n=at<sizeof extra?snprintf(line,sizeof line,
+            "{\"kind\":\"diag_episode\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
+            "\"event\":\"%s\",\"boot_id\":\"%s\",\"episode\":%u,\"arm\":\"%s\",\"reason\":\"%s\","
+            "\"state\":\"%s\",\"session_epoch\":%u,\"generation\":%u%s}",
+            (unsigned long long)now,event,diag_boot_,diag_index_?diag_index_-1:0,
+            adapter::diag_arm_name(adapter::DiagArm(diag_arm_)),reason,beta_state_name(state_),
+            shared_.storage_epoch.load(std::memory_order_acquire),adapter::generation(),extra):-1;
+        if(n>0 && size_t(n)<sizeof line)j.line(line);else j.fail();
+    }
+    static const char* u32(uint32_t v,char out[48]) { snprintf(out,48,"%u",v);return out; }
 
     // An observation of one stream: a gap found at its arrival waits for
     // the next cadence_fence() unless this silence was already fenced while
@@ -612,9 +746,12 @@ private:
         adapter::DrSnapshot s=adapter::DrSnapshot();
         double honest=0.0;
         int rule=BETA_ACC_RULE_NORMAL;
+        bool capped=false;
         if(!withdrawn) {
             const BetaModelInput in=nav.model_publication(now);
-            last_bridge_=map_model_publication(in,profile_,&s,&honest,&rule,&stop_latch_);
+            // Diagnostic arm A20 only; 0 (no cap) whenever the marker is absent.
+            const double cap=diag_ && diag_open_ && diag_arm_==adapter::DIAG_ARM_A20?DIAG_A20_CAP_M:0.0;
+            last_bridge_=map_model_publication(in,profile_,&s,&honest,&rule,&stop_latch_,cap,&capped);
             // The MODEL sample-age guard (250 ms of the frontier) can fire
             // before the 300 ms receipt silence; both mean sensor silence.
             if(last_bridge_!=CORE_BRIDGE_OK)
@@ -645,9 +782,11 @@ private:
             skip="generation_unobserved";
         if(!skip) {
             s.prediction_generation=generation;s.source_epoch=source;s.session_epoch=session;
+            s.diag_arm=diag_ && diag_open_?diag_arm_:uint8_t(adapter::DIAG_ARM_NONE);
             if(!adapter::publish_snapshot(s))skip="publish_rejected";
         }
         if(skip) { last_skip_=skip;++counters_.publish_skipped;return; }
+        if(diag_ && diag_open_)diag_publication(honest,s.accuracy_m,capped);
         ++counters_.publications;last_skip_="none";payload_="dr";
         last_accuracy_=s.accuracy_m;last_valid_until_=s.valid_until_mono_ns;
         last_honest_accuracy_=honest;last_acc_rule_=rule;last_stop_=stop_latch_;
@@ -743,6 +882,7 @@ private:
         // A new outage starts without the previous episode's honest budget.
         if(to==BETA_GPS_LOST) { last_honest_accuracy_=-1;last_acc_rule_=BETA_ACC_RULE_NORMAL;last_stop_=BetaStopLatch(); }
         if(to!=BETA_ENGAGED) stop_latch_=BetaStopLatch();
+        if(diag_)diag_transition(j,now,to,reason);
     }
     // At most 1 Hz (forced rows bypass the limit once, e.g. at stop).
     template<class J> void summary(J& j,uint64_t now,bool force) {
@@ -755,7 +895,7 @@ private:
         number_or_null(last_original_accuracy_,original_accuracy);number_or_null(last_speed_,speed);
         number_or_null(last_honest_accuracy_,honest_acc);
         char acc_rule[48];acc_rule_field(acc_rule);
-        char line[1300];
+        char line[1700];
         const int n=snprintf(line,sizeof line,
             "{\"kind\":\"beta_summary\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
             "\"state\":\"%s\",\"reason\":\"%s\",\"adapter_mode\":%u,\"held\":%s,"

@@ -167,6 +167,12 @@ if [ -e "$BASE/g3-off" ] || [ -L "$BASE/g3-off" ]; then
     rm -f "$BASE/g3-off" || fail 'Cannot clear the g3-off marker'
     echo 'Cleared g3-off: the heading log (G3) is on again from the next start.'
 fi
+# Likewise the diagnostic tunnel test marker from menu 9 (default off).
+if [ -e "$BASE/diag" ] || [ -L "$BASE/diag" ]; then
+    if [ -d "$BASE/diag" ] && [ ! -L "$BASE/diag" ]; then fail 'Cannot clear diag: it is a directory'; fi
+    rm -f "$BASE/diag" || fail 'Cannot clear the diag marker'
+    echo 'Cleared diag: the tunnel test is off from the next start; menu 9 turns it on again.'
+fi
 if [ "$POLICY" = persistent ]; then
     # A failure from here on must not leave an enablement behind.
     PERSIST_PENDING=1

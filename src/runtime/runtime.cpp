@@ -23,6 +23,7 @@
 #include "model_session.h"
 #include "beta_controller.h"
 #include "g3_heading.h"
+#include "diag_arms.h"
 #include "motion_gap.h"
 #include "model_bus.h"
 #include "lds_sideband.h"
@@ -285,14 +286,28 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
       hex[2*o.small_length]=0;
       snprintf(small,sizeof small,",\"payload_hex\":\"%s\"",hex);
     }
+    // Diagnostic BETA build only (adapter::set_diag(true)); otherwise empty
+    // and the row is byte-identical to v1.0.0-beta.11.
+    char diag[200]="";
+    if(o.diag_sat) {
+      char before[16]="null",after[16]="null",presence[16]="null";
+      if(!o.diag_sat_short) {
+        snprintf(before,sizeof before,"%u",o.diag_sat_before);snprintf(after,sizeof after,"%u",o.diag_sat_after);
+        snprintf(presence,sizeof presence,"%u",o.diag_sat_presence);
+      }
+      snprintf(diag,sizeof diag,",\"diag\":{\"arm\":\"%s\",\"sat\":\"%s\",\"in_use\":[%s,%s],\"presence\":%s}",
+          A::diag_arm_name(A::DiagArm(o.diag_arm)),A::diag_sat_outcome_name(A::DiagSatOutcome(o.diag_sat_outcome)),
+          before,after,presence);
+    } else if(o.diag_arm)
+      snprintf(diag,sizeof diag,",\"diag\":{\"arm\":\"%s\"}",A::diag_arm_name(A::DiagArm(o.diag_arm)));
     n=snprintf(line,capacity,
       "{\"kind\":\"send\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,\"mode\":%d,"
       "\"type\":%u,\"length\":%u,\"choice\":%u,\"reason\":%u,\"result\":%d,"
       "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s,\"send_session\":%s,\"lds_association\":%s,"
-      "\"class\":%u%s}",
+      "\"class\":%u%s%s}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
       o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request,session,association,
-      unsigned(o.position_class),small);
+      unsigned(o.position_class),small,diag);
   }
   return n>0 && size_t(n)<capacity;
 }
@@ -1617,6 +1632,12 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       holdout.init_model(model,mx5_dr_default_config(),nav_context);
   const bool beta_core=shadow && beta_requested && navigation.enable_beta(mx5::runtime::beta_profile_tunnel());
   mx5::runtime::BetaController beta(beta_shared);
+  // Diagnostic BETA build (runtime/diag_arms.h, owner menu 9): read once.
+  // Absent or invalid: nothing below runs and no row changes (beta.11).
+  const mx5::runtime::DiagMarker diag_marker=
+      beta_requested?mx5::runtime::diag_marker(root):mx5::runtime::DIAG_MARKER_ABSENT;
+  const bool diag_active=diag_marker==mx5::runtime::DIAG_MARKER_ON && beta_core;
+  if(diag_active) { beta.set_diag(true,boot_id);A::set_diag(true); }
   // G3 record-only heading carry-over (BETA only). One small file read here,
   // at startup; the parked store write runs on the dedicated store thread.
   mx5::runtime::G3Tracker g3;
@@ -1656,6 +1677,16 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         model.wheel_kmh_per_count,model.wheel_zero_kmh,
         model.reverse_forward_value,model.reverse_reverse_value,
         (unsigned long long)model.reorder_ns,g3_fields,side_state);
+    j.line(line);j.flush();
+  }
+  if(diag_marker==mx5::runtime::DIAG_MARKER_ON) {
+    snprintf(line,sizeof line,
+        "{\"kind\":\"diag_boot\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
+        "\"active\":%s,\"reason\":\"%s\",\"boot_id\":\"%s\",\"arms\":[\"CONTROL\",\"A20\",\"S5\"],"
+        "\"block\":%u,\"rejoin_ms\":%llu,\"cap_m\":%.4g,\"sat_type\":%d,\"sat_length\":%d,\"sat_in_use\":%d}",
+        (unsigned long long)clock_ns(0),diag_active?"true":"false",diag_active?"marker":"beta_core_unavailable",
+        boot_id,mx5::runtime::DIAG_BLOCK,(unsigned long long)(mx5::runtime::DIAG_REJOIN_NS/1000000ULL),
+        mx5::runtime::DIAG_A20_CAP_M,int(A::DIAG_SAT_TYPE),int(A::DIAG_SAT_LENGTH),int(A::DIAG_SAT_IN_USE));
     j.line(line);j.flush();
   }
   if(beta_requested) {

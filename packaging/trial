@@ -190,6 +190,10 @@ startup_verdict() {
             else if (v=="declined" || v=="observed") show("ok","FENCE",v)
             else show("NO","FENCE",v==""?"missing":v)
         }
+        # Menu 9 tunnel test: state only (never the arm); not a GO condition.
+        v=field("diag_marker=")
+        if (v=="on") print "TEST tunnel test on (menu 9)"
+        else if (v=="invalid") print "TEST marker invalid: test off"
         for (i=1;i<=NR;i++) if (index(line[i],"BETA NO_FIX: ")==1) print substr(line[i],1,40)
         # The owner-facing BETA count line, folded to the small screen.
         for (i=1;i<=NR;i++) if (index(line[i],"BETA: ")==1) fold40(line[i])
@@ -366,6 +370,56 @@ g3_toggle() {
     return 0
 }
 
+# Menu 9 (2026-10-12, validation/DIAG_BUILD_A20_S5_2026-10-12.md): the
+# owner switch of the diagnostic tunnel test. While BASE/diag holds exactly
+# "on" the BETA worker gives every GPS-lost episode one hidden test arm;
+# absent or anything else is the normal BETA. Read once at CMU start. Never
+# touches mx5dr.conf. Shows the state first, then one numeric confirmation
+# (9 again). The arm of a tunnel is never shown here (blind test).
+diag_toggle() {
+    marker=$BASE/diag
+    if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
+        echo 'Tunnel test: package not installed;'
+        echo 'nothing changed.'
+        return 0
+    fi
+    if [ -d "$marker" ] && [ ! -L "$marker" ]; then
+        echo 'Tunnel test: OFF (diag is a dir).'
+        echo 'Not changed here; menu 6 removes it.'
+        return 0
+    fi
+    state=OFF; next=ON
+    if [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(wc -c < "$marker")" -eq 3 ] &&
+       printf 'on\n' | cmp -s - "$marker"; then state=ON; next=OFF
+    elif [ -e "$marker" ] || [ -L "$marker" ]; then state='OFF (invalid marker)'; next=ON; fi
+    printf '%s\n' "Tunnel test now: $state" \
+        'BETA only: each tunnel gets a hidden' \
+        'setting. Note grey/frozen per tunnel.' \
+        "Enter 9 again to switch it $next," \
+        'anything else cancels.'
+    printf 'Number, then Enter: '
+    if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
+    if [ "$confirm" != 9 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
+    if [ "$next" = ON ]; then
+        marker_tmp=$BASE/diag.new.$$
+        rm -f "$marker_tmp" || fail 'Cannot stage the diag marker'
+        # An invalid marker (a symlink, even to a directory) is removed itself
+        # first: mv would otherwise move the file INTO a symlinked directory.
+        if [ -L "$marker" ]; then rm -f "$marker" || fail 'Cannot remove the invalid diag marker'; fi
+        if ! printf 'on\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
+            rm -f "$marker_tmp" || :
+            fail 'Cannot write the diag marker'
+        fi
+    else
+        rm -f "$marker" || fail 'Cannot remove the diag marker'
+    fi
+    sync
+    echo "Tunnel test set to $next."
+    echo 'Read once at CMU start: choose 5'
+    echo '(parked reboot) for it to take effect.'
+    return 0
+}
+
 # Display only: install.sh validates the same marker again before any write.
 bundle_mode() {
     marker=$HERE/bundle-default-mode
@@ -398,7 +452,7 @@ short_menu=0
 while :; do
     if [ "$short_menu" = 1 ]; then
         short_menu=0
-        printf '\n%s\n' '0 Exit (1-8 as listed before)'
+        printf '\n%s\n' '0 Exit (1-9 as listed before)'
     else
         printf '\n%s\n' 'Parked USB trial menu' \
             "This USB installs mode $BUNDLE_MODE: $mode_text" \
@@ -410,6 +464,7 @@ while :; do
             '6 Delete everything this package left on the CMU (run 4, then 5, first)' \
             '7 VIM side-channel log on/off (log only)' \
             '8 Heading log (G3) on/off (log only)' \
+            '9 Tunnel test on/off (BETA diagnostic)' \
             '0 Exit'
         echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
@@ -436,6 +491,7 @@ while :; do
            sh "$HERE/purge.sh" "$HERE"; exit 0;;
         7) if ! vim_side_toggle; then exit "$last_rc"; fi;;
         8) if ! g3_toggle; then exit "$last_rc"; fi;;
+        9) if ! diag_toggle; then exit "$last_rc"; fi;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac
