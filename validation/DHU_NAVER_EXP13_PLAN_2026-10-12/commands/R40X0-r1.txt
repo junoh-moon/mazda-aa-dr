@@ -1,0 +1,298 @@
+location 37.5280498 126.8964879 1.000 NAN 20.000 121.4
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-000.png
+sleep 0.8
+location 37.5279560 126.8966814 1.000 NAN 20.000 121.4
+sleep 1
+location 37.5278637 126.8968761 1.000 NAN 20.000 120.7
+sleep 1
+location 37.5277720 126.8970712 1.000 NAN 20.000 120.7
+sleep 1
+location 37.5276803 126.8972663 1.000 NAN 20.000 120.7
+sleep 1
+location 37.5275886 126.8974614 1.000 NAN 20.000 120.7
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-005.png
+sleep 0.8
+location 37.5275112 126.8976654 1.000 NAN 20.000 111.9
+sleep 1
+location 37.5274442 126.8978759 1.000 NAN 20.000 111.9
+sleep 1
+location 37.5273771 126.8980863 1.000 NAN 20.000 111.9
+sleep 1
+location 37.5273168 126.8982999 1.000 NAN 20.000 109.0
+sleep 1
+location 37.5272583 126.8985144 1.000 NAN 20.000 109.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-010.png
+sleep 0.8
+location 37.5271998 126.8987288 1.000 NAN 20.000 109.0
+sleep 1
+location 37.5271413 126.8989433 1.000 NAN 20.000 109.0
+sleep 1
+location 37.5270831 126.8991579 1.000 NAN 20.000 108.8
+sleep 1
+location 37.5270250 126.8993726 1.000 NAN 20.000 108.8
+sleep 1
+location 37.5269669 126.8995872 1.000 NAN 20.000 108.8
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-015.png
+sleep 0.8
+location 37.5269088 126.8998018 1.000 NAN 20.000 108.8
+sleep 1
+location 37.5268507 126.9000165 1.000 NAN 20.000 108.8
+sleep 1
+location 37.5267921 126.9002309 1.000 NAN 20.000 109.6
+sleep 1
+location 37.5267318 126.9004445 1.000 NAN 20.000 109.6
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-019.png
+sleep 0.8
+location 37.5266715 126.9006582 40.000 NAN 20.000 109.6
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-020.png
+sleep 0.8
+location 37.5266112 126.9008719 40.000 NAN 20.000 109.6
+sleep 1
+location 37.5265510 126.9010856 40.000 NAN 20.000 109.6
+sleep 1
+location 37.5264907 126.9012993 40.000 NAN 20.000 109.6
+sleep 1
+location 37.5264304 126.9015130 40.000 NAN 20.000 109.6
+sleep 1
+location 37.5263701 126.9017266 40.000 NAN 20.000 109.6
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-025.png
+sleep 0.8
+location 37.5263120 126.9019412 40.000 NAN 20.000 108.6
+sleep 1
+location 37.5262547 126.9021562 40.000 NAN 20.000 108.6
+sleep 1
+location 37.5261973 126.9023712 40.000 NAN 20.000 108.6
+sleep 1
+location 37.5261400 126.9025861 40.000 NAN 20.000 108.6
+sleep 1
+location 37.5260793 126.9027996 40.000 NAN 20.000 110.5
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-030.png
+sleep 0.8
+location 37.5260162 126.9030120 40.000 NAN 20.000 110.5
+sleep 1
+location 37.5259532 126.9032244 40.000 NAN 20.000 110.5
+sleep 1
+location 37.5258901 126.9034368 40.000 NAN 20.000 110.5
+sleep 1
+location 37.5258271 126.9036492 40.000 NAN 20.000 110.5
+sleep 1
+location 37.5257687 126.9038637 40.000 NAN 20.000 108.4
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-035.png
+sleep 0.8
+location 37.5257118 126.9040788 40.000 NAN 20.000 108.4
+sleep 1
+location 37.5256557 126.9042942 40.000 NAN 20.000 101.8
+sleep 1
+location 37.5256189 126.9045162 40.000 NAN 20.000 101.8
+sleep 1
+location 37.5255821 126.9047382 40.000 NAN 20.000 101.8
+sleep 1
+location 37.5255453 126.9049602 40.000 NAN 20.000 101.8
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-040.png
+sleep 0.8
+location 37.5255126 126.9051831 40.000 NAN 20.000 97.0
+sleep 1
+location 37.5254908 126.9054082 40.000 NAN 20.000 97.0
+sleep 1
+location 37.5254690 126.9056333 40.000 NAN 20.000 97.0
+sleep 1
+location 37.5254471 126.9058584 40.000 NAN 20.000 97.0
+sleep 1
+location 37.5254253 126.9060835 40.000 NAN 20.000 97.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-045.png
+sleep 0.8
+location 37.5254000 126.9063081 40.000 NAN 20.000 98.4
+sleep 1
+location 37.5253738 126.9065324 40.000 NAN 20.000 98.4
+sleep 1
+location 37.5253476 126.9067568 40.000 NAN 20.000 98.4
+sleep 1
+location 37.5253214 126.9069812 40.000 NAN 20.000 98.4
+sleep 1
+location 37.5252899 126.9072044 40.000 NAN 20.000 100.5
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-050.png
+sleep 0.8
+location 37.5252572 126.9074274 40.000 NAN 20.000 100.5
+sleep 1
+location 37.5252245 126.9076505 40.000 NAN 20.000 100.5
+sleep 1
+location 37.5251944 126.9078740 40.000 NAN 20.000 97.7
+sleep 1
+location 37.5251704 126.9080988 40.000 NAN 20.000 97.7
+sleep 1
+location 37.5251463 126.9083235 40.000 NAN 20.000 97.7
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-055.png
+sleep 0.8
+location 37.5251281 126.9085490 40.000 NAN 20.000 93.8
+sleep 1
+location 37.5251163 126.9087753 40.000 NAN 20.000 93.8
+sleep 1
+location 37.5251045 126.9090016 40.000 NAN 20.000 93.8
+sleep 1
+location 37.5251080 126.9092278 40.000 NAN 20.000 85.4
+sleep 1
+location 37.5251225 126.9094538 40.000 NAN 20.000 85.4
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-060.png
+sleep 0.8
+location 37.5251582 126.9096731 40.000 NAN 20.000 66.2
+sleep 1
+location 37.5252308 126.9098806 40.000 NAN 20.000 66.2
+sleep 1
+location 37.5253034 126.9100881 40.000 NAN 20.000 66.2
+sleep 1
+location 37.5253760 126.9102956 40.000 NAN 20.000 66.2
+sleep 1
+location 37.5254359 126.9105090 40.000 NAN 20.000 72.9
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-065.png
+sleep 0.8
+location 37.5254663 126.9107293 40.000 NAN 20.000 92.9
+sleep 1
+location 37.5254521 126.9109548 40.000 NAN 20.000 105.8
+sleep 1
+location 37.5254009 126.9111721 40.000 NAN 20.000 108.9
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-068.png
+sleep 0.8
+location 37.5253425 126.9113867 40.000 NAN 20.000 108.9
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-069.png
+sleep 0.8
+location 37.5252586 126.9115871 40.000 NAN 20.000 118.4
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-070.png
+sleep 0.8
+location 37.5251633 126.9117792 40.000 NAN 20.000 132.9
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-071.png
+sleep 0.8
+location 37.5250403 126.9119446 40.000 NAN 20.000 136.5
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-072.png
+sleep 0.8
+location 37.5249072 126.9120967 40.000 NAN 20.000 145.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-073.png
+sleep 0.8
+location 37.5247599 126.9122268 40.000 NAN 20.000 145.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-074.png
+sleep 0.8
+location 37.5246001 126.9123300 40.000 NAN 20.000 154.3
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-075.png
+sleep 0.8
+location 37.5244304 126.9124051 40.000 NAN 20.000 160.6
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-076.png
+sleep 0.8
+location 37.5242583 126.9124707 40.000 NAN 20.000 164.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-077.png
+sleep 0.8
+location 37.5240836 126.9125242 40.000 NAN 20.000 168.8
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-078.png
+sleep 0.8
+location 37.5239072 126.9125682 40.000 NAN 20.000 168.8
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-079.png
+sleep 0.8
+location 37.5237343 126.9126307 40.000 NAN 20.000 163.7
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-080.png
+sleep 0.8
+location 37.5235617 126.9126943 40.000 NAN 20.000 163.7
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-081.png
+sleep 0.8
+location 37.5233942 126.9127766 40.000 NAN 20.000 158.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-082.png
+sleep 0.8
+location 37.5232354 126.9128824 40.000 NAN 20.000 150.3
+sleep 1
+location 37.5230792 126.9129948 40.000 NAN 20.000 150.3
+sleep 1
+location 37.5229230 126.9131073 40.000 NAN 20.000 150.3
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-085.png
+sleep 0.8
+location 37.5227666 126.9132192 40.000 NAN 20.000 151.0
+sleep 1
+location 37.5226092 126.9133290 40.000 NAN 20.000 151.0
+sleep 1
+location 37.5224519 126.9134389 40.000 NAN 20.000 151.0
+sleep 1
+location 37.5222945 126.9135487 40.000 NAN 20.000 151.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-089.png
+sleep 0.8
+location 37.5221372 126.9136586 1.000 NAN 20.000 151.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-090.png
+sleep 0.8
+location 37.5219798 126.9137684 1.000 NAN 20.000 151.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-091.png
+sleep 0.8
+location 37.5218225 126.9138783 1.000 NAN 20.000 151.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-092.png
+sleep 0.8
+location 37.5216651 126.9139881 1.000 NAN 20.000 151.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-093.png
+sleep 0.8
+location 37.5215085 126.9140995 1.000 NAN 20.000 147.9
+sleep 1
+location 37.5213561 126.9142200 1.000 NAN 20.000 147.9
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-095.png
+sleep 0.8
+location 37.5212037 126.9143405 1.000 NAN 20.000 147.9
+sleep 1
+location 37.5210513 126.9144610 1.000 NAN 20.000 147.9
+sleep 1
+location 37.5209000 126.9145834 1.000 NAN 20.000 142.3
+sleep 1
+location 37.5207577 126.9147220 1.000 NAN 20.000 142.3
+sleep 1
+location 37.5206153 126.9148606 1.000 NAN 20.000 142.3
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-100.png
+sleep 0.8
+location 37.5204677 126.9149892 1.000 NAN 20.000 150.6
+sleep 1
+location 37.5203110 126.9151004 1.000 NAN 20.000 150.6
+sleep 1
+location 37.5201542 126.9152117 1.000 NAN 20.000 150.6
+sleep 1
+location 37.5199975 126.9153230 1.000 NAN 20.000 150.6
+sleep 1
+location 37.5198408 126.9154342 1.000 NAN 20.000 150.6
+sleep 1
+location 37.5196886 126.9155548 1.000 NAN 20.000 145.8
+sleep 1
+location 37.5195399 126.9156823 1.000 NAN 20.000 145.8
+sleep 1
+location 37.5193911 126.9158097 1.000 NAN 20.000 145.8
+sleep 1
+location 37.5192493 126.9159485 1.000 NAN 20.000 139.0
+sleep 0.2
+screenshot ../../../../experiment11/R40X0-r1-109.png
+sleep 0.8
