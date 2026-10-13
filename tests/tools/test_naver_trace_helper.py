@@ -21,8 +21,8 @@ if [ "$1" = shell ]; then
   case "$2" in
     "cat > "*) cat > "$ADB_CAP"; exit 0;;
     "[ -f "*) [ -n "$ADB_EXIST" ] && exit 0 || exit 1;;
-    "dumpsys "*) echo "    versionName=6.11.1.2"; exit 0;;
-    "pm path "*) printf 'package:/data/app/x/base.apk\\r\\npackage:/data/app/x/split_a.apk\\r\\n'; exit 0;;
+    dumpsys) echo "    versionName=6.11.1.2"; exit 0;;
+    pm) printf 'package:/data/app/x/base.apk\\r\\npackage:/data/app/x/split_a.apk\\r\\n'; exit 0;;
   esac
 fi
 exit 0
