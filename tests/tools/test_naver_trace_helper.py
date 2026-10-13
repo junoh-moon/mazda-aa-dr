@@ -21,6 +21,8 @@ if [ "$1" = shell ]; then
   case "$2" in
     "cat > "*) cat > "$ADB_CAP"; exit 0;;
     "[ -f "*) [ -n "$ADB_EXIST" ] && exit 0 || exit 1;;
+    "dumpsys "*) echo "    versionName=6.11.1.2"; exit 0;;
+    "pm path "*) printf 'package:/data/app/x/base.apk\\r\\npackage:/data/app/x/split_a.apk\\r\\n'; exit 0;;
   esac
 fi
 exit 0
@@ -76,6 +78,13 @@ class HelperTests(unittest.TestCase):
         backup = [i for i, c in enumerate(calls) if "cp " in c and "navi.config.bak" in c]
         write = [i for i, c in enumerate(calls) if c.startswith("shell cat >")]
         self.assertTrue(backup and write and backup[0] < write[0])
+
+    @unittest.skipUnless(shutil.which("zip"), "zip not available")
+    def test_pull_apk_is_read_only(self):
+        r = self.run_script("pull_apk.sh")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for c in self.calls():
+            self.assertTrue(c.startswith(("devices", "shell dumpsys", "shell pm path", "pull")), c)
 
     def test_scripts_never_mention_the_dangerous_key(self):
         for name in os.listdir(HELPER):
