@@ -111,6 +111,7 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(len(rm), 1)
         self.assertIn("NaverNavi/trace", rm[0])
         self.assertIn("NaverNavi/nmea", rm[0])
+        self.assertIn("NaverNavi/altitude", rm[0])
 
 
 if __name__ == "__main__":
