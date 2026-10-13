@@ -74,6 +74,19 @@ double stopgo_kmh(double c) {
     return 12-6*(c-6);
 }
 double drive_kmh(double t) { return stopgo?stopgo_kmh(fmod(t,8.0)):cycle_kmh(fmod(t,600.0)); }
+// --record-rows on|off (2026-10-13, drive data rows fix1/exit_jump/
+// yaw_learn/rec_drop, runtime/drive_record_log.h): default on like the
+// product; off is the profile before them.
+bool record_rows=true;
+// This harness journal is synchronous (no writer thread), where the product
+// gate refuses drive rows (GATE_NO_WRITER). Here they are written as a
+// current writer thread would accept them; every other gate reason is the
+// product's (Journal::record_gate).
+unsigned harness_record_gate(void* journal) {
+    typedef mx5::runtime::DriveRecordLog D;
+    const unsigned g=Journal::record_gate(journal);
+    return g==D::GATE_NO_WRITER?unsigned(D::GATE_OPEN):g;
+}
 // --yaw-count N / --yaw-noise 1 (2026-10-09): N samples per yaw window sum
 // as on the vehicle (mostly 5) and a deterministic +-3 count sample noise,
 // so the yaw digest fields have vehicle-like widths. Defaults (1, 0) keep
@@ -193,6 +206,7 @@ int main(int argc,char** argv) {
         else if(k=="--drive" && (v=="normal" || v=="stopgo"))stopgo=v=="stopgo";
         else if(k=="--yaw-rows" && (v=="on" || v=="off"))yaw_rows=v=="on";
         else if(k=="--chan" && (v=="on" || v=="off"))chan=v=="on";
+        else if(k=="--record-rows" && (v=="on" || v=="off"))record_rows=v=="on";
         else if(k=="--yaw-count" && atoi(v.c_str())>=1 && atoi(v.c_str())<=15)yaw_count=unsigned(atoi(v.c_str()));
         else if(k=="--yaw-noise")yaw_noise=atoi(v.c_str())!=0;
         else { fprintf(stderr,"unknown option %s\n",k.c_str());return 64; }
@@ -201,7 +215,8 @@ int main(int argc,char** argv) {
        !turn_ms || turn_ms%10) {
         fprintf(stderr,"usage: log_rate --profile full|persistent --out DIR [--seconds N] "
                        "[--event-every S] [--nofix S] [--outage S] [--motion-ms 20k] [--turn-ms 10k] [--drive normal|stopgo] "
-                       "[--yaw-rows on|off] [--yaw-count 1-15] [--yaw-noise 0|1] [--chan on|off]\n");return 64;
+                       "[--yaw-rows on|off] [--yaw-count 1-15] [--yaw-noise 0|1] [--chan on|off] "
+                       "[--record-rows on|off]\n");return 64;
     }
     const std::string logs=out+"/logs";
     if(mkdir(out.c_str(),0700) && errno!=EEXIST)return 73;
@@ -226,6 +241,9 @@ int main(int argc,char** argv) {
     if(quiet_profile) {
         window=new unsigned char[mx5::runtime::PersistentLog::WINDOW_BYTES+mx5::runtime::PersistentLog::ROW_BYTES];
         quiet.init(window,N::research_model_profile());quiet.set_yaw_rows(yaw_rows);j.filter=&quiet;
+        // runtime.cpp: the drive data rows, their yaw zero and gate.
+        quiet.set_record_rows(record_rows);quiet.set_record_zero(mx5::runtime::beta_profile_tunnel().yaw_zero);
+        quiet.set_record_gate(harness_record_gate,&j);
     }
     char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
     char boot_id[37];mx5::runtime::read_boot_id(boot_id);
@@ -324,6 +342,7 @@ int main(int argc,char** argv) {
         A::Observation o;
         while(pop(&o)) {
             if(!format_observation(line,sizeof line,o)) { j.fail();continue; }
+            if(j.filter)j.filter->set_beta_honest(beta.last_honest_accuracy());
             j.observation_line(line,o);
             if(o.kind==A::Observation::SEND)beta.send(o);
             if(o.kind==A::Observation::POSITION) {

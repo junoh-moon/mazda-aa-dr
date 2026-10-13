@@ -996,6 +996,7 @@ class Auditor:
         self.chan_side_states = []   # (session index, shadow_boot vim_side_channel value)
         self.chan_digest_spans = {}  # session index -> [first since_ns, last mono_ns, motion events]
         self.g3_rows = []       # (session index, g3_store/g3_first row)
+        self.drive_rows = []    # (session index, fix1/exit_jump/yaw_learn/rec_drop row)
         self.g3_events = []     # (session index, mono_ns, beta_journal_lag | GPS_LOST | ENGAGED)
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
@@ -1428,6 +1429,8 @@ class Auditor:
             self.chan_row(row, source)
         elif kind in ("g3_store", "g3_first", "g3_since"):
             self.g3_row(row, source)
+        elif kind in DRIVE_KINDS:
+            self.drive_row(row, source)
         elif kind == "log_digest" or kind.endswith("_digest"):
             self.digest(row, source)
         elif kind == "raw_window":
@@ -1686,6 +1689,13 @@ class Auditor:
             self.issue("malformed_g3_row", source, "Invalid %s row" % row["kind"])
             return
         self.g3_rows.append((len(self.sessions), row))
+
+    def drive_row(self, row, source):
+        """Drive data rows (record only; never evidence, never a product decision)."""
+        if not drive_row_valid(row):
+            self.issue("malformed_drive_row", source, "Invalid %s row" % row["kind"])
+            return
+        self.drive_rows.append((len(self.sessions), row))
 
     def g3_report(self):
         boots = {}
@@ -3463,6 +3473,9 @@ class Auditor:
                     omitted_issue_details=max(0, sum(self.issue_counts.values()) - len(self.issues)))
         if self.diagnostic.seen:
             report["diagnostic"] = self.diagnostic.report()
+        # Only with drive data rows: reports of earlier logs stay byte-identical.
+        if self.drive_rows:
+            report["drive_data"] = drive_report(self.drive_rows)
         return report
 
 
@@ -4074,6 +4087,145 @@ def chan_report(rows, speeds, stops, side_states=(), spans=None):
                 scope="diagnostic_vim_side_channel_not_sensor_qualification")
 
 
+# Drive data rows (v1.0.0-beta.14 candidate, src/runtime/drive_record_log.h,
+# validation/RELEASE_V100_BETA14_CANDIDATE_2026-10-13.md). Record only.
+DRIVE_KINDS = ("fix1", "exit_jump", "yaw_learn", "rec_drop")
+FIX1_FIELDS = ("t_ms", "mode", "lat_e7", "lon_e7", "speed_mm_s", "bearing_e6", "accuracy_mm", "satellites",
+               "window_ms", "yaw_sum", "yaw_n", "wheel_kmh_e1", "wheel_n")
+EXIT_NUMBERS = ("along_m", "cross_m", "sent_brg", "fix_brg", "dbrg", "sent_kmh", "fix_kmh", "sent_acc", "fix_acc",
+                "honest", "r2_kmh")
+DROP_COUNTS = ("fix1", "exit_jump", "yaw_learn", "rec_drop", "fix1_rate", "exit_rate", "lost_rate")
+DROP_REASONS = ("journal", "no_writer", "lag", "queue")
+EXIT_FLAGS = ("r1", "r1_acc", "r1_dt", "r1_dist", "r1_speed", "r2")
+
+
+def drive_row_valid(row):
+    kind = row.get("kind")
+    if kind == "fix1":
+        d = row.get("d")
+        if not isinstance(d, list) or len(d) != len(FIX1_FIELDS) or not all(integer(v) for v in d):
+            return False
+        f = dict(zip(FIX1_FIELDS, d))
+        return (0 <= f["t_ms"] < 2**63 and f["mode"] in (1, 2, 3) and abs(f["lat_e7"]) <= 900000000 and
+                abs(f["lon_e7"]) <= 1800000000 and -1 <= f["bearing_e6"] < 360000000 and
+                f["speed_mm_s"] >= -1 and f["accuracy_mm"] >= -1 and -1 <= f["satellites"] <= 255 and
+                f["window_ms"] >= 0 and f["yaw_n"] >= 0 and f["wheel_kmh_e1"] >= -1 and f["wheel_n"] >= 0 and
+                abs(f["yaw_sum"]) < 2**63)
+    if not bounded_int(row.get("schema"), 1, 1) or not bounded_int(row.get("mono_ns"), 0, 2**64-1):
+        return False
+    if kind == "exit_jump":
+        return (all(bounded_int(row.get(k), 0, 2**63-1)
+                    for k in ("ep", "fix_ms", "lost_ms", "reps", "rep_ms", "stock", "stock_after", "sent_ms")) and
+                _int_or_none(row.get("fix_send_ms"), 0, 2**63-1) and bounded_int(row.get("sent_choice"), 0, 255) and
+                bounded_int(row.get("mode"), 1, 3) and bounded_number(row.get("dt_ms"), 0, 1e12) and
+                bounded_number(row.get("jump_m"), 0, 1e9) and all(_num_or_none(row.get(k)) for k in EXIT_NUMBERS) and
+                all(type(row.get(k)) is bool for k in EXIT_FLAGS))
+    if kind == "yaw_learn":
+        return (row.get("ev") in ("lost", "periodic") and bounded_int(row.get("at_ms"), 0, 2**63-1) and
+                all(_int_or_none(row.get(k)) for k in ("z", "mean", "span_ms", "cover", "age_ms")) and
+                bounded_int(row.get("used"), -2**31, 2**31-1) and all(_num_or_none(row.get(k)) for k in ("dc", "dev")) and
+                bounded_int(row.get("fixes"), 0, 2**32-1) and bounded_int(row.get("n"), 0, 2**63-1) and
+                (row["z"] is None) == (row["mean"] is None))
+    if kind == "rec_drop":
+        why = row.get("why")
+        return (all(bounded_int(row.get(k), 0, 2**63-1) for k in DROP_COUNTS) and isinstance(why, dict) and
+                sorted(why) == sorted(DROP_REASONS) and all(bounded_int(why[k], 0, 2**63-1) for k in DROP_REASONS))
+    return False
+
+
+def drive_report(rows):
+    """Record-only drive data: fix1 coverage, every exit_jump with the Naver
+    jump predicates, the GPS-learned yaw zero rows and the drop counters."""
+    fix1 = [(s, dict(zip(FIX1_FIELDS, r["d"]))) for s, r in rows if r["kind"] == "fix1"]
+    sessions = {}
+    for session, f in fix1:
+        entry = sessions.setdefault(session, dict(rows=0, first_s=f["t_ms"] / 1000.0, last_s=0.0, max_gap_s=0.0,
+                                                  accuracy_known=0, satellites_known=0, yaw_samples=0))
+        if entry["rows"]:
+            entry["max_gap_s"] = max(entry["max_gap_s"], round(f["t_ms"] / 1000.0 - entry["last_s"], 3))
+        entry["rows"] += 1
+        entry["last_s"] = f["t_ms"] / 1000.0
+        entry["accuracy_known"] += f["accuracy_mm"] >= 0
+        entry["satellites_known"] += f["satellites"] >= 0
+        entry["yaw_samples"] += f["yaw_n"]
+    exits = []
+    for session, r in rows:
+        if r["kind"] != "exit_jump":
+            continue
+        # dt_ms: fix POSITION hook time - last LOCATION sent; dt_send_ms the
+        # same with the fix's own LOCATION send (Naver's getTime() is not
+        # confirmed to be either). reported_acc is the sent bytes' accuracy
+        # (authoritative); honest is the last published honest budget when
+        # the worker read the last replacement (may be one tick newer).
+        dt_send = None if r["fix_send_ms"] is None else r["fix_send_ms"] - r["sent_ms"]
+        exits.append(dict(session=session, fix_s=r["fix_ms"] / 1000.0, lost_s=r["lost_ms"] / 1000.0, reps=r["reps"],
+                          stock=r["stock"], stock_after=r["stock_after"], sent_choice=r["sent_choice"],
+                          dt_ms=r["dt_ms"], dt_send_ms=dt_send,
+                          r1_dt_send=None if dt_send is None else 500 <= dt_send <= 1500,
+                          jump_m=r["jump_m"], along_m=r["along_m"], cross_m=r["cross_m"],
+                          dbrg=r["dbrg"], reported_acc=r["sent_acc"], fix_acc=r["fix_acc"], honest=r["honest"],
+                          r1=r["r1"], r1_parts=[r["r1_acc"], r["r1_dt"], r["r1_dist"], r["r1_speed"]],
+                          r2=r["r2"], r2_kmh=r["r2_kmh"]))
+    learn = []
+    for session, r in rows:
+        if r["kind"] != "yaw_learn":
+            continue
+        learn.append(dict(session=session, at_s=r["at_ms"] / 1000.0, ev=r["ev"],
+                          zero=None if r["z"] is None else round(2048 + r["z"] / 100.0, 2),
+                          used=round(2048 + r["used"] / 100.0, 2),
+                          span_s=None if r["span_ms"] is None else r["span_ms"] / 1000.0,
+                          dc=r["dc"], dev=r["dev"], cover=r["cover"],
+                          age_s=None if r["age_ms"] is None else r["age_ms"] / 1000.0))
+    drops = Counter()
+    for _, r in rows:
+        if r["kind"] == "rec_drop":
+            for k in DROP_COUNTS:
+                drops[k] += r[k]
+            for k in DROP_REASONS:
+                drops["why_" + k] += r["why"][k]
+    lost = [entry for entry in learn if entry["ev"] == "lost"]
+    summary = dict(fix1_rows=len(fix1), exits=len(exits), r1_exits=sum(1 for e in exits if e["r1"]),
+                   r2_exits=sum(1 for e in exits if e["r2"]), learn_rows=len(learn), lost_rows=len(lost),
+                   lost_with_estimate=sum(1 for e in lost if e["zero"] is not None),
+                   dropped=dict(drops), counts="lower_bound",
+                   lower_bound=("record-only diagnostic rows, refused while the journal writer is behind or absent "
+                                "(counted in rec_drop, itself droppable), every kind rate-limited; persistent profile "
+                                "only"))
+    return dict(summary=summary, fix1_sessions={str(k): v for k, v in sorted(sessions.items())}, exits=exits,
+                learn=learn, scope="record_only_not_product_decisions")
+
+
+def print_drive_data(drive, limit=40):
+    """Text section: drive data rows (record only); None: no such rows."""
+    if drive is None:
+        return
+    summary = drive["summary"]
+    if not (summary["fix1_rows"] or summary["exits"] or summary["learn_rows"] or summary["dropped"]):
+        return
+    print("Drive data (record only): %d fix1 rows, %d exit_jump (R1 %d, R2 %d), %d yaw_learn (%d at GPS loss, "
+          "%d with an estimate); refused/limited (lower bound) %s" %
+          (summary["fix1_rows"], summary["exits"], summary["r1_exits"], summary["r2_exits"], summary["learn_rows"],
+           summary["lost_rows"], summary["lost_with_estimate"], summary["dropped"] or "none"))
+    for e in drive["exits"][:limit]:
+        f = lambda v, fmt="%.1f": "-" if v is None else fmt % v
+        print("   exit %8.1f s lost %6.1f s reps %3d stock after %3d (last sent choice %d) dt %6.0f ms (send %s) "
+              "jump %7.1f m along %7s cross %7s dbrg %6s reported acc %s->%s (honest %s) R1 %s %s R2 %s (%s km/h)" %
+              (e["fix_s"], e["lost_s"], e["reps"], e["stock_after"], e["sent_choice"], e["dt_ms"],
+               f(e["dt_send_ms"], "%.0f"), e["jump_m"], f(e["along_m"]), f(e["cross_m"]),
+               f(e["dbrg"]), f(e["reported_acc"]), f(e["fix_acc"]), f(e["honest"]), e["r1"],
+               "".join("1" if p else "0" for p in e["r1_parts"]), e["r2"], f(e["r2_kmh"])))
+    if drive["exits"]:
+        print("   (reported acc: the accuracy in the last LOCATION sent, authoritative; honest: the BETA honest "
+              "budget the worker read with the last replacement, possibly one tick newer; dt by hook receive time, "
+              "Naver getTime() semantics unconfirmed)")
+    for e in [x for x in drive["learn"] if x["ev"] == "lost"][:limit]:
+        print("   yaw_learn at GPS loss %8.1f s: zero %s (BETA uses %.2f), span %s s, course change %s deg, "
+              "max deviation %s deg, age %s s" %
+              (e["at_s"], "-" if e["zero"] is None else "%.2f" % e["zero"], e["used"],
+               "-" if e["span_s"] is None else "%.1f" % e["span_s"], "-" if e["dc"] is None else e["dc"],
+               "-" if e["dev"] is None else e["dev"], "-" if e["age_s"] is None else "%.1f" % e["age_s"]))
+
+
 def print_chan_data(chan, limit=40):
     """Text section: VIM side-channel rows (raw integers, diagnostic)."""
     summary = chan["summary"]
@@ -4201,6 +4353,7 @@ def main(argv=None):
         print_yaw_data(report["yaw_data"])
         print_chan_data(report["chan_data"])
         print_g3_data(report["g3"])
+        print_drive_data(report.get("drive_data"))
         print_diag_data(report.get("diagnostic"))
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))

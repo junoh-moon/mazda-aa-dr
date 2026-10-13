@@ -173,6 +173,9 @@ public:
     }
     const char* reason() const { return reason_; }
     const Counters& counters() const { return counters_; }
+    // The honest budget of the latest publication (-1: none in this
+    // episode). Read only by the record-only drive data rows.
+    double last_honest_accuracy() const { return last_honest_accuracy_; }
     // Live means BETA may still publish in this boot.
     bool live() const { return state_!=BETA_DISABLED && state_!=BETA_FAULT; }
 

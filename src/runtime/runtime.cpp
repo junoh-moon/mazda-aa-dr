@@ -70,6 +70,13 @@ static_assert(ATOMIC_INT_LOCK_FREE==2,"journal_ok is read by OEM threads");
 std::atomic<unsigned> journal_current(1);
 const uint64_t JOURNAL_LAG_LIMIT_NS=1500000000ULL;
 const uint64_t JOURNAL_LAG_CLEAR_NS=500000000ULL;
+// Record-only drive data rows (log_profile.h set_record_gate, 2026-10-13):
+// written only while the prompt rows are younger than this and the
+// diagnostic+evidence rings hold at most RECORD_QUEUE_BYTES; otherwise the
+// row is dropped and counted. A record row therefore never waits behind a
+// backlog and never makes the diagnostic ring drop an older row.
+const uint64_t RECORD_LAG_NS=JOURNAL_LAG_CLEAR_NS;
+const size_t RECORD_QUEUE_BYTES=65536;
 // The writer fflushes on its own once the oldest row handed to stdio since
 // the last fflush is this old (2026-10-07 follow-up). Rows in the stdio
 // buffer count as journal lag, so without it the steady-state lag rose to the
@@ -321,6 +328,7 @@ bool journal_writer_flush_wait(JournalWriter*,uint64_t timeout_ns);
 JournalWriter* start_journal_writer(const char* root,size_t diagnostic_bytes,size_t evidence_bytes,
                                     size_t bulk_bytes);
 bool journal_writer_bulk_ready(JournalWriter*);
+unsigned journal_writer_record_gate(JournalWriter*,uint64_t now);
 struct JournalLag { bool thread; uint64_t unwritten_rows,oldest_ns,dropped_rows; size_t high_water; };
 JournalLag journal_writer_lag(JournalWriter*,uint64_t now);
 
@@ -512,6 +520,16 @@ struct Journal {
     return !j.writer || journal_writer_bulk_ready(j.writer);
   }
   void sync_filter() { filter->set_journal_current(journal_current.load(std::memory_order_acquire) != 0); }
+  // The drive data row gate (RECORD_LAG_NS): a DriveRecordLog::Gate
+  // reason. Without a writer thread (start failed, synchronous journal)
+  // the rows are never written from the worker.
+  static unsigned record_gate(void* journal) {
+    typedef mx5::runtime::DriveRecordLog D;
+    Journal& j = *static_cast<Journal*>(journal);
+    if (j.failed || !journal_current.load(std::memory_order_acquire)) return D::GATE_JOURNAL;
+    if (!j.writer) return D::GATE_NO_WRITER;
+    return journal_writer_record_gate(j.writer, clock_ns(0));
+  }
   static void emit_to(void* journal, const char* s, unsigned row_class) {
     static_cast<Journal*>(journal)->emit(s, row_class);
   }
@@ -811,6 +829,12 @@ bool journal_writer_bulk_pending(JournalWriter* w) { return w->ring.stats().bulk
 bool journal_writer_bulk_ready(JournalWriter* w) {
   const mx5::runtime::JournalRing::Stats s=w->ring.stats();
   return !s.oldest_push_ns && !s.bulk_used;
+}
+unsigned journal_writer_record_gate(JournalWriter* w,uint64_t now) {
+  typedef mx5::runtime::DriveRecordLog D;
+  const mx5::runtime::JournalRing::Stats s=w->ring.stats();
+  if(s.used-s.bulk_used>RECORD_QUEUE_BYTES)return D::GATE_QUEUE;
+  return journal_writer_lag(w,now).oldest_ns<RECORD_LAG_NS?unsigned(D::GATE_OPEN):unsigned(D::GATE_LAG);
 }
 void journal_writer_request_flush(JournalWriter* w) {
   const uint64_t next=w->ring.stats().next_seq;
@@ -1539,6 +1563,8 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     quiet_storage.bytes=new(std::nothrow) unsigned char[mx5::runtime::PersistentLog::WINDOW_BYTES+
                                                        mx5::runtime::PersistentLog::ROW_BYTES];
     quiet.init(quiet_storage.bytes,N::research_model_profile());
+    quiet.set_record_zero(mx5::runtime::beta_profile_tunnel().yaw_zero);
+    quiet.set_record_gate(Journal::record_gate,&j);
     j.filter=&quiet;
   }
   mx5::runtime::MotionBatch motion_batch;
@@ -1788,6 +1814,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     unsigned drained = 0;
     while (drained++ < 256 && pop(&o)) {
       if(!format_observation(line,sizeof line,o)) { j.fail();continue; }
+      if(j.filter)j.filter->set_beta_honest(beta.last_honest_accuracy());
       j.observation_line(line,o);
       if(o.kind==A::Observation::SEND)beta.send(o);
       if(o.kind==A::Observation::SEND && g3.active())g3.send(o);

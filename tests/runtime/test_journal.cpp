@@ -675,6 +675,121 @@ static void writer_lagging_fix_rows(const char* root,const std::string& logs) {
   arm_test_mode();
   puts("Writer: FIX POSITION rows are diagnostic while the lag guard is engaged; LOST and current FIX stay evidence");
 }
+// Drive data rows (log_profile.h set_record_gate, runtime.cpp RECORD_LAG_NS;
+// validation/RELEASE_V100_BETA14_CANDIDATE_2026-10-13.md): written while the
+// writer is current; while it is behind they are refused (dropped and
+// counted, never queued), every other row is queued as before, and the
+// rec_drop counter row follows once the writer caught up.
+static void record_fix(Journal& j,uint32_t call,uint64_t utc) {
+  N::RawEvent w=N::RawEvent();w.kind=N::WHEELS;w.epoch=1;w.received_ns=clock_ns(0);
+  for(unsigned i=0;i<4;++i)w.raw[i]=uint16_t(40*100+10000);
+  j.note_motion(w);
+  A::Observation o=A::Observation();o.kind=A::Observation::POSITION;o.position_class=A::POSITION_FIX;
+  o.original_mode=1;o.position.mode=1;o.position.utc_seconds=utc;o.position.latitude_deg=35+utc*1e-5;
+  o.position.longitude_deg=135;o.position.heading_deg=90;o.position.velocity_kmh=40;o.call_sequence=call;
+  o.mono_ns=clock_ns(0);
+  char line[mx5::runtime::OBSERVATION_JSON_CAPACITY];
+  assert(format_observation(line,sizeof line,o));j.observation_line(line,o);
+  A::Observation s=A::Observation();s.kind=A::Observation::SEND;s.type=1;s.length=48;s.has_payload=true;
+  s.call_sequence=call;s.original_mode=1;s.position_class=A::POSITION_FIX;s.mono_ns=clock_ns(0);
+  s.original[16]=1;s.original[20]=0x88;s.original[21]=0x13;memcpy(s.outgoing,s.original,48);
+  assert(format_observation(line,sizeof line,s));j.observation_line(line,s);
+}
+static void writer_record_gate(const char* root,const std::string& logs) {
+  arm_test_mode();clear_traces(logs);config.max_log_bytes=1<<20;
+  std::vector<unsigned char> storage(mx5::runtime::PersistentLog::WINDOW_BYTES+mx5::runtime::PersistentLog::ROW_BYTES);
+  uint64_t queued_while_behind=0;
+  {
+    mx5::runtime::PersistentLog quiet;quiet.init(&storage[0],N::research_model_profile());
+    Journal j(root);assert(j.start_writer(524288,262144,131072));
+    quiet.set_record_gate(Journal::record_gate,&j);j.filter=&quiet;
+    j.line("{\"kind\":\"fixture\",\"n\":0}");
+    record_fix(j,1,1001);record_fix(j,2,1002);          // current: written
+    assert(j.flush_wait());
+    usleep(1700000);                                    // the fix1 token bucket refills
+    j.writer->inject_stall_ns.store(1500000000ULL);
+    j.line("{\"kind\":\"fixture\",\"n\":1}");             // held by the stalled writer
+    usleep(700000);                                     // lag > RECORD_LAG_NS (500 ms)
+    assert(journal_writer_lag(j.writer,clock_ns(0)).oldest_ns>500000000ULL);
+    assert(Journal::record_gate(&j)==mx5::runtime::DriveRecordLog::GATE_LAG);
+    const uint64_t before=j.writer->ring.stats().next_seq;
+    for(uint32_t k=0;k<3;++k)record_fix(j,3+k,1003+k); // behind: refused
+    queued_while_behind=j.writer->ring.stats().next_seq-before;
+    j.line("{\"kind\":\"fixture\",\"n\":2}");
+    usleep(1200000);
+    assert(j.flush_wait());
+    assert(Journal::record_gate(&j)==mx5::runtime::DriveRecordLog::GATE_OPEN);
+    j.tick(clock_ns(0));                                // rec_drop once current
+    assert(j.flush_wait() && !j.failed);
+  }
+  const std::vector<std::string> rows=trace_rows(logs);
+  unsigned fix1=0,drops=0,n2=0,fixture2=0;
+  for(size_t i=0;i<rows.size();++i) {
+    if(rows[i].find("{\"kind\":\"fix1\"")==0)++fix1;
+    if(rows[i].find("\"n\":2}")!=std::string::npos)fixture2=unsigned(i);
+    if(rows[i].find("{\"kind\":\"rec_drop\"")==0) {
+      ++drops;n2=unsigned(i);
+      // A counter row tried while still behind counts itself (rec_drop).
+      printf("Writer record gate: %s\n",rows[i].c_str());
+      assert(rows[i].find("\"fix1\":3,\"exit_jump\":0,\"yaw_learn\":0,\"rec_drop\":")!=std::string::npos &&
+             rows[i].find(",\"fix1_rate\":0,")!=std::string::npos &&
+             rows[i].find("\"why\":{\"journal\":0,\"no_writer\":0,\"lag\":")!=std::string::npos &&
+             row_number(rows[i],"lag")>=3);
+    }
+    assert(rows[i].find("journal_dropped")==std::string::npos);
+  }
+  printf("Writer record gate: fix1 written %u, refused 3 (rows queued while behind: %llu, none of them fix1), "
+         "rec_drop rows %u\n",fix1,(unsigned long long)queued_while_behind,drops);fflush(stdout);
+  if(!(fix1==2 && drops==1 && n2>fixture2 && queued_while_behind==6))for(size_t i=0;i<rows.size();++i)fprintf(stderr,"%.160s\n",rows[i].c_str());
+  // The two current fixes only; the three refused ones never reached the
+  // ring, while the POSITION and SEND rows of those three calls (raw period
+  // after the first class change) were queued as before: 6 rows.
+  assert(fix1==2 && drops==1 && n2>fixture2 && queued_while_behind==6);
+  clear_traces(logs);arm_test_mode();
+  // The queue limit alone: the writer is stalled for less than the lag
+  // limit but more than RECORD_QUEUE_BYTES wait in its rings.
+  {
+    Journal j(root);assert(j.start_writer(524288,262144,131072));
+    j.line("{\"kind\":\"fixture\",\"n\":0}");assert(j.flush_wait());
+    assert(Journal::record_gate(&j)==mx5::runtime::DriveRecordLog::GATE_OPEN);
+    j.writer->inject_stall_ns.store(1000000000ULL);
+    const uint64_t begin=clock_ns(0);
+    char row[1100];
+    for(unsigned n=1;n<=80;++n) { snprintf(row,sizeof row,"{\"kind\":\"fixture\",\"n\":%u,\"pad\":\"%01000u\"}",n,n);j.line(row); }
+    const JournalLag lag=journal_writer_lag(j.writer,clock_ns(0));
+    const unsigned gate=Journal::record_gate(&j);
+    const uint64_t checked=clock_ns(0)-begin;
+    printf("Writer record gate, queue: %llu bytes waiting, lag %llu ms, gate %s (checked after %llu ms)\n",
+           (unsigned long long)(j.writer->ring.stats().used),(unsigned long long)(lag.oldest_ns/1000000ULL),
+           mx5::runtime::DriveRecordLog::gate_name(gate),(unsigned long long)(checked/1000000ULL));
+    assert(checked<400000000ULL && lag.oldest_ns<500000000ULL && gate==mx5::runtime::DriveRecordLog::GATE_QUEUE);
+    usleep(1200000);assert(j.flush_wait());
+    assert(Journal::record_gate(&j)==mx5::runtime::DriveRecordLog::GATE_OPEN);
+  }
+  clear_traces(logs);arm_test_mode();
+  // No writer thread (start failed, synchronous journal): the rows are never
+  // written from the worker; the observation rows are, as before.
+  {
+    mx5::runtime::PersistentLog quiet;quiet.init(&storage[0],N::research_model_profile());
+    Journal j(root);quiet.set_record_gate(Journal::record_gate,&j);j.filter=&quiet;
+    assert(Journal::record_gate(&j)==mx5::runtime::DriveRecordLog::GATE_NO_WRITER);
+    j.line("{\"kind\":\"fixture\",\"n\":0}");
+    for(uint32_t k=0;k<3;++k)record_fix(j,1+k,1001+k);
+    j.tick(clock_ns(0));
+  }
+  {
+    const std::vector<std::string> sync=trace_rows(logs);
+    unsigned observations=0;
+    for(size_t i=0;i<sync.size();++i) {
+      assert(sync[i].find("{\"kind\":\"fix1\"")!=0 && sync[i].find("{\"kind\":\"rec_drop\"")!=0);
+      if(sync[i].find("{\"kind\":\"position\"")==0 || sync[i].find("{\"kind\":\"send\"")==0)++observations;
+    }
+    assert(observations==6);
+  }
+  clear_traces(logs);arm_test_mode();
+  puts("Writer: drive data rows are refused and counted while the writer is behind or its queue is full, "
+       "never queued, never written without a writer thread");
+}
 // Every queued row is written on worker exit; a requested stop closes the
 // file durably before its acknowledgement, in order.
 static void writer_shutdown(const char* root,const std::string& logs) {
@@ -1668,6 +1783,7 @@ int main(int argc,char** argv) {
     writer_lag_and_wakeups(root,logs);
     writer_age_flush(root,logs);
     writer_lagging_fix_rows(root,logs);
+    writer_record_gate(root,logs);
     window_burst_lag(root,logs);
     persistent_worker(root,logs);
     clear_traces(logs);assert(!rmdir(logs.c_str())&&!rmdir(root));

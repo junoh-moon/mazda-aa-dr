@@ -66,16 +66,19 @@ $(BUILD)/test_request_status: tests/runtime/test_request_status.cpp src/runtime/
 	$(CXX) $(CXX_WARN) src/runtime/request_trace.cpp tests/runtime/test_request_status.cpp -pthread -o $@
 $(BUILD)/test_journal_ring: tests/runtime/test_journal_ring.cpp src/runtime/journal_ring.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
-$(BUILD)/test_log_profile: tests/runtime/test_log_profile.cpp src/runtime/log_profile.h src/runtime/journal_ring.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+$(BUILD)/test_log_profile: tests/runtime/test_log_profile.cpp src/runtime/log_profile.h src/runtime/journal_ring.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/runtime/drive_record_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
-$(BUILD)/test_yaw_rows: tests/runtime/test_yaw_rows.cpp src/runtime/log_profile.h src/runtime/journal_ring.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+$(BUILD)/test_yaw_rows: tests/runtime/test_yaw_rows.cpp src/runtime/log_profile.h src/runtime/journal_ring.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/runtime/drive_record_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
 # VIM side-channel rows (validation/VIM_CHANNEL_CAPTURE_2026-10-10.md).
-$(BUILD)/test_chan_rows: tests/runtime/test_chan_rows.cpp src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+$(BUILD)/test_chan_rows: tests/runtime/test_chan_rows.cpp src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/runtime/drive_record_log.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+	$(CXX) $(CXX_WARN) $< -o $@
+# Drive data rows (validation/RELEASE_V100_BETA14_CANDIDATE_2026-10-13.md).
+$(BUILD)/test_drive_rows: tests/runtime/test_drive_rows.cpp src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/runtime/drive_record_log.h src/runtime/journal_ring.h src/sensors/vim_channels.h src/navigation/channel.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
 # Offline replay of recorded wheel/yaw/POSITION values through PersistentLog
 # (yaw data rows on private recordings; tests/tools/test_analyze_yaw.py).
-$(BUILD)/yaw_replay: tests/runtime/yaw_replay.cpp src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
+$(BUILD)/yaw_replay: tests/runtime/yaw_replay.cpp src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/runtime/drive_record_log.h src/sensors/vim_channels.h src/adapter/adapter.h src/navigation/pipeline.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -o $@
 $(BUILD)/test_journal_queue: tests/runtime/test_journal_queue.cpp src/runtime/journal_queue.h src/adapter/adapter.h src/runtime/request_trace.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $< -pthread -o $@
@@ -87,9 +90,9 @@ $(BUILD)/test_worker_beta: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runt
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_worker_beta.cpp -ldl -lpthread -lrt -lm -o $@
 # Journal byte-rate harness (full vs persistent profile, synthetic drive in
 # simulated time; validation/PERSISTENT_LOGGING_2026-10-06.md).
-$(BUILD)/log_rate: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/log_rate.cpp tests/runtime/model_bus_fixture.h src/runtime/model_bus.h $(ADAPTER) src/runtime/loader.cpp $(STORAGE_HEADERS) $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h | $(BUILD)
+$(BUILD)/log_rate: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/log_rate.cpp tests/runtime/model_bus_fixture.h src/runtime/model_bus.h $(ADAPTER) src/runtime/loader.cpp $(STORAGE_HEADERS) $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/runtime/drive_record_log.h src/sensors/vim_channels.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/log_rate.cpp -ldl -lpthread -lrt -lm -o $@
-$(BUILD)/writer_lag: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/writer_lag.cpp tests/runtime/model_bus_fixture.h src/runtime/model_bus.h $(ADAPTER) src/runtime/loader.cpp $(STORAGE_HEADERS) $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h | $(BUILD)
+$(BUILD)/writer_lag: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/writer_lag.cpp tests/runtime/model_bus_fixture.h src/runtime/model_bus.h $(ADAPTER) src/runtime/loader.cpp $(STORAGE_HEADERS) $(LDS_ASSOCIATION) $(LDS_SIDEBAND) $(LDS_HEADERS) $(LDS_REQUEST_SOURCE) src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/runtime/drive_record_log.h src/sensors/vim_channels.h | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/writer_lag.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_reset: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_reset.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
@@ -155,7 +158,7 @@ $(BUILD)/test_diag_episode: tests/runtime/test_diag_episode.cpp $(NAVIGATION) $(
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 $(BUILD)/test_worker_thread: tests/runtime/test_worker_thread.cpp src/runtime/worker_thread.h | $(BUILD)
 	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_worker_thread.cpp -pthread -o $@
-test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 $(BUILD)/test_diag $(BUILD)/test_diag_episode test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_drive_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 $(BUILD)/test_diag $(BUILD)/test_diag_episode test-request-publication test-journal-boundaries
 	$(BUILD)/test_worker_thread
 	$(BUILD)/test_g3
 	$(BUILD)/test_diag
@@ -173,6 +176,7 @@ test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association 
 	$(BUILD)/test_log_profile
 	$(BUILD)/test_yaw_rows
 	$(BUILD)/test_chan_rows
+	$(BUILD)/test_drive_rows
 	$(BUILD)/test_journal
 	$(BUILD)/test_journal --adapter-fault
 	$(BUILD)/test_journal --late-adapter-fault
@@ -211,7 +215,7 @@ $(BUILD)/test_pipeline: $(BUILD)/core_host.o src/runtime/core_bridge.cpp tests/i
 # adapter driven from vehicle-style journals with a fake OEM send. CI uses a
 # synthetic fixture only. MX5DR_TRIP_DIR optionally replays a private local
 # journal directory; its report stays under $(BUILD) and is never committed.
-$(BUILD)/replay_beta: tools/replay_beta.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp src/runtime/worker_tick.h $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h $(BUILD)/core_host.o
+$(BUILD)/replay_beta: tools/replay_beta.cpp src/runtime/drive_record_log.h $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp src/runtime/worker_tick.h $(ADAPTER) src/adapter/adapter.h src/adapter/session_hooks.h $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 test-replay-beta: $(BUILD)/replay_beta
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/replay -v
@@ -343,7 +347,7 @@ $(BUILD)/test_journal $(BUILD)/test_collector_journal: tests/runtime/storage_fix
 $(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_collector $(BUILD)/test_collector_journal $(BUILD)/mx5dr-collector-host: $(STORAGE_HEADERS)
 $(BUILD)/test_journal: src/runtime/request_log.h src/adapter/request_hooks.h
 $(BUILD)/test_journal: src/runtime/worker_tick.h src/runtime/journal_queue.h
-$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist $(BUILD)/test_worker_lds $(BUILD)/test_worker_lds_source $(BUILD)/test_runtime_lds_association: src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/sensors/vim_channels.h
+$(BUILD)/test_journal $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_runtime_assist $(BUILD)/test_worker_lds $(BUILD)/test_worker_lds_source $(BUILD)/test_runtime_lds_association: src/runtime/journal_ring.h src/runtime/log_profile.h src/runtime/yaw_study_log.h src/runtime/chan_digest_log.h src/runtime/drive_record_log.h src/sensors/vim_channels.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/cold_patch.h src/adapter/request_hooks.h src/runtime/request_observer.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/adapter.h src/runtime/request_trace.h
 $(BUILD)/test_adapter $(BUILD)/test_pipeline $(BUILD)/test_navigation $(BUILD)/test_live_pipeline $(BUILD)/test_journal $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_shadow_log: src/adapter/session_hooks.h src/runtime/session_trace.h

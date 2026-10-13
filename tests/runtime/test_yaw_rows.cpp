@@ -251,7 +251,8 @@ static void rate_limit_and_flush() {
 
 static void off_switch_and_class() {
     out.clear();
-    Feed f;f.log.set_yaw_rows(false);
+    // The drive data rows (yaw_learn) have their own switch.
+    Feed f;f.log.set_yaw_rows(false);f.log.set_record_rows(false);
     f.position(A::POSITION_FIX,10,30,1,1);f.run(3,30,2048);f.run(3,0,2048);
     f.position(A::POSITION_LOST,0,0,0,0);f.run(20,30,2048);
     for(size_t i=0;i<out.size();++i)assert(out[i].find("{\"kind\":\"yaw_")!=0 && out[i].find("\"y1\"")==std::string::npos);

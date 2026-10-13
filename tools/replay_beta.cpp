@@ -29,6 +29,7 @@
 #include "runtime/beta_controller.h"
 #include "runtime/beta_profile.h"
 #include "runtime/core_bridge.h"
+#include "runtime/drive_record_log.h"
 #include "runtime/g3_heading.h"
 #include "runtime/motion_gap.h"
 #include "runtime/worker_tick.h"
@@ -463,6 +464,11 @@ struct Options {
     bool yaw_rail;
     double trace_from, trace_to;
     std::string trace_out;
+    // --record-out FILE: the record-only drive data rows (fix1, exit_jump,
+    // yaw_learn, rec_drop; runtime/drive_record_log.h) of the recorded run,
+    // fed like the runtime's PersistentLog. Every other output is the same
+    // with or without it.
+    std::string record_out;
     bool stopped_rule_set() const {
         return !std::isnan(stopped_accuracy_m) || !std::isnan(stopped_honest_max_m) || !std::isnan(crawl_speed_mps);
     }
@@ -618,6 +624,12 @@ R::G3Tracker g3;
 Journal g3_journal;
 uint64_t g3_anchor_seen;
 struct G3Job { bool active, sync; uint32_t seq; uint64_t due; char line[R::G3_RECORD_MAX]; size_t n; } g3_job;
+// --record-out: the drive data rows in their own file (no gate: every row
+// is written).
+R::DriveRecordLog record;
+bool record_on;
+std::vector<std::string> record_lines;
+unsigned record_sink(void*, const char* row) { record_lines.push_back(row); return R::DriveRecordLog::GATE_OPEN; }
 bool g3_replacing(R::BetaState s) {
     return s == R::BETA_GPS_LOST || s == R::BETA_ENGAGED || s == R::BETA_NO_FIX || s == R::BETA_SPEED_ENGAGED;
 }
@@ -659,6 +671,9 @@ void worker_turn(uint64_t now) {
     g_now = now;
     for (size_t i = 0; i < pending.size(); ++i) {
         const A::Observation& o = pending[i];
+        // runtime.cpp: the PersistentLog sees the observation before the
+        // BETA controller (honest budget of its latest publication).
+        if (record_on) record.observation(o, beta->last_honest_accuracy(), now, record_sink, 0);
         if (o.kind == A::Observation::SEND) beta->send(o);
         if (o.kind == A::Observation::SEND && g3.active()) g3.send(o);
         if (o.kind == A::Observation::POSITION) {
@@ -695,6 +710,7 @@ void worker_turn(uint64_t now) {
             uint64_t missing = 0, span = 0;
             if (motion_gap.accept(r.event, &missing, &span) == R::MotionGapTracker::TOO_LARGE)
                 nav.exclude_reverse(N::LATCH_CLEAR_INPUT_GAP);
+            if (record_on) record.motion(r.event, N::research_model_profile());
             if (opt.reverse_fence && r.event.kind == N::REVERSE) {
                 const uint64_t since = fence.bus_since > fence.session_since ? fence.bus_since : fence.session_since;
                 const bool old_transport = r.event.source_mono_ms > 0 &&
@@ -716,6 +732,7 @@ void worker_turn(uint64_t now) {
         beta->tick(journal, now, nav, true, nav.status().last_received_ns, 1, fault);
         if (g3.active()) g3_turn(now);
         if (!opt.trace_out.empty()) heading_trace(now);
+        if (record_on) record.poll(now, record_sink, 0);
         double w;
         if (count_latch && wheel_at(now, &w) && w > 1.0) {
             ++latch_exposure.moving_ticks;
@@ -1218,7 +1235,7 @@ void usage() {
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "                   [--assume-forward on|off] [--seed-report] [--reverse-fence feed|runtime]\n"
         "                   [--diag SEED] [--diag-out FILE] [--acc-cap on|off]\n"
-        "                   [--yaw-rail on|off] [--heading-trace FROM:TO:FILE]\n"
+        "                   [--yaw-rail on|off] [--heading-trace FROM:TO:FILE] [--record-out FILE]\n"
         "Times are journal monotonic seconds. Without --t0/--sweep only recorded\n"
         "(real) outages are replayed.\n");
     exit(2);
@@ -1305,6 +1322,7 @@ int main(int argc, char** argv) {
             opt.acc_cap_off = v == "off";
         }
         else if (a == "--diag-out" && more) opt.diag_out = argv[++i];
+        else if (a == "--record-out" && more) opt.record_out = argv[++i];
         else if (a == "--check") opt.check = true;
         else if (a == "--real-only") opt.real_only = true;
         else usage();
@@ -1348,10 +1366,16 @@ int main(int argc, char** argv) {
     const uint64_t start = std::min(in.raws.front().t, in.calls.front().t);
     const uint64_t first_tick = (start / TICK_NS) * TICK_NS;
     if (!start_product(first_tick)) { fprintf(stderr, "replay_beta: product start failed\n"); return 2; }
+    if (!opt.record_out.empty()) {
+        record_on = true;
+        record.set_model(N::research_model_profile());
+        record.set_zero_in_use(R::beta_profile_tunnel().yaw_zero);
+    }
     const uint64_t last = std::max(in.raws.back().t, in.calls.back().t) + TICK_NS;
     Cursor cursor = {0, first_tick + TICK_NS};
     replay(cursor, last, true, 0);
     worker_turn(last);
+    if (record_on) record.flush(last, record_sink, 0);
     const size_t windows_unreached = windows.size() - window_results.size() - skipped_no_gps;
 
     // Baseline (recorded modes): elapsed is measured from the first mode-0
@@ -1631,6 +1655,12 @@ int main(int argc, char** argv) {
         if (!f) { perror(opt.g3_out.c_str()); return 2; }
         for (size_t i = 0; i < g3_journal.lines.size(); ++i) fprintf(f, "%s\n", g3_journal.lines[i].c_str());
         if (fclose(f)) { perror(opt.g3_out.c_str()); return 2; }
+    }
+    if (!opt.record_out.empty()) {
+        FILE* f = fopen(opt.record_out.c_str(), "w");
+        if (!f) { perror(opt.record_out.c_str()); return 2; }
+        for (size_t i = 0; i < record_lines.size(); ++i) fprintf(f, "%s\n", record_lines[i].c_str());
+        if (fclose(f)) { perror(opt.record_out.c_str()); return 2; }
     }
     if (opt.check && !violations.empty()) {
         fprintf(stderr, "replay_beta --check failed: %zu violation(s)\n", violations.size());

@@ -11,6 +11,7 @@ not vehicle, phone or DHU evidence.
 import collections
 import importlib.util
 import json
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -24,6 +25,11 @@ audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
 
 EVIDENCE_KINDS = ('beta_state', 'beta_anchor', 'beta_hold', 'beta_session_storage', 'beta_reverse_latch')
+# Record-only drive data rows (validation/RELEASE_V100_BETA14_CANDIDATE_2026-10-13.md).
+DRIVE_KINDS = ('fix1', 'exit_jump', 'yaw_learn', 'rec_drop')
+DRIVE_BUDGET_B_S = 600000 / 3600.0
+# The yaw and chan row classes below measure the profile before the drive rows.
+NO_DRIVE_ROWS = ('--record-rows', 'off')
 
 
 def run(profile, directory, seconds=3600, every=600, extra=()):
@@ -77,11 +83,17 @@ class PersistentProfile(unittest.TestCase):
     def test_rate_budget(self):
         # The full profile reproduces the measured vehicle rate (27.7-35.8 KB/s);
         # the quiet one stays under about 2 KB/s with one GPS outage per 10 min.
+        # The record-only drive data rows (2026-10-13, DriveRows below) have
+        # their own budget on top: at most 600 KB per hour.
         self.assertGreater(self.full['bytes_per_s'], 20000)
-        self.assertLess(self.quiet['bytes_per_s'], 2048)
+        drive = sum(self.quiet['kinds'].get(k, [0, 0])[1] for k in DRIVE_KINDS) / float(self.quiet['seconds'])
+        self.assertGreater(drive, 0)
+        self.assertLess(drive, DRIVE_BUDGET_B_S)
+        self.assertLess(self.quiet['bytes_per_s'] - drive, 2048)
         # At least 3 % margin below the budget with the yaw data rows
         # (validation/YAW_DATA_COLLECTION_2026-10-09.md; 1942.0 B/s before).
-        self.assertLess(self.quiet['bytes_per_s'], 2048 * 0.97)
+        self.assertLess(self.quiet['bytes_per_s'] - drive, 2048 * 0.97)
+        self.assertLess(self.quiet['bytes_per_s'], 2048 + DRIVE_BUDGET_B_S)
         self.assertEqual(self.full['outages'], self.quiet['outages'])
         self.assertGreaterEqual(self.quiet['outages'], 1)
 
@@ -179,7 +191,7 @@ class YawDataRows(unittest.TestCase):
             for state in ('on', 'off'):
                 directory = os.path.join(cls.tmp.name, '%s-%s' % (name, state))
                 cls.runs[(name, state)] = run('persistent', directory, seconds,
-                                              extra=extra + ('--yaw-rows', state)) + (directory,)
+                                              extra=extra + ('--yaw-rows', state) + NO_DRIVE_ROWS) + (directory,)
 
     @classmethod
     def tearDownClass(cls):
@@ -281,7 +293,7 @@ class ChanRows(unittest.TestCase):
             for state in ('on', 'off'):
                 directory = os.path.join(cls.tmp.name, '%s-%s' % (name, state))
                 cls.runs[(name, state)] = run('persistent', directory, seconds,
-                                              extra=extra + ('--chan', state)) + (directory,)
+                                              extra=extra + ('--chan', state) + NO_DRIVE_ROWS) + (directory,)
 
     @classmethod
     def tearDownClass(cls):
@@ -386,3 +398,108 @@ class ChanRows(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+# Drive data rows (2026-10-13, src/runtime/drive_record_log.h,
+# validation/RELEASE_V100_BETA14_CANDIDATE_2026-10-13.md): record only. With
+# them off the profile is the previous one; with them on, every other row is
+# byte for byte the same and the added rate stays below 600 KB per hour.
+def without_drive(rows):
+    out = []
+    for r in rows:
+        if r['kind'] in DRIVE_KINDS:
+            continue
+        if r['kind'] == 'boot':
+            r = {k: v for k, v in r.items() if k != 'pid'}
+        out.append(json.dumps(r, sort_keys=True))
+    return out
+
+
+def raw_without_drive(directory):
+    lines = []
+    for index in (2, 1, 0):
+        path = Path(directory) / 'logs' / ('trace.%d.jsonl' % index)
+        if path.exists():
+            for line in path.read_bytes().splitlines():
+                if any(line.startswith(b'{"kind":"%s"' % k.encode()) for k in DRIVE_KINDS):
+                    continue
+                if line.startswith(b'{"kind":"boot"'):
+                    line = re.sub(rb'"pid":[0-9]+', b'"pid":0', line)
+                lines.append(line)
+    return lines
+
+
+@unittest.skipUnless(TOOL.exists(), 'build/log_rate not built')
+class DriveRows(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='mx5dr-drive-rows-')
+        cls.runs = {}
+        scenarios = dict(drive=(3600, VEHICLE_YAW), stopgo=(3600, VEHICLE_YAW + ('--drive', 'stopgo')))
+        for name, (seconds, extra) in scenarios.items():
+            for state in ('on', 'off'):
+                directory = os.path.join(cls.tmp.name, '%s-%s' % (name, state))
+                cls.runs[(name, state)] = run('persistent', directory, seconds,
+                                              extra=extra + ('--record-rows', state)) + (directory,)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_logic_and_other_rows_unchanged(self):
+        for name in ('drive', 'stopgo'):
+            (on, on_rows, on_dir), (off, off_rows, off_dir) = self.runs[(name, 'on')], self.runs[(name, 'off')]
+            self.assertEqual(evidence(on_rows), evidence(off_rows), name)
+            self.assertEqual(without_drive(on_rows), without_drive(off_rows), name)
+            # Byte for byte: the journal lines without the drive kinds (the
+            # boot row's pid is the harness process id).
+            self.assertEqual(raw_without_drive(on_dir), raw_without_drive(off_dir), name)
+            self.assertFalse([r for r in off_rows if r['kind'] in DRIVE_KINDS])
+            self.assertEqual(on['beta_state'], off['beta_state'])
+            self.assertEqual(on['outages'], off['outages'])
+
+    def test_rate_within_budget(self):
+        rates = {}
+        for name in ('drive', 'stopgo'):
+            on, off = self.runs[(name, 'on')][0], self.runs[(name, 'off')][0]
+            added = on['bytes_per_s'] - off['bytes_per_s']
+            rates[name] = (off['bytes_per_s'], on['bytes_per_s'], round(added, 1), round(added * 3.6, 1))
+            self.assertGreater(added, 20, name)                  # the rows are really written
+            self.assertLess(added, DRIVE_BUDGET_B_S, name)       # 600 KB per hour
+        print('drive rows log rate (before, after, added B/s, added KB/h): %s' % rates)
+
+    def test_rows(self):
+        on = self.runs[('drive', 'on')][1]
+        kinds = collections.Counter(r['kind'] for r in on)
+        # At most one fix1 per second, only while moving (> 5 km/h).
+        self.assertGreater(kinds['fix1'], 2500)
+        self.assertLessEqual(kinds['fix1'], 3600)
+        fix1 = [r['d'] for r in on if r['kind'] == 'fix1']
+        self.assertTrue(all(audit.drive_row_valid(r) for r in on if r['kind'] in DRIVE_KINDS))
+        self.assertTrue(all(d[4] > 5 / 3.6 * 1000 or d[11] > 50 for d in fix1))
+        self.assertTrue(all(len(json.dumps(dict(kind='fix1', d=d), separators=(',', ':'))) < 120 for d in fix1))
+        # One exit_jump per GPS outage of the synthetic drive, each after a replacement.
+        outages = self.runs[('drive', 'on')][0]['outages']
+        exits = [r for r in on if r['kind'] == 'exit_jump']
+        self.assertEqual(len(exits), outages)
+        # The real runtime path: each synthetic outage is replaced (BETA) and ends with a fix.
+        self.assertTrue(all(r['reps'] > 10 and r['sent_choice'] == 3 and 900 <= r['dt_ms'] <= 1100 and
+                            r['jump_m'] < 50 for r in exits))
+        # yaw_learn: one row per GPS loss with the synthetic zero (2048), the rest every 60 s.
+        lost = [r for r in on if r['kind'] == 'yaw_learn' and r['ev'] == 'lost']
+        self.assertEqual(len(lost), outages)
+        self.assertTrue(all(r['z'] is not None and abs(r['z']) <= 20 and r['used'] == 0 for r in lost))
+        self.assertEqual(kinds['rec_drop'], 0)                   # no writer backlog in this harness
+        # stop-and-go at <= 12 km/h: fix1 only while moving, no learned zero (< 10 km/h most of the time).
+        stopgo = collections.Counter(r['kind'] for r in self.runs[('stopgo', 'on')][1])
+        self.assertLess(stopgo['fix1'], 3600)
+
+    def test_analyzer_reads_the_rows(self):
+        report, codes = analyze(os.path.join(self.runs[('drive', 'on')][2]))
+        self.assertFalse([c for (_, c) in codes if c in ('malformed_drive_row', 'unknown_record_kind')])
+        drive = report['drive_data']
+        outages = self.runs[('drive', 'on')][0]['outages']
+        self.assertEqual((drive['summary']['exits'], drive['summary']['lost_rows']), (outages, outages))
+        self.assertEqual(drive['summary']['fix1_rows'],
+                         collections.Counter(r['kind'] for r in self.runs[('drive', 'on')][1])['fix1'])
+        self.assertTrue(all(abs(e['zero'] - 2048) < 0.2 for e in drive['learn'] if e['zero'] is not None))

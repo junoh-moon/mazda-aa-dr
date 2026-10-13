@@ -63,12 +63,20 @@
 //    brake pressure, Qf bits, speed and rpm from channels(). Logging only,
 //    diagnostic rows (ROW_RAW), written only once side-channel input
 //    arrived. set_chan_rows(false) turns them off.
+//  * drive data rows (v1.0.0-beta.14 candidate, drive_record_log.h and
+//    validation/RELEASE_V100_BETA14_CANDIDATE_2026-10-13.md): fix1,
+//    exit_jump, yaw_learn and rec_drop. Record only, diagnostic rows
+//    (ROW_RAW), written after the rows of the same input. They pass a gate
+//    (set_record_gate, the runtime's writer check): a refused row is
+//    dropped and counted in rec_drop with the reason, never queued.
+//    set_record_rows(false) turns them off.
 // Worker thread only. No allocation after init(), no I/O except through the
 // emit callback, bounded work per row. OEM threads never reach this code.
 #include "adapter/adapter.h"
 #include "navigation/pipeline.h"
 #include "runtime/yaw_study_log.h"
 #include "runtime/chan_digest_log.h"
+#include "runtime/drive_record_log.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -110,7 +118,20 @@ public:
     // ,"raw_window":true after the kind of a row written from the window.
     static const size_t WINDOW_TAG_BYTES=18;
 
-    PersistentLog():window_(0),cap_(0),scratch_(0),paced_(DRAIN_ROWS_PER_S),yaw_rows_(true),chan_rows_(true) { reset_all(); }
+    PersistentLog():window_(0),cap_(0),scratch_(0),paced_(DRAIN_ROWS_PER_S),yaw_rows_(true),chan_rows_(true),
+        rec_rows_(true),rec_gate_(0),rec_gate_context_(0),rec_honest_(-1),rec_zero_(2048.0) { reset_all(); }
+    // Drive data rows (default on).
+    void set_record_rows(bool on) { rec_rows_=on; }
+    // Asked before each drive data row: DriveRecordLog::GATE_OPEN writes
+    // it, any other reason drops (and counts) it. Without a gate every row
+    // is written (unit tests, offline tools).
+    typedef unsigned (*RecordGate)(void* context);
+    void set_record_gate(RecordGate gate,void* context) { rec_gate_=gate;rec_gate_context_=context; }
+    // The yaw zero of the BETA dead reckoning (yaw_learn "used").
+    void set_record_zero(double counts) { rec_zero_=counts;rec_.set_zero_in_use(counts); }
+    // The BETA controller's honest budget of its latest publication (-1:
+    // none), before each observation (exit_jump "honest").
+    void set_beta_honest(double m) { rec_honest_=m; }
     // Yaw-zero data rows and digest fields (default on).
     void set_yaw_rows(bool on) { yaw_rows_=on; }
     // VIM side-channel rows (default on; written only after channels() input).
@@ -141,7 +162,7 @@ public:
     void init(unsigned char* storage,const navigation::ModelProfile& model) {
         window_=storage;cap_=storage?WINDOW_BYTES:0;
         scratch_=storage?reinterpret_cast<char*>(storage+WINDOW_BYTES):0;
-        model_=model;reset_all();
+        model_=model;reset_all();rec_.set_model(model);
     }
     bool window_available() const { return cap_!=0; }
 
@@ -201,14 +222,20 @@ public:
             trigger("capture_end",now,emit,context,true);
             if(yaw_rows_) { YawThunk t={emit,context};yaw_.flush(now,yaw_sink,&t); }
             if(chan_rows_) { YawThunk t={emit,context};chan_.flush(now,yaw_sink,&t); }
+            if(rec_rows_) { RecThunk t={this,emit,context};rec_.flush(now,rec_sink,&t); }
             digest(now,"final",emit,context);
             keep(s,emit,context);
             return;
         default: keep(s,emit,context);return;   // boot, beta_anchor, lifecycle, unknown kinds
         }
     }
-    // POSITION/SEND observations (the formatted row and its values).
+    // POSITION/SEND observations (the formatted row and its values). The
+    // drive data rows of this observation follow its own rows.
     void observation(const char* s,const adapter::Observation& o,uint64_t now,Emit emit,void* context) {
+        observation_rows(s,o,now,emit,context);
+        if(rec_rows_) { RecThunk t={this,emit,context};rec_.observation(o,rec_honest_,now,rec_sink,&t); }
+    }
+    void observation_rows(const char* s,const adapter::Observation& o,uint64_t now,Emit emit,void* context) {
         digest_due(now,emit,context);
         if(o.kind==adapter::Observation::SEND) {
             ++sends_;if(o.result)++send_nonzero_;
@@ -251,6 +278,7 @@ public:
         if(total_events_!=UINT64_MAX)++total_events_;
         if(yaw_rows_)yaw_.motion(e,model_);
         if(chan_rows_)chan_.wheels(e,model_);
+        if(rec_rows_)rec_.motion(e,model_);
         if(e.kind>=navigation::WHEELS && e.kind<=navigation::REVERSE) {
             ++kind_events_[e.kind-1];last_received_[e.kind-1]=e.received_ns;
         }
@@ -429,11 +457,21 @@ private:
         if(now>=since_ && now-since_>=DIGEST_NS)digest(now,"periodic",emit,context);
         if(yaw_rows_) { YawThunk t={emit,context};yaw_.poll(now,yaw_sink,&t); }
         if(chan_rows_) { YawThunk t={emit,context};chan_.poll(now,yaw_sink,&t); }
+        if(rec_rows_) { RecThunk t={this,emit,context};rec_.poll(now,rec_sink,&t); }
     }
     struct YawThunk { Emit emit;void* context; };
     // Yaw and chan_digest rows are diagnostic class whatever their kind (ROW_RAW).
     static void yaw_sink(void* thunk,const char* row) {
         const YawThunk* t=static_cast<const YawThunk*>(thunk);t->emit(t->context,row,ROW_RAW);
+    }
+    // Drive data rows: diagnostic class, only through the gate.
+    struct RecThunk { PersistentLog* log;Emit emit;void* context; };
+    static unsigned rec_sink(void* thunk,const char* row) {
+        const RecThunk* t=static_cast<const RecThunk*>(thunk);
+        const unsigned gate=t->log->rec_gate_?t->log->rec_gate_(t->log->rec_gate_context_):
+            unsigned(DriveRecordLog::GATE_OPEN);
+        if(gate!=DriveRecordLog::GATE_OPEN)return gate;
+        t->emit(t->context,row,ROW_RAW);return DriveRecordLog::GATE_OPEN;
     }
     static void number(char out[32],const Stat& s,int which) {
         if(!s.n) { strcpy(out,"null");return; }
@@ -543,6 +581,7 @@ private:
         for(unsigned i=0;i<3;++i)last_received_[i]=0;
         reverse_value_=-1;trigger_[0]=0;
         yaw_.reset();chan_.reset();
+        rec_.reset();rec_.set_zero_in_use(rec_zero_);
         reset_period(0);since_=0;
     }
     // ---- RAW window: rows [u32 length|evidence bit][u64 mono_ns][bytes], oldest first ----
@@ -601,6 +640,8 @@ private:
     YawStudyLog yaw_;
     bool chan_rows_;
     ChanDigestLog chan_;
+    bool rec_rows_;RecordGate rec_gate_;void* rec_gate_context_;double rec_honest_,rec_zero_;
+    DriveRecordLog rec_;
     PersistentLog(const PersistentLog&);
     PersistentLog& operator=(const PersistentLog&);
 };
