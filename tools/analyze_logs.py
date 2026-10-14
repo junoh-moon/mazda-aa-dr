@@ -4391,6 +4391,28 @@ def print_chan_data(chan, limit=40):
                                                      f(s["yaw_excess_counts"], "%.2f"), f(s["yaw_excess_deg_s"], "%.3f")))
 
 
+def map_aid_section(paths, db_path):
+    """Optional record-only map-aided tunnel counterfactual
+    (validation/MAP_AID_EVALUATOR_2026-10-14.md). Never changes the exit
+    status; an unusable database is reported as unavailable."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import map_aid_eval
+        report, _, _ = map_aid_eval.evaluate([str(p) for p in paths], db_path)
+    except Exception as exc:  # optional section: never abort the audit
+        return dict(status="unavailable", reason="%s: %s" % (type(exc).__name__, exc))
+    report["status"] = "evaluated"
+    return report
+
+
+def print_map_aid(section):
+    if section.get("status") != "evaluated":
+        print("Map-aided tunnel counterfactual: unavailable (%s)" % section.get("reason"))
+        return
+    import map_aid_eval
+    map_aid_eval.print_report(section)
+
+
 def analyze(paths):
     auditor = Auditor()
     for path in paths:
@@ -4402,8 +4424,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="+", help="JSONL files, directories, or exported tar files; separate sessions in chronological order")
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable JSON report")
+    parser.add_argument("--map-db", metavar="PATH",
+                        help="optional: OSM tunnel database (tools/osm_tunnels.py); adds the record-only map-aided "
+                             "tunnel counterfactual section (tools/map_aid_eval.py, no coordinates)")
     args = parser.parse_args(argv)
     report = analyze(args.inputs)
+    map_aid = map_aid_section(args.inputs, args.map_db) if args.map_db else None
+    if map_aid is not None:
+        report["map_aid"] = map_aid
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False))
     else:
@@ -4483,6 +4511,8 @@ def main(argv=None):
         print_diag_data(report.get("diagnostic"))
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))
+        if map_aid is not None:
+            print_map_aid(map_aid)
         print("Phone acceptance and DR accuracy: not established. Polling does not prove source provenance.")
     return {"local_checks_pass": 0, "violation": 1, "inconclusive": 2}[report["status"]]
 

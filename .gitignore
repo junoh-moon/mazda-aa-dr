@@ -19,3 +19,6 @@ __pycache__/
 *.jsonl
 .env
 .env.*
+# Private data (vehicle logs) and the ODbL-derived OSM tunnel database
+# (tools/osm_tunnels.py writes private-data/osm/; regenerate, never commit).
+/private-data/
