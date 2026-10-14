@@ -151,7 +151,7 @@ class TrialMenuTests(unittest.TestCase):
         marker = self.base / 'g3-off'
         result = self.menu('8\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('8 Heading log (G3) on/off (log only)', result.stdout)
+        self.assertIn('8 Heading (G3) log and start bearing on/off', result.stdout)
         self.assertIn('Heading log: package not installed;', result.stdout)
         self.assertFalse(self.base.exists())
         self.fixture.run_script('install.sh')

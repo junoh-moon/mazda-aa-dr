@@ -111,6 +111,12 @@ static DrSnapshot candidate = DrSnapshot();
 // Diagnostic build (validation/TUNNEL_REPORT_CAP_2026-10-12.md). diag_on is
 // written by the worker before BETA is enabled.
 static std::atomic<unsigned> diag_on(0);
+// G3 bearing overlay (validation/G3_SEND_2026-10-13.md). Written by the worker
+// only; 0 keeps every FIX LOCATION on the beta.14 path.
+static std::atomic<unsigned> bearing_on(0);
+// encode_bearing_overlay range in bearing_e6 units: (0.01, 359.99] deg.
+static const int32_t BEARING_OVERLAY_MIN_E6 = 10000;
+static const int32_t BEARING_OVERLAY_MAX_E6 = 359990000;
 
 uint32_t get32(const uint8_t* p) {
     return uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
@@ -246,7 +252,7 @@ Reason choose_dr(Context& ctx, uint64_t time,
         s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
     // A BETA (MODEL-domain) snapshot never satisfies the qualified gate.
     if (!s.ready || !s.profile_verified || !s.input_quality_verified || !s.limits_ok || s.beta ||
-        s.speed_only)
+        s.speed_only || s.bearing_only)
         return NOT_READY;
     if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
         time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
@@ -285,7 +291,7 @@ Reason choose_beta(Context& ctx, uint64_t time,
     if (ctx.generation != live_generation || s.prediction_generation != live_generation ||
         s.source_epoch != ctx.provenance.source_epoch ||
         s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
-    if (!s.ready || !s.beta || s.speed_only) return NOT_READY;
+    if (!s.ready || !s.beta || s.speed_only || s.bearing_only) return NOT_READY;
     if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
         time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
     // Never clamp here: above the limit the original passes. Any reduced
@@ -323,13 +329,46 @@ Reason choose_beta_speed(Context& ctx, uint64_t time,
     if (ctx.generation != live_generation || s.prediction_generation != live_generation ||
         s.source_epoch != ctx.provenance.source_epoch ||
         s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
-    if (!s.ready || !s.beta || !s.speed_only) return NOT_READY;
+    if (!s.ready || !s.beta || !s.speed_only || s.bearing_only) return NOT_READY;
     if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
         time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
     // Nothing to correct: the original shows no speed and the wheels stand.
     const bool original_speed = original[32] != 0 && int32_t(get32(original + 36)) > 0;
     if (!original_speed && (s.stopped || !(s.speed_mps > 0))) return OVERLAY_NOT_NEEDED;
     if (!encode_speed_overlay(s, original, bytes)) return BAD_ENCODING;
+    if (prediction_generation.load(std::memory_order_acquire) != live_generation)
+        return EPOCH_MISMATCH;
+    return PASS;
+}
+// Mode::BETA, class FIX, only while the worker armed the G3 bearing overlay
+// (validation/G3_SEND_2026-10-13.md). The original position, accuracy, speed
+// and timestamps stay; only hasBearing/bearing take the carried heading, and
+// only when this LOCATION carries this POSITION's coordinates.
+Reason choose_beta_bearing(Context& ctx, uint64_t time,
+                           const runtime::session_trace::Snapshot& session,
+                           const uint8_t original[48], uint8_t bytes[48]) {
+    if (ctx.position_class != POSITION_FIX) return NOT_UNKNOWN;
+    if (beta_hold.load(std::memory_order_acquire)) return HELD;
+    if (!options.allow_beta || !options.clock ||
+        ctx.provenance.domain != Provenance::Domain::BETA) return BAD_PROVENANCE;
+    if (session.result != runtime::session_trace::OBSERVED &&
+        !(session.result == runtime::session_trace::UNOBSERVED && options.sessions_declined))
+        return EPOCH_MISMATCH;
+    if (!ctx.coordinates_e7) return OVERLAY_MISMATCH;
+    const int64_t dlat = int64_t(int32_t(get32(original + 8))) - ctx.latitude_e7;
+    const int64_t dlon = int64_t(int32_t(get32(original + 12))) - ctx.longitude_e7;
+    if (dlat < -1 || dlat > 1 || dlon < -1 || dlon > 1) return OVERLAY_MISMATCH;
+    if (pthread_mutex_trylock(&snapshot_mutex) != 0) return LOCK_BUSY;
+    const DrSnapshot s = candidate;
+    pthread_mutex_unlock(&snapshot_mutex);
+    const uint32_t live_generation = prediction_generation.load(std::memory_order_acquire);
+    if (ctx.generation != live_generation || s.prediction_generation != live_generation ||
+        s.source_epoch != ctx.provenance.source_epoch ||
+        s.session_epoch != ctx.provenance.session_epoch) return EPOCH_MISMATCH;
+    if (!s.ready || !s.beta || !s.bearing_only || s.speed_only) return NOT_READY;
+    if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
+        time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
+    if (!encode_bearing_overlay(s, original, bytes)) return BAD_ENCODING;
     if (prediction_generation.load(std::memory_order_acquire) != live_generation)
         return EPOCH_MISMATCH;
     return PASS;
@@ -388,6 +427,8 @@ bool set_mode(Mode requested) {
 Mode mode() { return static_cast<Mode>(run_mode.load(std::memory_order_acquire)); }
 void set_diag(bool on) { diag_on.store(on ? 1u : 0u, std::memory_order_release); }
 bool diag() { return diag_on.load(std::memory_order_acquire) != 0; }
+void set_bearing_overlay(bool on) { bearing_on.store(on ? 1u : 0u, std::memory_order_release); }
+bool bearing_overlay() { return bearing_on.load(std::memory_order_acquire) != 0; }
 const char* diag_arm_name(DiagArm a) {
     // A20 and S5: beta.12 values, retired (never assigned).
     static const char* const names[]={"NONE","CONTROL","A20","S5","CAP"};
@@ -473,6 +514,20 @@ bool encode_speed_overlay(const DrSnapshot& in, const uint8_t original[48], uint
     if (!scaled(in.stopped ? 0.0 : in.speed_mps, 1000, &speed_e3)) return false;
     std::memcpy(out, original, 48);
     out[32] = 1; put32(out + 36, uint32_t(speed_e3));
+    return true;
+}
+bool encode_bearing_overlay(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]) {
+    if (!out || !original || !std::isfinite(in.travel_bearing_deg)) return false;
+    double b = std::fmod(in.travel_bearing_deg, 360.0);
+    if (b < 0) b += 360.0;
+    int32_t bearing_e6;
+    if (!scaled(b, 1e6, &bearing_e6)) return false;
+    // North within 0.01 deg on either side (including exactly 0 and a value
+    // that rounds to 360) is sent as 359.99.
+    if (bearing_e6 <= BEARING_OVERLAY_MIN_E6 || bearing_e6 > BEARING_OVERLAY_MAX_E6)
+        bearing_e6 = BEARING_OVERLAY_MAX_E6;
+    std::memcpy(out, original, 48);
+    out[40] = 1; put32(out + 44, uint32_t(bearing_e6));
     return true;
 }
 const char* position_class_name(PositionClass c) {
@@ -678,6 +733,16 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
                     if (event.reason == PASS) event.choice = BETA_SPEED_OVERLAY;
                 }
             }
+            else if (current == BETA && ctx->position_class == POSITION_FIX &&
+                     bearing_on.load(std::memory_order_acquire)) {
+                if (fault.load(std::memory_order_acquire)) event.reason = DISABLED;
+                else {
+                    event.mono_ns = now();
+                    event.reason = choose_beta_bearing(*ctx, event.mono_ns, event.send_session,
+                                                       event.original, replacement);
+                    if (event.reason == PASS) event.choice = BETA_BEARING_OVERLAY;
+                }
+            }
             else if (ctx->original_mode != 0) event.reason = NOT_UNKNOWN;
             else if (fault.load(std::memory_order_acquire) || current < SCRUB_STALE)
                 event.reason = DISABLED;
@@ -720,7 +785,8 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     if (current != OFF && !reentrant) emit(event);
     // BETA hold (design S4): a failed replaced send withdraws BETA until the
     // OEM path itself is seen succeeding again with its own payload.
-    if ((event.choice == BETA_REPLACEMENT || event.choice == BETA_SPEED_OVERLAY) && result != 0) {
+    if ((event.choice == BETA_REPLACEMENT || event.choice == BETA_SPEED_OVERLAY ||
+         event.choice == BETA_BEARING_OVERLAY) && result != 0) {
         // Revoke first: the failed candidate is unselectable even after a
         // later ORIGINAL 0 clears the hold (BETA_DECISIONS 3.6).
         invalidate();

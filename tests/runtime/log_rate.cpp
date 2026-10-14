@@ -78,6 +78,12 @@ double drive_kmh(double t) { return stopgo?stopgo_kmh(fmod(t,8.0)):cycle_kmh(fmo
 // yaw_learn/rec_drop, runtime/drive_record_log.h): default on like the
 // product; off is the profile before them.
 bool record_rows=true;
+// --g3 on (2026-10-13, validation/G3_SEND_2026-10-13.md): the G3 tracker
+// starts from a stored record (CARRIED: body heading --g3-heading DEG, 4.5
+// deg, at the drive's start position) and runs on every worker turn (no
+// store thread: no store write). --g3-send on also runs the bearing send
+// window. Default off: the journal is the one without G3, byte for byte.
+bool g3_on=false,g3_send_on=false;double g3_heading_deg=90.0;
 // This harness journal is synchronous (no writer thread), where the product
 // gate refuses drive rows (GATE_NO_WRITER). Here they are written as a
 // current writer thread would accept them; every other gate reason is the
@@ -209,6 +215,9 @@ int main(int argc,char** argv) {
         else if(k=="--record-rows" && (v=="on" || v=="off"))record_rows=v=="on";
         else if(k=="--yaw-count" && atoi(v.c_str())>=1 && atoi(v.c_str())<=15)yaw_count=unsigned(atoi(v.c_str()));
         else if(k=="--yaw-noise")yaw_noise=atoi(v.c_str())!=0;
+        else if(k=="--g3" && (v=="on" || v=="off"))g3_on=v=="on";
+        else if(k=="--g3-send" && (v=="on" || v=="off"))g3_send_on=v=="on";
+        else if(k=="--g3-heading")g3_heading_deg=atof(v.c_str());
         else { fprintf(stderr,"unknown option %s\n",k.c_str());return 64; }
     }
     if(out.empty() || (profile!="full" && profile!="persistent") || !motion_ms || motion_ms%20 ||
@@ -216,7 +225,7 @@ int main(int argc,char** argv) {
         fprintf(stderr,"usage: log_rate --profile full|persistent --out DIR [--seconds N] "
                        "[--event-every S] [--nofix S] [--outage S] [--motion-ms 20k] [--turn-ms 10k] [--drive normal|stopgo] "
                        "[--yaw-rows on|off] [--yaw-count 1-15] [--yaw-noise 0|1] [--chan on|off] "
-                       "[--record-rows on|off]\n");return 64;
+                       "[--record-rows on|off] [--g3 on|off] [--g3-send on|off] [--g3-heading DEG]\n");return 64;
     }
     const std::string logs=out+"/logs";
     if(mkdir(out.c_str(),0700) && errno!=EEXIST)return 73;
@@ -272,6 +281,19 @@ int main(int argc,char** argv) {
     mx5::runtime::BetaController beta(beta_shared);
     mx5::runtime::ModelSession model_session;mx5::runtime::ModelBus model_bus;
     if(!beta.enable(j,clock_ns(0),0) || A::mode()!=A::BETA)return 70;
+    // --g3 on: runtime.cpp's tracker/send wiring (worker start, then every turn).
+    const uint64_t g3_rt=1760000000ULL;
+    mx5::runtime::G3Tracker g3;mx5::runtime::G3Send g3_send;
+    if(g3_on) {
+        mx5::runtime::G3Record r=mx5::runtime::g3_record();
+        r.seq=3;strcpy(r.boot_id,"aaaaaaaa-1111-2222-3333-444444444444");r.state='S';
+        r.flags=mx5::runtime::G3_FLAG_HEADING|mx5::runtime::G3_FLAG_POSITION;
+        r.heading_cdeg=int32_t(lround(g3_heading_deg*100))%36000;r.unc_cdeg=450;
+        r.lat_e7=350000000;r.lon_e7=1350000000;r.pos_err_dm=50;r.rt_s=g3_rt;strcpy(r.chain,"none");
+        g3.start(clock_ns(0),true,"marker",boot_id,"none",g3_rt+3600,mx5::runtime::G3_LOAD_OK,r);
+        g3.journal_start(j,clock_ns(0));
+    }
+    g3_send.start(g3_send_on && g3.active());
     mx5::runtime::MotionBatch batch;SimReceiver receiver;SimChanReceiver side;
     unsigned last_speed_raw=0,last_rpm_raw=0;bool side_started=false;double previous_kmh=0;
     Drive drive;Truth frozen=drive.truth();
@@ -345,12 +367,16 @@ int main(int argc,char** argv) {
             if(j.filter)j.filter->set_beta_honest(beta.last_honest_accuracy());
             j.observation_line(line,o);
             if(o.kind==A::Observation::SEND)beta.send(o);
+            if(o.kind==A::Observation::SEND && g3.active())g3.send(o);
+            if(o.kind==A::Observation::SEND && g3_send.active())g3_send.send(j,o,now);
             if(o.kind==A::Observation::POSITION) {
                 const uint64_t resets=navigation.status().resets;
                 navigation.enqueue_position(o);
                 journal_pipeline_reset(j,navigation,resets,"position",o.mono_ns,0,0,o.call_sequence);
                 holdout.enqueue_position(o);
                 beta.position(j,o,now);
+                if(g3.active())g3.position(j,o,navigation.g3_motion());
+                if(g3.active())g3_send.position(j,o,navigation.g3_motion().speed_mps,now);
             }
         }
         drain_motion(j,batch,receiver,navigation,holdout,true);
@@ -373,6 +399,17 @@ int main(int argc,char** argv) {
         }
         if(beta.cadence_fence(j,now))navigation.fence_beta();
         beta.tick(j,now,navigation,true,navigation.status().last_received_ns,1,0);
+        if(g3.active()) {
+            const mx5::runtime::G3Sample g3s=mx5::runtime::g3_sample(navigation,now,g3_rt+3600+(now-start)/1000000000ULL);
+            g3.tick(j,g3s,0,"no_store_thread");
+            mx5::runtime::G3SendView v;
+            v.now=now;v.journal_ok=!j.failed;v.journal_current=journal_current.load()!=0;
+            v.beta_live=beta.live();v.beta_armed=beta.state()==mx5::runtime::BETA_ARMED;
+            v.adapter_ok=!A::faulted() && A::mode()==A::BETA && !A::beta_held();
+            v.source_epoch=beta_shared.source_epoch.load();v.session_epoch=beta_shared.storage_epoch.load();
+            v.cadence_fences=beta.cadence_fences();
+            g3_send.tick(j,g3,g3s,v);
+        }
         j.pump(now);   // paced RAW window drain (runtime worker turn)
         if(now-last_health>=1000000000ULL) {
             last_health=now;j.tick(now);journal_health(j,now,true,true);j.flush();

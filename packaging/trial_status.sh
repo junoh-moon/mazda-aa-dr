@@ -270,7 +270,7 @@ echo "vim_side_channel_marker=$vim_side_channel_marker (read at CMU start; prese
 # Owner switch of the record-only heading log G3 (menu 8); read once at start.
 g3_marker=absent
 if [ -e "$BASE/g3-off" ] || [ -L "$BASE/g3-off" ]; then g3_marker=present; fi
-echo "g3_marker=$g3_marker (read at CMU start; present = heading log off)"
+echo "g3_marker=$g3_marker (read at CMU start; present = heading log and start bearing off)"
 # Owner switch of the diagnostic tunnel test (menu 9); read once at start.
 # Only a regular file holding exactly "on" turns it on. The arm of each
 # tunnel is in the exported journal only, never in this status (blind test).

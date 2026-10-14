@@ -17,8 +17,11 @@ enum Mode { OFF = 0, OBSERVE = 1, SCRUB_STALE = 2, ASSIST = 3, BETA = 4 };
 // (validation/DIAG_BUILD_A20_S5_2026-10-12.md). Retired by the diagnostic
 // version 2 (validation/TUNNEL_REPORT_CAP_2026-10-12.md): never produced; the
 // value stays reserved so old journals keep their meaning.
+// BETA_BEARING_OVERLAY (validation/G3_SEND_2026-10-13.md, FIX only, while the
+// worker armed it): the original 48 bytes with only hasBearing (40) and
+// bearing_e6 (44..47) replaced by the carried G3 heading.
 enum Choice { ORIGINAL = 0, SCRUBBED = 1, DR_REPLACEMENT = 2, BETA_REPLACEMENT = 3,
-              BETA_SPEED_OVERLAY = 4, DIAG_SATELLITE_RETIRED = 5 };
+              BETA_SPEED_OVERLAY = 4, DIAG_SATELLITE_RETIRED = 5, BETA_BEARING_OVERLAY = 6 };
 // Diagnostic arms (one per GPS-lost episode, runtime/diag_arms.h). NONE: the
 // diagnostic marker is absent or no episode is open. Values 2 (A20) and 3
 // (S5) were the beta.12 arms; retired, never assigned (journal names only).
@@ -101,6 +104,10 @@ struct DrSnapshot {
     // candidate belongs to (0 when the diagnostic marker is absent). Read by
     // send_vehicle_data only while set_diag(true) is in effect.
     uint8_t diag_arm;
+    // G3 bearing overlay candidate (FIX class only): only travel_bearing_deg
+    // and the identity/lease fields are meaningful. Every other chooser
+    // rejects it; the bearing overlay accepts nothing else.
+    bool bearing_only;
 };
 
 struct Observation {
@@ -207,6 +214,12 @@ bool set_mode(Mode mode);
 // non-LOCATION send forwards the original wrapper and payload.
 void set_diag(bool on);
 bool diag();
+// G3 first-connection bearing overlay (validation/G3_SEND_2026-10-13.md).
+// Worker only. false (default, and after the overlay ended): a FIX LOCATION
+// takes exactly the beta.14 path (NOT_UNKNOWN, original). true: a FIX
+// LOCATION in Mode::BETA may receive a bearing_only candidate.
+void set_bearing_overlay(bool on);
+bool bearing_overlay();
 Mode mode();
 uint32_t invalidate(); // Bounded atomic revocation; no waits.
 // Retire one owned generation only if it is still current. A newer adapter
@@ -237,6 +250,13 @@ bool encode_beta_location(const DrSnapshot& in, const uint8_t original[48], uint
 // the original accuracy, stays byte-identical. Rejects non-finite, negative
 // or > 100 m/s speeds.
 bool encode_speed_overlay(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]);
+// G3 bearing overlay: copy the original 48 bytes, then set only hasBearing
+// (40) = 1 and bearing_e6 (44..47). Bytes 41..43 (padding) and everything
+// else stay byte-identical. The bearing is normalised to (0.01, 359.99]:
+// never exactly 0 (Naver: a bad course) and never a value that float32
+// rounding turns into 360 = 0 (validation/ANDROID_AUTO_BEARING_HEURISTICS_2026-10-13.md).
+// Rejects a non-finite bearing.
+bool encode_bearing_overlay(const DrSnapshot& in, const uint8_t original[48], uint8_t out[48]);
 
 enum InstallResult {
     INSTALL_OK = 0, ALREADY_INSTALLED, UNSUPPORTED_ARCH,

@@ -605,6 +605,16 @@ public:
     bool store_on() const { return store_on_; }
     uint64_t rows_dropped() const { return dropped_; }
     char disk_state() const { return disk_; }
+    // Read-only views for the G3 bearing send (g3_send.h). Valid after
+    // tick(): the propagated values are those of the latest MODEL tick.
+    bool have_carried() const { return have_carried_; }
+    double carried_deg() const { return carried_deg_; }
+    double carried_unc() const { return carried_unc_; }
+    double propagated_unc() const { return prop_unc_; }
+    double carried_travel(const G3Sample& s) const { return travel(s); }
+    uint64_t session_ns() const { return session_ns_; }
+    bool age_known() const { return age_known_; }
+    uint64_t age_s() const { return age_s_; }
 
     // Worker start. stored is read only when load == G3_LOAD_OK.
     void start(uint64_t now,bool enabled,const char* off_reason,const char* boot_id,const char* chain_now,

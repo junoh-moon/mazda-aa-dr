@@ -23,6 +23,7 @@
 #include "model_session.h"
 #include "beta_controller.h"
 #include "g3_heading.h"
+#include "g3_send.h"
 #include "diag_arms.h"
 #include "motion_gap.h"
 #include "model_bus.h"
@@ -1680,7 +1681,9 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   const uint32_t g3_worker_epoch=g3_epoch.fetch_add(1,std::memory_order_acq_rel)+1;
   // Capture stop and every worker exit stop the store thread: it never
   // renames after this point (it re-checks the flag before the rename).
-  struct G3StopOnExit { ~G3StopOnExit() { g3_mailbox.stop.store(1,std::memory_order_release); } } g3_stop_on_exit;
+  // The G3 bearing overlay gate never outlives this worker.
+  struct G3StopOnExit { ~G3StopOnExit() { g3_mailbox.stop.store(1,std::memory_order_release);
+                                          A::set_bearing_overlay(false); } } g3_stop_on_exit;
   (void)g3_stop_on_exit;
   if(beta_requested) {
     const bool g3_on=beta_core && mx5::runtime::g3_switch_on(root);
@@ -1696,6 +1699,10 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     g3.start(clock_ns(0),g3_on,!beta_core?"beta_core_unavailable":"marker",boot_id,chain,
              mx5::runtime::g3_realtime_s(),load,stored);
   }
+  // G3 first-connection bearing send (g3_send.h): only with the tracker
+  // (BETA, no g3-off marker); one window per worker, never re-armed.
+  mx5::runtime::G3Send g3_send;
+  g3_send.start(g3.active());
   char g3_fields[160]="";
   if(beta_requested) {
     g3.boot_fields(g3_fields,sizeof g3_fields);
@@ -1818,6 +1825,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       j.observation_line(line,o);
       if(o.kind==A::Observation::SEND)beta.send(o);
       if(o.kind==A::Observation::SEND && g3.active())g3.send(o);
+      if(o.kind==A::Observation::SEND && g3_send.active())g3_send.send(j,o,clock_ns(0));
       if(o.kind==A::Observation::POSITION && o.reason==A::CONTEXT_UNAVAILABLE) {
         // A pool miss keeps the raw input but cannot establish a usable
         // POSITION context. Revoke mutation and all later MODEL/source input.
@@ -1856,6 +1864,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         }
         beta.position(j,o,clock_ns(0));
         if(g3.active())g3.position(j,o,navigation.g3_motion());
+        if(g3.active())g3_send.position(j,o,navigation.g3_motion().speed_mps,clock_ns(0));
       }
     }
     if(!adapter_fault_reported && A::faulted()) {
@@ -1964,7 +1973,19 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       if(!g3_cancel && !g3_sample_now.wheels_fresh)g3_cancel="wheels_stale";
       if(!g3_cancel)g3_cancel=g3.discard_cancel(g3_sample_now);   // rule F taint end (v4)
       g3_pump(j,g3,g3_worker_epoch,g3_cancel);
+      mx5::runtime::G3SendView view;
+      view.now=g3_now;view.journal_ok=!j.failed;
+      view.journal_current=journal_current.load(std::memory_order_acquire)!=0;
+      view.beta_live=beta.live();view.beta_armed=beta.state()==mx5::runtime::BETA_ARMED;
+      view.adapter_ok=!A::faulted() && A::mode()==A::BETA && !A::beta_held();
+      view.source_epoch=beta_shared.source_epoch.load(std::memory_order_acquire);
+      view.session_epoch=beta_shared.storage_epoch.load(std::memory_order_acquire);
+      view.cadence_fences=beta.cadence_fences();
+      g3_send.tick(j,g3,g3_sample_now,view);
     }
+    // The MODEL tick above no longer runs: the bearing overlay ends at once.
+    if(g3_send.active() && (j.failed || !shadow || __sync_fetch_and_add(&audit_fault,0)))
+      g3_send.fail(j,clock_ns(0),j.failed?"journal_failed":!shadow?"model_disabled":"audit_fault");
     j.pump(clock_ns(0));
     if (now - last_flush >= 1000000000ULL) {
       last_flush = now;

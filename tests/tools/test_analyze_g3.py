@@ -111,7 +111,7 @@ class G3Rows(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             audit.print_g3_data(g3)
         text = out.getvalue()
-        self.assertIn("G3 heading carry-over (record-only; nothing sent): 3 boots", text)
+        self.assertIn("G3 heading carry-over (store, restore, first course): 3 boots", text)
         self.assertIn("boot bbbbbbbb: store loaded/chain_ok carried 197.3+-4.4", text)
         self.assertIn("err carried -36.7 prop 0.3 stock 126.0", text)
 
@@ -171,6 +171,117 @@ class G3Rows(unittest.TestCase):
         self.assertEqual(out.getvalue(), "")
 
 
+def location(bearing_e6, speed_e3=280):
+    payload = bytearray(range(0x50, 0x80))
+    payload[40] = 1
+    payload[36:40] = speed_e3.to_bytes(4, "little")
+    payload[44:48] = bearing_e6.to_bytes(4, "little", signed=True)
+    return bytes(payload)
+
+
+def send_row(mono, choice, original, outgoing, mode=1, cls=2, reason=None, call=1):
+    return dict(kind="send", call=call, generation=5, mono_ns=mono, mode=mode, type=1, length=48, choice=choice,
+                reason=(0 if choice else 7) if reason is None else reason, result=0, **{"class": cls},
+                original_hex=original.hex(), outgoing_hex=outgoing.hex())
+
+
+def window(start=2 * S, end=5 * S, reason="trusted", call=7, by="fix"):
+    rows = [dict(kind="g3_send", mono_ns=start, event="start", g3="CARRIED", t_s=0.0, h=20, carried=[20, 45],
+                 unc=45, tol=100, age_s=600, rev=0, m_b=0.0)]
+    if end is not None:
+        rows.append(dict(kind="g3_send", mono_ns=end, event="end", reason=reason, why="stock_course", by=by,
+                         call=call, t_s=3.0, sent=1, stock=0, h=20, unc=46, gated=4, course=[10, 180], d=10))
+    return rows
+
+
+class G3BearingSend(unittest.TestCase):
+    """G3 first-connection bearing send (validation/G3_SEND_2026-10-13.md):
+    choice-6 FIX sends change only hasBearing/bearing, inside the window."""
+
+    stock = location(0)
+    sent = location(2000000)
+
+    def bearing_codes(self, rows):
+        _, report = consume([boot(BOOT_A)] + rows)
+        return [c for c in codes(report) if c.startswith("g3_bearing") or c in ("malformed_g3_row",
+                "native_mode_mutation", "unknown_send_choice", "beta_nonpass_reason")], report
+
+    def test_valid_window(self):
+        found, report = self.bearing_codes(window() + [send_row(3 * S, 6, self.stock, self.sent),
+                                                       send_row(6 * S, 0, self.stock, self.stock, call=2)])
+        self.assertEqual(found, [])
+        send = report["g3"]["send"]
+        self.assertEqual((send["windows"], send["end_reasons"], send["overlaid_sends"]), (1, {"trusted": 1}, 1))
+        self.assertEqual(send["boots"][0]["start"]["heading_deg"], 2.0)
+        self.assertEqual(report["send_choices"]["BETA_BEARING_OVERLAY"], 1)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_g3_data(report["g3"])
+        self.assertIn("G3 bearing send: 1 windows, ends {'trusted': 1}, overlaid FIX sends 1", out.getvalue())
+        self.assertIn("start 2.0 deg +- 4.5 (tol 10.0); end trusted/stock_course at 3.0 s, sent 1, stock 0",
+                      out.getvalue())
+        # Real-order clock: the end row carries the worker time; the send of
+        # the deciding call is stamped by the adapter 1 us or 20 ms later and
+        # its row may follow the end row. Exactly one such send is allowed.
+        for late in (1000, 20 * 10**6):
+            found, _ = self.bearing_codes(window(end=5 * S, call=7) + [send_row(5 * S + late, 6, self.stock, self.sent,
+                                                                              call=7)])
+            self.assertEqual(found, [], late)
+        # A later call after a fix end, or a second post-end send: outside.
+        found, _ = self.bearing_codes(window(end=5 * S, call=7) + [send_row(5 * S + 1000, 6, self.stock, self.sent,
+                                                                          call=8)])
+        self.assertIn("g3_bearing_outside_window", found)
+        # A tick end: the call in progress (end call + 1) once, nothing more.
+        found, _ = self.bearing_codes(window(end=5 * S, call=7, by="tick") +
+                                      [send_row(5 * S + 1000, 6, self.stock, self.sent, call=8)])
+        self.assertEqual(found, [])
+        found, _ = self.bearing_codes(window(end=5 * S, call=7, by="tick") +
+                                      [send_row(5 * S + 1000, 6, self.stock, self.sent, call=8),
+                                       send_row(6 * S, 6, self.stock, self.sent, call=9)])
+        self.assertIn("g3_bearing_outside_window", found)
+
+    def test_violations(self):
+        cases = [
+            (window() + [send_row(6 * S, 6, self.stock, self.sent)], "g3_bearing_outside_window"),
+            ([send_row(3 * S, 6, self.stock, self.sent)], "g3_bearing_outside_window"),
+            (window(end=None) + [send_row(1 * S, 6, self.stock, self.sent)], "g3_bearing_outside_window"),
+            (window() + [send_row(3 * S, 6, self.stock, location(2000000, speed_e3=9))], "g3_bearing_payload_mismatch"),
+            (window() + [send_row(3 * S, 6, self.stock, bytes(self.sent[:40]) + b"\x00" + bytes(self.sent[41:]))],
+             "g3_bearing_payload_mismatch"),
+            (window() + [send_row(3 * S, 6, self.stock, location(10000))], "g3_bearing_out_of_range"),
+            (window() + [send_row(3 * S, 6, location(5), location(360000000))], "g3_bearing_out_of_range"),
+            (window() + [send_row(3 * S, 6, self.stock, self.sent, mode=0, cls=3)], "g3_bearing_wrong_class"),
+            (window() + [send_row(3 * S, 6, self.stock, self.sent, cls=1)], "g3_bearing_wrong_class"),
+            (window() + [send_row(3 * S, 6, self.stock, self.sent, reason=8)], "beta_nonpass_reason"),
+            # A bearing change under any other choice is a native-mode mutation.
+            (window() + [send_row(3 * S, 0, self.stock, self.sent)], "native_mode_mutation"),
+        ]
+        for rows, code in cases:
+            found, _ = self.bearing_codes(rows)
+            self.assertIn(code, found, (code, rows[-1]))
+
+    def test_rows_and_old_logs(self):
+        bad = [dict(kind="g3_send", mono_ns=1, event="exploded"),
+               dict(kind="g3_send", mono_ns=1, event="end", reason="tired", why="x", sent=0, stock=0),
+               dict(kind="g3_send", mono_ns=1, event="start", g3="CARRIED", h=1.5, carried=[1, 2]),
+               dict(kind="g3_send", mono_ns=1, event="none", g3="NOPE", reason="x"),
+               dict(kind="g3_send_conflict", mono_ns=1, h=1, unc=1, tol=1, course=[1], d=1, fixes=8)]
+        for row in bad:
+            found, _ = self.bearing_codes([row])
+            self.assertIn("malformed_g3_row", found, row)
+        ok = [dict(kind="g3_send", mono_ns=1, event="none", g3="UNKNOWN", reason="missing"),
+              dict(kind="g3_send_conflict", mono_ns=1, t_s=4.0, h=900, unc=45, tol=100, course=[0, 360], d=900,
+                   fixes=8)]
+        found, report = self.bearing_codes(ok)
+        self.assertEqual(found, [])
+        self.assertEqual(report["g3"]["send"]["boots"][0]["none"], dict(state="UNKNOWN", reason="missing"))
+        # Logs without the send (every build before it): no send section.
+        _, report = consume([boot(BOOT_A), dict(kind="g3_store", mono_ns=1, event="missing", reason="missing",
+                                                g3="UNKNOWN", age_s=None, age_src="none", boot="none",
+                                                chain="none", seq=0)])
+        self.assertNotIn("send", report["g3"])
+
+
 class G3TwoBootReplay(unittest.TestCase):
     """The real tracker, store codec and atomic file writer across two boots."""
 
@@ -214,7 +325,7 @@ class G3TwoBootReplay(unittest.TestCase):
             text = io.StringIO()
             with contextlib.redirect_stdout(text):
                 audit.main([str(trace)])
-            self.assertIn("G3 heading carry-over (record-only; nothing sent): 2 boots", text.getvalue())
+            self.assertIn("G3 heading carry-over (store, restore, first course): 2 boots", text.getvalue())
 
 
 if __name__ == "__main__":

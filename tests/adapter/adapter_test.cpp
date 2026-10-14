@@ -37,7 +37,7 @@ static R::Result trace_result=R::OK;
 static unsigned trace_reads;
 static unsigned session_reads;
 // BETA-case knobs. Defaults leave every pre-existing case unchanged.
-static bool beta_fixture, speed_fixture;
+static bool beta_fixture, speed_fixture, bearing_fixture;
 static void (*mutate_snapshot)(DrSnapshot&);
 static Provenance::Domain provenance_domain = Provenance::Domain::NONE;
 static mx5::runtime::session_trace::Result beta_session_result = mx5::runtime::session_trace::OBSERVED;
@@ -89,6 +89,12 @@ static DrSnapshot fixture() {
         s.latitude_deg = s.longitude_deg = s.travel_bearing_deg = 0;
         s.accuracy_m = 0; s.derived_utc_ns = 0; s.speed_only = true;
     }
+    if (bearing_fixture) {
+        // A G3 bearing candidate: no position, speed or accuracy claim.
+        s.latitude_deg = s.longitude_deg = s.speed_mps = 0;
+        s.profile_verified = s.input_quality_verified = s.limits_ok = false; s.beta = true;
+        s.accuracy_m = 0; s.derived_utc_ns = 0; s.travel_bearing_deg = 123.456789; s.bearing_only = true;
+    }
     if (mutate_snapshot) mutate_snapshot(s);
     return s;
 }
@@ -106,7 +112,8 @@ static int32_t fake_next(void* session, VehicleData* data) {
 static void sink(const Observation* e, void*) {
     ++events; last_event = *e;
     if (e->kind == Observation::POSITION && publish_on_position &&
-        (e->original_mode == 0 || (speed_fixture && e->position_class == POSITION_NO_FIX_STALE)))
+        (e->original_mode == 0 || (speed_fixture && e->position_class == POSITION_NO_FIX_STALE) ||
+         (bearing_fixture && e->position_class == POSITION_FIX)))
         assert(publish_snapshot(fixture()));
     errno = EBUSY; // The shim must hide this side effect from OEM code.
 }
@@ -218,6 +225,61 @@ static void overlay_send(void (*mutate)(DrSnapshot&), Reason expected, double la
         assert(sent[32]==1);
         assert(!std::memcmp(last_event.original,overlay_payload,48) && !std::memcmp(last_event.outgoing,sent,48));
     } else { assert(last_event.choice==ORIGINAL); assert(!std::memcmp(sent,overlay_payload,48)); }
+}
+// G3 bearing overlay fixture (validation/G3_SEND_2026-10-13.md): a FIX
+// LOCATION built from a FIX POSITION (mode 1, increasing utc), stock bearing
+// 0 with hasBearing 1, padding bytes 41..43 non-zero.
+static uint8_t fix_payload[48];
+static uint64_t fix_utc=1700000500;
+static void make_fix_payload() {
+    for(unsigned i=0;i<48;++i)fix_payload[i]=uint8_t(0x50+i);
+    put32(fix_payload+8,uint32_t(int32_t(::round(STORED_LAT*1e7))));
+    put32(fix_payload+12,uint32_t(int32_t(::round(STORED_LON*1e7))));
+    fix_payload[16]=1;put32(fix_payload+20,2200);
+    fix_payload[32]=1;put32(fix_payload+36,280);
+    fix_payload[40]=1;put32(fix_payload+44,0);
+}
+static void m_not_bearing(DrSnapshot& s){s.bearing_only=false;}
+static void m_bearing_speed(DrSnapshot& s){s.speed_only=true;}
+static void m_bearing_unqualified(DrSnapshot& s){s.beta=false;}
+static void m_bearing_value_nan(DrSnapshot& s){s.travel_bearing_deg=std::numeric_limits<double>::quiet_NaN();}
+static void bearing_send(void (*mutate)(DrSnapshot&), Reason expected, double lat=STORED_LAT, int32_t mode=1) {
+    mutate_snapshot=mutate;
+    uint8_t position[72]={};put32(position,uint32_t(mode));
+    ++fix_utc;put32(position+8,uint32_t(fix_utc));put32(position+12,uint32_t(fix_utc>>32));
+    putd(position+16,lat);putd(position+24,STORED_LON);putd(position+40,0.0);putd(position+48,1.0);
+    putd(position+56,1.0);putd(position+64,1.5);
+    uint8_t before[48];std::memcpy(before,fix_payload,48);
+    VehicleData data={1,fix_payload,48};
+    position_enter(0,position);last_position=last_event;
+    run_send(data,expected!=PASS);
+    position_leave();mutate_snapshot=0;
+    if (last_event.reason!=expected) {
+        std::fprintf(stderr,"bearing reason %d expected %d\n",int(last_event.reason),int(expected));assert(false);
+    }
+    assert(!std::memcmp(fix_payload,before,48)); // OEM memory untouched
+    assert(last_position.position_class==(mode==0?POSITION_LOST:POSITION_FIX));
+    if (expected==PASS) {
+        assert(last_event.choice==BETA_BEARING_OVERLAY);
+        // Only hasBearing (40) and bearing (44..47) may differ; 41..43 stay.
+        for(unsigned i=0;i<48;++i)
+            if(i!=40 && !(i>=44 && i<48))assert(sent[i]==fix_payload[i]);
+        assert(sent[40]==1);
+        assert(!std::memcmp(last_event.original,fix_payload,48) && !std::memcmp(last_event.outgoing,sent,48));
+    } else { assert(last_event.choice==ORIGINAL); assert(!std::memcmp(sent,fix_payload,48)); }
+}
+// encode_bearing_overlay alone: the e6 value sent, and what Android Auto
+// makes of it (int -> float * 1e-6f, then [0, 360) normalisation).
+static int32_t bearing_e6_of(double deg) {
+    DrSnapshot o=DrSnapshot();o.travel_bearing_deg=deg;uint8_t out[48];
+    assert(encode_bearing_overlay(o,fix_payload,out));
+    for(unsigned i=0;i<48;++i)if(i!=40 && !(i>=44 && i<48))assert(out[i]==fix_payload[i]);
+    assert(out[40]==1);
+    const int32_t e6=int32_t(get32(out+44));
+    const float f=float(e6)*1.0e-6f;
+    assert(f>0.0f && f<360.0f && std::fmod(f,360.0f)>0.0f);   // never north 0, never 360 -> 0
+    assert(e6>10000 && e6<=359990000);
+    return e6;
 }
 static void check_beta_bytes(uint32_t accuracy_e3) {
     for(unsigned i=0;i<8;++i)assert(sent[i]==beta_payload[i]);            // timestamp original
@@ -453,6 +515,94 @@ static int beta_main(const char* test) {
           o.speed_mps=-0.001;assert(!encode_speed_overlay(o,overlay_payload,out));
           o.speed_mps=std::numeric_limits<double>::quiet_NaN();assert(!encode_speed_overlay(o,overlay_payload,out));
           o.speed_mps=50;o.stopped=true;assert(encode_speed_overlay(o,overlay_payload,out) && get32(out+36)==0); }
+    } else if (!std::strcmp(test,"beta_bearing")) {
+        // G3 bearing overlay (validation/G3_SEND_2026-10-13.md): FIX only,
+        // only while the worker armed it, only hasBearing/bearing change.
+        beta_fixture=false;bearing_fixture=true;make_fix_payload();
+        assert(!bearing_overlay());
+        bearing_send(0,NOT_UNKNOWN);               // gate closed: the beta.14 path, original
+        set_bearing_overlay(true);assert(bearing_overlay());
+        bearing_send(0,PASS);assert(get32(sent+44)==123456789 && sent[40]==1);
+        assert(get32(sent+36)==280 && get32(sent+20)==2200 && sent[16]==1 && sent[32]==1);
+        // The LOCATION is not the one built from this POSITION.
+        bearing_send(0,OVERLAY_MISMATCH,STORED_LAT+2e-7);
+        bearing_send(0,PASS,STORED_LAT+0.6e-7);
+        // Candidate checks.
+        bearing_send(m_not_bearing,NOT_READY);bearing_send(m_bearing_speed,NOT_READY);
+        bearing_send(m_bearing_unqualified,NOT_READY);bearing_send(m_not_ready,NOT_READY);
+        bearing_send(m_source_epoch,EPOCH_MISMATCH);bearing_send(m_session_epoch,EPOCH_MISMATCH);
+        bearing_send(m_future,EXPIRED);bearing_send(m_lease_over,EXPIRED);bearing_send(m_too_old,EXPIRED);
+        bearing_send(m_bearing_value_nan,BAD_ENCODING);
+        force_lock_busy=true;bearing_send(0,LOCK_BUSY);force_lock_busy=false;
+        provenance_domain=Provenance::Domain::QUALIFIED;bearing_send(0,BAD_PROVENANCE);
+        provenance_domain=Provenance::Domain::BETA;
+        beta_session_result=mx5::runtime::session_trace::TRANSITION;bearing_send(0,EPOCH_MISMATCH);
+        beta_session_result=mx5::runtime::session_trace::OBSERVED;
+        bearing_send(0,PASS);
+        // A bearing candidate never feeds the DR replacement (LOST) or the
+        // speed overlay (NO_FIX), and the gate does not open them.
+        publish_on_position=false;
+        { uint8_t position[72]={};VehicleData data={1,beta_payload,48};
+          position_enter(0,position);assert(publish_snapshot(fixture()));
+          run_send(data,true);position_leave();
+          assert(last_event.position_class==POSITION_LOST && last_event.reason==NOT_READY); }
+        { make_overlay_payload(1111);uint8_t position[72]={};put32(position,1);
+          putd(position+16,STORED_LAT);putd(position+24,STORED_LON);
+          VehicleData data={1,overlay_payload,48};
+          position_enter(0,position);assert(publish_snapshot(fixture()));
+          run_send(data,true);position_leave();
+          assert(last_event.position_class==POSITION_NO_FIX_STALE && last_event.reason==NOT_READY); }
+        publish_on_position=true;
+        // Hold: a failed overlaid send revokes and holds; HELD until an
+        // ORIGINAL LOCATION returns 0.
+        { const uint32_t g=generation();
+          next_result=-3;bearing_send(0,PASS);
+          assert(beta_held() && hold_set_events==1 && generation()>g);
+          next_result=0;bearing_send(0,HELD);
+          assert(!beta_held() && hold_cleared_events==1);
+          bearing_send(0,PASS); }
+        // Gate closed again: back to the beta.14 path even with a candidate.
+        set_bearing_overlay(false);bearing_send(0,NOT_UNKNOWN);
+        set_bearing_overlay(true);bearing_send(0,PASS);
+        // Outside Mode::BETA the gate is ignored.
+        assert(set_mode(OBSERVE));bearing_send(0,NOT_UNKNOWN);
+        assert(set_mode(BETA));bearing_send(0,PASS);
+        // Encoder boundaries: never 0, never a float32 360.
+        assert(bearing_e6_of(123.456789)==123456789);
+        // A stock LOCATION without a bearing (hasBearing 0) gets presence 1.
+        { uint8_t none[48];std::memcpy(none,fix_payload,48);none[40]=0;put32(none+44,0);
+          DrSnapshot o=DrSnapshot();o.travel_bearing_deg=42.0;uint8_t out[48];
+          assert(encode_bearing_overlay(o,none,out) && out[40]==1 && get32(out+44)==42000000);
+          for(unsigned i=0;i<48;++i)if(i!=40 && !(i>=44 && i<48))assert(out[i]==none[i]); }
+        assert(bearing_e6_of(0.0)==359990000);
+        assert(bearing_e6_of(-0.0)==359990000);
+        assert(bearing_e6_of(360.0)==359990000);
+        assert(bearing_e6_of(0.01)==359990000);
+        assert(bearing_e6_of(0.010001)==10001);
+        assert(bearing_e6_of(0.02)==20000);
+        assert(bearing_e6_of(359.99)==359990000);
+        assert(bearing_e6_of(359.990001)==359990000);
+        assert(bearing_e6_of(359.995)==359990000);
+        assert(bearing_e6_of(359.99999)==359990000);
+        assert(bearing_e6_of(359.9999996)==359990000);
+        assert(bearing_e6_of(359.98)==359980000);
+        assert(bearing_e6_of(-90.0)==270000000);
+        assert(bearing_e6_of(720.5)==500000);
+        for(int32_t e=0;e<=360000000;e+=7919) {   // whole range, float32 check inside
+            const int32_t sent_e6=bearing_e6_of(e/1e6);
+            assert(e<=10000 || e>359990000 ? sent_e6==359990000 : sent_e6==e);
+        }
+        { DrSnapshot o=DrSnapshot();uint8_t out[48];
+          o.travel_bearing_deg=std::numeric_limits<double>::infinity();assert(!encode_bearing_overlay(o,fix_payload,out));
+          o.travel_bearing_deg=1e300;assert(!encode_bearing_overlay(o,fix_payload,out) || out[40]==1);
+          o.travel_bearing_deg=10;assert(!encode_bearing_overlay(o,0,out)); }
+        // A sticky fault (extra LOCATION) disables the overlay too.
+        { uint8_t position[72]={};put32(position,1);++fix_utc;put32(position+8,uint32_t(fix_utc));
+          putd(position+16,STORED_LAT);putd(position+24,STORED_LON);
+          VehicleData data={1,fix_payload,48};
+          position_enter(0,position);run_send(data,false);run_send(data,true);
+          assert(last_event.reason==EXTRA_LOCATION);position_leave(); }
+        publish_on_position=false;bearing_send(0,DISABLED);assert(faulted());
     } else if (!std::strcmp(test,"beta_undeclined")) {
         // Sessions were not declined by the installer: an UNOBSERVED send
         // session means the fence is missing, so the original passes.

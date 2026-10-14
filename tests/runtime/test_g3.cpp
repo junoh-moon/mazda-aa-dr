@@ -1,4 +1,5 @@
-// G3 record-only heading carry-over host tests (validation/G3_RECORD_ONLY_2026-10-11.md):
+// G3 record-only heading carry-over host tests (validation/G3_RECORD_ONLY_2026-10-11.md)
+// and the G3 bearing send state machine (validation/G3_SEND_2026-10-13.md):
 // store codec, atomic file I/O and its failure paths, the guard chain token,
 // the off switch, the restore / continuity / course state machine, the store
 // policy, journal rows and the pipeline's G3Motion observation. Synthetic
@@ -7,6 +8,7 @@
 //   test_g3 --two-boot DIR  prints a synthetic two-boot JSONL (real tracker
 //                           rows, real store file in DIR) for the analyzer test
 #include "runtime/g3_heading.h"
+#include "runtime/g3_send.h"
 #include "navigation/pipeline.h"
 #include <cstdio>
 #include <cstdlib>
@@ -1028,6 +1030,283 @@ static void pipeline_park_detection() {
 }
 
 // ---- synthetic two-boot JSONL for the analyzer test -------------------------
+// ---- G3 bearing send (g3_send.h) -------------------------------------------
+static uint32_t next_call=100;
+static adapter::Observation fixv(uint64_t mono,double kmh,double course) {
+    adapter::Observation o=fix(mono,35.5,139.5,RT+mono/S);
+    o.position.velocity_kmh=kmh;o.position.heading_deg=course;o.call_sequence=++next_call;return o;
+}
+static G3SendView view(uint64_t now) {
+    G3SendView v;v.now=now;v.journal_ok=v.journal_current=v.beta_live=v.beta_armed=v.adapter_ok=true;
+    v.source_epoch=11;v.session_epoch=12;v.cadence_fences=0;return v;
+}
+static adapter::Observation overlaid(uint64_t mono,int32_t result) {
+    adapter::Observation o=location(mono,true,0,0);o.choice=adapter::BETA_BEARING_OVERLAY;o.result=result;
+    o.position_class=adapter::POSITION_FIX;return o;
+}
+// A tracker restored CARRIED/chain_ok (197.0 +- 4.5 deg) with a session
+// start at 1 s and a G3Send opened at that tick.
+struct SendRig {
+    G3Tracker t;G3Send g;Rows j;
+    explicit SendRig(const G3Record& r=good_record(),bool enabled=true) {
+        adapter::set_bearing_overlay(false);   // process-global gate: each case starts closed
+        t=started(r);g.start(enabled);
+        t.send(location(1*S,true,0,0));
+        tick(1*S);
+    }
+    void tick(uint64_t now,const G3SendView* v=0,const G3Sample* s=0) {
+        const G3Sample x=s?*s:sample(now);
+        t.tick(j,x,0,0);g.tick(j,t,x,v?*v:view(now));
+    }
+    void pos(const adapter::Observation& o,double wheel) { g.position(j,o,wheel,o.mono_ns+1000); }
+    std::string end() const { return j.last("\"event\":\"end\""); }
+};
+static bool send_started(const Rows& j) {
+    for(size_t i=0;i<j.lines.size();++i)
+        if(has(j.lines[i],"{\"kind\":\"g3_send\"") && has(j.lines[i],"\"event\":\"start\""))return true;
+    return false;
+}
+static void g3_send_rules() {
+    adapter::set_bearing_overlay(false);
+    // Opened at the session start: one start row, the OEM gate open.
+    { SendRig r;CHECK(r.g.active() && adapter::bearing_overlay());
+      const std::string l=r.j.last("\"kind\":\"g3_send\"");
+      CHECK(has(l,"\"event\":\"start\"") && has(l,"\"g3\":\"CARRIED\"") && has(l,"\"h\":1970") &&
+            has(l,"\"carried\":[1970,45]") && has(l,"\"tol\":100") && has(l,"\"age_s\":10800") && has(l,"\"session\":12"));
+      CHECK(r.j.count("\"kind\":\"g3_send\"")==1 && r.g.heading()==197.0);
+      // Trust gate: 4 consecutive gated fixes agreeing within 10 deg.
+      r.pos(fixv(2*S,18,203),5.0);r.pos(fixv(3*S,18,190),5.0);r.pos(fixv(4*S,18,199),5.0);CHECK(r.g.active());
+      // A fix below 3.6 km/h, a wheel ratio of 0.25 or a wheel below 1 m/s resets the run.
+      r.pos(fixv(5*S,3.5,197),0.97);CHECK(r.g.active());
+      r.pos(fixv(6*S,18,197),5.0);r.pos(fixv(7*S,18,197),4.0);r.pos(fixv(8*S,3.6,197),0.99);
+      r.pos(fixv(9*S,18,197),5.0);r.pos(fixv(10*S,18,197),5.0);
+      r.pos(fixv(11*S,18,207.0),5.0);CHECK(r.g.active());   // 3 in a row (10.0 deg agrees)
+      r.g.send(r.j,overlaid(11*S,0),11*S);r.g.send(r.j,location(11*S,true,0,0),11*S);
+      adapter::Observation stock=location(11*S,true,0,0);stock.position_class=adapter::POSITION_FIX;
+      r.g.send(r.j,stock,11*S);CHECK(r.g.overlaid()==1);
+      const adapter::Observation last=fixv(12*S,18,196);r.pos(last,5.0);
+      CHECK(!r.g.active() && r.g.phase()==G3_SEND_ENDED && !adapter::bearing_overlay() && !strcmp(r.g.end_reason(),"trusted"));
+      char call[48];snprintf(call,sizeof call,"\"by\":\"fix\",\"call\":%lu,",(unsigned long)last.call_sequence);
+      // The end row carries the worker time and the deciding call.
+      CHECK(has(r.end(),"\"reason\":\"trusted\",\"why\":\"stock_course\"") && has(r.end(),call) &&
+            has(r.end(),"\"mono_ns\":12000001000,") && has(r.end(),"\"sent\":1,\"stock\":1") &&
+            has(r.end(),"\"course\":[1960,180],\"d\":10"));
+      const size_t rows=r.j.lines.size();
+      r.tick(20*S);r.pos(fixv(21*S,18,290),5.0);r.g.send(r.j,overlaid(21*S,0),21*S);
+      CHECK(r.g.phase()==G3_SEND_ENDED && !adapter::bearing_overlay() && r.j.lines.size()==rows); }
+    // Wheel ratio boundary: |18/3.6 / 4.0 - 1| = 0.25 is not gated (it resets
+    // the run), 0.09 is.
+    { SendRig r;
+      for(unsigned k=0;k<3;++k)r.pos(fixv((2+k)*S,18,197),5.0);
+      r.pos(fixv(5*S,18,197),4.0);CHECK(r.g.active());
+      for(unsigned k=0;k<3;++k)r.pos(fixv((6+k)*S,18,197),5.0);
+      CHECK(r.g.active());
+      r.pos(fixv(9*S,18,197),5.0/1.09);CHECK(!r.g.active() && !strcmp(r.g.end_reason(),"trusted")); }
+    // A larger honest uncertainty widens the agreement (25 deg): 220 agrees.
+    { G3Record m=good_record();m.unc_cdeg=2500;SendRig r(m);CHECK(has(r.j.last("start"),"\"tol\":250"));
+      for(unsigned k=0;k<4;++k)r.pos(fixv((2+k)*S,18,221.5),5.0);
+      CHECK(!strcmp(r.g.end_reason(),"trusted")); }
+    // Conflict: 8 consecutive gated fixes disagreeing -> the stock course wins.
+    { SendRig r;
+      for(unsigned k=0;k<7;++k)r.pos(fixv((2+k)*S,18,290),5.0);
+      CHECK(r.g.active() && !r.j.count("g3_send_conflict"));
+      r.pos(fixv(9*S,18,197),5.0);      // one agreeing fix resets the conflict run
+      for(unsigned k=0;k<7;++k)r.pos(fixv((10+k)*S,18,17),5.0);
+      CHECK(r.g.active());
+      r.pos(fixv(17*S,18,17),5.0);
+      CHECK(!r.g.active() && !adapter::bearing_overlay() && !strcmp(r.g.end_reason(),"conflict"));
+      const std::string c=r.j.last("g3_send_conflict");
+      CHECK(has(c,"\"h\":1970") && has(c,"\"course\":[170,180]") && has(c,"\"d\":1800") && has(c,"\"fixes\":8"));
+      CHECK(has(r.end(),"\"reason\":\"conflict\"") && has(r.end(),"\"by\":\"fix\"")); }
+    // Stationary cap: 900 s from the open while no stock fix reached 3.6 km/h.
+    { SendRig r;r.pos(fixv(2*S,3.5,197),0);r.tick(800*S);CHECK(r.g.active() && r.j.count("\"event\":\"count\"")>=1);
+      r.tick(900*S);CHECK(r.g.active());
+      r.tick(901*S);CHECK(!r.g.active() && !adapter::bearing_overlay() &&
+                          has(r.end(),"\"reason\":\"cap\",\"why\":\"stationary_900s\",\"by\":\"tick\"")); }
+    // Motion cap: 60 s from the first stock fix at >= 3.6 km/h (here without
+    // a gated fix: the wheels report nothing), even after a long stand.
+    { SendRig r;r.tick(700*S);CHECK(r.g.active());
+      r.pos(fixv(700*S,3.6,197),0);       // motion starts at 700 s + 1 us
+      r.tick(760*S);CHECK(r.g.active());
+      r.tick(760*S+2000);CHECK(!r.g.active() && has(r.end(),"\"reason\":\"cap\",\"why\":\"motion_60s\"")); }
+    // Faults: fail closed to the stock LOCATION at once.
+    for(unsigned k=0;k<8;++k) {
+        SendRig r;G3SendView v=view(2*S);G3Sample s=sample(2*S);
+        const char* why[]={"journal_failed","writer_lag","beta_not_live","adapter","clock","yaw_break","model","wheel_stale"};
+        if(k==0)v.journal_ok=false;else if(k==1)v.journal_current=false;else if(k==2)v.beta_live=false;
+        else if(k==3)v.adapter_ok=false;else if(k==4)v.now=S/2;
+        else if(k==5) { s=sample(2*S,3,0,1,true);s.motion.breaks=1; }   // a break while moving
+        else if(k==7) { s.wheels_fresh=false; }                         // a dead wheel stream is not "parked"
+        if(k==6)r.g.fail(r.j,2*S,"model_disabled");else r.tick(2*S,&v,&s);
+        CHECK(!r.g.active() && !adapter::bearing_overlay() && !strcmp(r.g.end_reason(),"fault"));
+        char want[64];snprintf(want,sizeof want,"\"why\":\"%s",why[k]);CHECK(has(r.end(),want));
+    }
+    // Stale wheels and a break together: wheel_stale (a dead stream never counts as parked).
+    { SendRig r;G3Sample s=sample(2*S);s.wheels_fresh=false;s.motion.breaks=1;r.tick(2*S,0,&s);
+      CHECK(has(r.end(),"\"why\":\"wheel_stale\"") && has(r.end(),"\"pbreaks\":0")); }
+    // A break while parked (fresh wheels, no moving wheel at this and the
+    // previous tick, no wheel distance) cannot hide a rotation: tolerated.
+    { SendRig r;G3Sample s=sample(2*S);s.motion.breaks=2;r.tick(2*S,0,&s);
+      CHECK(r.g.active() && adapter::bearing_overlay());
+      s=sample(3*S,0.5,0,0.1,true);s.motion.breaks=3;r.tick(3*S,0,&s);
+      CHECK(!r.g.active() && has(r.end(),"\"why\":\"yaw_break\"") && has(r.end(),"\"pbreaks\":1")); }
+    { SendRig r;G3Sample s=sample(2*S,0.02);s.motion.breaks=1;r.tick(2*S,0,&s);
+      CHECK(!r.g.active() && has(r.end(),"\"why\":\"yaw_break\"")); }
+    // Session boundary: a new send session, bus or cadence fence ends it (never re-published).
+    for(unsigned k=0;k<3;++k) {
+        SendRig r;G3SendView v=view(2*S);
+        if(k==0)v.session_epoch=13;else if(k==1)v.source_epoch=12;else v.cadence_fences=1;
+        r.tick(2*S,&v);
+        const char* why[]={"send_session","source","cadence_fence"};
+        char want[64];snprintf(want,sizeof want,"\"reason\":\"session\",\"why\":\"%s\"",why[k]);
+        CHECK(!r.g.active() && !adapter::bearing_overlay() && has(r.end(),want));
+        r.tick(3*S,&v);CHECK(r.g.phase()==G3_SEND_ENDED && r.j.count("\"event\":\"start\",\"g3\":\"CARRIED\",\"t_s\"")==1);
+    }
+    // Reverse latch: a change or loss during the window ends it (no 180 deg jump).
+    for(int latch=-1;latch<=1;latch+=2) {
+        SendRig r;G3Sample s=sample(2*S,0,0,0,false,latch);r.tick(2*S,0,&s);
+        CHECK(!r.g.active() && has(r.end(),latch==1?"\"reason\":\"latch\",\"why\":\"reverse\"":"\"reason\":\"latch\",\"why\":\"unknown\""));
+        CHECK(r.g.heading()==197.0);
+    }
+    // A failed overlaid send ends the window.
+    { SendRig r;r.g.send(r.j,overlaid(2*S,-3),2*S);
+      CHECK(!r.g.active() && has(r.end(),"\"reason\":\"fault\",\"why\":\"send_result\"")); }
+    // The tracker leaves CARRIED: an M course (CONFIRMED) or a rejection.
+    { SendRig r;G3Course c={5*S,198.0,20.0,1};r.t.tick(r.j,sample(5*S,10,0,2,true),&c,0);
+      r.g.tick(r.j,r.t,sample(5*S,10,0,2,true),view(5*S));
+      CHECK(!r.g.active() && has(r.end(),"\"reason\":\"trusted\",\"why\":\"m_course\"")); }
+    { SendRig r;G3Course c={5*S,17.0,20.0,1};r.t.tick(r.j,sample(5*S,10,0,2,true),&c,0);
+      r.g.tick(r.j,r.t,sample(5*S,10,0,2,true),view(5*S));
+      CHECK(!r.g.active() && has(r.end(),"\"reason\":\"rejected\",\"why\":\"course_error\"")); }
+    // The carried heading follows the yaw integral.
+    { SendRig r;r.tick(3*S,0,0);G3Sample s=sample(4*S,8,30,4,true);r.tick(4*S,0,&s);
+      CHECK(r.g.active() && fabs(r.g.heading()-227.0)<1e-9); }
+    // Only the genuinely restored CARRIED (chain_ok) opens; CARRIED_UNVERIFIED
+    // (age_unknown, chain_unknown, same_boot) never does, also not when the
+    // first FIX (position_ok) raises it to CARRIED before or after the tick.
+    const char* chains[]={"none","unread","none"};
+    const uint64_t rts[]={0,RT+3*3600,RT+3*3600};
+    const char* boots[]={BOOT_B,BOOT_B,BOOT_A};
+    const char* reasons[]={"age_unknown","chain_unknown","same_boot"};
+    for(unsigned k=0;k<3;++k)for(unsigned order=0;order<2;++order) {
+        adapter::set_bearing_overlay(false);
+        G3Tracker t=started(good_record(),G3_LOAD_OK,chains[k],rts[k],boots[k]);
+        CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),reasons[k]));
+        G3Send g;g.start(true);Rows j;t.send(location(1*S,true,0,0));
+        if(order==0)t.position(j,fix(1*S,35.50005,139.5,RT+7200),navigation::G3Motion());   // first FIX before the tick
+        t.tick(j,sample(1*S),0,0);g.tick(j,t,sample(1*S),view(1*S));
+        if(order==1) { t.position(j,fix(2*S,35.50005,139.5,RT+7200),navigation::G3Motion());
+                       t.tick(j,sample(2*S),0,0);g.tick(j,t,sample(2*S),view(2*S)); }
+        if(k!=1)CHECK(t.state()==G3_CARRIED && !strcmp(t.reason(),"position_ok"));
+        CHECK(g.phase()==G3_SEND_ENDED && !adapter::bearing_overlay() && !send_started(j) && j.count("\"event\":\"none\"")==1);
+    }
+    // The genuine chain_ok restore opens whether the first FIX came before the tick or not.
+    for(unsigned order=0;order<2;++order) {
+        adapter::set_bearing_overlay(false);
+        G3Tracker t=started(good_record());G3Send g;g.start(true);Rows j;t.send(location(1*S,true,0,0));
+        if(order==0)t.position(j,fix(1*S,35.50005,139.5,RT+3*3600),navigation::G3Motion());
+        t.tick(j,sample(1*S),0,0);g.tick(j,t,sample(1*S),view(1*S));
+        CHECK(g.active() && adapter::bearing_overlay() && !strcmp(t.reason(),"chain_ok"));
+    }
+    // Waiting for a known forward latch while the car stands, at most 30 s;
+    // given up when the car moves first.
+    { adapter::set_bearing_overlay(false);
+      G3Tracker t=started(good_record());G3Send g;g.start(true);Rows j;t.send(location(1*S,true,0,0));
+      G3Sample s=sample(1*S,0,0,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
+      CHECK(g.phase()==G3_SEND_IDLE && j.lines.size()>0 && !j.count("g3_send"));
+      s=sample(5*S,0,0,0,false,1);t.tick(j,s,0,0);g.tick(j,t,s,view(5*S));CHECK(g.phase()==G3_SEND_IDLE);
+      s=sample(6*S);t.tick(j,s,0,0);g.tick(j,t,s,view(6*S));CHECK(g.active() && has(j.last("start"),"\"rev\":0")); }
+    { adapter::set_bearing_overlay(false);
+      G3Tracker t=started(good_record());G3Send g;g.start(true);Rows j;t.send(location(1*S,true,0,0));
+      G3Sample s=sample(1*S,0,0,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
+      s=sample(31*S,0,0,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(31*S));
+      CHECK(g.phase()==G3_SEND_ENDED && has(j.last("g3_send"),"\"event\":\"none\",\"g3\":\"CARRIED\",\"reason\":\"latch\"")); }
+    { adapter::set_bearing_overlay(false);
+      G3Tracker t=started(good_record());G3Send g;g.start(true);Rows j;t.send(location(1*S,true,0,0));
+      G3Sample s=sample(1*S,0,0,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
+      s=sample(2*S,1,0,1,true,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(2*S));
+      CHECK(g.phase()==G3_SEND_ENDED && has(j.last("g3_send"),"\"reason\":\"latch\"")); }
+    // Stale wheels or no observed session at the open: wait, then none.
+    { adapter::set_bearing_overlay(false);
+      G3Tracker t=started(good_record());G3Send g;g.start(true);Rows j;t.send(location(1*S,true,0,0));
+      G3Sample s=sample(1*S);s.wheels_fresh=false;t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
+      CHECK(g.phase()==G3_SEND_IDLE);
+      G3SendView v=view(2*S);v.session_epoch=0;s=sample(2*S);t.tick(j,s,0,0);g.tick(j,t,s,v);CHECK(g.phase()==G3_SEND_IDLE);
+      s=sample(40*S);s.wheels_fresh=false;t.tick(j,s,0,0);g.tick(j,t,s,view(40*S));
+      CHECK(g.phase()==G3_SEND_ENDED && has(j.last("g3_send"),"\"reason\":\"wheel_stale\"")); }
+    { G3Tracker t=started(good_record(),G3_LOAD_MISSING);G3Send g;g.start(true);Rows j;
+      t.tick(j,sample(1*S),0,0);g.tick(j,t,sample(1*S),view(1*S));
+      CHECK(g.phase()==G3_SEND_IDLE && j.lines.empty());          // no session yet
+      t.send(location(2*S,true,0,0));t.tick(j,sample(2*S),0,0);g.tick(j,t,sample(2*S),view(2*S));
+      CHECK(g.phase()==G3_SEND_ENDED && has(j.last("g3_send"),"\"g3\":\"UNKNOWN\",\"reason\":\"missing\"")); }
+    // Off (g3-off marker or not BETA): no row, no gate, ever.
+    { SendRig r(good_record(),false);
+      r.pos(fixv(2*S,18,197),5.0);r.tick(2*S);r.g.send(r.j,overlaid(2*S,0),2*S);
+      CHECK(r.g.phase()==G3_SEND_OFF && !adapter::bearing_overlay() && !r.j.count("g3_send")); }
+}
+
+// The window against the REAL adapter (configured once, at the end of this
+// process): what reaches the OEM send. Covers the publish() generation check
+// (a candidate needs a FIX POSITION of the current generation seen by the
+// worker) and the empty-candidate overwrite after the end.
+static uint64_t adapter_now=100*S;
+static uint8_t oem_sent[48];
+static adapter::Observation last_position_obs;
+static uint64_t oem_clock(void*) { return adapter_now; }
+static int32_t oem_next(void*,adapter::VehicleData* d) { if(d && d->payload && d->length==48)memcpy(oem_sent,d->payload,48);return 0; }
+static void oem_sink(const adapter::Observation* o,void*) { if(o->kind==adapter::Observation::POSITION)last_position_obs=*o; }
+static bool oem_provenance(void*,const adapter::PositionContext&,adapter::Provenance* out,void*) {
+    *out=adapter::Provenance();out->source_epoch=11;out->session_epoch=12;
+    out->domain=adapter::Provenance::Domain::BETA;return true;
+}
+static void oem_beta_event(void*,const char*) {}
+static void oem_session(const void*,runtime::session_trace::Snapshot* out,void*) {
+    *out=runtime::session_trace::Snapshot();out->result=runtime::session_trace::UNOBSERVED;
+}
+static void put32le(uint8_t* p,uint32_t v) { for(unsigned i=0;i<4;++i)p[i]=uint8_t(v>>(8*i)); }
+// One FIX POSITION + its LOCATION (stock bearing 0); returns the outgoing bearing_e6 (or -1: original).
+static long oem_fix(uint64_t utc) {
+    uint8_t position[72]={};put32le(position,1);put32le(position+8,uint32_t(utc));
+    const double lat=35.5,lon=139.5;uint64_t b;
+    memcpy(&b,&lat,8);put32le(position+16,uint32_t(b));put32le(position+20,uint32_t(b>>32));
+    memcpy(&b,&lon,8);put32le(position+24,uint32_t(b));put32le(position+28,uint32_t(b>>32));
+    uint8_t original[48];for(unsigned i=0;i<48;++i)original[i]=uint8_t(0x40+i);
+    put32le(original+8,355000000u);put32le(original+12,1395000000u);original[40]=1;put32le(original+44,0);
+    adapter::VehicleData data={1,original,48};
+    adapter::position_enter(0,position);adapter::send_vehicle_data(0,&data);adapter::position_leave();
+    if(!memcmp(oem_sent,original,48))return -1;
+    for(unsigned i=0;i<48;++i)if(i!=40 && !(i>=44 && i<48))CHECK(oem_sent[i]==original[i]);
+    return long(oem_sent[44]|(oem_sent[45]<<8)|(oem_sent[46]<<16)|(uint32_t(oem_sent[47])<<24));
+}
+static void g3_send_adapter() {
+    adapter::Options o=adapter::Options();
+    o.sink=oem_sink;o.clock=oem_clock;o.provenance=oem_provenance;o.max_snapshot_age_ns=500000000ULL;
+    o.allow_beta=true;o.beta_event=oem_beta_event;o.session_reader=oem_session;o.sessions_declined=true;
+    CHECK(adapter::configure(oem_next,o) && adapter::set_mode(adapter::BETA));
+    SendRig r;CHECK(r.g.active());
+    uint64_t utc=1700000000;
+    CHECK(oem_fix(++utc)==-1);                     // the worker has not seen a FIX POSITION yet
+    r.g.position(r.j,last_position_obs,0,adapter_now);
+    r.tick(adapter_now);CHECK(oem_fix(++utc)==197000000);   // published for this generation: overlaid
+    // A generation change the worker has not followed with a FIX POSITION:
+    // no publication with the new generation, the old candidate is unusable.
+    adapter::invalidate();
+    adapter_now+=50000000;r.tick(adapter_now);
+    CHECK(oem_fix(++utc)==-1);
+    r.g.position(r.j,last_position_obs,0,adapter_now);
+    adapter_now+=50000000;r.tick(adapter_now);CHECK(oem_fix(++utc)==197000000);
+    // End (stock trusted): the gate closes and the next tick overwrites the
+    // candidate with an empty one; re-opening the gate by hand finds nothing.
+    for(unsigned k=0;k<4;++k)r.pos(fixv(adapter_now+k,18,197),5.0);
+    CHECK(!r.g.active() && !adapter::bearing_overlay());
+    r.g.position(r.j,last_position_obs,0,adapter_now);
+    CHECK(oem_fix(++utc)==-1);                     // gate closed: the beta.14 path
+    adapter_now+=50000000;r.tick(adapter_now);
+    adapter::set_bearing_overlay(true);
+    CHECK(oem_fix(++utc)==-1);                     // the empty candidate: nothing to overlay
+    adapter::set_bearing_overlay(false);
+}
+
 struct Out { void line(const char* s) { std::printf("%s\n",s); } void fail() {} };
 static void boot_row(Out& o,uint64_t mono,const char* boot) {
     char b[600];
@@ -1109,6 +1388,8 @@ int main(int argc,char** argv) {
     yaw_chain_breaks();
     rule_f_discard();
     rule_f_discard_in_flight();
+    g3_send_rules();
+    g3_send_adapter();   // configures the process-global adapter: last
     std::printf("test_g3: %u checks passed\n",checks);
     return 0;
 }

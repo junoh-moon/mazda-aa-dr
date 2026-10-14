@@ -31,6 +31,7 @@
 #include "runtime/core_bridge.h"
 #include "runtime/drive_record_log.h"
 #include "runtime/g3_heading.h"
+#include "runtime/g3_send.h"
 #include "runtime/motion_gap.h"
 #include "runtime/worker_tick.h"
 #include <algorithm>
@@ -418,6 +419,17 @@ struct Options {
     // replay time later). g3_store: a directory holding the real store file
     // (read at start, written by the parent run); g3_out: its rows.
     std::string g3, g3_store, g3_out;
+    // G3 first-connection bearing send (validation/G3_SEND_2026-10-13.md):
+    // --g3-send on runs the product's G3Send next to the tracker (needs --g3
+    // on|slow); off (default) leaves every output byte-identical to beta.14.
+    // --g3-send-out FILE: one JSON line per LOCATION send of the recorded run
+    // (stock and sent bearing, the POSITION's course and speed, the G3 motion
+    // integral and the window state) for the acceptance analysis.
+    bool g3_send;
+    std::string g3_send_out;
+    // --g3-rt S: the CLOCK_REALTIME seconds the tracker sees at worker start
+    // (the product reads it; default 0 = unknown, the record-only replays).
+    uint64_t g3_rt;
     std::vector<double> t0s, durations;
     double sweep_from, sweep_to, sweep_step;
     bool sweep, check, real_only;
@@ -538,6 +550,7 @@ struct SendRecord {
 std::vector<SendRecord> sends;
 std::vector<std::string> diag_lines;   // --diag-out
 
+void g3_send_record(const Fix& f, uint64_t t, const SendRecord& r);
 // One OEM POSITION callback with at most one LOCATION send.
 void oem_call(const Fix& f, bool synthetic, uint64_t t, const uint8_t* original_or_null) {
     g_now = t;
@@ -573,6 +586,7 @@ void oem_call(const Fix& f, bool synthetic, uint64_t t, const uint8_t* original_
                 r.choice = int32_t(pending[i].choice); r.reason = int32_t(pending[i].reason);
             }
         sends.push_back(r);
+        if (!opt.g3_send_out.empty()) g3_send_record(f, t, r);
     }
     if (!opt.diag.empty()) {
         // RequestSendPosition: MakeGpsSatellite + SendGpsSatellite after the
@@ -624,6 +638,26 @@ R::G3Tracker g3;
 Journal g3_journal;
 uint64_t g3_anchor_seen;
 struct G3Job { bool active, sync; uint32_t seq; uint64_t due; char line[R::G3_RECORD_MAX]; size_t n; } g3_job;
+// --g3-send on: the bearing send window (rows into g3_journal).
+R::G3Send g3send;
+std::vector<std::string> g3_send_lines;   // --g3-send-out
+// --g3-send-out: one line per LOCATION send of the recorded run (parent only).
+void g3_send_record(const Fix& f, uint64_t t, const SendRecord& r) {
+    if (!count_latch) return;
+    const N::G3Motion& m = nav.g3_motion();
+    char line[640];
+    snprintf(line, sizeof line,
+        "{\"t_ns\":%llu,\"mode\":%d,\"utc\":%llu,\"kmh\":%.3f,\"course\":%.3f,\"choice\":%d,"
+        "\"reason\":%d,\"result\":%d,\"orig\":[%d,%lld],\"sent\":[%d,%lld],\"wheel\":%.3f,"
+        "\"turn\":%.6f,\"breaks\":%u,\"g3\":\"%s\",\"phase\":\"%s\",\"h\":%.3f}",
+        (unsigned long long)t, f.mode, (unsigned long long)f.utc, f.kmh, f.heading, r.choice,
+        r.reason, r.result, int(r.original[40]), (long long)int32_t(get32(r.original + 44)),
+        int(r.outgoing[40]), (long long)int32_t(get32(r.outgoing + 44)),
+        std::isfinite(m.speed_mps) ? m.speed_mps : -1.0, std::isfinite(m.turn_rad) ? m.turn_rad : 0.0,
+        m.breaks, R::g3_state_name(g3.state()), R::g3_send_phase_name(g3send.phase()),
+        g3send.heading());
+    g3_send_lines.push_back(line);
+}
 // --record-out: the drive data rows in their own file (no gate: every row
 // is written).
 R::DriveRecordLog record;
@@ -636,7 +670,8 @@ bool g3_replacing(R::BetaState s) {
 void g3_turn(uint64_t now) {
     R::G3Course course;
     const bool found = g3.wants_course() && R::g3_find_course(nav, &g3_anchor_seen, &course);
-    const R::G3Sample sample = R::g3_sample(nav, now, 0);
+    // --g3-rt: the wall clock advances with the replay (stored records carry it).
+    const R::G3Sample sample = R::g3_sample(nav, now, opt.g3_rt ? opt.g3_rt + now / 1000000000ULL : 0);
     g3.tick(g3_journal, sample, found ? &course : 0,
             g3_replacing(beta->state()) ? "beta_replacing" : 0);
     // runtime.cpp g3_pump: a rule F taint end cancels the in-flight write.
@@ -662,6 +697,16 @@ void g3_turn(uint64_t now) {
         g3_job.active = true;
         g3_job.due = now + (opt.g3 == "slow" ? 3000000000ULL : 0);
     }
+    // runtime.cpp: the bearing send after the tracker (journal always current here).
+    if (opt.g3_send) {
+        R::G3SendView v;
+        v.now = now; v.journal_ok = !journal.failed; v.journal_current = true;
+        v.beta_live = beta->live(); v.beta_armed = beta->state() == R::BETA_ARMED;
+        v.adapter_ok = !A::faulted() && A::mode() == A::BETA && !A::beta_held();
+        v.source_epoch = shared.source_epoch.load(); v.session_epoch = shared.storage_epoch.load();
+        v.cadence_fences = beta->cadence_fences();
+        g3send.tick(g3_journal, g3, sample, v);
+    }
 }
 // One worker turn at the tick grid, in runtime order: pop observations,
 // receive motion, drain on the MODEL tick, then the BETA tick.
@@ -676,10 +721,12 @@ void worker_turn(uint64_t now) {
         if (record_on) record.observation(o, beta->last_honest_accuracy(), now, record_sink, 0);
         if (o.kind == A::Observation::SEND) beta->send(o);
         if (o.kind == A::Observation::SEND && g3.active()) g3.send(o);
+        if (o.kind == A::Observation::SEND && g3send.active()) g3send.send(g3_journal, o, now);
         if (o.kind == A::Observation::POSITION) {
             if (o.reason != A::CONTEXT_UNAVAILABLE) nav.enqueue_position(o);
             beta->position(journal, o, now);
             if (g3.active()) g3.position(g3_journal, o, nav.g3_motion());
+            if (g3.active()) g3send.position(g3_journal, o, nav.g3_motion().speed_mps, now);
         }
     }
     pending.clear();
@@ -808,9 +855,10 @@ bool start_product(uint64_t t) {
         R::G3Load load = R::G3_LOAD_MISSING;
         if (!opt.g3_store.empty()) load = R::g3_load(opt.g3_store.c_str(), &stored);
         const std::string boot = in.boot_id.size() == 36 ? in.boot_id : std::string("unknown");
-        g3.start(t, true, "replay", boot.c_str(), "none", 0, load, stored);
+        g3.start(t, true, "replay", boot.c_str(), "none", opt.g3_rt, load, stored);
         g3.journal_start(g3_journal, t);
     }
+    g3send.start(opt.g3_send && g3.active());
     return true;
 }
 
@@ -836,7 +884,8 @@ int classify(int32_t mode, uint64_t utc) {
     return CLASS_OTHER;
 }
 // change: 0 unchanged, 1 speed only (bytes 32..39), 2 replacement.
-enum Change { CHANGE_NONE = 0, CHANGE_SPEED = 1, CHANGE_REPLACED = 2 };
+// 3: bearing only (bytes 40, 44..47; the G3 bearing overlay, FIX class).
+enum Change { CHANGE_NONE = 0, CHANGE_SPEED = 1, CHANGE_REPLACED = 2, CHANGE_BEARING = 3 };
 struct SendEval {
     int32_t window;
     double t_s, elapsed_s;
@@ -914,16 +963,26 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
     bool speed_only = s.replaced;
     for (unsigned i = 0; i < 48; ++i)
         if (out[i] != r.original[i] && (i < 32 || i > 39)) speed_only = false;
-    s.change = !s.replaced ? CHANGE_NONE : speed_only ? CHANGE_SPEED : CHANGE_REPLACED;
+    bool bearing_only = s.replaced;
+    for (unsigned i = 0; i < 48; ++i)
+        if (out[i] != r.original[i] && i != 40 && (i < 44 || i > 47)) bearing_only = false;
+    s.change = !s.replaced ? CHANGE_NONE : speed_only ? CHANGE_SPEED : bearing_only ? CHANGE_BEARING :
+               CHANGE_REPLACED;
     // Each change must report its own choice (BETA replacement / overlay).
     s.contract_ok = r.one_call && (s.change != CHANGE_REPLACED || r.choice == int32_t(A::BETA_REPLACEMENT)) &&
                     (s.change != CHANGE_SPEED || r.choice == int32_t(A::BETA_SPEED_OVERLAY)) &&
-                    (s.change != CHANGE_NONE || r.choice == int32_t(A::ORIGINAL));
+                    (s.change != CHANGE_BEARING || r.choice == int32_t(A::BETA_BEARING_OVERLAY)) &&
+                    // A bearing overlay may equal the stock bearing byte for byte.
+                    (s.change != CHANGE_NONE || r.choice == int32_t(A::ORIGINAL) ||
+                     r.choice == int32_t(A::BETA_BEARING_OVERLAY));
     s.payload_ok = 1;
     for (unsigned i = 0; i < 48; ++i) {
         if (out[i] == r.original[i]) continue;
+        // FIX: only the G3 bearing overlay may change hasBearing/bearing.
         const bool allowed = s.cls == CLASS_LOST ? allowed_byte(i) :
-                             s.cls == CLASS_NO_FIX ? (i >= 32 && i <= 39) : false;
+                             s.cls == CLASS_NO_FIX ? (i >= 32 && i <= 39) :
+                             s.cls == CLASS_FIX && r.choice == int32_t(A::BETA_BEARING_OVERLAY) ?
+                                 (i == 40 || (i >= 44 && i <= 47)) : false;
         if (!allowed) s.payload_ok = 0;
     }
     s.speed_ok = 1;
@@ -931,9 +990,10 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
         s.accuracy_ok = 1;
         s.accuracy_m = s.error_m = s.bearing_deg = NAN;
         s.speed_mps = int32_t(get32(out + 36)) / 1000.0;
-    } else if (!s.replaced) {
+    } else if (!s.replaced || s.change == CHANGE_BEARING) {
         s.accuracy_ok = 1;
         s.accuracy_m = s.error_m = s.speed_mps = s.bearing_deg = NAN;
+        if (s.change == CHANGE_BEARING) s.bearing_deg = int32_t(get32(out + 44)) / 1e6;
     } else {
         const uint32_t acc = get32(out + 20);
         s.accuracy_m = acc / 1000.0;
@@ -1232,6 +1292,7 @@ void usage() {
         "                   [--boot-id ID] [--poll-hdop H] [--position-source auto|adapter|poll] [--report FILE.json] [--csv FILE.csv] [--check]\n"
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
         "                   [--g3 off|on|slow] [--g3-store DIR] [--g3-out FILE]\n"
+        "                   [--g3-send off|on] [--g3-send-out FILE] [--g3-rt S]\n"
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "                   [--assume-forward on|off] [--seed-report] [--reverse-fence feed|runtime]\n"
         "                   [--diag SEED] [--diag-out FILE] [--acc-cap on|off]\n"
@@ -1249,7 +1310,7 @@ int main(int argc, char** argv) {
     opt.truth_gap_ns = 3000000000ULL; opt.course_min_kmh = 15; opt.coverage_min = 0.95;
     opt.poll_hdop = 1.0; opt.position_source = "auto";
     opt.engagement = "continuous";
-    opt.g3 = "off";
+    opt.g3 = "off"; opt.g3_send = false; opt.g3_rt = 0;
     opt.assume_forward = true; opt.seed_report = false; opt.reverse_fence = false;
     opt.acc_cap_off = false;
     opt.yaw_rail = true; opt.trace_from = opt.trace_to = 0;
@@ -1293,6 +1354,13 @@ int main(int argc, char** argv) {
         }
         else if (a == "--g3-store" && more) opt.g3_store = argv[++i];
         else if (a == "--g3-out" && more) opt.g3_out = argv[++i];
+        else if (a == "--g3-send" && more) {
+            const std::string v = argv[++i];
+            if (v != "on" && v != "off") usage();
+            opt.g3_send = v == "on";
+        }
+        else if (a == "--g3-send-out" && more) opt.g3_send_out = argv[++i];
+        else if (a == "--g3-rt" && more) opt.g3_rt = strtoull(argv[++i], 0, 10);
         else if (a == "--stopped-accuracy-m" && more) opt.stopped_accuracy_m = atof(argv[++i]);
         else if (a == "--stopped-honest-max-m" && more) opt.stopped_honest_max_m = atof(argv[++i]);
         else if (a == "--crawl-speed-mps" && more) opt.crawl_speed_mps = atof(argv[++i]);
@@ -1655,6 +1723,12 @@ int main(int argc, char** argv) {
         if (!f) { perror(opt.g3_out.c_str()); return 2; }
         for (size_t i = 0; i < g3_journal.lines.size(); ++i) fprintf(f, "%s\n", g3_journal.lines[i].c_str());
         if (fclose(f)) { perror(opt.g3_out.c_str()); return 2; }
+    }
+    if (!opt.g3_send_out.empty()) {
+        FILE* f = fopen(opt.g3_send_out.c_str(), "w");
+        if (!f) { perror(opt.g3_send_out.c_str()); return 2; }
+        for (size_t i = 0; i < g3_send_lines.size(); ++i) fprintf(f, "%s\n", g3_send_lines[i].c_str());
+        if (fclose(f)) { perror(opt.g3_send_out.c_str()); return 2; }
     }
     if (!opt.record_out.empty()) {
         FILE* f = fopen(opt.record_out.c_str(), "w");

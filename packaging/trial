@@ -330,9 +330,10 @@ vim_side_toggle() {
 }
 
 # Menu 8 (2026-10-11, validation/G3_RECORD_ONLY_2026-10-11.md): the owner
-# switch of the record-only first-connection heading log (G3). While
-# BASE/g3-off exists the worker neither restores nor stores the parked
-# heading and writes no G3 rows; read once at CMU start. Never touches
+# switch of the first-connection heading (G3). While BASE/g3-off exists the
+# worker neither restores nor stores the parked heading, never sends the
+# carried start bearing (validation/G3_SEND_2026-10-13.md) and writes no G3
+# rows; read once at CMU start. Never touches
 # mx5dr.conf. Shows the state first, then one numeric confirmation (8 again).
 g3_toggle() {
     marker=$BASE/g3-off
@@ -349,7 +350,7 @@ g3_toggle() {
     if [ -e "$marker" ] || [ -L "$marker" ]; then state=OFF; next=ON
     else state=ON; next=OFF; fi
     printf '%s\n' "Heading log (G3) now: $state" \
-        'Log-only; LOCATION never changes.' \
+        'Off: no heading log, no start bearing.' \
         "Enter 8 again to switch it $next," \
         'anything else cancels.'
     printf 'Number, then Enter: '
@@ -511,7 +512,7 @@ while :; do
             '5 Reboot CMU now through the original system reboot command' \
             '6 Delete everything this package left on the CMU (run 4, then 5, first)' \
             '7 VIM side-channel log on/off (log only)' \
-            '8 Heading log (G3) on/off (log only)' \
+            '8 Heading (G3) log and start bearing on/off' \
             '9 Tunnel test on/off (BETA diagnostic)' \
             '10 Tunnel 25 m cap on/off (BETA)' \
             '0 Exit'

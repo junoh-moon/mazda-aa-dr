@@ -10,6 +10,7 @@
 // only: this is not vehicle, phone or DHU evidence.
 #include "../../src/runtime/runtime.cpp"
 #include <assert.h>
+#include <dirent.h>
 #include <fstream>
 #include <map>
 #include <string>
@@ -60,7 +61,8 @@ static void put64(uint8_t* p,uint64_t v) { put32(p,uint32_t(v));put32(p+4,uint32
 static void putd(uint8_t* p,double v) { uint64_t b;memcpy(&b,&v,8);put64(p,b); }
 static uint32_t get32(const uint8_t* p) { return p[0]|(p[1]<<8)|(p[2]<<16)|(uint32_t(p[3])<<24); }
 
-struct Call { unsigned ms;int mode;bool replaced,overlay;int32_t result;uint32_t accuracy_e3,speed_e3; };
+struct Call { unsigned ms;int mode;bool replaced,overlay;int32_t result;uint32_t accuracy_e3,speed_e3;bool bearing;uint32_t bearing_e6;
+              uint64_t sent_ns;uint8_t sent_bytes[48]; };
 static std::vector<Call> calls;
 static int manager;
 static double kmh=36;
@@ -69,7 +71,21 @@ static int storage_b_object;
 static void* storage=storage_a;
 // g3_park: the car parks; fixes keep this latitude (and report 0 km/h).
 static int frozen_ms=-1;
-static double latitude(unsigned ms) { return 35+kmh/3.6*((frozen_ms>=0?unsigned(frozen_ms):ms)/1000.0)/111320; }
+// g3_send scenarios (validation/G3_SEND_2026-10-13.md): parked until
+// drive_from_ms, then the wheels and the fixes report kmh and every fix
+// reports fix_course, while the fix position stays where the car parked (a
+// held GPS position): BETA's policy M (a 3 m chord) never accepts a course,
+// so the window must end by its own stock trust/conflict rule.
+static int drive_from_ms=-1;
+static double fix_course=0.0;
+static double latitude(unsigned ms) {
+    if(drive_from_ms>=0)return 35.0;
+    return 35+kmh/3.6*((frozen_ms>=0?unsigned(frozen_ms):ms)/1000.0)/111320;
+}
+static double fix_kmh(unsigned ms) {
+    if(drive_from_ms>=0)return ms>=unsigned(drive_from_ms)?kmh:0.0;
+    return frozen_ms>=0?0.0:kmh;
+}
 // G3 store latency injection: the store thread's fsync step blocks 3 s
 // (g3_fsync_hook runs inside the step, between its gates).
 // Only the fsync write of a stop of >= 60 s runs the hook (a 15-60 s stop is
@@ -84,6 +100,10 @@ static void slow_fsync() {
 static bool g3_scenario(const std::string& s) {
     return s=="g3_park" || s=="g3_cancel" || s=="g3_move" || s=="g3_stop" || s=="g3_fault";
 }
+static bool g3_send_scenario(const std::string& s) {
+    return s=="g3_send" || s=="g3_send_conflict" || s=="g3_send_off" || s=="g3_send_abort" ||
+           s=="g3_send_fence";
+}
 static bool replaced_overlay(const uint8_t* original);
 // One OEM position callback: POSITION enter, one LOCATION send, leave.
 // stored: the boot-time no-fix value (mode 1, utc 0, fixed coordinates,
@@ -93,7 +113,7 @@ static bool oem_call(unsigned ms,int mode,bool stored=false) {
     const double lat=stored?35.0:latitude(ms);
     put32(position,uint32_t(mode));put64(position+8,stored?0:1700000000ULL+ms/1000);
     putd(position+16,lat);putd(position+24,135.0);put32(position+32,30);
-    putd(position+40,stored?335.0:0.0);putd(position+48,stored?4.0:frozen_ms>=0?0.0:kmh);
+    putd(position+40,stored?335.0:fix_course);putd(position+48,stored?4.0:fix_kmh(ms));
     putd(position+56,stored?4.4:mode?1.0:99.0);putd(position+64,stored?9.7:mode?1.0:99.0);
     uint8_t original[48];
     for(unsigned i=0;i<48;++i)original[i]=uint8_t(0xA0+i);
@@ -109,8 +129,15 @@ static bool oem_call(unsigned ms,int mode,bool stored=false) {
     assert(sent_type==1);
     const bool replaced=memcmp(sent,original,48)!=0;
     const bool overlay=replaced && stored;
-    Call c={ms,mode,replaced && !overlay,overlay,result,get32(sent+20),get32(sent+36)};
+    // G3 bearing overlay: a FIX send with only hasBearing (40) and bearing (44..47) changed.
+    bool bearing=replaced && !stored && mode!=0;
+    for(unsigned i=0;i<48 && bearing;++i)if(i!=40 && !(i>=44 && i<48) && sent[i]!=original[i])bearing=false;
+    if(replaced && !stored && mode!=0)assert(bearing && sent[40]==1);
+    Call c={ms,mode,replaced && !overlay && !bearing,overlay,result,get32(sent+20),get32(sent+36),bearing,get32(sent+44),
+            clock_ns(0),{0}};
+    memcpy(c.sent_bytes,sent,48);
     calls.push_back(c);
+    if(bearing)return true;
     if(overlay)assert(replaced_overlay(original));
     else if(replaced) {
         // Never on a non-mode-0 call; copy-then-overwrite keeps 0..7, 24..31.
@@ -211,7 +238,7 @@ int main(int argc,char** argv) {
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
            scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed"||
-           scenario=="contradict"||g3_scenario(scenario));
+           scenario=="contradict"||g3_scenario(scenario)||g3_send_scenario(scenario));
     // contradict (rule F v3): no REVERSE message at boot (the BETA seed comes
     // from the assumed forward state), GPS lost from t 3.2 s (ENGAGED), then a
     // real reverse 1 at t 4.4 s: the episode is withdrawn for the contradiction
@@ -229,8 +256,29 @@ int main(int argc,char** argv) {
     const std::string logs=std::string(root)+"/logs";
     assert(!mkdir(logs.c_str(),0700));
     if(cap_off) { const int fd=open((std::string(root)+"/acc-cap-off").c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);assert(fd>=0);close(fd); }
+    const bool g3_send_case=g3_send_scenario(scenario);
+    if(g3_send_case) {
+        // A parked record of an earlier boot at the start position: the
+        // worker restores it CARRIED (chain none = none, wall-clock age 10 min).
+        mx5::runtime::G3Record r=mx5::runtime::g3_record();
+        r.seq=4;strcpy(r.boot_id,"aaaaaaaa-1111-2222-3333-444444444444");r.state='S';
+        r.flags=mx5::runtime::G3_FLAG_HEADING|mx5::runtime::G3_FLAG_POSITION;
+        r.heading_cdeg=scenario=="g3_send_conflict"?9000:200;r.unc_cdeg=450;
+        r.lat_e7=350000000;r.lon_e7=1350000000;r.pos_err_dm=50;
+        r.rt_s=mx5::runtime::g3_realtime_s()-600;strcpy(r.chain,"none");
+        char line[mx5::runtime::G3_RECORD_MAX];const size_t n=mx5::runtime::g3_encode(r,line,sizeof line);assert(n);
+        const int fd=open((logs+"/"+mx5::runtime::G3_STORE_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+        assert(fd>=0 && write(fd,line,n)==ssize_t(n));close(fd);
+        if(scenario=="g3_send_off") {
+            const int m=open((std::string(root)+"/"+mx5::runtime::G3_OFF_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+            assert(m>=0);close(m);
+        }
+        drive_from_ms=6000;fix_course=0.0;
+    }
     // Startup-only fixture injection, as loader_enabled()/bootstrap set them.
     config.mode=5;config.valid=true;config.max_log_bytes=41943040;config.max_log_files=1;
+    // g3_send scenarios: the product's persistent profile (writer thread, quiet filter).
+    if(g3_send_case)config.log_profile=mx5::runtime::LOG_PROFILE_PERSISTENT;
     hook_installed=true;boot_result="ok";
     install_report.sessions_declined=true;install_report.declined_stage=3;
     A::Options options=product_options();
@@ -274,7 +322,8 @@ int main(int argc,char** argv) {
         std::ifstream g((logs+"/trace.0.jsonl").c_str());bool side=false,cap=false;
         while(std::getline(g,line))
             if(line.find("\"kind\":\"shadow_boot\"")!=std::string::npos) {
-                if(line.find(",\"vim_side_channel\":\"not_persistent\"}")!=std::string::npos)side=true;
+                // (The g3_send scenarios run the persistent profile, which binds it.)
+                if(line.find(",\"vim_side_channel\":\"not_persistent\"}")!=std::string::npos || g3_send_case)side=true;
                 // The tunnel reporting ceiling of this boot (0: acc-cap-off).
                 if(line.find(cap_off?",\"acc_cap_m\":0,":",\"acc_cap_m\":25,")!=std::string::npos)cap=true;
             }
@@ -290,14 +339,15 @@ int main(int argc,char** argv) {
     const unsigned PRELUDE=8000,PRELUDE2=10000; // >= 1 s margin over the 10 s rule
     const bool nofix=scenario=="nofix" || scenario=="nofix_rearm" || scenario=="cadence_gap_speed";
     const bool cadence=scenario=="cadence_gap" || scenario=="cadence_gap_speed";
-    const bool shifted=!nofix && !cadence && scenario!="no_anchor";
+    const bool shifted=!nofix && !cadence && scenario!="no_anchor" && !g3_send_case;
     const unsigned scenario_end=scenario=="budget"?20000:scenario=="main"?9600:
                                 scenario=="nofix_rearm"?17000:scenario=="cadence_gap"?30400:
-                                scenario=="cadence_gap_speed"?16000:scenario=="g3_park"?68000:scenario=="g3_cancel" || scenario=="g3_move"?70000:scenario=="g3_stop"?63000:scenario=="g3_fault"?66000:6400;
+                                scenario=="cadence_gap_speed"?16000:scenario=="g3_park"?68000:scenario=="g3_cancel" || scenario=="g3_move"?70000:scenario=="g3_stop"?63000:scenario=="g3_fault"?66000:g3_send_case?14000:6400;
     const unsigned end_ms=scenario_end+(shifted?PRELUDE:0)+(scenario=="main"?PRELUDE2:0);
     const uint64_t start=clock_ns(0);
     bool motion=true;
     int g3_inject_t=-1;
+    uint64_t abort_ns=0,abort_closed_ns=0;
     unsigned first_outage_replaced=0,second_outage_replaced=0,after_hold_replaced=0,after_storage_replaced=0;
     unsigned replaced_after_silence=0,replaced_after_disable=0,replaced_after_stop=0;
     bool failed_once=false,storage_changed=false;
@@ -330,7 +380,7 @@ int main(int argc,char** argv) {
         const bool g3_injected=g3_inject_t>=0 && int(t)>=g3_inject_t+300;
         if(scenario=="silence" && !prelude && t==4000)motion=false;
         // nofix: the car drives, then stands still, all before the first fix.
-        const double wheel_kmh=(scenario=="nofix" && ms>=2500) || (g3_scenario(scenario) && !prelude && t>=2000 &&
+        const double wheel_kmh=g3_send_case?(ms>=6000?kmh:0.0):(scenario=="nofix" && ms>=2500) || (g3_scenario(scenario) && !prelude && t>=2000 &&
                                   !(scenario=="g3_move" && g3_injected))?0.0:kmh;
         for(unsigned kind=1;kind<=3 && motion;++kind) {
             if(kind==N::YAW && ms%100)continue;
@@ -357,6 +407,16 @@ int main(int argc,char** argv) {
         // 60 s write (a tainted heading), a permanent audit fault resets the
         // pipeline (ending the assumed origin) and stops MODEL/G3 computation.
         if(scenario=="g3_fault" && !prelude && g3_injected)audit_fault=1;
+        if(g3_send_case) {
+            // Parked fixes (0 km/h, course 0) until 6 s, then kmh (position held).
+            // g3_send_abort: a permanent audit fault at 3 s, inside the window.
+            if(scenario=="g3_send_abort" && t==3000) { abort_ns=clock_ns(0);audit_fault=1; }
+            if(scenario=="g3_send_abort" && abort_ns && !abort_closed_ns && !A::bearing_overlay())abort_closed_ns=clock_ns(0);
+            // g3_send_fence: no POSITION/SEND for 4 s (a dongle reconnect) at 2.5-6.5 s.
+            if(scenario=="g3_send_fence" && t>=2500 && t<6500)continue;
+            if(t%500==0)oem_call(ms,1);
+            continue;
+        }
         if(scenario=="g3_cancel" || scenario=="g3_move" || scenario=="g3_stop" || scenario=="g3_fault") {
             // Parked from 2 s with real fixes (ARMED): the 15 s write (no
             // fsync) at about 17 s, then the 60 s write at about 62 s blocks
@@ -537,6 +597,99 @@ int main(int argc,char** argv) {
         assert(access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0);
     }
     assert(A::mode()==A::OBSERVE);
+    if(g3_send_case) {
+        // The bearing gate never outlives the worker.
+        assert(!A::bearing_overlay());
+        std::vector<std::string> lines;
+        for(int k=2;k>=0;--k) {
+            std::ifstream f((logs+"/trace."+char('0'+k)+".jsonl").c_str());std::string l;
+            while(std::getline(f,l))lines.push_back(l);
+        }
+        unsigned bearing=0,first_ms=0,last_ms=0,choice6=0,starts=0,ends=0,conflicts=0;uint32_t e6=0;
+        std::string start_row,end_row,restore;
+        for(size_t i=0;i<calls.size();++i)if(calls[i].bearing) {
+            if(!bearing++)first_ms=calls[i].ms;
+            last_ms=calls[i].ms;e6=calls[i].bearing_e6;
+            assert(calls[i].mode==1 && !calls[i].replaced && !calls[i].overlay);
+        }
+        uint64_t end_ns=0;
+        for(size_t i=0;i<lines.size();++i) {
+            const std::string& l=lines[i];
+            if(l.find("{\"kind\":\"send\"")==0 && l.find("\"choice\":6,")!=std::string::npos)++choice6;
+            if(l.find("{\"kind\":\"send\"")==0 && l.find("\"choice\":3,")!=std::string::npos)assert(0);
+            if(l.find("{\"kind\":\"g3_send\"")==0 && l.find("\"event\":\"start\"")!=std::string::npos) { ++starts;start_row=l; }
+            if(l.find("{\"kind\":\"g3_send\"")==0 && l.find("\"event\":\"end\"")!=std::string::npos) {
+                ++ends;end_row=l;end_ns=strtoull(l.c_str()+l.find("\"mono_ns\":")+10,0,10);
+            }
+            if(l.find("{\"kind\":\"g3_send_conflict\"")==0)++conflicts;
+            if(l.find("{\"kind\":\"g3_store\"")==0 && restore.empty())restore=l;
+        }
+        printf("%s: calls=%zu bearing_overlays=%u (%u..%u ms, e6 %u) choice6_rows=%u starts=%u ends=%u conflicts=%u\n  %s\n  %s\n",
+               scenario.c_str(),calls.size(),bearing,first_ms,last_ms,unsigned(e6),choice6,starts,ends,conflicts,
+               start_row.c_str(),end_row.c_str());
+        if(scenario=="g3_send_off") {
+            // Owner switch: no restore, no window, no overlaid send, no g3_send row.
+            assert(!bearing && !choice6 && !starts && !ends && !conflicts);
+            assert(restore.find("\"event\":\"off\",\"reason\":\"marker\"")!=std::string::npos);
+            unlink((std::string(root)+"/"+mx5::runtime::G3_OFF_NAME).c_str());
+        } else {
+            assert(restore.find("\"event\":\"loaded\",\"reason\":\"chain_ok\",\"g3\":\"CARRIED\"")!=std::string::npos);
+            assert(starts==1 && ends==1 && bearing>=3 && choice6==bearing);
+            // Overlaid while parked (the first send precedes the window).
+            assert(first_ms<=2000);
+            if(scenario=="g3_send") {
+                // The stock trust rule itself (4 gated fixes at 2 Hz after 6 s).
+                assert(e6==2000000 && start_row.find("\"h\":20,")!=std::string::npos && !conflicts);
+                assert(end_row.find("\"reason\":\"trusted\",\"why\":\"stock_course\",\"by\":\"fix\"")!=std::string::npos);
+            } else if(scenario=="g3_send_conflict") {
+                // The conflict rule itself (8 gated fixes disagreeing by 90 deg).
+                assert(e6==90000000 && conflicts==1);
+                assert(end_row.find("\"reason\":\"conflict\",\"why\":\"stock_course\",\"by\":\"fix\"")!=std::string::npos);
+            } else if(scenario=="g3_send_fence") {
+                // The cadence fence (a send/position gap > 3 s) ends the window
+                // (never re-published with the new session evidence).
+                assert(end_row.find("\"reason\":\"session\",\"why\":\"cadence_fence\"")!=std::string::npos);
+            } else {
+                // MODEL tick abort: the window ends at once (fault), the gate closes.
+                printf("g3_send_abort: gate closed %.1f ms after the fault\n",(abort_closed_ns-abort_ns)/1e6);
+                assert(abort_ns && abort_closed_ns && abort_closed_ns-abort_ns<1000000000ULL);
+                assert(end_row.find("\"reason\":\"fault\",\"why\":\"model_disabled\"")!=std::string::npos ||
+                       end_row.find("\"reason\":\"fault\",\"why\":\"audit_fault\"")!=std::string::npos);
+            }
+            // Real send times: every overlaid send happened before the end row
+            // (the worker writes it after the deciding call returned), and the
+            // first call that started after the end row is not overlaid.
+            unsigned before=0,after=0;
+            for(size_t i=0;i<calls.size();++i) {
+                if(calls[i].bearing) { assert(calls[i].sent_ns<=end_ns);++before; }
+                if(calls[i].sent_ns>end_ns) { ++after;assert(!calls[i].bearing); }
+            }
+            printf("  overlaid before the end row %u, calls after it %u (none overlaid)\n",before,after);
+            assert(before>=(scenario=="g3_send_abort" || scenario=="g3_send_fence"?3u:5u) && after>=3);
+        }
+        // Feature on/off identity (with g3_send_off): every OEM-bound payload,
+        // in call order, for tests/runtime/g3_send_identity.py.
+        if(const char* dump=getenv("MX5DR_G3_SENT_DUMP")) {
+            FILE* out=fopen(dump,"w");assert(out);
+            for(size_t i=0;i<calls.size();++i) {
+                fprintf(out,"%u %d ",calls[i].ms,int(calls[i].bearing));
+                for(unsigned b=0;b<48;++b)fprintf(out,"%02x",calls[i].sent_bytes[b]);
+                fprintf(out,"\n");
+            }
+            assert(!fclose(out));
+        }
+        // Cleanup: every file the worker wrote below logs, then the tree.
+        DIR* d=opendir(logs.c_str());assert(d);
+        for(struct dirent* e;(e=readdir(d));) {
+            const std::string name=e->d_name;if(name=="." || name=="..")continue;
+            const std::string path=logs+"/"+name;
+            if(rmdir(path.c_str()))unlink(path.c_str());
+        }
+        closedir(d);
+        assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);
+        puts("G3 bearing send runtime checks passed");
+        return 0;
+    }
     for(unsigned i=0;i<3;++i) if(oem_call(end_ms+200+i*200,0))++replaced_after_stop;
     const Rows rows=read_rows(logs);
     unsigned replaced_total=0;

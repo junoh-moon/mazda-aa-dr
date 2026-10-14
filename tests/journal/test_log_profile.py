@@ -396,6 +396,138 @@ class ChanRows(unittest.TestCase):
         self.assertIn('malformed_chan_row', [i['code'] for i in a.report()['issues']])
 
 
+
+# G3 first-connection bearing send (validation/G3_SEND_2026-10-13.md).
+G3_SEND_KINDS = ('g3_send', 'g3_send_conflict')
+BEARING_BYTES = (40, 44, 45, 46, 47)
+# Digest send counters move between "location" (RAW context) and "changed"
+# (kept) when a stock FIX send is overlaid; raw_direct_rows follows.
+DIGEST_SEND_KEYS = ('send_location', 'send_changed', 'raw_direct_rows')
+
+
+def g3_lines(directory):
+    lines = []
+    for index in (2, 1, 0):
+        path = Path(directory) / 'logs' / ('trace.%d.jsonl' % index)
+        if path.exists():
+            lines += path.read_text().splitlines()
+    return lines
+
+
+def fold_digest(row):
+    total = 0
+
+    def fold(d):
+        nonlocal total
+        for k in list(d):
+            if isinstance(d[k], dict):
+                fold(d[k])
+            elif k in DIGEST_SEND_KEYS[:2]:
+                total += d.pop(k)
+            elif k == DIGEST_SEND_KEYS[2]:
+                d.pop(k)
+    fold(row)
+    row['send_location_or_changed'] = total
+
+
+def without_g3_send(lines, overlaid=None):
+    """The journal with the bearing send removed: no g3_send rows; every
+    overlaid SEND row turned back into the stock row it replaced (choice 0,
+    NOT_UNKNOWN, outgoing = original) after checking that only hasBearing (1)
+    and bearing changed; a FIX send inside the window that the overlay did not
+    take (candidate not yet published) back to NOT_UNKNOWN; the digest send
+    counters folded. overlaid: collects (call, generation, bearing_e6)."""
+    out = []
+    for line in lines:
+        row = json.loads(line)
+        if row['kind'] in G3_SEND_KINDS:
+            continue
+        if row['kind'] == 'boot':
+            row.pop('pid', None)
+        if row['kind'] == 'send' and row.get('type') == 1 and row.get('class') == 2:
+            if row['choice'] == 6:
+                original, outgoing = bytes.fromhex(row['original_hex']), bytes.fromhex(row['outgoing_hex'])
+                changed = [i for i in range(48) if original[i] != outgoing[i]]
+                assert all(i in BEARING_BYTES for i in changed) and outgoing[40] == 1, changed
+                bearing = int.from_bytes(outgoing[44:48], 'little', signed=True)
+                assert 10000 < bearing <= 359990000, bearing
+                if overlaid is not None:
+                    overlaid.append((row['call'], row['generation'], bearing))
+                row.update(choice=0, reason=7, outgoing_hex=row['original_hex'])
+            elif row['choice'] == 0 and row['reason'] != 7:
+                row['reason'] = 7
+        if row['kind'] == 'log_digest':
+            fold_digest(row)
+        out.append(json.dumps(row, sort_keys=True))
+    return out
+
+
+@unittest.skipUnless(TOOL.exists(), 'build/log_rate not built')
+class G3SendRows(unittest.TestCase):
+    """The product journal path with the G3 tracker restored CARRIED: the
+    bearing send on and off (the beta.14 behaviour) on the same synthetic
+    drive (parked at the start, then away; GPS outages every 10 minutes)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='mx5dr-g3-send-')
+        cls.runs = {}
+        for profile in ('full', 'persistent'):
+            for state in ('on', 'off'):
+                directory = os.path.join(cls.tmp.name, '%s-%s' % (profile, state))
+                cls.runs[(profile, state)] = run(profile, directory, 1300,
+                                                 extra=('--nofix', '0', '--g3', 'on', '--g3-send', state)) + (directory,)
+        directory = os.path.join(cls.tmp.name, 'conflict')
+        cls.runs['conflict'] = run('full', directory, 120, extra=('--nofix', '0', '--g3', 'on', '--g3-send', 'on',
+                                                                  '--g3-heading', '180')) + (directory,)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_off_and_on_differ_only_in_bearing(self):
+        for profile in ('full', 'persistent'):
+            on, off = self.runs[(profile, 'on')], self.runs[(profile, 'off')]
+            overlaid = []
+            on_lines, off_lines = g3_lines(on[2]), g3_lines(off[2])
+            self.assertEqual(without_g3_send(on_lines, overlaid), without_g3_send(off_lines), profile)
+            # Off: no window, no row, no overlaid send (the stock bytes, byte for byte).
+            self.assertFalse([l for l in off_lines if '"kind":"g3_send' in l or '"choice":6,' in l], profile)
+            self.assertGreaterEqual(len(overlaid), 5, profile)
+            self.assertEqual({b for _, _, b in overlaid}, {90000000}, profile)   # carried 90.0, straight
+            self.assertEqual((on[0]['beta_state'], on[0]['outages']), (off[0]['beta_state'], off[0]['outages']))
+            self.assertEqual(evidence([r for r in on[1] if r['kind'] != 'send']),
+                             evidence([r for r in off[1] if r['kind'] != 'send']), profile)
+
+    def test_window_ends_and_never_rearms(self):
+        for key in (('full', 'on'), ('persistent', 'on'), 'conflict'):
+            rows = self.runs[key][1]
+            send = [r for r in rows if r['kind'] in G3_SEND_KINDS]
+            starts = [r for r in send if r.get('event') == 'start']
+            ends = [r for r in send if r.get('event') == 'end']
+            self.assertEqual((len(starts), len(ends)), (1, 1), key)
+            reason = 'conflict' if key == 'conflict' else 'trusted'
+            self.assertEqual((ends[0]['reason'], ends[0]['why']), (reason, 'stock_course'), key)
+            self.assertEqual(len([r for r in send if r['kind'] == 'g3_send_conflict']), int(key == 'conflict'))
+            # Only the call of the fix that ended the window (decided before the
+            # worker saw that fix) may follow the end row; no later call.
+            end_at = rows.index(ends[0])
+            last_position = max(r['call'] for r in rows[:end_at] if r['kind'] == 'position')
+            overlaid = [r for r in rows if r['kind'] == 'send' and r['choice'] == 6]
+            self.assertTrue(overlaid and max(r['call'] for r in overlaid) <= last_position, key)
+            self.assertEqual(ends[0]['sent'] + 1, len(overlaid), key)
+
+    def test_analyzer_accepts_the_send(self):
+        for profile in ('full', 'persistent'):
+            report, found = analyze(self.runs[(profile, 'on')][2])
+            violations = [code for (violation, code), n in found.items() if violation]
+            self.assertEqual(violations, [], profile)
+            self.assertFalse([code for (_, code) in found if code.startswith('g3_bearing')], profile)
+            send = report['g3']['send']
+            self.assertEqual((send['windows'], send['end_reasons']), (1, {'trusted': 1}), profile)
+            self.assertGreaterEqual(send['overlaid_sends'], 5, profile)
+
+
 if __name__ == '__main__':
     unittest.main()
 

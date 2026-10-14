@@ -10,7 +10,7 @@ CORE = src/core/dr_core.c
 REQUEST = src/adapter/request_hooks.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp
 ADAPTER = src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $(REQUEST)
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
-NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h src/runtime/beta_profile.h src/runtime/core_bridge.h src/runtime/beta_controller.h src/runtime/motion_gap.h src/runtime/g3_heading.h
+NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h src/runtime/beta_profile.h src/runtime/core_bridge.h src/runtime/beta_controller.h src/runtime/motion_gap.h src/runtime/g3_heading.h src/runtime/g3_send.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
 SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
@@ -133,7 +133,7 @@ $(BUILD)/test_install_policy: tests/adapter/test_install_policy.cpp src/adapter/
 	$(CXX) $(CXX_WARN) tests/adapter/test_install_policy.cpp -o $@
 test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_pool_association $(BUILD)/test_association_context $(BUILD)/test_bus_endpoint $(BUILD)/test_bus_hooks $(BUILD)/test_lds_bus_hooks $(BUILD)/test_bus_early_init $(BUILD)/test_adapter $(BUILD)/test_provenance_context $(BUILD)/test_context_pool $(BUILD)/test_cold_patch $(BUILD)/test_session_hooks $(BUILD)/test_session_early_init $(BUILD)/test_session_request $(BUILD)/test_request_wire $(BUILD)/test_install_policy
 	$(BUILD)/test_install_policy
-	@set -e; for case in small_payload small_payload_off observe scrub native malformed nested assist assist_beta epoch reacquire expiry encoder backend request beta_disallowed beta_replace beta_accuracy beta_branches beta_hold beta_diag_sat beta_send_storage beta_undeclined beta_overlay; do $(BUILD)/test_adapter $$case; done
+	@set -e; for case in small_payload small_payload_off observe scrub native malformed nested assist assist_beta epoch reacquire expiry encoder backend request beta_disallowed beta_replace beta_accuracy beta_branches beta_hold beta_diag_sat beta_send_storage beta_undeclined beta_overlay beta_bearing; do $(BUILD)/test_adapter $$case; done
 	@set -e; for scenario in captured nested mutate_after nested_missing wrong_call wrong_generation wrong_request wrong_worker wrong_stage unavailable missing malformed request_failed reader_conflict reader_mismatch frame_reuse provenance_failed presence_empty presence_present legacy_layout invalid_presence presence_without_origin status_empty status_a status_v status_other invalid_status status_without_origin legacy_layout_v2; do $(BUILD)/test_association_context $$scenario; done
 	@set -e; for case in captured nested failure missing invalidate unqualified malformed; do $(BUILD)/test_provenance_context $$case; done
 	$(BUILD)/test_context_pool saturation
@@ -188,7 +188,8 @@ test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association 
 	$(BUILD)/test_model_session_input
 	@set -e; for case in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session $$case; done
 	MX5DR_TEST_STALE_RAW=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session bus_reuse
-	@set -e; for case in main main_no_reverse contradict silence disable budget budget_cap_off fault no_anchor nofix withdrawn_class nofix_rearm cadence_gap cadence_gap_speed g3_park g3_cancel g3_move g3_stop g3_fault; do $(BUILD)/test_worker_beta $$case; done
+	@set -e; for case in main main_no_reverse contradict silence disable budget budget_cap_off fault no_anchor nofix withdrawn_class nofix_rearm cadence_gap cadence_gap_speed g3_park g3_cancel g3_move g3_stop g3_fault g3_send_conflict g3_send_abort g3_send_fence; do $(BUILD)/test_worker_beta $$case; done
+	@MX5DR_G3_SENT_DUMP=$(BUILD)/g3_send_on.txt $(BUILD)/test_worker_beta g3_send && MX5DR_G3_SENT_DUMP=$(BUILD)/g3_send_off.txt $(BUILD)/test_worker_beta g3_send_off && python3 tests/runtime/g3_send_identity.py $(BUILD)/g3_send_on.txt $(BUILD)/g3_send_off.txt
 	MX5DR_TEST_SLOW_YAW=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session bus_reuse
 	@set -e; for case in bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight; do MX5DR_TEST_PREGAP=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session $$case; done
 test-journal-boundaries:

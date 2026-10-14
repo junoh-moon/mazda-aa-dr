@@ -23,7 +23,7 @@ STORAGE_FILES = ('trace.storage.json', 'collector.storage.json')
 CLEAR_BYTES = (32, 36, 37, 38, 39, 40, 44, 45, 46, 47)
 # src/adapter/adapter.h Choice/Reason (exact enum order).
 CHOICES = {0: "ORIGINAL", 1: "SCRUBBED", 2: "DR_REPLACEMENT", 3: "BETA_REPLACEMENT",
-           4: "BETA_SPEED_OVERLAY"}
+           4: "BETA_SPEED_OVERLAY", 6: "BETA_BEARING_OVERLAY"}
 REASONS = ("PASS", "NO_CONTEXT", "NESTED_CALL", "EXTRA_LOCATION", "BAD_LENGTH",
            "DISABLED", "LOCK_BUSY", "NOT_UNKNOWN", "NOT_READY", "EPOCH_MISMATCH",
            "EXPIRED", "BAD_ENCODING", "BAD_PROVENANCE", "CONTEXT_UNAVAILABLE", "HELD",
@@ -40,6 +40,11 @@ BETA_MAX_ACCURACY_E3 = 40000
 # encode_speed_overlay: only hasSpeed (32) and speed_e3 (36..39) may change.
 BETA_OVERLAY_BYTES = (32, 36, 37, 38, 39)
 BETA_MAX_SPEED_E3 = 100000
+# encode_bearing_overlay (G3 first-connection bearing send,
+# validation/G3_SEND_2026-10-13.md): only hasBearing (40) and bearing_e6
+# (44..47) may change, hasBearing 1, bearing in (0.01, 359.99] deg.
+BETA_BEARING_BYTES = (40, 44, 45, 46, 47)
+BETA_BEARING_MIN_E6, BETA_BEARING_MAX_E6 = 10000, 359990000
 # BetaProfile.lease_ns / Options.max_snapshot_age_ns: an overlay speed comes
 # from a wheel event received at most this long before the send.
 BETA_LEASE_NS = 500000000
@@ -73,8 +78,11 @@ G3_STORE_EVENTS = ("off", "missing", "rejected", "loaded", "checked", "written",
                    "cancelled")
 G3_SINCE_EVENTS = ("unstored", "left")
 G3_FIRST_EVENTS = ("start", "t30", "course")
+# G3 bearing send (src/runtime/g3_send.h): one window per boot.
+G3_SEND_EVENTS = ("start", "none", "count", "end")
+G3_SEND_END_REASONS = ("trusted", "conflict", "cap", "fault", "rejected")
 # Adapter PositionClass numbers carried as the send/position "class" field.
-POSITION_CLASS_NO_FIX, POSITION_CLASS_LOST = 1, 3
+POSITION_CLASS_NO_FIX, POSITION_CLASS_FIX, POSITION_CLASS_LOST = 1, 2, 3
 BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor",
               "beta_cadence_fence")
 # beta_anchor "h"[0] codes (navigation::beta_heading_source_code).
@@ -1024,6 +1032,7 @@ class Auditor:
         self.beta_speed_engaged_periods = 0
         self.beta_speed_engaged_seconds = dict(count=0, min=None, max=None, mean=None)
         self.beta_speed_overlays = 0
+        self.g3_bearing_overlays = 0            # choice-6 LOCATION sends (G3 bearing send)
         self.beta_speed_overlay_nonzero = 0
         self.beta_speed_overlay_mps = dict(count=0, min=None, max=None, mean=None)
         self.beta_speed_overlay_wheel = Counter()  # checked / unverified (no wheel row in the lease)
@@ -1091,7 +1100,9 @@ class Auditor:
                                       # acc_h0 of the current stop above H_max, open stop episode.
                                       rule_build=False, h0_above=None, stop=None,
                                       # rule F: first seed recorded.
-                                      seeded=False))
+                                      seeded=False),
+                            # G3 bearing send window of this boot (g3_send start/end mono_ns).
+                            g3_send=dict(start_ns=None, end_ns=None, end_calls=(), post_end=False))
         self.sessions.append(self.session)
         self.positions = {}
         self.invalid_positions = set()
@@ -1427,7 +1438,7 @@ class Auditor:
             self.late_motion(row, source)
         elif kind == "chan_digest":
             self.chan_row(row, source)
-        elif kind in ("g3_store", "g3_first", "g3_since"):
+        elif kind in ("g3_store", "g3_first", "g3_since", "g3_send", "g3_send_conflict"):
             self.g3_row(row, source)
         elif kind in DRIVE_KINDS:
             self.drive_row(row, source)
@@ -1689,6 +1700,18 @@ class Auditor:
             self.issue("malformed_g3_row", source, "Invalid %s row" % row["kind"])
             return
         self.g3_rows.append((len(self.sessions), row))
+        if row["kind"] == "g3_send" and self.session is not None:
+            window = self.session["g3_send"]
+            if row["event"] == "start":
+                window["start_ns"] = row["mono_ns"]
+            elif row["event"] == "end":
+                window["end_ns"] = row["mono_ns"]
+                # The send of the call the end was decided in (by a fix: that
+                # call; by a tick: also the call in progress) was decided before
+                # the gate closed and may follow the end row once.
+                call = row.get("call")
+                if integer(call):
+                    window["end_calls"] = (call,) if row.get("by") == "fix" else (call, call + 1)
 
     def drive_row(self, row, source):
         """Drive data rows (record only; never evidence, never a product decision)."""
@@ -1702,7 +1725,7 @@ class Auditor:
         for index, session in enumerate(self.sessions):
             boot = session.get("boot") or {}
             boots[index + 1] = boot.get("boot_id") if isinstance(boot.get("boot_id"), str) else None
-        return g3_report(self.g3_rows, boots, self.g3_events)
+        return g3_report(self.g3_rows, boots, self.g3_events, self.g3_bearing_overlays)
 
     def chan_report(self):
         return chan_report(self.chan_rows, self.chan_speeds,
@@ -2697,8 +2720,8 @@ class Auditor:
             payloads.append(bytes.fromhex(value))
         original, outgoing = payloads
         self.checked += 1
-        # A choice-4 overlay is checked (and rejected outside NO_FIX) below.
-        if row["mode"] in (1, 2, 3) and choice != 4 and (original != outgoing or choice != 0):
+        # A choice-4/6 overlay is checked (and rejected outside NO_FIX/FIX) below.
+        if row["mode"] in (1, 2, 3) and choice not in (4, 6) and (original != outgoing or choice != 0):
             self.issue("native_mode_mutation", source, "Native mode1/2/3 must remain ORIGINAL and identical", True)
         if choice == 0 and original != outgoing:
             self.issue("original_payload_changed", source, "ORIGINAL payload differs", True)
@@ -2718,6 +2741,8 @@ class Auditor:
             self.beta_send(row, original, outgoing, source)
         elif choice == 4:
             self.beta_overlay(row, original, outgoing, source)
+        elif choice == 6:
+            self.beta_bearing(row, original, outgoing, source)
 
     def beta_boot(self, row, source):
         beta = row.get("beta")
@@ -3011,6 +3036,47 @@ class Auditor:
         add_difference(self.beta_speed_overlay_mps, speed_e3 / 1000.0)
         if len(beta["overlays"]) < 1000000:
             beta["overlays"].append((row["mono_ns"], speed_e3, source))
+
+    def beta_bearing(self, row, original, outgoing, source):
+        """BETA_BEARING_OVERLAY (choice 6, G3 first-connection bearing send):
+        only on a FIX send (original mode 1/2 with GetPosition utc_s > 0),
+        only bytes 40 and 44..47 changed, hasBearing 1, a bearing in
+        (0.01, 359.99] deg, and only inside this boot's g3_send window
+        (after its start row, not after its end row)."""
+        s = self.session
+        self.lag_violation(row, source, "BETA_BEARING_OVERLAY")
+        self.g3_bearing_overlays += 1
+        if s["boot"] is not None and s["boot"].get("mode") != 5:
+            self.issue("beta_without_beta_config", source, "BETA_BEARING_OVERLAY requires boot configuration BETA=5", True)
+        if row["reason"] != 0:
+            self.issue("beta_nonpass_reason", source, "BETA_BEARING_OVERLAY must have reason PASS", True)
+        position = self.positions.get((row["call"], row["generation"]))
+        if row["mode"] not in (1, 2) or ("class" in row and row["class"] != POSITION_CLASS_FIX):
+            self.issue("g3_bearing_wrong_class", source,
+                       "BETA_BEARING_OVERLAY requires a FIX send (mode %d class %r)" % (row["mode"], row.get("class")), True)
+        elif position is not None and integer(position.get("utc_s")) and position["utc_s"] == 0:
+            self.issue("g3_bearing_wrong_class", source, "BETA_BEARING_OVERLAY on a NO_FIX send (utc_s 0)", True)
+        window = s["g3_send"]
+        outside = window["start_ns"] is None or row["mono_ns"] < window["start_ns"]
+        if not outside and window["end_ns"] is not None and row["mono_ns"] > window["end_ns"]:
+            # Consistent by call: exactly one changed send of the deciding call
+            # (or, for a tick end, the call in progress) may carry a later time.
+            if row["call"] in window["end_calls"] and not window["post_end"]:
+                window["post_end"] = True
+            else:
+                outside = True
+        if outside:
+            self.issue("g3_bearing_outside_window", source,
+                       "BETA_BEARING_OVERLAY outside this boot's g3_send window", True)
+        changed = [i for i in range(48) if original[i] != outgoing[i]]
+        if any(i not in BETA_BEARING_BYTES for i in changed) or outgoing[40] != 1:
+            self.issue("g3_bearing_payload_mismatch", source,
+                       "Only hasBearing (byte40, set to 1) and bearing (44..47) may differ (changed %s)" % changed, True)
+            return
+        bearing_e6 = int.from_bytes(outgoing[44:48], 'little', signed=True)
+        if not BETA_BEARING_MIN_E6 < bearing_e6 <= BETA_BEARING_MAX_E6:
+            self.issue("g3_bearing_out_of_range", source,
+                       "bearing_e6=%d outside (%d, %d]" % (bearing_e6, BETA_BEARING_MIN_E6, BETA_BEARING_MAX_E6), True)
 
     def check_overlay_speeds(self, beta):
         """Each overlay speed must equal (+-1 mm/s rounding) the speed of a
@@ -3729,6 +3795,21 @@ def g3_row_valid(row):
     if not bounded_int(row.get("mono_ns"), 0, 2**64 - 1):
         return False
     event = row.get("event")
+    if row["kind"] == "g3_send_conflict":
+        return (all(type(row.get(k)) is int for k in ("h", "unc", "tol", "d", "fixes")) and
+                isinstance(row.get("course"), list) and len(row["course"]) == 2 and
+                all(type(v) is int for v in row["course"]))
+    if row["kind"] == "g3_send":
+        if event not in G3_SEND_EVENTS:
+            return False
+        if event == "none":
+            return row.get("g3") in G3_STATES and isinstance(row.get("reason"), str)
+        if event == "start":
+            return row.get("g3") in G3_STATES and type(row.get("h")) is int and _pair(row.get("carried"))
+        if event == "end":
+            return (row.get("reason") in G3_SEND_END_REASONS and isinstance(row.get("why"), str) and
+                    all(bounded_int(row.get(k), 0, 2**63 - 1) for k in ("sent", "stock")))
+        return all(bounded_int(row.get(k), 0, 2**63 - 1) for k in ("sent", "stock"))
     if row["kind"] == "g3_store":
         if event not in G3_STORE_EVENTS:
             return False
@@ -3795,12 +3876,44 @@ def g3_write_overlap(rows, events):
                 overlap_events=hits[:10], default_off_next_build=bool(slow or hits))
 
 
-def g3_report(rows, boots, events=()):
+def g3_send_report(rows, boots, overlays=0):
+    """G3 bearing send windows (src/runtime/g3_send.h), one per boot: start
+    (carried travel heading, uncertainty), end reason, overlaid and stock FIX
+    sends inside the window, conflict rows. overlays: choice-6 SEND rows."""
+    per = {}
+    for session, row in rows:
+        boot_id = boots.get(session)
+        b = per.setdefault(session, dict(session=session, boot_id=boot_id[:8] if boot_id else None, start=None,
+                                         none=None, end=None, counts=0, conflict=None))
+        event = row.get("event")
+        if row["kind"] == "g3_send_conflict":
+            b["conflict"] = dict(heading_deg=_deci(row["h"]), course_deg=_deci(row["course"][0]),
+                                 difference_deg=_deci(row["d"]), fixes=row["fixes"])
+        elif event == "start":
+            b["start"] = dict(heading_deg=_deci(row["h"]), carried=row.get("carried"),
+                              unc_deg=_deci(row.get("unc")), tolerance_deg=_deci(row.get("tol")), age_s=row.get("age_s"))
+        elif event == "none":
+            b["none"] = dict(state=row["g3"], reason=row["reason"])
+        elif event == "count":
+            b["counts"] += 1
+        elif event == "end":
+            b["end"] = dict(reason=row["reason"], why=row["why"], t_s=row.get("t_s"), sent=row["sent"],
+                            stock=row["stock"], heading_deg=_deci(row.get("h")))
+    out = [per[s] for s in sorted(per)]
+    return dict(boots=out, windows=sum(1 for b in out if b["start"]),
+                end_reasons=dict(Counter(b["end"]["reason"] for b in out if b["end"])),
+                overlaid_sends=overlays,
+                scope="FIX LOCATION bearing replaced by the carried G3 heading until the stock course is trusted")
+
+
+def g3_report(rows, boots, events=(), overlays=0):
     """Per boot: the restore decision, continuity checks, store writes and the
     first-session rows; overall: the first-course error distribution (the
     validation metric of the record-only build) and reverse starts."""
     per = {}
     order = []
+    sends = [(session, row) for session, row in rows if row["kind"] in ("g3_send", "g3_send_conflict")]
+    rows = [(session, row) for session, row in rows if row["kind"] not in ("g3_send", "g3_send_conflict")]
     for session, row in rows:
         b = per.get(session)
         if b is None:
@@ -3874,17 +3987,18 @@ def g3_report(rows, boots, events=()):
                 parked_stops_unstored=sum(sum(b["unstored"].values()) for b in boots_out),
                 writes_cancelled=sum(sum(b["cancelled"].values()) for b in boots_out),
                 write_overlap=g3_write_overlap(rows, events),
-                scope="record_only_would_be_heading_not_sent; GPS course is a reference, not ground truth")
+                scope="record_only_would_be_heading_not_sent; GPS course is a reference, not ground truth",
+                **({"send": g3_send_report(sends, boots, overlays)} if sends or overlays else {}))
 
 
 def print_g3_data(g3):
-    """Text section: G3 record-only heading carry-over."""
-    if not g3["boots"]:
+    """Text section: G3 heading carry-over and the bearing send."""
+    if not g3["boots"] and not g3.get("send"):
         return
     def f(value, fmt="%.1f"):
         return "-" if value is None else fmt % value
     e = g3["first_course_error_deg"]
-    print("G3 heading carry-over (record-only; nothing sent): %d boots, restore %s, final %s, writes %d "
+    print("G3 heading carry-over (store, restore, first course): %d boots, restore %s, final %s, writes %d "
           "(failures %d, cancelled %d, parked stops not stored %d), reverse starts %d; first M course error |carried+yaw - course| n %d median %s max %s "
           "deg; unpropagated carried n %d median %s; stock bearing n %d median %s" %
           (len(g3["boots"]), g3["restore_events"], g3["final_states"], g3["writes"], g3["write_failures"],
@@ -3897,6 +4011,18 @@ def print_g3_data(g3):
           (o["writes"], f(o["max_lat_ms"]), o["overlaps"],
            " -> pre-registered rule: next build defaults the store OFF (menu 8 opt-in)"
            if o["default_off_next_build"] else ""))
+    send = g3.get("send")
+    if send:
+        print("G3 bearing send: %d windows, ends %s, overlaid FIX sends %d" %
+              (send["windows"], send["end_reasons"], send["overlaid_sends"]))
+        for b in send["boots"]:
+            st, en = b["start"], b["end"]
+            print("  boot %s: %s; end %s" % (
+                b["boot_id"] or "?",
+                "start %s deg +- %s (tol %s)" % (f(st["heading_deg"]), f(st["unc_deg"]), f(st["tolerance_deg"]))
+                if st else "not armed (%s/%s)" % ((b["none"] or {}).get("state", "-"), (b["none"] or {}).get("reason", "-")),
+                "%s/%s at %s s, sent %d, stock %d" % (en["reason"], en["why"], f(en["t_s"]), en["sent"], en["stock"])
+                if en else "-"))
     for b in g3["boots"]:
         r = b["restore"] or {}
         lw = b["last_write"]
