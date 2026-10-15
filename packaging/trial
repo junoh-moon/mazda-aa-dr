@@ -196,6 +196,9 @@ startup_verdict() {
         else if (v=="invalid") print "TEST marker invalid: test off"
         # Menu 10 tunnel ceiling: shown only when switched off (not a GO condition).
         if (field("acc_cap_marker=")=="present") print "CAP 25 m tunnel cap OFF (menu 10)"
+        if (field("bt_marker=")=="present") print "BT phone IMU OFF (menu 11)"
+        v=field("bt_fail=")
+        if (v!="" && v!="absent") print substr("BT fallback " v ": menu 1",1,40)
         for (i=1;i<=NR;i++) if (index(line[i],"BETA NO_FIX: ")==1) print substr(line[i],1,40)
         # The owner-facing BETA count line, folded to the small screen.
         for (i=1;i<=NR;i++) if (index(line[i],"BETA: ")==1) fold40(line[i])
@@ -469,6 +472,52 @@ acc_cap_toggle() {
     return 0
 }
 
+# Menu 11 (2026-10-14, validation/PHONE_IMU_CHANNEL_2026-10-14.md): the
+# owner switch of the phone IMU Bluetooth service (record only, default on).
+# While BASE/bt-off exists (any type) the guard starts bds with the stock
+# arguments and the collector starts no receiver; read at CMU start. Never
+# touches mx5dr.conf. Shows the state first, then one numeric confirmation
+# (11 again). Menu 1 clears it, like the automatic bt-fail records.
+bt_toggle() {
+    marker=$BASE/bt-off
+    if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
+        echo 'Phone IMU Bluetooth: package not'
+        echo 'installed; nothing changed.'
+        return 0
+    fi
+    if [ -d "$marker" ] && [ ! -L "$marker" ]; then
+        echo 'Phone IMU Bluetooth: OFF (marker dir).'
+        echo 'Not changed here; menu 6 removes it.'
+        return 0
+    fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then state=OFF; next=ON
+    else state=ON; next=OFF; fi
+    printf '%s\n' "Phone IMU Bluetooth now: $state" \
+        'Record only; BETA and LOCATION same.' \
+        "Enter 11 again to switch it $next," \
+        'anything else cancels.'
+    printf 'Number, then Enter: '
+    if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
+    if [ "$confirm" != 11 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
+    if [ "$next" = OFF ]; then
+        marker_tmp=$BASE/bt-off.new.$$
+        rm -f "$marker_tmp" || fail 'Cannot stage the bt-off marker'
+        if ! printf 'off\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
+            rm -f "$marker_tmp" || :
+            fail 'Cannot write the bt-off marker'
+        fi
+    else
+        # The marker itself (also a symlink) is removed; nothing is written
+        # through it.
+        rm -f "$marker" || fail 'Cannot remove the bt-off marker'
+    fi
+    sync
+    echo "Phone IMU Bluetooth set to $next."
+    echo 'Read once at CMU start: choose 5'
+    echo '(parked reboot) for it to take effect.'
+    return 0
+}
+
 # Display only: install.sh validates the same marker again before any write.
 bundle_mode() {
     marker=$HERE/bundle-default-mode
@@ -501,7 +550,7 @@ short_menu=0
 while :; do
     if [ "$short_menu" = 1 ]; then
         short_menu=0
-        printf '\n%s\n' '0 Exit (1-10 as listed before)'
+        printf '\n%s\n' '0 Exit (1-11 as listed before)'
     else
         printf '\n%s\n' 'Parked USB trial menu' \
             "This USB installs mode $BUNDLE_MODE: $mode_text" \
@@ -515,6 +564,7 @@ while :; do
             '8 Heading (G3) log and start bearing on/off' \
             '9 Tunnel test on/off (BETA diagnostic)' \
             '10 Tunnel 25 m cap on/off (BETA)' \
+            '11 Phone IMU Bluetooth on/off (record only)' \
             '0 Exit'
         echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
@@ -543,6 +593,7 @@ while :; do
         8) if ! g3_toggle; then exit "$last_rc"; fi;;
         9) if ! diag_toggle; then exit "$last_rc"; fi;;
         10) if ! acc_cap_toggle; then exit "$last_rc"; fi;;
+        11) if ! bt_toggle; then exit "$last_rc"; fi;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac

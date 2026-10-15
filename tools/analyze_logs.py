@@ -119,7 +119,7 @@ LIMITATIONS = [
 
 def rotation_key(name):
     p = PurePosixPath(name)
-    m = re.fullmatch(r"(trace|collector)\.(\d+)\.jsonl", p.name)
+    m = re.fullmatch(r"(trace|collector|pimu)\.(\d+)\.jsonl", p.name)
     return (str(p.parent), m[1] if m else p.name, -int(m[2]) if m else 0, p.name)
 
 
@@ -1006,6 +1006,8 @@ class Auditor:
         self.g3_rows = []       # (session index, g3_store/g3_first row)
         self.drive_rows = []    # (session index, fix1/exit_jump/yaw_learn/rec_drop row)
         self.g3_events = []     # (session index, mono_ns, beta_journal_lag | GPS_LOST | ENGAGED)
+        self.pimu_rows = []     # (file, line bytes, row) of logs/pimu.N.jsonl
+        self.pimu_bad = 0
         self.capture_ends = 0
         self.holdout_position = dict(count=0, min=None, max=None, mean=None)
         self.holdout_heading = dict(count=0, min=None, max=None, mean=None)
@@ -3274,6 +3276,9 @@ class Auditor:
             return
         self.total_bytes += size
         self.files.append(name)
+        if PIMU_FILE.fullmatch(PurePosixPath(name.split("!")[-1]).name):
+            self.read_pimu(stream, name)
+            return
         number = 0
         # One line of lookahead: since 2026-10-10 a short boot may append to
         # a small trace.0 after a previous boot whose last row was cut; the
@@ -3347,6 +3352,20 @@ class Auditor:
                 self.issue("input_unavailable", str(path), "Not a regular file/directory")
         except (OSError, tarfile.TarError, EOFError) as exc:
             self.issue("input_error", str(path), str(exc))
+
+    def read_pimu(self, stream, name):
+        """Phone IMU journal (logs/pimu.N.jsonl): its own compact rows, never
+        AA trace identity. A cut last line (live writer) is counted only."""
+        for raw in stream:
+            try:
+                row = json.loads(raw.decode("utf-8"), parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+            except (ValueError, UnicodeError, RecursionError):
+                self.pimu_bad += 1
+                continue
+            if isinstance(row, dict) and row.get("kind") in PIMU_KINDS:
+                self.pimu_rows.append((name, len(raw), row))
+            else:
+                self.pimu_bad += 1
 
     def read_tar(self, path):
         with tarfile.open(path, "r:*") as archive:
@@ -3542,6 +3561,9 @@ class Auditor:
         # Only with drive data rows: reports of earlier logs stay byte-identical.
         if self.drive_rows:
             report["drive_data"] = drive_report(self.drive_rows)
+        # Likewise the phone IMU section (logs/pimu.N.jsonl).
+        if self.pimu_rows or self.pimu_bad:
+            report["phone_imu"] = phone_imu_report(self.pimu_rows, self.pimu_bad)
         return report
 
 
@@ -4321,6 +4343,115 @@ def drive_report(rows):
                 learn=learn, scope="record_only_not_product_decisions")
 
 
+# ---- phone IMU channel, stage 1 record-only (validation/PHONE_IMU_CHANNEL_2026-10-14.md)
+# Rows of logs/pimu.N.jsonl written by the collector's receiver. The phone's
+# gyro about gravity is only recorded next to the car's own yaw; nothing reads
+# it back. Bins are CMU receipt seconds (CLOCK_MONOTONIC), not phone time.
+PIMU_FILE = re.compile(r"pimu\.\d+\.jsonl")
+PIMU_KINDS = ("pimu_boot", "pimu", "pimu_sync", "pimu_link", "bt_watch", "pimu_drop")
+PIMU_RATE_HZ = 50.0
+PIMU_DROP_FIELDS = ("rate_pimu", "rate_sync", "rate_link", "rate_bt", "ring", "signals_other_service",
+                    "unexpected", "ping_write_failed", "unmatched_pong")
+
+
+def _pct(values, q):
+    values = sorted(values)
+    if not values:
+        return None
+    return values[min(len(values) - 1, int(math.ceil(q * len(values))) - 1)]
+
+
+def phone_imu_report(rows, bad=0):
+    boots = [r for _, _, r in rows if r["kind"] == "pimu_boot"]
+    links = Counter()
+    link_reasons = Counter()
+    bt = []
+    data = dict(rows=0, bins=0, connected_bins=0, frames=0, gaps=0, crc_errors=0, bad_version=0,
+                skipped_bytes=0, dropped_bytes=0, frame_resets=0, window_s=0.0, dtheta_deg=0.0, flags_or=0)
+    biases, syncs, drops, spans = [], [], None, []
+    nbytes = 0
+    for _, size, r in rows:
+        nbytes += size
+        kind = r["kind"]
+        try:
+            if kind == "pimu_link":
+                links[r["ev"]] += 1
+                if r["ev"] in ("open_fail", "disconnect", "poll_error", "bus"):
+                    link_reasons["%s:%s" % (r["ev"], r.get("why", ""))] += 1
+            elif kind == "bt_watch":
+                bt.append("%s:%s" % (r["ev"], r.get("why", "")))
+            elif kind == "pimu_sync":
+                syncs.append((r["m"], r["rtt_us"], r["off_us"]))
+            elif kind == "pimu_drop":
+                drops = dict(zip(PIMU_DROP_FIELDS, r["d"]))
+            elif kind == "pimu":
+                data["rows"] += 1
+                for key, field in (("crc_errors", "ce"), ("bad_version", "bv"), ("skipped_bytes", "sk"),
+                                   ("dropped_bytes", "dr"), ("frame_resets", "fr")):
+                    data[key] += int(r[field])
+                spans.append((r["m"], r["m"] + 1000 * len(r["d"])))
+                for n, dth, wu_ms, gap, fl in r["d"]:
+                    data["bins"] += 1
+                    data["connected_bins"] += 1 if n > 0 else 0
+                    data["frames"] += n
+                    data["gaps"] += gap
+                    data["window_s"] += wu_ms / 1000.0
+                    data["dtheta_deg"] += math.degrees(dth * 1e-6)
+                    data["flags_or"] |= fl
+                if r["s1"] >= 0:
+                    biases.append(r["b"])
+        except (KeyError, TypeError, ValueError):
+            bad += 1
+    data["dtheta_deg"] = round(data["dtheta_deg"], 3)
+    data["window_s"] = round(data["window_s"], 3)
+    seconds = data["bins"]
+    data["frames_per_s"] = round(data["frames"] / seconds, 2) if seconds else None
+    data["expected_frames_at_50hz"] = int(seconds * PIMU_RATE_HZ)
+    data["seq_loss_fraction"] = (round(data["gaps"] / float(data["frames"] + data["gaps"]), 5)
+                                 if data["frames"] + data["gaps"] else None)
+    report = dict(boots=[dict(boot_id=b.get("boot_id"), budget_bph=b.get("budget_bph"), cap=b.get("cap")) for b in boots],
+                  malformed_rows=bad, links=dict(links), link_reasons=dict(link_reasons), bt_watch=bt,
+                  data=data, drops=drops)
+    if biases:
+        report["bias_deg_s"] = dict(min=round(math.degrees(min(biases) * 1e-6), 4),
+                                    max=round(math.degrees(max(biases) * 1e-6), 4),
+                                    last=round(math.degrees(biases[-1] * 1e-6), 4))
+    if syncs:
+        rtts = [s[1] / 1000.0 for s in syncs]
+        offs = [s[2] / 1000.0 for s in syncs]
+        sync = dict(pongs=len(syncs), rtt_ms_median=round(_median(rtts), 3), rtt_ms_p90=round(_pct(rtts, 0.9), 3),
+                    rtt_ms_max=round(max(rtts), 3), offset_ms_median=round(_median(offs), 3))
+        good = [(m / 1000.0, off) for (m, _, _), off, rtt in zip(syncs, offs, rtts) if rtt <= 2 * _median(rtts) + 1]
+        fit = _least_squares([t for t, _ in good], [o for _, o in good]) if len(good) >= 3 else None
+        # Offset slope in ms per s = 1000 ppm; phone and CMU clocks drift apart.
+        sync["clock_drift_ppm"] = round(fit[1] * 1000.0, 2) if fit else None
+        sync["offset_fit_rms_ms"] = round(fit[3], 3) if fit else None
+        report["sync"] = sync
+    if spans:
+        hours = sum(b - a for a, b in spans) / 3600000.0
+        report["bytes_per_connected_hour"] = round(nbytes / hours) if hours > 0 else None
+    return report
+
+
+def print_phone_imu(imu):
+    if not imu:
+        return
+    d = imu["data"]
+    print("Phone IMU (record only): %d rows, %d bins (%d with frames), %d frames (%s/s), seq loss %s, "
+          "crc errors %d, bad version %d, skipped %d B, dropped %d B, frame resets %d, sum %.1f deg" %
+          (d["rows"], d["bins"], d["connected_bins"], d["frames"], d["frames_per_s"], d["seq_loss_fraction"],
+           d["crc_errors"], d["bad_version"], d["skipped_bytes"], d["dropped_bytes"], d["frame_resets"],
+           d["dtheta_deg"]))
+    print("Phone IMU links: %s; reasons %s; bds watch %s" % (imu["links"], imu["link_reasons"], imu["bt_watch"]))
+    if imu.get("sync"):
+        s = imu["sync"]
+        print("Phone IMU sync: %d pongs, rtt median/p90/max %s/%s/%s ms, offset median %s ms, drift %s ppm" %
+              (s["pongs"], s["rtt_ms_median"], s["rtt_ms_p90"], s["rtt_ms_max"], s["offset_ms_median"],
+               s["clock_drift_ppm"]))
+    if imu.get("bias_deg_s"):
+        print("Phone IMU reported gyro bias (deg/s): %s" % imu["bias_deg_s"])
+
+
 def print_drive_data(drive, limit=40):
     """Text section: drive data rows (record only); None: no such rows."""
     if drive is None:
@@ -4508,6 +4639,7 @@ def main(argv=None):
         print_chan_data(report["chan_data"])
         print_g3_data(report["g3"])
         print_drive_data(report.get("drive_data"))
+        print_phone_imu(report.get("phone_imu"))
         print_diag_data(report.get("diagnostic"))
         for issue in report["issues"][:10]:
             print("%s %s: %s" % (issue["code"], issue["source"], issue["detail"]))

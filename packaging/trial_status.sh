@@ -284,6 +284,43 @@ echo "diag_marker=$diag_marker (read at CMU start; on = tunnel test, invalid = o
 acc_cap_marker=absent
 if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then acc_cap_marker=present; fi
 echo "acc_cap_marker=$acc_cap_marker (read at CMU start; present = 25 m tunnel cap off)"
+# Phone IMU Bluetooth service (menu 11; validation/PHONE_IMU_CHANNEL_2026-10-14.md).
+# bt_fail names the automatic fallback record (collector or guard); either
+# keeps bds on its stock arguments until menu 1. bds_args reads the kernel's
+# command line of the running stock bds (read-only).
+bt_marker=absent
+if [ -e "$BASE/bt-off" ] || [ -L "$BASE/bt-off" ]; then bt_marker=present; fi
+echo "bt_marker=$bt_marker (read at CMU start; present = phone IMU Bluetooth off)"
+bt_fail=absent
+for bt_record in "$BASE/logs/bt-fail:runtime" "$BASE/guard/bt-fail:guard"; do
+    bt_path=${bt_record%:*}
+    if [ -e "$bt_path" ] || [ -L "$bt_path" ]; then
+        bt_reason=unreadable
+        if [ -f "$bt_path" ] && [ ! -L "$bt_path" ]; then
+            bt_reason=$(awk -F= 'NR<=3 && $1=="reason" && $2 ~ /^[a-z_]+$/ && length($2)<=24 {print $2}' "$bt_path" 2>/dev/null) || bt_reason=unreadable
+            [ -n "$bt_reason" ] || bt_reason=invalid
+        fi
+        bt_fail=${bt_record##*:}:$bt_reason
+        break
+    fi
+done
+bt_config=absent
+if [ -f "$BASE/bt/BdsConfiguration.xml" ] && [ ! -L "$BASE/bt/BdsConfiguration.xml" ]; then bt_config=installed; fi
+bds_args=not_running
+for bt_proc in "$ROOT"/proc/[0-9]*; do
+    [ -f "$bt_proc/cmdline" ] || continue
+    bt_cmd=$(tr '\000' ' ' < "$bt_proc/cmdline" 2>/dev/null) || continue
+    # argv[0] basename "bds" (SM starts /jci/bds/bds; any directory accepted).
+    case "$bt_cmd" in
+        bds\ *|*/bds\ *) ;;
+        *) continue;;
+    esac
+    case "$bt_cmd" in
+        *' -configFilePath /data_persist/mx5-aa-dr/bt/BdsConfiguration.xml '*) bds_args=with_config; break;;
+        *) bds_args=stock; break;;
+    esac
+done
+echo "bt_fail=$bt_fail bt_config=$bt_config bds_args=$bds_args"
 guard_config_binding=unconfirmed
 if [ "$startup_state" = guard_committed_after_new_boot ]; then
     # Row 3 of the validated v3 manifest is the configuration digest used by

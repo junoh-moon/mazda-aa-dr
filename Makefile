@@ -98,13 +98,22 @@ $(BUILD)/test_model_session_reset: $(ASSIST_WORKER) src/runtime/assist_worker.h 
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_input: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_input.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
-$(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
+COLLECTOR_HEADERS = src/collector/phone_imu.h src/collector/phone_imu_rx.h src/runtime/worker_thread.h
+$(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp $(COLLECTOR_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
-$(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
+$(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp $(COLLECTOR_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) -DMX5_COLLECTOR_TESTING $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
-$(BUILD)/test_collector_journal: tests/collector/test_journal.cpp src/collector/collector.cpp src/runtime/config.cpp | $(BUILD)
+$(BUILD)/test_collector_journal: tests/collector/test_journal.cpp src/collector/collector.cpp src/runtime/config.cpp $(COLLECTOR_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) tests/collector/test_journal.cpp src/runtime/config.cpp $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
-test-collector: $(BUILD)/test_collector $(BUILD)/mx5dr-collector-host $(BUILD)/test_collector_journal $(BUILD)/test_journal $(BUILD)/test_adapter
+# Phone IMU channel (validation/PHONE_IMU_CHANNEL_2026-10-14.md): decoder and
+# budget unit checks, golden vectors, and the receiver against host PTYs, a
+# private dbus-daemon and a fake BCA (skipped without dbus-daemon).
+$(BUILD)/test_phone_imu: tests/collector/test_phone_imu.cpp $(COLLECTOR_HEADERS) | $(BUILD)
+	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) tests/collector/test_phone_imu.cpp $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+$(BUILD)/fake_bca: tests/collector/fake_bca.c | $(BUILD)
+	$(CC) -std=gnu99 -O2 -Wall -Wextra -Werror $(HOST_DBUS_FLAGS) tests/collector/fake_bca.c $(HOST_DBUS_LIBS) -o $@
+test-collector: $(BUILD)/test_collector $(BUILD)/mx5dr-collector-host $(BUILD)/test_collector_journal $(BUILD)/test_journal $(BUILD)/test_adapter $(BUILD)/test_phone_imu $(BUILD)/fake_bca
+	$(BUILD)/test_phone_imu
 	$(BUILD)/test_collector_journal
 	@set -e; for scenario in startup during query invalid healthy; do $(BUILD)/test_collector_journal --storage $$scenario; done
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/collector -v
@@ -231,6 +240,7 @@ test-loader:
 test-recovery:
 	$(PYTHON) tests/recovery/test_guard.py
 	$(PYTHON) tests/recovery/test_guard_persistent.py
+	$(PYTHON) tests/recovery/test_guard_bt.py
 
 test-navigation: $(BUILD)/test_navigation $(BUILD)/test_channel $(BUILD)/test_chan_channel $(BUILD)/test_live_pipeline $(BUILD)/test_gyro_bias $(BUILD)/test_gps_wheel $(BUILD)/test_holdout $(BUILD)/test_beta
 	$(BUILD)/test_navigation
@@ -442,3 +452,9 @@ HOST_ADAPTER_TESTS = \
     test_worker_lds_source test_association_context test_context_pool_association \
     test_context_pool_atfork_failure test_runtime_lds_association replay_beta
 $(addprefix $(BUILD)/,$(HOST_ADAPTER_TESTS)): src/runtime/lds_association_protocol.h
+
+# Phone IMU sender app (phone/imu-sender): host-only tests (javac/java 11+, python3; no Android
+# SDK, no Gradle, no network). Kept out of `test` so hosts without a JDK still run `make test`.
+.PHONY: test-phone-imu-sender
+test-phone-imu-sender:
+	phone/imu-sender/test.sh

@@ -4,6 +4,7 @@
 #include "../runtime/config.h"
 #include "../runtime/boot_id.h"
 #include "../runtime/storage.h"
+#include "phone_imu_rx.h"
 #include <dbus/dbus.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -22,6 +23,11 @@
 #include <sys/file.h>
 #include <pwd.h>
 #include <grp.h>
+#ifndef MX5_COLLECTOR_TESTING
+#include <linux/capability.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#endif
 namespace {
 const char *const ROOT = "/data_persist/mx5-aa-dr";
 const char *bus_address = "unix:path=/tmp/dbus_service_socket";
@@ -293,11 +299,45 @@ void sensor_log(Journal &j, DBusConnection *c, uint64_t serial) {
   }
 }
 
+// Phone IMU channel (validation/PHONE_IMU_CHANNEL_2026-10-14.md): the
+// receiver runs only when menu 1 generated the Bluetooth configuration
+// (bt/BdsConfiguration.xml), neither bt-off nor logs/bt-fail exists, and the
+// mode records sensors (SHADOW or BETA). It stays inert until the stock bds
+// is seen with our -configFilePath. A missing marker check fails closed.
+bool absent_path(const char *path) {
+  struct stat st;
+  return lstat(path, &st) != 0 && errno == ENOENT;
+}
+bool phone_imu_wanted(const char *root) {
+  char xml[512], off[512], fail[512];
+  snprintf(xml, sizeof xml, "%s/bt/BdsConfiguration.xml", root);
+  snprintf(off, sizeof off, "%s/bt-off", root);
+  snprintf(fail, sizeof fail, "%s/logs/bt-fail", root);
+  struct stat st;
+  return !lstat(xml, &st) && S_ISREG(st.st_mode) && absent_path(off) && absent_path(fail);
+}
+#ifndef MX5_COLLECTOR_TESTING
+// Per-thread capability sets (capset with pid 0 changes the calling thread).
+bool set_caps(unsigned permitted, unsigned effective) {
+  struct __user_cap_header_struct h;
+  struct __user_cap_data_struct d[2];
+  memset(&h, 0, sizeof h);
+  memset(d, 0, sizeof d);
+  h.version = _LINUX_CAPABILITY_VERSION_3;
+  d[0].permitted = permitted;
+  d[0].effective = effective;
+  return syscall(SYS_capset, &h, d) == 0;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char **argv) {
   const char *root = ROOT;
   unsigned session_seconds = 28800;
+  const char *pimu_proc = "/proc", *pimu_ready = "/tmp/bds_ready_flag", *pimu_pts = "/dev/pts/";
+  long pimu_owner = -1;
+  unsigned long pimu_ready_ms = 60000, pimu_vanish_ms = 30000;
 #ifdef MX5_COLLECTOR_TESTING
   unsigned max_samples = 0;
 #endif
@@ -312,19 +352,35 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--root") && i + 1 < argc) root = argv[++i];
     else if (!strcmp(argv[i], "--bus-address") && i + 1 < argc) bus_address = argv[++i];
     else if (!strcmp(argv[i], "--samples") && i + 1 < argc) max_samples = unsigned(atoi(argv[++i]));
+    else if (!strcmp(argv[i], "--pimu-proc-root") && i + 1 < argc) pimu_proc = argv[++i];
+    else if (!strcmp(argv[i], "--pimu-ready-flag") && i + 1 < argc) pimu_ready = argv[++i];
+    else if (!strcmp(argv[i], "--pimu-ready-timeout-ms") && i + 1 < argc) pimu_ready_ms = strtoul(argv[++i], 0, 10);
+    else if (!strcmp(argv[i], "--pimu-pts-dir") && i + 1 < argc) pimu_pts = argv[++i];
+    else if (!strcmp(argv[i], "--pimu-vanish-ms") && i + 1 < argc) pimu_vanish_ms = strtoul(argv[++i], 0, 10);
+    else if (!strcmp(argv[i], "--pimu-pty-owner") && i + 1 < argc) pimu_owner = atol(argv[++i]);
 #endif
     else { fprintf(stderr, "Usage: mx5dr-collector [--session-seconds 1..86400]\n"); return 64; }
   }
   // A verified root-owned external startup path may launch us once. Drop to
   // the existing unprivileged account before config/DBus/log access. In the
   // shipped passwd update cmu is UID 0, and service is the bus account.
+  // The phone IMU receiver must open the bds PTY slave (uid 0, devpts
+  // mode=600): only CAP_DAC_OVERRIDE is kept in the permitted set of the
+  // receiver thread and made effective only around that open().
+  bool pimu = phone_imu_wanted(root), pimu_cap = false;
 #ifndef MX5_COLLECTOR_TESTING
   if (geteuid() == 0) {
     struct passwd *account = getpwnam("cmu");
     if (!account) return 77;
     if (account->pw_uid == 0) account = getpwnam("service");
+    if (pimu && prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0)) pimu = false;
     if (!account || account->pw_uid == 0 || setgroups(0, 0) ||
         setgid(account->pw_gid) || setuid(account->pw_uid)) return 77;
+    if (pimu) {
+      pimu_cap = set_caps(1u << CAP_DAC_OVERRIDE, 0);
+      prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
+      if (!pimu_cap) set_caps(0, 0);
+    }
   }
 #endif
   // Initialization is private to this process, before any DBus operation.
@@ -370,6 +426,23 @@ int main(int argc, char **argv) {
   char line[512];
   char boot_id[37];
   mx5::runtime::read_boot_id(boot_id);
+  if (config.mode != 4 && config.mode != 5) pimu = false;
+  mx5::pimu::PimuJournal pimu_journal(root);
+  mx5::pimu::RxOptions pimu_options = {root, bus_address, pimu_proc, pimu_ready, mx5::pimu::BT_XML, boot_id,
+                                       uint64_t(pimu_ready_ms) * 1000000ULL, pimu_cap, geteuid(), pimu_pts,
+                                       uint64_t(pimu_vanish_ms) * 1000000ULL};
+#ifndef MX5_COLLECTOR_TESTING
+  pimu_options.pty_owner = 0;
+  (void)pimu_owner;
+#else
+  if (pimu_owner >= 0) pimu_options.pty_owner = uid_t(pimu_owner);
+#endif
+  mx5::pimu::Receiver *receiver = pimu ? new mx5::pimu::Receiver(pimu_options) : 0;
+  if (receiver && !receiver->start()) { delete receiver; receiver = 0; }
+#ifndef MX5_COLLECTOR_TESTING
+  // The main thread keeps no capability; the receiver thread has its own copy.
+  if (pimu_cap) set_caps(0, 0);
+#endif
   snprintf(line, sizeof line,
            "{\"kind\":\"collector_boot\",\"schema\":1,\"sample_ms\":%u,"
            "\"boot_id\":\"%s\","
@@ -397,11 +470,17 @@ int main(int argc, char **argv) {
     // No shared memory, IPC, signal, or restart link to the AA process.
     unsigned waited = 0;
     while (!stop_requested && waited < config.sample_ms) {
+      if (receiver) receiver->drain(pimu_journal);
       if (access(stop_path, F_OK) == 0) break;
       struct timespec pause = {0, 50000000};
       nanosleep(&pause, 0);
       waited += 50;
     }
+  }
+  if (receiver) {
+    receiver->stop();
+    receiver->drain(pimu_journal);
+    delete receiver;
   }
   if (stop_requested) reason = "signal";
   snprintf(line, sizeof line, "{\"kind\":\"collector_stop\",\"reason\":\"%s\",\"samples\":%llu}",

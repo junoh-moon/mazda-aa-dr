@@ -38,7 +38,7 @@ sys.path.insert(0, str(HERE))
 import cmu_emulation as h  # noqa: E402
 
 REPO = HERE.parents[1]
-HELPERS = ('trial install.sh uninstall.sh purge.sh export_logs.sh common.sh edit_service.awk '
+HELPERS = ('trial install.sh uninstall.sh purge.sh export_logs.sh common.sh edit_service.awk edit_bds.awk bt.sha256 '
            'edit_autostart.awk arm.sh start_collector.sh stop_collector.sh finish_capture.sh '
            'trial_status.sh trial_status.awk startup_diagnostics.sh reboot_cmu.sh '
            'firmware.sha256 mx5dr.conf').split()

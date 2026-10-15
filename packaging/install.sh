@@ -45,6 +45,15 @@ regular "$HERE/mx5dr-sha256"
 regular "$HERE/mx5dr-sha256.sha256"
 [ "$(hash "$HERE/mx5dr-sha256")" = "$(awk 'NR==1{print $1}' "$HERE/mx5dr-sha256.sha256")" ] || fail 'Hash helper checksum mismatch'
 verify_firmware
+# Phone IMU channel, stage 1 record-only (validation/PHONE_IMU_CHANNEL_2026-10-14.md):
+# SHADOW/BETA trial templates start the stock bds with our configuration copy.
+BT=0
+if [ "$MODE" = SHADOW ] || [ "$MODE" = BETA ]; then
+    regular "$HERE/edit_bds.awk"
+    regular "$HERE/bt.sha256"
+    if bt_stock_ok; then BT=1
+    else echo 'Phone IMU Bluetooth service not prepared: the stock Bluetooth files differ from the checked ones.'; fi
+fi
 regular "$HERE/libmx5dr.so"
 regular "$HERE/libmx5dr.so.sha256"
 [ "$(wc -c < "$HERE/libmx5dr.so")" -ge 52 ] || fail 'Truncated ELF header'
@@ -107,6 +116,7 @@ mount_rw "$ROOT/usr/bin"
 mkdir -p "$BASE/guard"
 chmod 0700 "$BASE/guard"
 if [ -z "$ROOT" ]; then chown 0 "$BASE" "$BASE/guard"; fi
+if [ "$BT" = 1 ]; then stage_bt_config; fi
 # A retry must not reuse the old trial's boot marker if later staging fails.
 if [ "$MODE" != OFF ]; then stash_arm_boot; fi
 # Menu 1 resets the persistent state (guard enable) and acknowledges a runtime
@@ -179,6 +189,21 @@ if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then
     rm -f "$BASE/acc-cap-off" || fail 'Cannot clear the acc-cap-off marker'
     echo 'Cleared acc-cap-off: the 25 m tunnel cap is on again from the next start.'
 fi
+# Likewise the phone IMU Bluetooth switch from menu 11 (default on) and both
+# automatic fallback records (collector logs/bt-fail, guard/bt-fail).
+if [ -e "$BASE/bt-off" ] || [ -L "$BASE/bt-off" ]; then
+    if [ -d "$BASE/bt-off" ] && [ ! -L "$BASE/bt-off" ]; then fail 'Cannot clear bt-off: it is a directory'; fi
+    rm -f "$BASE/bt-off" || fail 'Cannot clear the bt-off marker'
+    echo 'Cleared bt-off: the phone IMU Bluetooth service is on again from the next start.'
+fi
+for item in "$BASE/logs/bt-fail" "$BASE/guard/bt-fail"; do
+    if [ -e "$item" ] || [ -L "$item" ]; then
+        regular "$item"
+        cp -pP "$item" "$BASE/backups/" 2>/dev/null || :
+        rm -f "$item" || fail 'Cannot clear a Bluetooth fallback record'
+        echo "Cleared ${item#"$BASE/"}: bds starts with the phone IMU service again from the next start."
+    fi
+done
 if [ "$POLICY" = persistent ]; then
     # A failure from here on must not leave an enablement behind.
     PERSIST_PENDING=1
@@ -227,7 +252,7 @@ set_config
 mkdir -p "$BASE/tools"
 chmod 0755 "$BASE/tools"
 if [ -z "$ROOT" ]; then chown 0 "$BASE/tools"; fi
-for name in common.sh edit_service.awk edit_autostart.awk arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk startup_diagnostics.sh firmware.sha256 mx5dr-sha256; do
+for name in common.sh edit_service.awk edit_autostart.awk edit_bds.awk bt.sha256 arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk startup_diagnostics.sh firmware.sha256 mx5dr-sha256; do
     cp "$HERE/$name" "$BASE/tools/$name.new.$$"
     chmod 0644 "$BASE/tools/$name.new.$$"
     if [ -z "$ROOT" ]; then chown 0 "$BASE/tools/$name.new.$$"; fi
@@ -235,6 +260,7 @@ for name in common.sh edit_service.awk edit_autostart.awk arm.sh uninstall.sh ex
 done
 # Publish local templates while disarmed, and exercise the real guard against
 # the real filesystem/libc before changing the OEM startup script.
+if [ "$BT" = 1 ]; then publish_bt_config; else remove_bt_config || fail 'Cannot remove the old Bluetooth configuration'; fi
 mv -f "$BASE/guard/normal.trial.new.$$" "$BASE/guard/normal.trial"
 mv -f "$BASE/guard/wcp.trial.new.$$" "$BASE/guard/wcp.trial"
 mv -f "$BASE/guard/normal.source.sha256.new.$$" "$BASE/guard/normal.source.sha256"
@@ -274,6 +300,9 @@ if [ "$MODE" != OFF ] && [ "$POLICY" = one-boot ]; then
     fi
 fi
 ARM_PENDING=0
+if [ "$BT" = 1 ]; then
+    echo 'Phone IMU Bluetooth service MX5DR IMU prepared (record only; menu 11 turns it off).'
+fi
 if [ "$POLICY" = persistent ]; then
     echo "Installed $MODE persistent: the guard starts it on every CMU boot. Persistent service configs retain existing touch only. No processes restarted."
     echo 'Automatic fallback: after 2 boots in a row that end in a CMU reset, the guard starts stock only and keeps the logs. Menu 1 re-enables, menu 4 removes.'

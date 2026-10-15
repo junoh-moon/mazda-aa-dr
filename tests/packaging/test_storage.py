@@ -40,9 +40,11 @@ class StorageTests(unittest.TestCase):
     def test_existing_bounded_logs_are_reused_without_demanding_twice_the_space(self):
         logs = self.base / 'logs'
         logs.mkdir(parents=True)
-        # Files already at the per-file caps (trace 40 MiB x3, collector 4 MiB x2).
+        # Files already at the per-file caps (trace 40 MiB x3, collector 4 MiB x2,
+        # phone IMU 1 MiB x2).
         for stream, count, size in (('trace', 3, 40 * 1024 * 1024),
-                                    ('collector', 2, 4 * 1024 * 1024)):
+                                    ('collector', 2, 4 * 1024 * 1024),
+                                    ('pimu', 2, 1024 * 1024)):
             for i in range(count):
                 with (logs / f'{stream}.{i}.jsonl').open('wb') as f:
                     f.truncate(size)

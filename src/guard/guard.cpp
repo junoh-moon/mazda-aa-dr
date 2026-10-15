@@ -146,7 +146,7 @@ bool owned_read(const char*name,std::string&s){int fd=openat(gd,name,O_RDONLY|O_
 bool last_boot_record(std::string&s){struct stat st;if(fstatat(gd,"last-boot",&st,AT_SYMLINK_NOFOLLOW)){return errno==ENOENT;}return owned_read("last-boot",s)&&valid_boot_record(s);}
 bool baseline_clean(){for(unsigned i=2;i<=4;i+=2){std::string s;if(!read_file(prefix+names[i],s,1024*1024)||s.find(token)!=std::string::npos||s.find(tap_token)!=std::string::npos||s.find(lds_token)!=std::string::npos){why=std::string("baseline_has_token:")+short_names[i];return false;}}return true;}
 // Temporary names of atomic_file() that a power cut can leave behind.
-const char*const temp_names[]={"arm","last-boot","persist","persist-state","last-decision",0};
+const char*const temp_names[]={"arm","last-boot","persist","persist-state","last-decision","bt-last","bt-fail",0};
 bool stale_temp_name(const char*n){
  if(n[0]!='.')return false;
  for(const char*const*k=temp_names;*k;k++){
@@ -391,6 +391,62 @@ void fresh_state(State&s,const std::string&boot){
  s.attempt_boot="none";s.attempt_reports="none";s.attempt_trial="none";s.confirmed_boot="none";
  s.previous="none";s.healthy_previous="none";s.tripped="no";
 }
+// ---- Phone IMU Bluetooth service (validation/PHONE_IMU_CHANNEL_2026-10-14.md)
+// The installer adds BT_ARG to the bds args of the trial templates (bound by
+// the manifest like every template byte). Each selection decides again and
+// removes it from the staged copy unless every condition holds: no bt-off
+// marker (menu 11), no bt-fail record (guard: a reset after a boot that used
+// it; collector: bds not ready or restarted), and the generated XML matches
+// the digest the installer recorded. A removed argument is the stock bds
+// command line. The decision is recorded in guard/bt-last before the path is
+// published; it never declines the product itself.
+const char*const BT_ARG=" -configFilePath /data_persist/mx5-aa-dr/bt/BdsConfiguration.xml";
+const char*const BT_XML="/data_persist/mx5-aa-dr/bt/BdsConfiguration.xml";
+const char*const BT_SHA="/data_persist/mx5-aa-dr/bt/BdsConfiguration.xml.sha256";
+size_t bt_count(const std::string&c){size_t n=0;std::string needle=std::string(BT_ARG)+"\"";for(size_t at=c.find(needle);at!=std::string::npos;at=c.find(needle,at+1))n++;return n;}
+void bt_strip(std::string&c){std::string needle=std::string(BT_ARG)+"\"";for(size_t at=c.find(needle);at!=std::string::npos;at=c.find(needle))c.erase(at,strlen(BT_ARG));}
+// Fail closed: anything but a definitely absent entry counts as present.
+bool base_entry_present(const char*name){int bd=open_base();if(bd<0)return true;struct stat st;bool present=fstatat(bd,name,&st,AT_SYMLINK_NOFOLLOW)==0||errno!=ENOENT;close(bd);return present;}
+bool logs_entry_present(const char*name){int ld=open_logs();if(ld<0)return true;struct stat st;bool present=fstatat(ld,name,&st,AT_SYMLINK_NOFOLLOW)==0||errno!=ENOENT;close(ld);return present;}
+bool bt_xml_valid(){
+ std::string xml,want;
+ if(!read_file(prefix+BT_XML,xml,256*1024)||!read_file(prefix+BT_SHA,want,80))return false;
+ if(want.size()!=65||want[64]!='\n'||!hex64(want.substr(0,64)))return false;
+ char h[65];mx5_sha256_bytes(xml.data(),xml.size(),h);return want.compare(0,64,h)==0;
+}
+// Decides for the staged copy `c` of this selection; returns "use:reason".
+std::string bt_decide(std::string&c){
+ size_t n=bt_count(c);
+ if(!n)return "no:not_installed";
+ std::string why;
+ if(n!=1)why="template_invalid";
+ else if(base_entry_present("bt-off"))why="off";
+ else if(!absent("bt-fail"))why="fail_guard";
+ else if(logs_entry_present("bt-fail"))why="fail_runtime";
+ else if(!bt_xml_valid())why="xml_invalid";
+ if(why.empty())return "yes:ok";
+ bt_strip(c);return "no:"+why;
+}
+// guard/bt-last, written before the trial path is published.
+bool bt_record(const std::string&boot,const std::string&decision){
+ size_t colon=decision.find(':');
+ return atomic_file("bt-last","mx5dr-bt-v1\nboot_id="+boot+"\nuse="+decision.substr(0,colon)+"\nreason="+decision.substr(colon+1)+"\n");
+}
+// The boot of the last bt-last record that used the service, or "".
+std::string bt_used_boot(){
+ std::string s;if(!owned_read("bt-last",s))return "";
+ const std::string head="mx5dr-bt-v1\nboot_id=";
+ if(s.size()<head.size()+36+9||s.compare(0,head.size(),head))return "";
+ std::string boot=s.substr(head.size(),36);
+ if(!uuid36(boot)||s.compare(head.size()+36,9,"\nuse=yes\n"))return "";
+ return boot;
+}
+// Selection with a template: decide, record, and on a failed record fall
+// back to the stock bds arguments (fail closed).
+void bt_apply(std::string&content,const std::string&boot){
+ std::string decision=bt_decide(content);
+ if(!bt_record(boot,decision)&&decision.compare(0,4,"yes:")==0){bt_strip(content);bt_record(boot,"no:record_failed");}
+}
 int enable_persistent(const std::string&expected){
  // One policy at a time: a pending one-boot arm must be removed first.
  if(!absent("arm")||!beta_config())return 2;
@@ -434,7 +490,13 @@ int select_persistent(unsigned index,const std::string&expected){
  if(s.attempt_boot==boot)DECLINE("same_boot");
  if(s.tripped!="no")DECLINE("tripped:"+s.tripped);
  if(!report_fingerprint(reports))DECLINE("reports_unreadable");
+ const std::string judged_boot=s.attempt_boot;
  evaluate(s,reports);
+ // A reset after a boot that started bds with our configuration stops using
+ // it until menu 1, whatever else the product decides (best effort record;
+ // a lost record is re-derived only by the collector's checks).
+ if(s.previous=="failed_reset"&&judged_boot!="none"&&bt_used_boot()==judged_boot&&absent("bt-fail"))
+  atomic_file("bt-fail","mx5dr-bt-fail-v1\nboot_id="+judged_boot+"\nreason=reset_after_bt\n");
  if(s.tripped=="no"&&runtime_disabled())s.tripped="runtime_disabled";
  if(s.tripped!="no"){
   // Stock baseline from now on; the evidence stays. Re-enabling is menu 1.
@@ -444,6 +506,7 @@ int select_persistent(unsigned index,const std::string&expected){
   DECLINE("tripped:"+s.tripped);
  }
  std::string content;if(!read_file(prefix+names[index],content,1024*1024))DECLINE("template_unreadable");
+ bt_apply(content,boot);
  std::vector<char> d;int td=stage_trial(content,d);if(td<0)DECLINE("trial_write_failed");
  std::string result=std::string(&d[0])+"/sm.conf";
  s.attempt_boot=boot;s.attempt_reports=reports;s.attempt_trial=result;s.confirmed_boot="none";
@@ -545,6 +608,16 @@ int print_status(bool inputs,const std::string&expected){
   }
  }
  out+="last_decision="+decision+"\n";
+ // Phone IMU service decision of this boot (bt-last), and a guard bt-fail.
+ std::string b,bt="none";
+ if(boot!="none"&&owned_read("bt-last",b)){
+  std::string head="mx5dr-bt-v1\nboot_id="+boot+"\nuse=";
+  if(!b.compare(0,head.size(),head)&&b.size()<head.size()+64&&b[b.size()-1]=='\n'){
+   std::string r=b.substr(head.size(),b.size()-head.size()-1);size_t nl=r.find("\nreason=");
+   if(nl!=std::string::npos){r=r.substr(0,nl)+":"+r.substr(nl+8);if(r.find_first_not_of("abcdefghijklmnopqrstuvwxyz_:")==std::string::npos)bt=r;}
+  }
+ }
+ out+="bt_this_boot="+bt+"\nbt_fail_guard="+(absent("bt-fail")?"absent":"present")+"\n";
  // Free text last: the owner message for a failed verify.
  out+="verify_message="+reason_text(code)+"\n";
  return printf("%s",out.c_str())<0||fflush(stdout)?2:0;
@@ -629,6 +702,7 @@ int run(int argc,char**argv){
  // in that same Linux boot must not consume the future-boot trial.
  if(last==id||armed==id)return 2;
  std::string content;if(!read_file(prefix+names[index],content,1024*1024))return 2;
+ bt_apply(content,id.substr(0,36));
  // Temporary parent is a real directory. mkdtemp gives an unguessable exclusive child.
  std::string t=prefix+"/tmp/mx5dr-trial-XXXXXX";std::vector<char> d(t.begin(),t.end());d.push_back(0);
  struct stat tmpst;if(lstat((prefix+"/tmp").c_str(),&tmpst)||!S_ISDIR(tmpst.st_mode))return 2;

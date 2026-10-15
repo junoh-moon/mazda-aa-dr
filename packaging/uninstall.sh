@@ -14,6 +14,10 @@ rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 if [ -f "$BASE/diag" ] || [ -L "$BASE/diag" ]; then rm -f "$BASE/diag" || echo 'Warning: cannot remove the diag marker; menu 6 removes it.'; fi
 # Likewise the tunnel accuracy ceiling off switch (menu 10).
 if [ -f "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then rm -f "$BASE/acc-cap-off" || echo 'Warning: cannot remove the acc-cap-off marker; menu 6 removes it.'; fi
+# The phone IMU Bluetooth configuration copy: bds copies it to /tmp only at
+# its start, so removing it now changes nothing in this boot; later boots
+# never select a trial (stock bds arguments).
+remove_bt_config || echo 'Warning: cannot remove the Bluetooth configuration copy; menu 6 removes it.'
 sync
 file=$ROOT/usr/bin/autostart
 regular "$file"

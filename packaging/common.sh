@@ -13,6 +13,8 @@ BASE=$ROOT/data_persist/mx5-aa-dr
 TOKEN=/data_persist/mx5-aa-dr/libmx5dr.so
 TAP_TOKEN=/data_persist/mx5-aa-dr/libmx5dr-vimtap.so
 LDS_TOKEN=/data_persist/mx5-aa-dr/libmx5dr-ldstap.so
+BT_XML=/data_persist/mx5-aa-dr/bt/BdsConfiguration.xml
+BT_ARG=" -configFilePath $BT_XML"
 LOCK=$ROOT/data_persist/.mx5dr-install-lock
 MOUNT_LOCK=$ROOT/tmp/.mx5dr-mount.lock
 MOUNT_LOCKED=0
@@ -89,7 +91,8 @@ cleanup() {
             "$ROOT/jci/sm/sm.conf.mx5dr-remove.$$" "$ROOT/jci/sm/sm_WCP.conf.mx5dr-remove.$$" \
             "$BASE"/*.new.$$ "$BASE/guard"/*.new.$$ "$BASE/tools"/*.new.$$ \
             "$ROOT/jci/sm"/*.mx5dr-remove.$$.tap.$$ "$BASE/guard"/*.new.$$.tap.$$ \
-            "$ROOT/jci/sm"/*.mx5dr-remove.$$.lds.$$ "$BASE/guard"/*.new.$$.lds.$$; do
+            "$ROOT/jci/sm"/*.mx5dr-remove.$$.lds.$$ "$BASE/guard"/*.new.$$.lds.$$ \
+            "$BASE/guard"/*.new.$$.bt.$$ "$ROOT/jci/sm"/*.mx5dr-remove.$$.bt.$$ "$BASE/bt"/*.new.$$; do
             [ ! -f "$staged" ] || rm -f "$staged" || rc=1
         done
         rm -f "$LOCK/pid" || rc=1
@@ -186,7 +189,8 @@ require_trial_space() {
     if [ "$MODE" != OFF ]; then
         [ ! -L "$BASE" ] && [ ! -L "$BASE/logs" ] || fail 'Symlink log storage'
         for entry in trace.0.jsonl:41943040 trace.1.jsonl:41943040 trace.2.jsonl:41943040 \
-                     collector.0.jsonl:4194304 collector.1.jsonl:4194304; do
+                     collector.0.jsonl:4194304 collector.1.jsonl:4194304 \
+                     pimu.0.jsonl:1048576 pimu.1.jsonl:1048576; do
             name=${entry%:*}; cap=${entry#*:}; bytes=0
             if [ -e "$BASE/logs/$name" ] || [ -L "$BASE/logs/$name" ]; then
                 regular "$BASE/logs/$name"
@@ -228,7 +232,7 @@ prepare_collector_storage() {
         fi
         # Validate every existing entry while holding the collector's lock,
         # before changing any owner. Never recurse into AA traces or evidence.
-        collector_files='collector.lock collector.pid collector.0.jsonl collector.1.jsonl'
+        collector_files='collector.lock collector.pid collector.0.jsonl collector.1.jsonl pimu.0.jsonl pimu.1.jsonl bt-fail'
         for collector_name in $collector_files; do
             collector_path=$BASE/logs/$collector_name
             if [ -e "$collector_path" ] || [ -L "$collector_path" ]; then
@@ -260,6 +264,11 @@ edit_to() {
         cat "$2.tap.$$" > "$2"
         rm -f "$2.tap.$$"
     fi
+    if [ "$3" = remove ] && grep -F "$BT_ARG" "$2" >/dev/null; then
+        awk -v what=args -v action=remove -v xml="$BT_XML" -f "$HERE/edit_bds.awk" "$2" > "$2.bt.$$" || fail "Unsupported bds service configuration: $1"
+        cat "$2.bt.$$" > "$2"
+        rm -f "$2.bt.$$"
+    fi
     if [ "$3" = remove ] && grep -F "$LDS_TOKEN" "$2" >/dev/null; then
         awk -v action=remove -v target_service=jciLDS -v token="$LDS_TOKEN" -f "$HERE/edit_service.awk" "$2" > "$2.lds.$$" || fail "Unsupported LDS service configuration: $1"
         cat "$2.lds.$$" > "$2"
@@ -280,7 +289,53 @@ trial_to() {
         cat "$2.tap.$$" > "$2"
         rm -f "$2.tap.$$"
     fi
+    # Phone IMU Bluetooth service (validation/PHONE_IMU_CHANNEL_2026-10-14.md):
+    # only the bds args of this trial template; the guard removes it again on
+    # every selection unless bt-off/bt-fail are absent and the XML is intact.
+    if [ "${BT:-0}" = 1 ]; then
+        awk -v what=args -v action=add -v xml="$BT_XML" -f "$HERE/edit_bds.awk" "$2" > "$2.bt.$$" || fail "Unsupported bds service configuration: $1"
+        cat "$2.bt.$$" > "$2"
+        rm -f "$2.bt.$$"
+    fi
     chmod 0600 "$2"
+}
+# Stock Bluetooth inputs of the phone IMU service: the configuration the XML
+# is generated from and the bds binary the offline parse check ran
+# (tests/packaging/test_bds_parse_qemu.py). A mismatch only skips the service.
+bt_stock_ok() {
+    while read -r want name; do
+        [ -n "$want" ] || continue
+        [ -f "$ROOT/$name" ] && [ ! -L "$ROOT/$name" ] || return 1
+        [ "$(hash "$ROOT/$name")" = "$want" ] || return 1
+    done < "$HERE/bt.sha256"
+}
+# Generates BASE/bt/BdsConfiguration.xml (+ .sha256 for the guard) from the
+# stock XML with exactly one added serialPort line; never touches /jci/bds.
+stage_bt_config() {
+    [ ! -L "$BASE/bt" ] || fail 'Symlink bt directory'
+    mkdir -p "$BASE/bt"
+    chmod 0755 "$BASE/bt"
+    if [ -z "$ROOT" ]; then chown 0 "$BASE/bt"; fi
+    bt_new=$BASE/bt/BdsConfiguration.xml.new.$$
+    awk -v what=xml -f "$HERE/edit_bds.awk" "$ROOT/jci/bds/BdsConfiguration.xml" > "$bt_new" || fail 'Unsupported stock Bluetooth configuration'
+    bt_lines_in=$(wc -l < "$ROOT/jci/bds/BdsConfiguration.xml")
+    bt_lines_out=$(wc -l < "$bt_new")
+    [ "$bt_lines_out" -eq $((bt_lines_in + 1)) ] || fail 'Bluetooth configuration edit is not one added line'
+    [ "$(grep -c -F 'name="MX5DR IMU"' "$bt_new")" = 1 ] || fail 'Bluetooth configuration edit is not one added line'
+    grep -v -F 'name="MX5DR IMU"' "$bt_new" | cmp -s - "$ROOT/jci/bds/BdsConfiguration.xml" || fail 'Bluetooth configuration edit changed stock lines'
+    hash "$bt_new" > "$BASE/bt/BdsConfiguration.xml.sha256.new.$$" || fail 'Cannot hash the Bluetooth configuration'
+    chmod 0644 "$bt_new" "$BASE/bt/BdsConfiguration.xml.sha256.new.$$"
+    if [ -z "$ROOT" ]; then chown 0 "$bt_new" "$BASE/bt/BdsConfiguration.xml.sha256.new.$$"; fi
+}
+publish_bt_config() {
+    mv -f "$BASE/bt/BdsConfiguration.xml.new.$$" "$BASE/bt/BdsConfiguration.xml"
+    mv -f "$BASE/bt/BdsConfiguration.xml.sha256.new.$$" "$BASE/bt/BdsConfiguration.xml.sha256"
+}
+remove_bt_config() {
+    [ ! -L "$BASE/bt" ] || fail 'Symlink bt directory'
+    [ -d "$BASE/bt" ] || return 0
+    rm -f "$BASE/bt/BdsConfiguration.xml" "$BASE/bt/BdsConfiguration.xml.sha256" || return 1
+    rmdir "$BASE/bt" 2>/dev/null || :
 }
 verify_firmware() {
     regular "$ROOT/jci/version.ini"
