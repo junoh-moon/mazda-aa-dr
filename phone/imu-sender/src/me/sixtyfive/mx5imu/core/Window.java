@@ -18,7 +18,10 @@ public final class Window {
         this.samples = samples;
     }
 
-    public byte[] encode(long seq) {
-        return Protocol.encodeData(flags, seq, tEndNs, dthetaUrad, windowUs, biasUradS);
+    public byte[] encode(long seq) { return encode(seq, 0); }
+
+    /** extraFlags are ORed in (the session's frame_reset on its first sent window). */
+    public byte[] encode(long seq, int extraFlags) {
+        return Protocol.encodeData(flags | extraFlags, seq, tEndNs, dthetaUrad, windowUs, biasUradS);
     }
 }

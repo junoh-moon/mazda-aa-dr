@@ -321,7 +321,11 @@ public final class CoreTests {
         t.rx.add(java.util.Arrays.copyOfRange(ping, 0, 9));
         t.rx.add(java.util.Arrays.copyOfRange(ping, 9, 28));
         check(waitFor(() -> s.pinged(), 2000), "first ping arms the session");
-        for (Window w : ws) s.offer(w);
+        check((ws.get(0).flags & Protocol.FLAG_FRAME_RESET) != 0 && (ws.get(1).flags & Protocol.FLAG_FRAME_RESET) == 0,
+                "integrator: frame_reset on its first window only");
+        // The integrator's frame_reset window was discarded before the PING: the session sets
+        // frame_reset on its first DATA actually sent (interop rig F1).
+        for (Window w : new Window[] {ws.get(1), ws.get(2), ws.get(3), ws.get(1)}) s.offer(w);
         check(waitFor(() -> s.framesSent.get() == 4, 2000), "session: 4 frames sent after the PING");
         byte[] bad = ping.clone();
         bad[12] ^= 1;
@@ -342,6 +346,9 @@ public final class CoreTests {
         }
         eq(pongs, 1, "exactly one pong for one valid ping");
         check(fr.get(0).kind == Frame.Kind.PONG, "the first frame on the wire is the PONG, no DATA before it");
+        List<Integer> resetFlags = new ArrayList<>();
+        for (Frame f : fr) if (f.kind == Frame.Kind.DATA) resetFlags.add(f.flags & Protocol.FLAG_FRAME_RESET);
+        check(resetFlags.equals(java.util.Arrays.asList(8, 0, 0, 0)), "frame_reset on the first sent DATA only: " + resetFlags);
         check(seqs.equals(java.util.Arrays.asList(0xFFFFFFFEL, 0xFFFFFFFFL, 0L, 1L)), "seq wraps: " + seqs);
         eq(s.crcErrors(), 1, "corrupt ping counted");
         eq(s.lastPingNs(), 2_000_000_000L, "last ping time");
@@ -359,10 +366,28 @@ public final class CoreTests {
         clk.t.addAndGet(6_000_000_000L);
         t.rx.add(Protocol.encodePingPong(0, 1, 1, 0));
         check(waitFor(() -> s.pingsReceived.get() == 1, 2000), "silence: ping received");
-        clk.t.addAndGet(9_000_000_000L); // 15 s since start, 9 s since the ping
-        check(!s.checkSilence(), "silence: 9 s after a ping still open");
+        Window w0 = new Window(4, 1, 1, 20000, 0, 4);
+        clk.t.addAndGet(10_500_000_000L); // one lost PING: data still flows
+        s.offer(w0);
+        check(waitFor(() -> s.framesSent.get() == 1, 2000), "10.5 s after a ping: DATA still sent");
+        clk.t.addAndGet(500_000_000L);    // 11 s: the CMU reader may be stalled; never fill the bds PTY
+        s.offer(w0);
+        Thread.sleep(50);
+        eq(s.droppedStalePing.get(), 1, "11 s after the last PING: DATA paused (counted)");
+        eq(s.framesSent.get(), 1, "paused window not sent");
+        t.rx.add(Protocol.encodePingPong(0, 2, 2, 0));    // the PING comes back: DATA resumes
+        check(waitFor(() -> s.pingsReceived.get() == 2, 2000), "gap: second ping");
+        s.offer(w0);
+        check(waitFor(() -> s.framesSent.get() == 2, 2000), "gap: DATA resumes");
+        byte[] gapOut = t.sent();
+        List<Frame> gapFr = new FrameParser().feed(gapOut, 0, gapOut.length);
+        List<Integer> gapFlags = new ArrayList<>();
+        for (Frame f : gapFr) if (f.kind == Frame.Kind.DATA) gapFlags.add(f.flags & Protocol.FLAG_FRAME_RESET);
+        check(gapFlags.equals(java.util.Arrays.asList(8, 8)), "frame_reset on the first DATA and again after the PING gap: " + gapFlags);
+        clk.t.addAndGet(14_000_000_000L); // 14 s since the last ping: one or two lost PINGs keep it open
+        check(!s.checkSilence(), "silence: 14 s after a ping still open");
         clk.t.addAndGet(1_000_000_000L);
-        check(s.checkSilence() && "silence".equals(s.closeReason()) && t.closed, "silence: closed after 10 s without a ping");
+        check(s.checkSilence() && "silence".equals(s.closeReason()) && t.closed, "silence: closed after 15 s (three PING periods) without a ping");
         s.join(1000);
         FakeTransport t2 = new FakeTransport();
         FakeClock c2 = new FakeClock();
@@ -396,6 +421,8 @@ public final class CoreTests {
         s.join(2000);
     }
 
+    static final long M = 60_000L, H = 3_600_000L;
+
     static void policy() {
         ReconnectPolicy p = new ReconnectPolicy(2000, 30000);
         eq(p.waitMs(0), -1, "disabled: wait for an event");
@@ -408,37 +435,37 @@ public final class CoreTests {
         eq(p.waitMs(2000), 4000, "backoff doubles");
         p.aclConnected(2500);
         check(!p.shouldAttempt(2500), "ACL_CONNECTED gives no immediate attempt while failures are pending");
-        // A session with PINGs for 61 s resets the failures and the backoff.
         p.connected(6000);
         check(!p.shouldAttempt(6000), "no attempts while connected");
-        p.sessionEnded(70000, true, 61000);
+        p.sessionEnded(70000, true, 61000);                  // healthy: 64 s, PINGs over 61 s
         eq(p.consecutiveFailures(), 0, "healthy session clears the failures");
         eq(p.waitMs(70000), 2000, "healthy session: backoff back to 2 s");
-        // A pinged but short session (40 s) is neither healthy nor a failure: the backoff keeps growing.
         p.connected(72000);
-        p.sessionEnded(112000, true, 35000);
-        eq(p.consecutiveFailures(), 0, "short pinged session is not a failure");
-        eq(p.waitMs(112000), 4000, "short session does not reset the backoff");
-        p.aclConnected(113000);
-        check(p.shouldAttempt(113000), "ACL_CONNECTED: immediate attempt with no failure pending");
-        p.aclDisconnected(114000);
-        eq(p.waitMs(120000), -1, "ACL down: no attempts");
-        p.adapter(false, 121000);
-        eq(p.waitMs(122000), -1, "adapter off: no attempts");
-        p.adapter(true, 123000);
-        check(p.shouldAttempt(200000) && p.acl() == ReconnectPolicy.Acl.UNKNOWN, "adapter on: unknown ACL");
-        ReconnectPolicy u = new ReconnectPolicy(2000, 30000, new ReconnectPolicy.Breaker(100, 3_600_000, 60_000, 30_000));
+        p.sessionEnded(142000, true, 35000);                 // 70 s, PINGs over 35 s: neutral
+        eq(p.consecutiveFailures(), 0, "long session with short PING span is not a failure");
+        eq(p.waitMs(142000), 4000, "neutral session does not reset the backoff");
+        p.aclConnected(143000);
+        check(p.shouldAttempt(143000), "ACL_CONNECTED: immediate attempt with no failure pending");
+        p.aclDisconnected(144000);
+        eq(p.waitMs(150000), -1, "ACL down: no attempts");
+        p.adapter(false, 151000);
+        eq(p.waitMs(152000), -1, "adapter off: no attempts");
+        p.adapter(true, 153000);
+        check(p.shouldAttempt(300000) && p.acl() == ReconnectPolicy.Acl.UNKNOWN, "adapter on: unknown ACL");
+        ReconnectPolicy u = new ReconnectPolicy(2000, 30000);
         u.setEnabled(true, 0);
         for (int i = 0; i < ReconnectPolicy.UNKNOWN_GIVE_UP; i++) u.connectFailed(0);
         check(u.acl() == ReconnectPolicy.Acl.DOWN && u.waitMs(100000) == -1, "unknown ACL: stop paging after 5 failures");
+        eq(u.consecutiveFailures(), 0, "car absent (ACL unknown): connect failures are not breaker failures");
         p.setEnabled(false, 0);
-        eq(p.waitMs(300000), -1, "disabled again: no attempts");
+        eq(p.waitMs(400000), -1, "disabled again: no attempts");
         breaker();
+        persistence();
+        retryBound();
         crashLoop();
     }
 
     static void breaker() {
-        // Failures: a session without PING, a session ending (or ACL dropping) within 30 s, a failed connect.
         ReconnectPolicy p = new ReconnectPolicy(2000, 30000);
         p.setEnabled(true, 0);
         p.aclConnected(0);
@@ -446,89 +473,281 @@ public final class CoreTests {
         p.sessionEnded(15000, false, 0);                  // no PING (closed after 15 s)
         eq(p.consecutiveFailures(), 1, "no-ping session is a failure");
         p.connected(20000);
-        p.aclDisconnected(25000);                          // ACL drop 5 s after the connect
-        p.sessionEnded(45000, true, 20000);
-        eq(p.consecutiveFailures(), 2, "early ACL drop is a failure");
-        p.aclConnected(46000);
-        check(!p.shouldAttempt(46000), "no immediate retry on ACL_CONNECTED after failures");
-        p.connected(60000);
-        p.sessionEnded(70000, true, 9000);                 // ended 10 s after the connect
-        check(p.state(70000) == ReconnectPolicy.BreakerState.OPEN && p.trips() == 1, "third failure trips the breaker");
-        check(!p.shouldAttempt(70000 + 59 * 60_000L), "open: no attempt for 60 min");
-        p.aclConnected(80000);
-        check(!p.shouldAttempt(80001), "open: ACL_CONNECTED never retries");
-        eq(p.waitMs(80000), 70000 + 60 * 60_000L - 80000, "open: waits until the breaker closes");
-        long t = 70000 + 60 * 60_000L;
+        p.aclDisconnected(25000);
+        p.sessionEnded(28000, true, 3000);                 // PINGs, then the ACL dropped after 8 s
+        eq(p.consecutiveFailures(), 1, "a session with a PING is never a failure (ACL flapping)");
+        p.connected(40000);
+        p.sessionEnded(55000, false, 0);
+        eq(p.consecutiveFailures(), 2, "second no-ping session");
+        p.aclConnected(56000);
+        check(!p.shouldAttempt(56000), "no immediate retry on ACL_CONNECTED after failures");
+        p.connected(90000);
+        p.sessionEnded(100000, false, 0);
+        check(p.state(100000) == ReconnectPolicy.BreakerState.OPEN && p.trips() == 1, "third failure trips the breaker");
+        check(!p.shouldAttempt(100000 + 59 * M), "open: no attempt for 60 min");
+        p.aclConnected(110000);
+        check(!p.shouldAttempt(110001), "open: ACL_CONNECTED never retries");
+        eq(p.waitMs(110000), 100000 + 60 * M - 110000, "open: waits until the breaker closes");
+        long t = 100000 + 60 * M;
         check(p.state(t) == ReconnectPolicy.BreakerState.CLOSED && p.shouldAttempt(t), "breaker closes after 60 min");
-        for (int i = 0; i < 3; i++) p.connectFailed(t + i);
+        for (int i = 0; i < 3; i++) p.connectFailed(t + i);   // ACL is UP: the car is there
         check(p.state(t + 10) == ReconnectPolicy.BreakerState.LOCKED && p.waitMs(t + 999_999_999L) == -1,
-                "second trip: stopped until the app is reopened");
+                "second trip: locked until 'retry now'");
         p.aclConnected(t + 20);
         check(!p.shouldAttempt(t + 10_000_000L), "locked: ACL_CONNECTED never retries");
-        p.resetBreaker();
-        check(p.state(t + 30) == ReconnectPolicy.BreakerState.CLOSED && p.shouldAttempt(t + 10_000_000L), "app reopened: breaker cleared");
-        // A failure followed by a healthy session starts the count again.
+        p.setEnabled(true, t + 30);
+        check(p.state(t + 40) == ReconnectPolicy.BreakerState.LOCKED, "a service (re)start does not clear the breaker");
+        p.retryNow(t + 50);
+        check(p.state(t + 60) == ReconnectPolicy.BreakerState.CLOSED && p.shouldAttempt(t + 60), "'retry now' clears it");
+        for (int i = 0; i < 3; i++) p.connectFailed(t + 100 + i);
+        check(p.state(t + 200) == ReconnectPolicy.BreakerState.LOCKED, "after 'retry now' the next trip locks at once");
+        // ACL flapping every 20 s with a healthy CMU (interop rig F4): never a failure, never locks.
+        ReconnectPolicy a = new ReconnectPolicy(2000, 30000);
+        a.setEnabled(true, 0);
+        a.aclConnected(0);
+        long ft = 0;
+        for (int i = 0; i < 2000; i++) {                  // > 11 h of 20 s flaps
+            if (!a.shouldAttempt(ft)) { ft += Math.max(1, a.waitMs(ft) < 0 ? 1000 : a.waitMs(ft)); a.aclConnected(ft); continue; }
+            a.connected(ft);
+            a.aclDisconnected(ft + 20000);
+            a.sessionEnded(ft + 20100, true, 15000);          // PINGs at 1, 6, 11, 16 s
+            ft += 20100 + 1000;
+            a.aclConnected(ft);
+        }
+        check(a.state(ft) == ReconnectPolicy.BreakerState.CLOSED && a.consecutiveFailures() == 0 && a.trips() == 0,
+                "ACL flapping every 20 s with PINGs: never trips");
+        // Absent car (Fable S7/S8): at home after a phone reboot nothing trips; one failure in the car later does not lock.
+        ReconnectPolicy h = new ReconnectPolicy(2000, 30000);
+        long now = 0;
+        h.setEnabled(true, 0);
+        while (now < 3 * H) {
+            if (h.shouldAttempt(now)) { now += 6000; h.connectFailed(now); continue; }
+            long w = h.waitMs(now);
+            if (w < 0) break;
+            now += Math.max(1, w);
+        }
+        check(h.state(now) == ReconnectPolicy.BreakerState.CLOSED && h.consecutiveFailures() == 0 && h.trips() == 0,
+                "car absent at start: the breaker never counts");
+        h.aclConnected(90 * M);
+        check(h.shouldAttempt(90 * M), "in the car later: immediate attempt");
+        h.connectFailed(90 * M + 6000);
+        check(h.state(90 * M + 6001) == ReconnectPolicy.BreakerState.CLOSED && h.consecutiveFailures() == 1,
+                "one failed first connect in the car: counted once, not locked");
+        // A healthy session forgets the trip only 24 h after it.
         ReconnectPolicy q = new ReconnectPolicy(2000, 30000);
         q.setEnabled(true, 0);
-        q.connectFailed(0);
-        q.connectFailed(1);
-        q.connected(10000);
-        q.sessionEnded(100000, true, 80000);
-        q.connectFailed(100001);
-        check(q.state(100002) == ReconnectPolicy.BreakerState.CLOSED && q.consecutiveFailures() == 1, "healthy session resets the count");
+        q.aclConnected(0);
+        for (int i = 0; i < 3; i++) q.connectFailed(i);
+        q.connected(2 * H);
+        q.sessionEnded(2 * H + 2 * M, true, 90000);
+        eq(q.trips(), 1, "healthy session within 24 h keeps the trip");
+        q.connected(30 * H);
+        q.sessionEnded(30 * H + 2 * M, true, 90000);
+        eq(q.trips(), 0, "healthy session 24 h after the trip forgets it");
+    }
+
+    static void persistence() {
+        ReconnectPolicy p = new ReconnectPolicy(2000, 30000);
+        p.setEnabled(true, 0);
+        p.aclConnected(0);
+        for (int i = 0; i < 3; i++) p.connectFailed(1000 + i);   // OPEN until 1002 + 60 min
+        String rec = p.snapshot(5000, 1_760_000_000_000L, 7);
+        check(rec.startsWith("pimu-breaker-v1 0 1 0 "), "snapshot: " + rec);
+        ReconnectPolicy same = new ReconnectPolicy(2000, 30000);
+        same.restore(rec, 6000, 1_760_000_001_000L, 7);       // process restart in the same phone boot
+        check(same.state(6000) == ReconnectPolicy.BreakerState.OPEN && same.openUntilMs() == p.openUntilMs(), "restore: same boot");
+        ReconnectPolicy reboot = new ReconnectPolicy(2000, 30000);
+        reboot.restore(rec, 50, 1_760_000_000_000L + 10 * M, 8);  // phone rebooted 10 min later
+        long left = reboot.openUntilMs() - 50;
+        check(reboot.state(50) == ReconnectPolicy.BreakerState.OPEN && left > 49 * M && left <= 50 * M, "restore after a reboot: " + left);
+        ReconnectPolicy late = new ReconnectPolicy(2000, 30000);
+        late.restore(rec, 50, 1_760_000_000_000L + 2 * H, 8);
+        check(late.state(50) == ReconnectPolicy.BreakerState.CLOSED && late.trips() == 1, "reboot after the open time: closed, trip kept");
+        p.connectFailed(70 * M);
+        p.connectFailed(70 * M + 1);
+        p.connectFailed(70 * M + 2);
+        ReconnectPolicy locked = new ReconnectPolicy(2000, 30000);
+        locked.restore(p.snapshot(71 * M, 1_760_000_000_000L, 7), 0, 1_760_000_100_000L, 9);
+        check(locked.state(0) == ReconnectPolicy.BreakerState.LOCKED, "locked survives a reboot");
+        // retry now -> snapshot -> restore: still CLOSED, one trip (v3 re-locked here).
+        locked.retryNow(10);
+        String afterRetry = locked.snapshot(20, 1_760_000_200_000L, 9);
+        check(afterRetry.startsWith("pimu-breaker-v1 0 1 0 "), "retry now stores trips 1, unlocked: " + afterRetry);
+        for (long boot2 : new long[] {9, 10}) {                 // process restart, phone reboot
+            ReconnectPolicy r = new ReconnectPolicy(2000, 30000);
+            r.restore(afterRetry, 30, 1_760_000_201_000L, boot2);
+            check(r.state(30) == ReconnectPolicy.BreakerState.CLOSED && r.trips() == 1, "retry now survives a restart (boot " + boot2 + ")");
+        }
+        // retry now -> one more trip -> restart: LOCKED (v3 stored trips 3 and silently unlocked).
+        locked.aclConnected(40);
+        for (int i = 0; i < 3; i++) locked.connectFailed(50 + i);
+        check(locked.state(60) == ReconnectPolicy.BreakerState.LOCKED && locked.trips() == 2, "retry now: the next trip locks");
+        String relocked = locked.snapshot(60, 1_760_000_300_000L, 9);
+        ReconnectPolicy rr = new ReconnectPolicy(2000, 30000);
+        rr.restore(relocked, 70, 1_760_000_301_000L, 9);
+        check(rr.state(70) == ReconnectPolicy.BreakerState.LOCKED, "retry now -> trip -> restart: still locked: " + relocked);
+        roundTripProperty();
+        ReconnectPolicy bad = new ReconnectPolicy(2000, 30000);
+        bad.restore("pimu-breaker-v1 x", 0, 0, 1);
+        check(bad.trips() == 1 && bad.state(0) == ReconnectPolicy.BreakerState.CLOSED, "corrupt record: one trip kept (next trip locks)");
+    }
+
+    /** Every reachable state (random event sequences): snapshot -> restore (same boot) -> snapshot is exact. */
+    static void roundTripProperty() {
+        java.util.Random rnd = new java.util.Random(16);
+        int checked = 0, lockedSeen = 0, openSeen = 0, mismatches = 0;
+        for (int run = 0; run < 400; run++) {
+            ReconnectPolicy p = new ReconnectPolicy(2000, 30000);
+            long now = 0;
+            p.setEnabled(true, 0);
+            for (int step = 0; step < 60; step++) {
+                now += 1 + rnd.nextInt(30 * 60_000);
+                switch (rnd.nextInt(8)) {
+                    case 0: p.aclConnected(now); break;
+                    case 1: p.aclDisconnected(now); break;
+                    case 2: p.connectFailed(now); break;
+                    case 3: p.connected(now); p.sessionEnded(now + 20000, false, 0); now += 20000; break;
+                    case 4: p.connected(now); p.sessionEnded(now + 90000, true, 80000); now += 90000; break;
+                    case 5: p.connected(now); p.sessionEnded(now + 30000, true, 20000); now += 30000; break;
+                    case 6: if (rnd.nextInt(4) == 0) p.retryNow(now); break;
+                    default: p.aclConnected(now); p.connectFailed(now); break;
+                }
+                String a = p.snapshot(now, 1_760_000_000_000L + now, 5);
+                ReconnectPolicy q = new ReconnectPolicy(2000, 30000);
+                q.restore(a, now, 1_760_000_000_000L + now, 5);
+                String b = q.snapshot(now, 1_760_000_000_000L + now, 5);
+                if (!a.equals(b) || q.state(now) != p.state(now) || q.trips() > 2) mismatches++;
+                if (p.state(now) == ReconnectPolicy.BreakerState.LOCKED) lockedSeen++;
+                if (p.state(now) == ReconnectPolicy.BreakerState.OPEN) openSeen++;
+                if (!(p.trips() <= 2 && (p.trips() == 2) == (p.state(now) == ReconnectPolicy.BreakerState.LOCKED))) mismatches++;
+                checked++;
+            }
+        }
+        System.out.println("breaker round trip: " + checked + " states, " + lockedSeen + " locked, " + openSeen + " open, " + mismatches + " mismatches");
+        check(mismatches == 0 && lockedSeen > 0 && openSeen > 0, "snapshot -> restore is exact for every reachable state");
     }
 
     /**
-     * 'bds crash on connect -> SM restart -> phone retries' (discrete events, fake time). The bds
-     * crashes on every RFCOMM connect (worst case: the crash is in the SDP/RFCOMM stage, which the
-     * QEMU parse check cannot reach); the crash drops the ACL link, SM restarts bds after ~3 s and the
-     * ACL comes back ~5 s later. The CMU (collector) stops opening the PTY and sending PINGs after
-     * the first restart (phone_imu_rx.h quiesce), so no session is ever healthy. Count the crashes
-     * the phone causes in 24 h of one CMU boot with ACL_CONNECTED broadcasts: the bound is
-     * 2 trips x 3 failures = 6, then nothing until the app is reopened.
+     * 'retry now' bound: a crash on every connect, the CMU quiesced; the owner presses the button
+     * once LOCKED, again and again; the process restarts every 10 min. Each press allows exactly 3
+     * more connects (crashes) before LOCKED again.
      */
-    static void crashLoop() {
+    static void retryBound() {
+        String stored = "";
+        long now = 0, wall0 = 1_760_000_000_000L;
         ReconnectPolicy p = new ReconnectPolicy(2000, 30000);
-        long now = 0, end = 24L * 3600_000L;
-        p.setEnabled(true, now);
-        p.aclConnected(now);
-        int crashes = 0;
-        long aclBackAt = -1;
-        while (now < end) {
-            if (aclBackAt >= 0 && now >= aclBackAt) { p.aclConnected(now); aclBackAt = -1; }
-            if (p.shouldAttempt(now)) {
-                p.connected(now);
-                crashes++;                                   // bds dies on the connect
-                p.aclDisconnected(now + 200);
-                p.sessionEnded(now + 300, false, 0);         // read error, no PING
-                aclBackAt = now + 8000;                      // SM restart + ACL reconnect
-                now += 300;
+        p.setEnabled(true, 0);
+        p.aclConnected(0);
+        int crashes = 0, presses = 0;
+        java.util.List<Integer> perPress = new java.util.ArrayList<>();
+        long nextRestart = 10 * M;
+        while (presses <= 5 && now < 30 * 24 * H) {
+            if (now >= nextRestart) {
+                stored = p.snapshot(now, wall0 + now, 1);
+                p = new ReconnectPolicy(2000, 30000); p.restore(stored, now, wall0 + now, 1); p.setEnabled(true, now); p.aclConnected(now);
+                nextRestart += 10 * M;
+            }
+            if (p.state(now) == ReconnectPolicy.BreakerState.LOCKED) {
+                if (presses > 0) perPress.add(crashes);
+                crashes = 0; presses++;
+                p.retryNow(now);
                 continue;
             }
-            long w = p.waitMs(now);
-            long next = w < 0 ? (aclBackAt >= 0 ? aclBackAt : end) : now + Math.max(1, w);
-            if (aclBackAt >= 0) next = Math.min(next, aclBackAt);
-            now = Math.max(next, now + 1);
+            if (p.shouldAttempt(now)) {
+                p.connected(now); crashes++;
+                p.sessionEnded(now + 300, false, 0);
+                now += 300 + 8000; p.aclConnected(now);
+                continue;
+            }
+            now += 1000;
         }
-        eq(crashes, 6, "crash loop: bounded by 2 trips x 3 failures per app start");
-        check(p.state(end) == ReconnectPolicy.BreakerState.LOCKED, "crash loop: locked until the app is reopened");
-        // Same loop when the CMU keeps pinging for 40 s before each crash (not quiesced): still bounded.
-        ReconnectPolicy r = new ReconnectPolicy(2000, 30000);
-        now = 0;
-        r.setEnabled(true, 0);
-        r.aclConnected(0);
-        crashes = 0;
-        for (int i = 0; i < 1000 && now < end; i++) {
-            long w = r.waitMs(now);
-            if (w < 0) break;
-            now += w;
-            if (!r.shouldAttempt(now)) { now += 1; continue; }
-            r.connected(now);
-            crashes++;
-            r.sessionEnded(now + 40000, true, 35000);   // PINGs for 35 s, then the crash
-            now += 40000;
+        System.out.println("retry now bound: crashes per press " + perPress);
+        check(!perPress.isEmpty() && perPress.stream().allMatch(c -> c == 3), "each 'retry now' allows exactly 3 crashes: " + perPress);
+    }
+
+    /**
+     * Independent crash-bound simulation (discrete events, ms). One CMU boot per 45-min drive every
+     * 3 h for 30 days. The phone process is killed and restarted every 30 min (state restored from the
+     * stored record), the phone reboots every 7 h, the owner opens the app every 2 h (no effect) and
+     * never presses 'retry now'. Scenarios (interop rig): CRASH_EVERY = bds dies whenever our service
+     * is connected (no PING ever); HEALTHY_THEN_CRASH = the first session of each drive gets PINGs for
+     * 65 s, then bds dies and every later connect crashes it again; with the CMU quiesce after the
+     * first death no later session gets a PING. FLAP20/FLAP75 = healthy CMU, the ACL link drops every
+     * 20/75 s (radio trouble): sessions get PINGs, no crash. Returns {crashes, max per day, max per
+     * drive, locked(0/1)}.
+     */
+    enum Scn { CRASH_EVERY, HEALTHY_THEN_CRASH, FLAP20, FLAP75 }
+
+    static long[] crashSim(Scn scn) {
+        long day = 24 * H, end = 30 * day, wall0 = 1_760_000_000_000L, boot = 1, bootStart = 0;
+        String stored;
+        ReconnectPolicy p = new ReconnectPolicy(2000, 30000);
+        p.setEnabled(true, 0);
+        int crashes = 0, maxDrive = 0, maxDay = 0, dayCount = 0, driveCrash = 0, driveSessions = 0;
+        long dayStart = 0, nextRestart = 30 * M, nextReboot = 7 * H, now = 0, driveEnd = 0, nextDrive = 10 * M, aclBackAt = -1;
+        boolean inCar = false, cmuQuiet = false;
+        while (now < end) {
+            long el = now - bootStart;
+            if (now >= dayStart + day) { maxDay = Math.max(maxDay, dayCount); dayCount = 0; dayStart += day; }
+            if (now >= nextReboot) {
+                stored = p.snapshot(el, wall0 + now, boot);
+                boot++; bootStart = now; nextReboot += 7 * H; el = 0;
+                p = new ReconnectPolicy(2000, 30000); p.restore(stored, 0, wall0 + now, boot); p.setEnabled(true, 0);
+                if (inCar) p.aclConnected(0);
+            } else if (now >= nextRestart) {
+                stored = p.snapshot(el, wall0 + now, boot);
+                p = new ReconnectPolicy(2000, 30000); p.restore(stored, el, wall0 + now, boot); p.setEnabled(true, el);
+                if (inCar) p.aclConnected(el);
+                nextRestart += 30 * M;
+            }
+            if (!inCar && now >= nextDrive) { inCar = true; cmuQuiet = false; driveCrash = 0; driveSessions = 0; driveEnd = now + 45 * M; p.aclConnected(el); }
+            if (inCar && now >= driveEnd) { inCar = false; nextDrive = now + 3 * H; p.aclDisconnected(el); maxDrive = Math.max(maxDrive, driveCrash); aclBackAt = -1; }
+            if (inCar && aclBackAt >= 0 && now >= aclBackAt) { p.aclConnected(el); aclBackAt = -1; }
+            if (inCar && aclBackAt < 0 && p.shouldAttempt(el)) {
+                p.connected(el);
+                long len;
+                boolean pinged;
+                long span;
+                boolean crash;
+                if (scn == Scn.FLAP20 || scn == Scn.FLAP75) {
+                    len = scn == Scn.FLAP20 ? 20000 : 75000; pinged = true; span = len - 5000; crash = false;
+                } else if (scn == Scn.HEALTHY_THEN_CRASH && driveSessions == 0) {
+                    len = 66000; pinged = true; span = 65000; crash = true;
+                } else {
+                    len = 300; pinged = false; span = 0; crash = true;   // dies on the connect: no PING
+                }
+                if (cmuQuiet) { pinged = false; span = 0; }
+                driveSessions++;
+                if (crash) { crashes++; dayCount++; driveCrash++; cmuQuiet = true; }
+                p.aclDisconnected(el + len - 100);
+                p.sessionEnded(el + len, pinged, span);
+                aclBackAt = now + len + (crash ? 8000 : 1000);
+                now += len;
+                continue;
+            }
+            now += 1000;
         }
-        check(crashes > 6, "without the CMU quiesce a pinged-then-crash loop is NOT bounded by the phone alone (" + crashes + ")");
+        maxDay = Math.max(maxDay, dayCount);
+        return new long[] {crashes, maxDay, maxDrive, p.state(now - bootStart) == ReconnectPolicy.BreakerState.LOCKED ? 1 : 0};
+    }
+
+    static void crashLoop() {
+        for (Scn scn : Scn.values()) {
+            long[] r = crashSim(scn);
+            System.out.println("crash bound simulation " + scn + ": total " + r[0] + " in 30 days, max per 24 h " + r[1] +
+                    ", max per drive " + r[2] + ", locked " + (r[3] == 1));
+            switch (scn) {
+                case CRASH_EVERY:
+                    check(r[2] <= 3 && r[1] <= 6 && r[0] <= 6 && r[3] == 1, "crash on every connect: <= 3 per drive, 6 in total, then locked");
+                    break;
+                case HEALTHY_THEN_CRASH:
+                    // each drive: one healthy session (resets the failures, keeps the trip), its crash, 3 failures
+                    check(r[2] <= 4 && r[1] <= 8 && r[0] <= 8 && r[3] == 1, "healthy then crash: <= 4 per drive, 8 in total, then locked");
+                    break;
+                default:
+                    check(r[0] == 0 && r[3] == 0, scn + ": no crash and never locked");
+            }
+        }
     }
 
     static void link() throws Exception {
@@ -559,8 +778,7 @@ public final class CoreTests {
             @Override public void disconnected(Session s, String reason) { events.add("disconnected:" + reason); }
             @Override public void connectFailed(String error, long nextWaitMs, ReconnectPolicy.Acl acl) { events.add("failed:" + nextWaitMs); }
         };
-        ReconnectPolicy.Breaker noTrip = new ReconnectPolicy.Breaker(1000, 1, 60_000, 0);
-        Link link = new Link(conn, l, Clock.SYSTEM, 40, 400, 10, noTrip);
+        Link link = new Link(conn, l, Clock.SYSTEM, 40, 400, 10);
         link.start();
         check(waitFor(() -> events.contains("connected"), 3000), "link: connects after two failures");
         check(attempts.size() == 3 && attempts.get(1) - attempts.get(0) >= 35_000_000L && attempts.get(2) - attempts.get(1) >= 75_000_000L,
@@ -575,14 +793,21 @@ public final class CoreTests {
         attempts.clear();
         events.clear();
         failFirst.set(100);
-        Link slow = new Link(conn, l, Clock.SYSTEM, 400, 30000, 10, noTrip);
+        Link slow = new Link(conn, l, Clock.SYSTEM, 400, 30000, 10);
         slow.start();
         check(waitFor(() -> attempts.size() == 1 && events.size() == 1, 2000), "acl: first attempt failed");
+        // The first failure happened with the car absent (ACL unknown): not a breaker failure, so
+        // ACL_CONNECTED gives an immediate attempt; that one fails with the car present.
+        long before = System.nanoTime();
+        slow.aclConnected();
+        check(waitFor(() -> attempts.size() == 2, 1000) && attempts.get(1) - before < 300_000_000L,
+                "acl: car arrives after absent-car failures: immediate attempt");
+        Thread.sleep(50);
         slow.aclConnected();
         Thread.sleep(150);
-        eq(attempts.size(), 1, "acl: ACL_CONNECTED gives no immediate attempt after a failure");
+        eq(attempts.size(), 2, "acl: ACL_CONNECTED gives no immediate attempt after a car-present failure");
         synchronized (blocker) { blockOpen[0] = true; }
-        check(waitFor(() -> attempts.size() == 2, 2000), "acl: blocking open in progress after the backoff");
+        check(waitFor(() -> attempts.size() == 3, 3000), "acl: blocking open in progress after the backoff");
         long t0 = System.nanoTime();
         slow.stop();
         check(System.nanoTime() - t0 < 2_000_000_000L, "stop aborts a blocking connect");
@@ -608,7 +833,16 @@ public final class CoreTests {
             @Override public void connectFailed(String error, long nextWaitMs, ReconnectPolicy.Acl acl) {}
             @Override public void breaker(ReconnectPolicy.BreakerState state, long untilMs) { events.add("breaker:" + state); }
         };
-        Link link = new Link(conn, l, Clock.SYSTEM, 10, 40, 5, new ReconnectPolicy.Breaker(3, 300, 60_000, 30_000));
+        final String[] stored = {""};
+        final Link.Store store = new Link.Store() {
+            @Override public String load() { return stored[0]; }
+            @Override public void save(String r) { stored[0] = r; }
+            @Override public long wallMs() { return System.currentTimeMillis(); }
+            @Override public long bootCount() { return 3; }
+        };
+        ReconnectPolicy.Breaker fast = new ReconnectPolicy.Breaker(3, 300, 60_000, 30_000);
+        Link link = new Link(conn, l, Clock.SYSTEM, 10, 40, 5, fast);
+        link.setStore(store);
         link.start();
         check(waitFor(() -> events.contains("breaker:OPEN"), 3000), "link: three no-ping sessions open the breaker");
         eq(opened.size(), 3, "link: exactly three attempts before the breaker opened");
@@ -620,9 +854,18 @@ public final class CoreTests {
         link.aclConnected();
         Thread.sleep(400);
         eq(opened.size(), 6, "link: locked, no attempts");
-        link.resetBreaker();
-        check(waitFor(() -> opened.size() >= 7, 2000), "link: app reopened, attempts resume");
         link.stop();
+        check(stored[0].startsWith("pimu-breaker-v1 0 2 1 "), "link: locked state stored: " + stored[0]);
+        // Process restart (or the app opened and the service restarted): still locked.
+        Link again = new Link(conn, l, Clock.SYSTEM, 10, 40, 5, fast);
+        again.setStore(store);
+        again.start();
+        again.aclConnected();
+        Thread.sleep(300);
+        eq(opened.size(), 6, "link: restored locked breaker, no attempts after a restart");
+        again.retryNow();
+        check(waitFor(() -> opened.size() >= 7, 2000), "link: 'retry now' resumes the attempts");
+        again.stop();
     }
 
     static void rollingLog(File dir) throws IOException {

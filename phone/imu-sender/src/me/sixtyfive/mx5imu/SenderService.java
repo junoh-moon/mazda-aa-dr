@@ -48,8 +48,8 @@ import me.sixtyfive.mx5imu.core.Window;
  */
 public final class SenderService extends Service implements SensorEventListener, Link.Listener {
     static final String ACTION_STOP = "me.sixtyfive.mx5imu.STOP";
-    /** The app was opened: clear the circuit breaker (validation/PHONE_IMU_CHANNEL_2026-10-14.md). */
-    static final String ACTION_APP_OPENED = "me.sixtyfive.mx5imu.APP_OPENED";
+    /** The app's 'retry now' button: clears the circuit breaker (validation/PHONE_IMU_CHANNEL_2026-10-14.md). */
+    static final String ACTION_RETRY_NOW = "me.sixtyfive.mx5imu.RETRY_NOW";
     private static final String CHANNEL = "link";
     private static final int NOTE_ID = 1;
     private static final int GYRO_US = 5000;      // 200 Hz, no HIGH_SAMPLING_RATE_SENSORS needed
@@ -108,15 +108,16 @@ public final class SenderService extends Service implements SensorEventListener,
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (intent != null && ACTION_APP_OPENED.equals(intent.getAction())) {
+        if (intent != null && ACTION_RETRY_NOW.equals(intent.getAction())) {
             Link l = link;
-            if (l != null && l.breakerState() != ReconnectPolicy.BreakerState.CLOSED) {
-                log.event("breaker_reset app_opened");
+            if (l != null) {
+                log.event("breaker_retry_now");
+                l.retryNow();
                 Status.breaker = "";
-                l.resetBreaker();
                 updateNote("연결 대기 중");
+                return START_STICKY;
             }
-            return START_STICKY;
+            // not running: the button already updated the stored breaker; start normally below
         }
         String why = intent == null ? "sticky_restart" : intent.getStringExtra("why");
         if (!Prefs.enabled(this) || Prefs.address(this) == null) { stopSelf(); return START_NOT_STICKY; }
@@ -152,6 +153,17 @@ public final class SenderService extends Service implements SensorEventListener,
         Status.state = "연결 대기 중";
         log.event("service_start why=" + why + " device=" + addr);
         link = new Link(new RfcommConnector(device), this, CLOCK, 2000, 30000, 500);
+        final Context ctx = this;
+        link.setStore(new Link.Store() {
+            @Override public String load() { return Prefs.breaker(ctx); }
+            @Override public void save(String record) { Prefs.setBreaker(ctx, record); }
+            @Override public long wallMs() { return System.currentTimeMillis(); }
+            @Override public long bootCount() { return Prefs.bootCount(ctx); }
+        });
+        ReconnectPolicy.BreakerState restored = link.breakerState();
+        log.event("breaker_restored state=" + restored + " record=" + Prefs.breaker(this));
+        if (restored == ReconnectPolicy.BreakerState.LOCKED) breaker(restored, 0);
+        else if (restored == ReconnectPolicy.BreakerState.OPEN) breaker(restored, link.openUntilMs());
         receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context c, Intent i) { onBluetoothEvent(i); }
         };
@@ -250,9 +262,9 @@ public final class SenderService extends Service implements SensorEventListener,
         Status.state = "연결 대기 중";
         sensorHandler.post(this::unregisterSensors);
         if (wake.isHeld()) wake.release();
-        log.event(String.format(Locale.ROOT, "disconnected reason=%s frames=%d pongs=%d crc_errors=%d unknown_version=%d unexpected=%d dropped_before_ping=%d ping_span_ms=%d",
+        log.event(String.format(Locale.ROOT, "disconnected reason=%s frames=%d pongs=%d crc_errors=%d unknown_version=%d unexpected=%d dropped_before_ping=%d dropped_stale_ping=%d ping_span_ms=%d",
                 reason, s.framesSent.get(), s.pongsSent.get(), s.crcErrors(), s.unknownVersion(), s.unexpectedFrames.get(),
-                s.droppedBeforePing.get(), s.pingSpanMs()));
+                s.droppedBeforePing.get(), s.droppedStalePing.get(), s.pingSpanMs()));
         if (!"stopped".equals(reason)) Status.lastError = "연결 끊김: " + reason;
         updateNote("연결 대기 중");
     }
@@ -270,9 +282,9 @@ public final class SenderService extends Service implements SensorEventListener,
             Status.breaker = "연속 실패 3회: " + min + "분 동안 연결 중지";
             updateNote("연결 반복 실패 · " + min + "분 동안 중지");
         } else if (state == ReconnectPolicy.BreakerState.LOCKED) {
-            log.event("breaker_locked second_trip until_app_opened");
-            Status.breaker = "연결 중지됨: 앱을 다시 여십시오";
-            updateNote("연결 중지됨 · 앱을 다시 여십시오");
+            log.event("breaker_locked second_trip until_retry_now");
+            Status.breaker = "연결 중지됨: 앱의 '지금 다시 시도'를 누르면 다시 시도합니다";
+            updateNote("연결 중지됨 · 앱에서 '지금 다시 시도'");
         } else {
             log.event("breaker_closed");
             Status.breaker = "";

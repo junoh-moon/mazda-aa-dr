@@ -458,3 +458,15 @@ $(addprefix $(BUILD)/,$(HOST_ADAPTER_TESTS)): src/runtime/lds_association_protoc
 .PHONY: test-phone-imu-sender
 test-phone-imu-sender:
 	phone/imu-sender/test.sh
+# End-to-end interop rig: the real phone Java core (PhoneSim) against the real
+# collector receiver through a fake bds relay (host PTY, private dbus-daemon,
+# fake BCA). Needs a JDK (javac/java >= 11) and dbus-daemon; about 30 minutes
+# of wall time; NOT part of `make test`. Exit 77 = skipped (tool missing).
+# Run it on a quiet host: the Python relay stalls under heavy load (see rig.py).
+# PIMU_INTEROP_ARGS selects scenarios (normal firstping firstping_poll crash
+# flap garbage slow); the run fails on any CHECK failure. Timing checks are
+# load-sensitive: run when the 1-minute load has been below 4.
+# validation/PHONE_IMU_CHANNEL_2026-10-14.md.
+.PHONY: test-phone-imu-interop
+test-phone-imu-interop: $(BUILD)/test_collector $(BUILD)/fake_bca
+	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) tests/phone_imu/interop/rig.py $(PIMU_INTEROP_ARGS)

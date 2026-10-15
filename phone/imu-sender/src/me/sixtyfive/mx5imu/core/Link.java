@@ -17,12 +17,22 @@ public final class Link {
         default void breaker(ReconnectPolicy.BreakerState state, long untilMs) {}
     }
 
+    /** Where the breaker state survives the process (the service's Prefs); tests may keep it in memory. */
+    public interface Store {
+        String load();
+        void save(String record);
+        long wallMs();
+        long bootCount();
+    }
+
     private final Transport.Connector connector;
     private final Listener listener;
     private final Clock clock;
     private final ReconnectPolicy policy;
     private final AtomicLong seq = new AtomicLong();
     private final long pollMs;
+    private Store store;
+    private int saved = -1;
     private Thread thread;
     private volatile boolean running;
     private volatile Session session;
@@ -41,6 +51,18 @@ public final class Link {
     }
 
     private long nowMs() { return clock.nanos() / 1_000_000L; }
+
+    /** Before start(): restore and later persist the breaker through the store. */
+    public synchronized void setStore(Store s) {
+        store = s;
+        if (s != null) { policy.restore(s.load(), nowMs(), s.wallMs(), s.bootCount()); saved = policy.changes(); }
+    }
+
+    private void persist() {  // caller holds the lock
+        if (store == null || saved == policy.changes()) return;
+        saved = policy.changes();
+        store.save(policy.snapshot(nowMs(), store.wallMs(), store.bootCount()));
+    }
 
     public synchronized void start() {
         if (running) return;
@@ -67,9 +89,10 @@ public final class Link {
 
     public synchronized void aclConnected() { policy.aclConnected(nowMs()); notifyAll(); }
     public synchronized void aclDisconnected() { policy.aclDisconnected(nowMs()); notifyAll(); }
-    /** The app was opened again: a locked or open breaker is cleared. */
-    public synchronized void resetBreaker() { policy.resetBreaker(); notifyAll(); }
+    /** The app's explicit 'retry now' button: clears an OPEN or LOCKED breaker (one more trip locks). */
+    public synchronized void retryNow() { policy.retryNow(nowMs()); persist(); notifyAll(); }
     public synchronized ReconnectPolicy.BreakerState breakerState() { return policy.state(nowMs()); }
+    public synchronized long openUntilMs() { return policy.openUntilMs(); }
     public synchronized void adapter(boolean on) {
         policy.adapter(on, nowMs());
         notifyAll();
@@ -100,6 +123,7 @@ public final class Link {
                 synchronized (this) {
                     before = policy.state(nowMs());
                     policy.connectFailed(nowMs());
+                    persist();
                     wait = policy.waitMs(nowMs()); acl = policy.acl();
                     after = policy.state(nowMs()); until = policy.openUntilMs();
                 }
@@ -127,6 +151,7 @@ public final class Link {
                 session = null;
                 before = policy.state(nowMs());
                 policy.sessionEnded(nowMs(), s.pinged(), s.pingSpanMs());
+                persist();
                 after = policy.state(nowMs()); until = policy.openUntilMs();
             }
             listener.disconnected(s, s.closeReason());

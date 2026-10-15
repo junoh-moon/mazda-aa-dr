@@ -13,13 +13,21 @@ import java.util.concurrent.atomic.AtomicLong;
  * One connected RFCOMM session. A reader thread answers every valid PING at once with a PONG; a
  * writer thread sends queued DATA frames in order. Only DATA and PONG frames are ever written, and
  * no DATA frame before the first PING of the session (windows offered earlier are discarded and
- * counted): a CMU that does not receive us never gets data. The session closes on an I/O error, when
- * no PING arrives within 15 s of the connect ("no_ping"), on 10 s without a valid PING after that
- * ("silence") or when the transmit queue is full (the CMU stopped reading).
+ * counted): a CMU that does not receive us never gets data. DATA also pauses while the last PING is
+ * older than 11 s (STALE_PING_NS), so a stalled CMU reader never fills the stock bds's PTY. The session closes on an I/O error, when
+ * no PING arrives within 15 s of the connect ("no_ping"), on 15 s (three PING periods) without a valid PING after
+ * that ("silence") or when the transmit queue is full (the CMU stopped reading).
  */
 public final class Session {
-    public static final long SILENCE_NS = 10_000_000_000L;
+    public static final long SILENCE_NS = 15_000_000_000L;  // three CMU PING periods
     public static final long FIRST_PING_NS = 15_000_000_000L;
+    /**
+     * No DATA is queued when the last PING is older than this (a stalled CMU reader): the stock bds
+     * must never block on a full PTY. 11 s of data is 17.6 kB, below the 20 kB host PTY capacity
+     * measured by the interop rig (the target kernel's capacity is unknown). One lost PING (a 10 s
+     * gap) stays below it.
+     */
+    public static final long STALE_PING_NS = 11_000_000_000L;
     public static final int QUEUE_FRAMES = 500; // 10 s at 50 Hz
 
     private final Transport transport;
@@ -32,12 +40,14 @@ public final class Session {
     private final long startNs;
     private volatile String closeReason;
     private volatile long lastPingNs, firstPingNs;
+    /** frame_reset for the next DATA actually sent: the first of the session, or after a dropped reset window. */
+    private volatile boolean resetPending = true;
     private Thread reader, writer;
     private InputStream in;
     private OutputStream out;
 
     public final AtomicLong framesSent = new AtomicLong(), pongsSent = new AtomicLong(), pingsReceived = new AtomicLong(),
-            unexpectedFrames = new AtomicLong(), droppedBeforePing = new AtomicLong();
+            unexpectedFrames = new AtomicLong(), droppedBeforePing = new AtomicLong(), droppedStalePing = new AtomicLong();
 
     public Session(Transport transport, Clock clock, AtomicLong seq) {
         this.transport = transport;
@@ -59,7 +69,15 @@ public final class Session {
     /** Queues a window for sending; returns false (and closes the session) when the queue is full. */
     public boolean offer(Window w) {
         if (closeReason != null) return false;
-        if (firstPingNs == 0) { droppedBeforePing.incrementAndGet(); return true; }
+        if (firstPingNs == 0) {
+            droppedBeforePing.incrementAndGet();
+            return true;
+        }
+        if (clock.nanos() - lastPingNs >= STALE_PING_NS) {
+            droppedStalePing.incrementAndGet();
+            resetPending = true;                 // the stream restarts after the gap
+            return true;
+        }
         if (queue.offer(w)) return true;
         close("tx_stall");
         return false;
@@ -129,7 +147,8 @@ public final class Session {
             while (closeReason == null) {
                 Window w = queue.poll(250, TimeUnit.MILLISECONDS);
                 if (w == null) continue;
-                byte[] frame = w.encode(seq.get() & 0xFFFFFFFFL);
+                byte[] frame = w.encode(seq.get() & 0xFFFFFFFFL, resetPending ? Protocol.FLAG_FRAME_RESET : 0);
+                resetPending = false;
                 synchronized (outLock) { out.write(frame); out.flush(); }
                 seq.set((seq.get() + 1) & 0xFFFFFFFFL);
                 framesSent.incrementAndGet();

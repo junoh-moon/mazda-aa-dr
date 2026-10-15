@@ -150,7 +150,7 @@ public:
         memset(path_, 0, sizeof path_); memset(owner_, 0, sizeof owner_);
         sig_other_ = unexpected_ = ping_drop_ = unmatched_ = 0; last_drop_row_ = 0; drop_sig_ = 0;
         bds_state_ = BDS_SEARCH; bds_pid_ = 0; bds_seen_ = bds_missing_ = 0; ready_ = false; next_scan_ = 0;
-        quiesced_ = false; cand_pid_ = 0; cand_kind_ = -1; query_period_ = QUERY_NS;
+        quiesced_ = failed_ = opened_once_ = gone_ = false; misses_ = 0; me_.pid = 0; me_.start = 0; me_.ppid = 0; query_period_ = QUERY_NS;
         next_query_ = 0; next_bus_ = 0; query_fail_ = 0; last_frame_ = 0; sec_start_ = 0; sec_bytes_ = 0; pending_out_ = 0;
         memset(&noted_, 0, sizeof noted_);
         last_cs_ = last_st_ = 0xFFFFFFFFu; last_poll_path_[0] = 0;
@@ -174,7 +174,7 @@ public:
     }
 
 private:
-    enum BdsState { BDS_SEARCH, BDS_CONFIG, BDS_STOCK, BDS_FAILED };
+    enum BdsState { BDS_SEARCH, BDS_CONFIG, BDS_STOCK };
     static void* run_thread(void* p) { static_cast<Receiver*>(p)->run(); return 0; }
 
     // ---- queue ---------------------------------------------------------------
@@ -241,68 +241,84 @@ private:
     // Match: argv[0] has basename "bds" (SM starts /jci/bds/bds with an absolute
     // path; any directory is accepted so a different launcher spelling cannot
     // hide it) and -configFilePath is followed by exactly our XML path.
-    // 1 = bds with our config, 0 = bds with other args, -1 = not bds/unreadable.
-    int bds_cmdline(long pid) {
-        char p[256], buf[1024];
-        snprintf(p, sizeof p, "%s/%ld/cmdline", o_.proc_root, pid);
+    // A process is identified by (pid, start time = /proc/<pid>/stat field 22),
+    // so a reused pid is a different process.
+    enum Probe { P_OURS = 1, P_OTHER_ARGS = 0, P_GONE = -1, P_UNKNOWN = -2 };
+    // ENOENT/ESRCH = the entry is gone; any other open/read error (EACCES,
+    // EMFILE, ENOMEM, EAGAIN, EIO, ...) is UNKNOWN and never counts as gone.
+    static int gone_or_unknown(int err) { return err == ENOENT || err == ESRCH ? P_GONE : P_UNKNOWN; }
+    int read_small(long pid, const char* what, char* buf, size_t cap, ssize_t* n) {
+        char p[256];
+        snprintf(p, sizeof p, "%s/%ld/%s", o_.proc_root, pid, what);
         int fd = open(p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
-        if (fd < 0) return -1;
-        ssize_t n = read(fd, buf, sizeof buf - 1);
+        if (fd < 0) return gone_or_unknown(errno);
+        *n = read(fd, buf, cap - 1);
+        int err = errno;
         close(fd);
-        if (n <= 0) return -1;
-        buf[n] = 0;
+        if (*n < 0) return gone_or_unknown(err);
+        buf[*n] = 0;
+        return 0;
+    }
+    // Probe one pid: kind of bds, start time, parent pid.
+    int probe(long pid, unsigned long long* start, long* ppid) {
+        char buf[1024];
+        ssize_t n = 0;
+        *start = 0; *ppid = 0;
+        int r = read_small(pid, "stat", buf, sizeof buf, &n);
+        if (r) return r;
+        const char* q = strrchr(buf, ')');
+        if (!q) return P_GONE;
+        unsigned field = 2;  // q points at the end of field 2 (comm)
+        for (++q; *q && field < 22; ++q) {
+            if (*q == ' ') {
+                ++field;
+                if (field == 4) *ppid = atol(q + 1);
+                if (field == 22) *start = strtoull(q + 1, 0, 10);
+            }
+        }
+        r = read_small(pid, "cmdline", buf, sizeof buf, &n);
+        if (r) return r;
+        if (n <= 0) return P_GONE;                     // a zombie has an empty cmdline
         const char* base = strrchr(buf, '/');
-        if (strcmp(base ? base + 1 : buf, "bds")) return -1;
+        if (strcmp(base ? base + 1 : buf, "bds")) return P_GONE;   // the pid now runs something else
         const char* end = buf + n;
         bool flag = false;
         for (const char* a = buf + strlen(buf) + 1; a < end; a += strlen(a) + 1) {
-            if (flag) return strcmp(a, o_.xml_path) ? 0 : 1;
+            if (flag) return strcmp(a, o_.xml_path) ? P_OTHER_ARGS : P_OURS;
             flag = !strcmp(a, "-configFilePath");
         }
-        return 0;
+        return P_OTHER_ARGS;
     }
-    // Start time (clock ticks since boot, /proc/<pid>/stat field 22); 0 when unknown.
-    unsigned long long start_ticks(long pid) {
-        char p[256], buf[1024];
-        snprintf(p, sizeof p, "%s/%ld/stat", o_.proc_root, pid);
-        int fd = open(p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
-        if (fd < 0) return 0;
-        ssize_t n = read(fd, buf, sizeof buf - 1);
-        close(fd);
-        if (n <= 0) return 0;
-        buf[n] = 0;
-        const char* q = strrchr(buf, ')');
-        if (!q) return 0;
-        unsigned field = 2;  // q points at the end of field 2 (comm)
-        for (++q; *q && field < 22; ++q) if (*q == ' ') ++field;
-        return field == 22 ? strtoull(q, 0, 10) : 0;
-    }
-    // The bds process: our-config processes win over others; among several,
-    // the oldest (a fork of bds running system() has the same cmdline for a
-    // moment before its exec, and is younger).
-    long scan_bds(int* kind) {
+    int bds_cmdline(long pid) { unsigned long long st; long pp; int k = probe(pid, &st, &pp); return k == P_OURS ? 1 : k == P_OTHER_ARGS ? 0 : -1; }
+    struct Seen { long pid; unsigned long long start; long ppid; };
+    // Every bds process: our-config processes into cfg[], the oldest with other
+    // args into *stock. Returns the number of our-config processes (<= 8).
+    unsigned scan_bds(Seen cfg[8], Seen* stock) {
         DIR* d = opendir(o_.proc_root);
-        long found = 0; *kind = -1;
-        unsigned long long best = 0;
+        unsigned n = 0; stock->pid = 0;
         if (!d) return 0;
         for (unsigned seen = 0; seen < 8192; ++seen) {
             struct dirent* e = readdir(d);
             if (!e) break;
-            const char* n = e->d_name;
-            if (!n[0] || strspn(n, "0123456789") != strlen(n) || strlen(n) > 9) continue;
-            long pid = atol(n);
-            int k = bds_cmdline(pid);
-            if (k < 0 || k < *kind) continue;
-            unsigned long long st = start_ticks(pid);
-            if (k > *kind || (st ? st : ~0ULL) < (best ? best : ~0ULL) || (st == best && pid < found)) {
-                *kind = k; found = pid; best = st;
-            }
+            const char* name = e->d_name;
+            if (!name[0] || strspn(name, "0123456789") != strlen(name) || strlen(name) > 9) continue;
+            Seen x; x.pid = atol(name);
+            int k = probe(x.pid, &x.start, &x.ppid);
+            if (k == P_OURS && n < 8) cfg[n++] = x;
+            else if (k == P_OTHER_ARGS && (!stock->pid || x.pid < stock->pid)) *stock = x;
         }
         closedir(d);
-        return found;
+        return n;
+    }
+    // The bds is the oldest process (smallest start time, then pid): a fork of
+    // bds running system() has the same cmdline for a moment and is younger.
+    static Seen oldest(const Seen* v, unsigned n) {
+        Seen best = v[0];
+        for (unsigned i = 1; i < n; ++i)
+            if (v[i].start < best.start || (v[i].start == best.start && v[i].pid < best.pid)) best = v[i];
+        return best;
     }
     void bt_fail(uint64_t now, const char* why) {
-        bds_state_ = BDS_FAILED;
         char tmp[512], dst[512], dir[512], body[160];
         snprintf(tmp, sizeof tmp, "%s/logs/.bt-fail.%ld", o_.root, (long)getpid());
         snprintf(dst, sizeof dst, "%s/logs/bt-fail", o_.root);
@@ -321,52 +337,68 @@ private:
         bt_row(now, "fail", ok ? why : "write_failed", (now - bds_seen_) / MS_NS);
     }
     // In-boot circuit breaker: once the bds that runs our configuration is
-    // gone (crash and SM restart, args change, vanished), this boot never
-    // opens the service PTY again and sends no PING, so the phone's breaker
-    // counts every further session as a failure and stops reconnecting.
+    // gone (crash and SM restart, args change, vanished) or never became ready,
+    // this boot never opens the service PTY again, sends no PING, makes no
+    // BCA query and closes its D-Bus connection, so the phone's breaker counts
+    // every further session as a failure and stops reconnecting.
     void quiesce(uint64_t now, const char* why) {
         if (quiesced_) return;
         quiesced_ = true;
         close_link(now, "quiesce", 0);
+        bus_close();
         bt_row(now, "quiesce", why, (now - bds_seen_) / MS_NS);
     }
-    // A pid becomes the bds only after two consecutive scans (1 s apart) saw it.
-    bool confirmed(long pid, int kind) {
-        bool same = pid && pid == cand_pid_ && kind == cand_kind_;
-        cand_pid_ = pid; cand_kind_ = kind;
-        return same;
-    }
+    void fail_once(uint64_t now, const char* why) { if (!failed_) { failed_ = true; bt_fail(now, why); } }
+    // Watched in every state for the whole boot. Only one process is the bds:
+    // the oldest with our config at the first sighting, identified by (pid,
+    // start time). It is GONE after two consecutive ticks whose probe says the
+    // entry is missing, a zombie, another program, or another start time (pid
+    // reuse); an unreadable entry for another reason (EACCES, EMFILE, ...)
+    // neither counts nor resets. Other processes with our cmdline are never
+    // part of the identity: the disappearance of the bds is a crash whatever
+    // else is running (a real fork child is younger and its parent is the bds;
+    // it never keeps a crash hidden). Once gone: quiesce at once; a process
+    // with our config and another identity = restart, a bds with other args =
+    // args_changed, nothing for vanish_ns = vanished (bt-fail once).
     void bds_tick(uint64_t now) {
-        if (bds_state_ == BDS_STOCK || bds_state_ == BDS_FAILED || now < next_scan_) return;
+        if (bds_state_ == BDS_STOCK || now < next_scan_) return;
         next_scan_ = now + SEC_NS;
+        Seen cfg[8], stock;
         if (bds_state_ == BDS_SEARCH) {
-            int kind; long pid = scan_bds(&kind);
-            if (kind < 0 || !confirmed(pid, kind)) return;
-            bds_pid_ = pid;
-            if (kind == 0) { bds_state_ = BDS_STOCK; bt_row(now, "stock", "args", 0); return; }
-            bds_seen_ = now; bds_missing_ = 0; bds_state_ = BDS_CONFIG; cand_pid_ = 0;
-            bt_row(now, "config", "seen", 0);
-        }
-        // BDS_CONFIG
-        if (bds_cmdline(bds_pid_) != 1) {
-            quiesce(now, "bds_gone");
-            if (!bds_missing_) bds_missing_ = now;
-            int kind; long pid = scan_bds(&kind);
-            if (kind >= 0 && pid != bds_pid_ && confirmed(pid, kind)) {
-                bds_pid_ = pid; bt_fail(now, kind == 1 ? "restart" : "args_changed"); return;
+            unsigned n = scan_bds(cfg, &stock);
+            if (!n) {
+                if (stock.pid) { bds_pid_ = stock.pid; bds_state_ = BDS_STOCK; bt_row(now, "stock", "args", 0); }
+                return;
             }
-            if (kind < 0) cand_pid_ = 0;
-            if (now - bds_missing_ >= o_.vanish_ns) bt_fail(now, "vanished");
+            me_ = oldest(cfg, n); bds_pid_ = me_.pid; bds_seen_ = now; bds_state_ = BDS_CONFIG; misses_ = 0;
+            bt_row(now, "config", "seen", 0);
+            check_ready(now);
             return;
         }
-        bds_missing_ = 0; cand_pid_ = 0;
-        if (!ready_) {
-            struct stat st;
-            if (!stat(o_.ready_flag, &st)) { ready_ = true; bt_row(now, "ready", "flag", (now - bds_seen_) / MS_NS); }
-            else if (now - bds_seen_ >= o_.ready_timeout_ns) bt_fail(now, "not_ready");
+        if (!gone_) {
+            unsigned long long st; long pp;
+            int k = probe(me_.pid, &st, &pp);
+            if (k == P_OURS && st == me_.start) { misses_ = 0; check_ready(now); return; }
+            if (k == P_UNKNOWN) return;                            // transient: no verdict
+            if (k == P_OTHER_ARGS && st == me_.start) misses_ = 2;  // same process, args changed
+            else if (++misses_ < 2) return;                        // gone only on the second miss
+            gone_ = true;
+            bds_missing_ = now;
+            quiesce(now, "bds_gone");
         }
+        unsigned n = scan_bds(cfg, &stock);
+        for (unsigned i = 0; i < n; ++i)
+            if (cfg[i].pid != me_.pid || cfg[i].start != me_.start) { bds_pid_ = cfg[i].pid; fail_once(now, "restart"); return; }
+        if (stock.pid) { bds_pid_ = stock.pid; fail_once(now, "args_changed"); return; }
+        if (now - bds_missing_ >= o_.vanish_ns) fail_once(now, "vanished");
     }
-    bool bt_active() const { return !quiesced_ && (bds_state_ == BDS_CONFIG || (bds_state_ == BDS_FAILED && bds_pid_)); }
+    void check_ready(uint64_t now) {
+        if (ready_ || bds_state_ != BDS_CONFIG) return;
+        struct stat st;
+        if (!stat(o_.ready_flag, &st)) { ready_ = true; bt_row(now, "ready", "flag", (now - bds_seen_) / MS_NS); }
+        else if (now - bds_seen_ >= o_.ready_timeout_ns) { quiesce(now, "not_ready"); fail_once(now, "not_ready"); ready_ = true; }
+    }
+    bool bt_active() const { return !quiesced_ && bds_state_ == BDS_CONFIG; }
 
     // ---- D-Bus -------------------------------------------------------------------
     void bus_close() { if (conn_) { dbus_connection_close(conn_); dbus_connection_unref(conn_); conn_ = 0; } owner_[0] = 0; }
@@ -475,13 +507,16 @@ private:
         }
         if (fd_ < 0 && now >= next_query_) query(now);
     }
-    // QueryConnectStatus is a call into the stock BCA: 5 s after start or a
-    // disconnect, doubling to 60 s while nothing connects; a signal for our
+    // QueryConnectStatus is a call into the stock BCA: every 5 s until the
+    // first PTY of the boot was opened, then 5 s after a disconnect doubling
+    // to 60 s while nothing connects; a signal for our
     // service resets it to 5 s (signals are the primary path, polling only the
     // fallback for a missed or never-broadcast signal).
     void query(uint64_t now) {
         next_query_ = now + query_period_;
-        query_period_ = query_period_ * 2 > QUERY_MAX_NS ? QUERY_MAX_NS : query_period_ * 2;
+        // Until the first PTY of this boot is open the phone waits only 15 s
+        // for a first PING: keep 5 s; afterwards back off to 60 s.
+        if (opened_once_) query_period_ = query_period_ * 2 > QUERY_MAX_NS ? QUERY_MAX_NS : query_period_ * 2;
         DBusMessage* m = dbus_message_new_method_call("com.jci.bca", "/com/jci/bca", "com.jci.bca", "QueryConnectStatus");
         if (!m) return;
         dbus_message_set_auto_start(m, 0);
@@ -519,6 +554,12 @@ private:
         // CAP_DAC_OVERRIDE is effective only for this open (permitted set only otherwise).
         if (o_.raise_cap) set_cap(true);
 #endif
+#ifdef MX5_COLLECTOR_TESTING
+        // Test hook right before the open syscall: any reader closed before
+        // this point leaves the PTY without a reader for the delay, which the
+        // test sees as a hangup/EIO on the master side.
+        if (getenv("MX5_TEST_REOPEN_DELAY_MS")) usleep(1000u * unsigned(atoi(getenv("MX5_TEST_REOPEN_DELAY_MS"))));
+#endif
         int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
         *err = fd < 0 ? errno : 0;
 #ifndef MX5_COLLECTOR_TESTING
@@ -543,11 +584,6 @@ private:
 #endif
     void open_link(uint64_t now, const char* path, const char* ev) {
         if (quiesced_) return;
-#ifdef MX5_COLLECTOR_TESTING
-        // Test hook: hold the old reader open for a while before the new open,
-        // so a reordered close is visible as a hangup on the PTY master.
-        if (fd_ >= 0 && getenv("MX5_TEST_REOPEN_DELAY_MS")) usleep(1000u * unsigned(atoi(getenv("MX5_TEST_REOPEN_DELAY_MS"))));
-#endif
         int err = 0, fd = open_slave(path, &err);
         char saved[32]; memcpy(saved, path_, sizeof saved);
         copy(path_, sizeof path_, path);
@@ -561,6 +597,7 @@ private:
         // A replaced reader is closed only after the new one is open: the
         // stock bds never sees a moment without a reader of our service.
         if (fd_ >= 0) { finish_rows(now); close(fd_); }
+        opened_once_ = true;
         fd_ = fd; last_frame_ = now; dec_ = Decoder(); memset(&noted_, 0, sizeof noted_); pinger_.reset(); pending_out_ = 0;
         link_row(now, ev, why, 0, 0xFFFFFFFFu, 0xFFFFFFFFu);
         agg_.start(now);
@@ -700,8 +737,8 @@ private:
     Bucket buckets_[R_KINDS];
     unsigned long long rate_drop_[R_KINDS], sig_other_, unexpected_, ping_drop_, unmatched_, drop_sig_;
     uint64_t last_drop_row_;
-    BdsState bds_state_; long bds_pid_; uint64_t bds_seen_, bds_missing_, next_scan_; bool ready_, quiesced_;
-    long cand_pid_; int cand_kind_; uint64_t query_period_;
+    BdsState bds_state_; long bds_pid_; uint64_t bds_seen_, bds_missing_, next_scan_; bool ready_, quiesced_, failed_, opened_once_;
+    Seen me_; unsigned misses_; bool gone_; uint64_t query_period_;
     int fd_; char path_[32]; uint64_t last_frame_, sec_start_; size_t sec_bytes_;
     Decoder dec_; Decoder::Counts noted_; Aggregator agg_; Pinger pinger_;
     uint8_t out_[SYNC_LEN]; size_t pending_out_;

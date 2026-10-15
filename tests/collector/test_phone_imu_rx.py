@@ -6,6 +6,7 @@ frames (tests/phone_imu/make_golden.py encoder), answers PINGs and checks the
 pimu rows. No OEM code, radio or vehicle is involved; RFCOMM/BlueGo timing is
 not modelled. validation/PHONE_IMU_CHANNEL_2026-10-14.md.
 """
+import errno
 import json
 import os
 from pathlib import Path
@@ -103,14 +104,16 @@ class PhoneImuReceiverTests(unittest.TestCase):
         bca.stdin.write(text + '\n')
         bca.stdin.flush()
 
-    def set_bds(self, pid, args, argv0='/jci/bds/bds', start=None, keep=False):
+    def set_bds(self, pid, args, argv0='/jci/bds/bds', start=None, keep=False, ppid=1):
         """Authored /proc entry of a bds-shaped process (never an OEM process)."""
         if self.proc.exists() and not keep:
             shutil.rmtree(self.proc)
         (self.proc / str(pid)).mkdir(parents=True, exist_ok=True)
         (self.proc / str(pid) / 'cmdline').write_bytes(b'\0'.join(x.encode() for x in [argv0, *args]) + b'\0')
-        if start is not None:
-            fields = ['S', '1'] + ['0'] * 18 + [str(start)] + ['0'] * 10   # field 3 onwards; 22 = start
+        if start is None:
+            start = 1000 + pid       # every authored process has a stat entry, like /proc
+        if start is not False:
+            fields = ['S', str(ppid)] + ['0'] * 17 + [str(start)] + ['0'] * 10   # fields 3..; 4 = ppid, 22 = start
             (self.proc / str(pid) / 'stat').write_text('%d (bds) %s\n' % (pid, ' '.join(fields)))
         (self.proc / 'self').mkdir(exist_ok=True)
 
@@ -325,12 +328,28 @@ class PhoneImuReceiverTests(unittest.TestCase):
         drop = self.rows('pimu_drop')
         self.assertTrue(drop and drop[-1]['d'][5] >= 1 and drop[-1]['d'][6] >= 1, drop)
 
-    def test_not_ready_writes_bt_fail(self):
+    def test_not_ready_writes_bt_fail_and_quiesces(self):
+        # Not ready within the timeout: bt-fail AND quiesce for the boot (no PTY, no PING, no
+        # BCA query, D-Bus closed), even when a CONNECTED signal and the flag come later.
         self.ready.unlink()
         self.start('--pimu-ready-timeout-ms', '500')
         self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'fail', what='bt fail')
         text = (self.root / 'logs/bt-fail').read_text()
         self.assertRegex(text, r'^mx5dr-bt-fail-v1\nboot_id=[0-9a-f-]{36}\nreason=not_ready\n$')
+        self.assertTrue([r for r in self.rows('bt_watch') if r['ev'] == 'quiesce' and r['why'] == 'not_ready'])
+        self.ready.write_text('')
+        master, path = self.new_pty(raw=True)
+        self.bca_cmd(self.bca, f'state 15 3 0 {path}')
+        self.bca_cmd(self.bca, f'signal 15 3 3 0 {path}')
+        queries = self.bca_lines.count('query 15\n')
+        self.assertEqual(self.read_master(master, 7), b'', 'no PING after not_ready')
+        self.assertEqual(self.bca_lines.count('query 15\n'), queries, 'no BCA query after not_ready')
+        self.assertFalse([r for r in self.rows('pimu_link') if r['ev'] in ('connect', 'replace')])
+        # The bds keeps being watched: its later death is still journaled and nothing reopens.
+        shutil.rmtree(self.proc / '4242')
+        self.set_bds(4343, ['-interface', 'dbus', '-configFilePath', XML], keep=True)
+        time.sleep(2.5)
+        self.assertFalse([r for r in self.rows('pimu_link') if r['ev'] in ('connect', 'replace')])
 
     def test_restart_writes_bt_fail(self):
         self.start()
@@ -403,17 +422,56 @@ class PhoneImuReceiverTests(unittest.TestCase):
         self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['ev'] == 'disconnect' and r['why'] == 'bca_status',
                       what='bca disconnect')
 
-    def test_poll_backs_off_while_disconnected(self):
+    def test_poll_stays_at_5_s_until_the_first_pty_then_backs_off(self):
         self.start()
         self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        time.sleep(21)
+        # The phone waits only 15 s for a first PING: every 5 s until a PTY was opened.
+        self.assertGreaterEqual(self.bca_lines.count('query 15\n'), 4, self.bca_lines)
+        master, path = self.new_pty(raw=True)
+        self.connect(master, path, via='poll')
+        self.bca_cmd(self.bca, 'state 15 0 0 -')
+        os.close(master)
+        self.masters.remove(master)
+        self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['ev'] == 'disconnect', what='disconnect')
+        before = self.bca_lines.count('query 15\n')
         time.sleep(25)
-        queries = self.bca_lines.count('query 15\n')
-        # t = 0, 5, 15 (then 35): three in 25 s; a fixed 5 s period would give five or six.
-        self.assertIn(queries, (3, 4), self.bca_lines)
-        self.bca_cmd(self.bca, 'signal 15 0 3 0 -')          # any signal resets the period to 5 s
-        before = queries
+        # after the first PTY: 5, 10, 20 s steps -> at most 3 queries in 25 s
+        self.assertLessEqual(self.bca_lines.count('query 15\n') - before, 3, self.bca_lines)
+        self.bca_cmd(self.bca, 'signal 15 0 3 0 -')          # a signal resets the period to 5 s
+        before = self.bca_lines.count('query 15\n')
         time.sleep(6.5)
         self.assertGreaterEqual(self.bca_lines.count('query 15\n'), before + 1)
+
+    def test_connecting_while_connected_keeps_the_reader(self):
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        master, path = self.new_pty(raw=True)
+        self.connect(master, path, via='signal')
+        self.bca_cmd(self.bca, f'signal 15 2 3 0 {path}')    # CONNECTING for the open path
+        time.sleep(2)
+        self.assertFalse([r for r in self.rows('pimu_link') if r['ev'] == 'disconnect'])
+        self.assertIn(b'MP', self.read_master(master, 6))     # still reading and PINGing
+
+    def bus_clients(self):
+        out = subprocess.run(['dbus-send', '--bus=' + self.address, '--print-reply', '--dest=org.freedesktop.DBus',
+                              '/org/freedesktop/DBus', 'org.freedesktop.DBus.ListNames'], capture_output=True, text=True).stdout
+        return out.count('":1.')
+
+    def test_quiesce_is_immediate(self):
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        master, path = self.new_pty(raw=True)
+        self.connect(master, path, via='signal')
+        clients = self.bus_clients()
+        t0 = time.monotonic()
+        shutil.rmtree(self.proc / '4242')                    # bds died
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'quiesce', what='quiesce', timeout=5)
+        self.assertLess(time.monotonic() - t0, 2.6, 'quiesce within about one watch period')
+        m2, p2 = self.new_pty(raw=True)
+        self.bca_cmd(self.bca, f'signal 15 3 3 0 {p2}')
+        self.assertEqual(self.read_master(m2, 3), b'')
+        self.assertEqual(self.bus_clients(), clients - 1, 'the receiver closed its D-Bus connection')
 
     def test_bds_crash_quiesces_the_service_for_the_boot(self):
         """bds crash on connect -> SM restart -> the phone retries: after the restart the CMU
@@ -474,18 +532,16 @@ class PhoneImuReceiverTests(unittest.TestCase):
         self.assertFalse((self.root / 'logs/bt-fail').exists())
         self.assertFalse([r for r in self.rows('bt_watch') if r['ev'] in ('fail', 'quiesce')])
 
-    def test_short_lived_bds_shaped_process_is_not_taken_for_bds(self):
-        # At the first scan only a short-lived bds-shaped process (a fork before its exec)
-        # exists; the real bds appears a moment later. It must not be reported as a restart.
+    def test_bds_dying_during_discovery_quiesces(self):
+        # bds A is seen once and replaced by B before the next scan (a crash right after the
+        # start): the first sighting already counts, so this is a restart, never accepted silently.
         self.set_bds(4300, ['-interface', 'dbus', '-configFilePath', XML])
         self.start()
-        time.sleep(0.6)
-        self.set_bds(4242, ['-interface', 'dbus', '-configFilePath', XML])
         self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'config', what='config')
-        time.sleep(3)
-        self.assertEqual([r['pid'] for r in self.rows('bt_watch') if r['ev'] == 'config'], [4242])
-        self.assertFalse([r for r in self.rows('bt_watch') if r['ev'] in ('fail', 'quiesce')])
-        self.assertFalse((self.root / 'logs/bt-fail').exists())
+        self.set_bds(4242, ['-interface', 'dbus', '-configFilePath', XML])
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'fail', what='restart')
+        self.assertIn('reason=restart\n', (self.root / 'logs/bt-fail').read_text())
+        self.assertTrue([r for r in self.rows('bt_watch') if r['ev'] == 'quiesce'])
 
     def test_pty_validation_rejects_other_devices_and_owners(self):
         pts = self.root / 'pts'
@@ -524,11 +580,128 @@ class PhoneImuReceiverTests(unittest.TestCase):
                     hup += 1
             try:
                 os.read(master, 4096)
-            except (BlockingIOError, OSError):
+            except BlockingIOError:
                 pass
+            except OSError as e:                              # EIO: no slave open = no reader
+                if e.errno == errno.EIO:
+                    hup += 1
         self.assertTrue([r for r in self.rows('pimu_link') if r['ev'] == 'silence'])
-        self.assertEqual(hup, 0, 'the PTY master saw a hangup: no reader for a moment')
+        self.assertEqual(hup, 0, 'the PTY master saw a hangup/EIO: no reader for a moment')
 
+    # ---- third-round review probes (Fable r3f, Opus r3o), now regression tests ----
+
+    class Ticks:
+        """Counts the watch's opens of /proc/<pid>/stat (one per 1 s tick) with inotify, so a test
+        can change the entry exactly between ticks."""
+        IN_OPEN = 0x20
+
+        def __init__(self, path):
+            import ctypes
+            self.libc = ctypes.CDLL(None, use_errno=True)
+            self.fd = self.libc.inotify_init1(os.O_NONBLOCK)
+            self.wd = self.libc.inotify_add_watch(self.fd, str(path).encode(), self.IN_OPEN)
+            assert self.fd >= 0 and self.wd >= 0
+
+        def wait_stat_open(self, timeout=5):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                try:
+                    data = os.read(self.fd, 4096)
+                except BlockingIOError:
+                    time.sleep(.005)
+                    continue
+                if b'stat' in data:
+                    return True
+            return False
+
+        def close(self):
+            os.close(self.fd)
+
+    def test_transient_unreadable_cmdline_is_not_a_restart(self):
+        # Opus r3o: the known bds's cmdline unreadable (EACCES) for exactly two ticks, then readable.
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        ticks = self.Ticks(self.proc / '4242')
+        self.addCleanup(ticks.close)
+        c = self.proc / '4242' / 'cmdline'
+        self.assertTrue(ticks.wait_stat_open())
+        time.sleep(.2)
+        os.chmod(c, 0)
+        for _ in range(2):
+            self.assertTrue(ticks.wait_stat_open())             # two ticks see EACCES
+        time.sleep(.2)
+        os.chmod(c, 0o644)
+        time.sleep(2.5)
+        self.assertFalse([r for r in self.rows('bt_watch') if r['ev'] in ('fail', 'quiesce')])
+        self.assertFalse((self.root / 'logs/bt-fail').exists())
+
+    def test_one_missing_read_is_not_gone(self):
+        # The cmdline missing for exactly one tick, then back with the same identity.
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        ticks = self.Ticks(self.proc / '4242')
+        self.addCleanup(ticks.close)
+        c = self.proc / '4242' / 'cmdline'
+        saved = c.read_bytes()
+        self.assertTrue(ticks.wait_stat_open())
+        time.sleep(.2)
+        c.unlink()
+        self.assertTrue(ticks.wait_stat_open())                 # one tick sees it missing
+        time.sleep(.2)
+        c.write_bytes(saved)
+        time.sleep(3)
+        self.assertFalse([r for r in self.rows('bt_watch') if r['ev'] in ('fail', 'quiesce')])
+
+    def test_second_long_lived_process_does_not_hide_a_crash(self):
+        # Fable r3f (b) / Opus r3o: bds P (start 1000) and another long-lived process C with the same
+        # cmdline (start 1500). P dies, SM starts Q: a crash, whatever C is.
+        self.set_bds(4242, ARGS, start=1000)
+        self.set_bds(4300, ARGS, start=1500, keep=True)
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        master, path = self.new_pty(raw=True)
+        self.connect(master, path, via='signal')
+        self.assertEqual(self.rows('bt_watch')[0]['pid'], 4242)
+        shutil.rmtree(self.proc / '4242')
+        time.sleep(1.5)
+        self.set_bds(4400, ARGS, start=9000, keep=True)
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'quiesce', what='quiesce', timeout=5)
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'fail', what='fail', timeout=5)
+        self.read_master(master, 0.3)                           # PINGs written before the quiesce
+        self.assertEqual(self.read_master(master, 6), b'', 'no PING on the old PTY after the crash')
+
+    def test_pid_reuse_within_one_tick_is_a_restart(self):
+        # Fable r3f (a2): the restarted bds gets the same pid with another start time.
+        self.set_bds(4242, ARGS, start=1000)
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        self.set_bds(4242, ARGS, start=7777)
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'fail', what='restart', timeout=6)
+        self.assertIn('reason=restart\n', (self.root / 'logs/bt-fail').read_text())
+
+    def test_zombie_is_gone(self):
+        # Fable r3f (a3): the bds's entry stays as a zombie (empty cmdline); the restarted bds appears.
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        (self.proc / '4242' / 'cmdline').write_bytes(b'')
+        self.set_bds(4300, ARGS, start=5000, keep=True)
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'fail', what='restart', timeout=6)
+        self.assertTrue([r for r in self.rows('bt_watch') if r['ev'] == 'quiesce'])
+
+    def test_collector_before_bds(self):
+        # Fable r3f (a1): no bds at the collector start, bds with our config appears 3 s later.
+        shutil.rmtree(self.proc)
+        (self.proc / 'self').mkdir(parents=True)
+        self.start()
+        time.sleep(3)
+        self.assertFalse(self.rows('bt_watch'))
+        self.set_bds(4242, ARGS, start=1000)
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        time.sleep(2)
+        self.assertFalse([r for r in self.rows('bt_watch') if r['ev'] in ('fail', 'quiesce')])
+
+
+ARGS = ['-interface', 'dbus', '-configFilePath', XML]
 
 if __name__ == '__main__':
     unittest.main()

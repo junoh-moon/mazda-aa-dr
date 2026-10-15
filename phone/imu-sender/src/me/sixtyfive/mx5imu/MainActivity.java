@@ -22,6 +22,7 @@ import android.widget.TextView;
 import java.io.File;
 import java.util.Locale;
 import java.util.Set;
+import me.sixtyfive.mx5imu.core.ReconnectPolicy;
 import me.sixtyfive.mx5imu.core.RollingLog;
 
 /** One-time setup screen: permissions, choose the CMU among bonded devices, on/off, status, log export. */
@@ -30,7 +31,7 @@ public final class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private TextView status, deviceHint;
     private RadioGroup devices;
-    private Button toggle, permit;
+    private Button toggle, permit, retry;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -66,6 +67,11 @@ public final class MainActivity extends Activity {
         toggle = new Button(this);
         toggle.setOnClickListener(v -> onToggle());
         layout.addView(toggle);
+        // Only this button clears a tripped circuit breaker; opening the app does not.
+        retry = new Button(this);
+        retry.setText("지금 다시 시도");
+        retry.setOnClickListener(v -> retryNow());
+        layout.addView(retry);
         Button battery = new Button(this);
         battery.setText("배터리 설정 열기");
         battery.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -87,8 +93,6 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        // Opening the app clears a tripped circuit breaker of a running sender.
-        if (Status.running) startService(new Intent(this, SenderService.class).setAction(SenderService.ACTION_APP_OPENED));
         listDevices();
         ui.post(refresh);
     }
@@ -154,6 +158,7 @@ public final class MainActivity extends Activity {
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
             updateToggle();
+            retry.setVisibility(breakerTripped() ? View.VISIBLE : View.GONE);
             String dev = Prefs.address(MainActivity.this);
             StringBuilder b = new StringBuilder();
             b.append("선택한 차량: ").append(dev == null ? "없음" : Prefs.name(MainActivity.this) + " (" + dev + ")").append('\n');
@@ -173,6 +178,24 @@ public final class MainActivity extends Activity {
             ui.postDelayed(this, 1000);
         }
     };
+
+    private boolean breakerTripped() {
+        ReconnectPolicy p = new ReconnectPolicy(2000, 30000);
+        long now = SenderService.CLOCK.nanos() / 1_000_000L;
+        p.restore(Prefs.breaker(this), now, System.currentTimeMillis(), Prefs.bootCount(this));
+        return p.state(now) != ReconnectPolicy.BreakerState.CLOSED;
+    }
+
+    /** The explicit 'retry now': stored breaker cleared (one more trip locks again), sender told. */
+    private void retryNow() {
+        ReconnectPolicy p = new ReconnectPolicy(2000, 30000);
+        long now = SenderService.CLOCK.nanos() / 1_000_000L, wall = System.currentTimeMillis(), boot = Prefs.bootCount(this);
+        p.restore(Prefs.breaker(this), now, wall, boot);
+        p.retryNow(now);
+        Prefs.setBreaker(this, p.snapshot(now, wall, boot));
+        Status.breaker = "";
+        if (Status.running) startService(new Intent(this, SenderService.class).setAction(SenderService.ACTION_RETRY_NOW));
+    }
 
     private void exportLog() {
         final File out = LogProvider.exportFile(this);

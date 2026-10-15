@@ -33,6 +33,13 @@ final class Prefs {
         return true;
     }
 
+    /** Persisted circuit breaker (ReconnectPolicy.snapshot); survives process death and phone reboots. */
+    static String breaker(Context c) { return p(c).getString("breaker", ""); }
+    static void setBreaker(Context c, String record) { p(c).edit().putString("breaker", record).commit(); }
+    static long bootCount(Context c) {
+        return android.provider.Settings.Global.getInt(c.getContentResolver(), android.provider.Settings.Global.BOOT_COUNT, -1);
+    }
+
     static void setEnabled(Context c, boolean on) { p(c).edit().putBoolean("enabled", on).apply(); }
     static void setDevice(Context c, String address, String name) {
         p(c).edit().putString("address", address).putString("name", name == null ? "" : name).apply();
