@@ -190,13 +190,13 @@ public final class MainActivity extends Activity {
     private void runObdCheck() {
         String addr = Prefs.obdAddress(this);
         if (addr == null) { Status.obdCheck = "먼저 OBD 어댑터를 고르십시오."; return; }
-        if (Status.obdServiceRunning || Status.obdCheckRunning) { Status.obdCheck = "어댑터 사용 중입니다. '송신 끄기' 후 다시 누르십시오."; return; }
         BluetoothManager m = getSystemService(BluetoothManager.class);
         BluetoothAdapter a = m == null ? null : m.getAdapter();
         if (a == null || !bluetoothGranted()) { Status.obdCheck = "Bluetooth를 쓸 수 없습니다."; return; }
         final BluetoothDevice dev;
         try { dev = a.getRemoteDevice(addr); } catch (IllegalArgumentException e) { Status.obdCheck = "주소가 잘못됐습니다."; return; }
-        Status.obdCheckRunning = true;
+        // Atomic with the sender's startObd(): never both on the single-client adapter.
+        if (!Status.tryStartObdCheck()) { Status.obdCheck = "어댑터 사용 중입니다. '송신 끄기' 후 다시 누르십시오."; return; }
         obdCheck.setEnabled(false);
         final RollingLog log = new RollingLog(getFilesDir(), SenderService.CLOCK);
         new Thread(() -> {
@@ -208,19 +208,24 @@ public final class MainActivity extends Activity {
             link.start();
             long end = SenderService.CLOCK.nanos() + OBD_CHECK_MS * 1_000_000L;
             while (SenderService.CLOCK.nanos() < end) {
-                long left = (end - SenderService.CLOCK.nanos()) / 1_000_000_000L;
-                Status.obdCheck = String.format(Locale.ROOT, "점검 중 %d초 남음 · %s · 초당 %.1f프레임 · 손실 %.1f%%",
-                        left, link.state(), link.fps(), link.lossPercent());
+                long now = SenderService.CLOCK.nanos();
+                long left = (end - now) / 1_000_000_000L;
+                Status.obdCheck = String.format(Locale.ROOT, "점검 중 %d초 남음 · %s · 덮개율 %.0f%% · 재시작 %d회 · 손실 %.1f%%",
+                        left, link.state(), 100 * link.wallCoverage(now), link.restarts(), link.lossPercent());
                 try { Thread.sleep(500); } catch (InterruptedException e) { break; }
             }
+            long endNs = SenderService.CLOCK.nanos();
             link.stop();
-            String verdict = link.verdict();
-            log.event("obd_check_end verdict=" + verdict + " | " + link.summary());
+            // Wall clock from the first frame to the end of the check: restart holes count as missing.
+            String verdict = link.verdict(endNs);
+            double coverage = link.wallCoverage(endNs);
+            log.event(String.format(Locale.ROOT, "obd_check_end verdict=%s wall_coverage=%.3f restarts=%d | %s",
+                    verdict, coverage, link.restarts(), link.summary()));
             String word = "GOOD".equals(verdict) ? "좋음" : "MARGINAL".equals(verdict) ? "보통(누락 있음)"
                     : "BAD".equals(verdict) ? "나쁨(누락 많음)" : "0x079 수신 없음";
-            Status.obdCheck = String.format(Locale.ROOT, "점검 결과: %s · 초당 %.1f프레임(기준 50) · 손실 %.1f%% · 받은 프레임 %d",
-                    word, link.fps(), link.lossPercent(), link.frames());
-            Status.obdCheckRunning = false;
+            Status.obdCheck = String.format(Locale.ROOT, "점검 결과: %s · 덮개율 %.0f%%(기준 100) · 재시작 %d회 · 손실 %.1f%% · 받은 프레임 %d",
+                    word, 100 * coverage, link.restarts(), link.lossPercent(), link.frames());
+            Status.endObdCheck();
             ui.post(() -> { if (!isDestroyed()) obdCheck.setEnabled(true); });
         }, "obd-check").start();
     }

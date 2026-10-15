@@ -75,6 +75,8 @@ public final class SenderService extends Service implements SensorEventListener,
     private volatile Session active;
     private volatile SourceSelector selector = new SourceSelector(false);
     private volatile ObdLink obd;
+    /** The thread stopping the previous session's link; the next link waits for it (no overlap). */
+    private volatile Thread obdStopping;
     private PowerManager.WakeLock wake;
     private BroadcastReceiver receiver;
     private int ticks, gyroCount;
@@ -382,7 +384,7 @@ public final class SenderService extends Service implements SensorEventListener,
 
     private void startObd() {
         String obdAddr = Prefs.obdAddress(this);
-        if (obdAddr == null || Status.obdCheckRunning) { selector = new SourceSelector(false); return; }
+        if (obdAddr == null) { selector = new SourceSelector(false); return; }
         final BluetoothDevice dev;
         try { dev = adapter.getRemoteDevice(obdAddr); }
         catch (IllegalArgumentException e) { log.event("obd_bad_address " + obdAddr); selector = new SourceSelector(false); return; }
@@ -396,24 +398,31 @@ public final class SenderService extends Service implements SensorEventListener,
             }
             @Override public void event(String line) { log.event(line); }
         }, ElmController.Timing.DEFAULT, 2000, 30000);
-        obd = o;
-        Status.obdServiceRunning = true;
+        synchronized (Status.OBD_LOCK) {  // atomic with the parked check's tryStartObdCheck()
+            if (Status.obdCheckRunning) { selector = new SourceSelector(false); log.event("obd_skip check_running"); return; }
+            Status.obdServiceRunning = true;
+            obd = o;
+        }
         log.event("obd_start device=" + obdAddr);
-        o.start();
+        o.start(obdStopping);
     }
 
     private void stopObd() {
         final ObdLink o = obd;
         obd = null;
         if (o == null) return;
-        new Thread(() -> {
+        Thread t = new Thread(() -> {
             o.stop();
             log.event("obd_stop | " + o.summary());
-            if (obd == null) {  // a new connection may already run its own link
-                Status.obdServiceRunning = false;
-                Status.obdState = "";
+            synchronized (Status.OBD_LOCK) {
+                if (obd == null) {  // a new connection may already run its own link
+                    Status.obdServiceRunning = false;
+                    Status.obdState = "";
+                }
             }
-        }, "obd-stop").start();
+        }, "obd-stop");
+        obdStopping = t;
+        t.start();
     }
 
     // ---- notification ----

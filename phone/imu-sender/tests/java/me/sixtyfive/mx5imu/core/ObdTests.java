@@ -54,6 +54,15 @@ public final class ObdTests {
         controllerQuestionStop();
         controllerNoTraffic();
         controllerRefusedCommand();
+        controllerAdapterReset();
+        controllerRestartStorm();
+        controllerDoublePrompt();
+        controllerAtmaAlwaysRefused();
+        controllerStopSendsX();
+        linkConnectGiveUp();
+        linkWaitsForPredecessor();
+        linkAmbiguousGapFlag();
+        observedVectors(vec);
         linkEndToEnd(vec, args[1]);
         System.out.println("obd tests: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
@@ -144,7 +153,10 @@ public final class ObdTests {
         eq(m.add(c, t), 0, "first frame: no loss");
         for (int i = 1; i < 600; i++) { c = (c + 1) & 15; t += P; if (m.add(c, t) != 0) { check(false, "step 1: no loss at " + i); break; } }
         check(m.counterConsistent() && Math.abs(m.fps() - 50) < 0.1 && m.lossPercent() < 1e-9, "12 s clean at 50 Hz: consistent, no loss");
-        check(m.verdict().equals("GOOD"), "clean: GOOD");
+        check(!m.verdict(t + P).equals("GOOD"), "12 s is too short a span for GOOD (30 s minimum)");
+        for (int i = 0; i < 1000; i++) { c = (c + 1) & 15; t += P; m.add(c, t); }
+        check(m.verdict(t + P).equals("GOOD"), "32 s clean: GOOD " + m.verdict(t + P));
+        check(Math.abs(m.wallCoverage(t + P) - 1.0) < 0.001, "clean: wall coverage 1.0: " + m.wallCoverage(t + P));
         // lose 3 frames
         c = (c + 4) & 15; t += 4 * P;
         eq(m.add(c, t), 3, "counter step 4: three frames lost");
@@ -160,7 +172,9 @@ public final class ObdTests {
         c = (c + 1) & 15; t += 600_000_000L;
         m.add(c, t);
         check(m.lastAmbiguous && m.ambiguousGaps == 1 && m.stalls500ms == 1 && m.maxGapNs == 600_000_000L, "600 ms gap: ambiguous, stall counted");
-        check(!m.verdict().equals("GOOD"), "a stall prevents GOOD");
+        check(!m.verdict(t + P).equals("GOOD"), "a stall prevents GOOD");
+        // a repeated counter after a long (ambiguous) gap is a whole lost cycle, not a duplicate
+        eq(m.add(c, t + 600_000_000L), 15, "same counter after 600 ms: 15 lost (whole cycle), not a duplicate");
         // heavy loss: every second frame lost for 20 s -> implied rate consistent, loss 50 %
         ObdLossMeter h = new ObdLossMeter(20000);
         long t2 = 0;
@@ -168,7 +182,7 @@ public final class ObdTests {
         h.add(c2, t2);
         for (int i = 0; i < 500; i++) { c2 = (c2 + 2) & 15; t2 += 2 * P; h.add(c2, t2); }
         check(h.counterConsistent() && Math.abs(h.lossPercent() - 50) < 0.5 && Math.abs(h.fps() - 25) < 0.1, "half lost: counter says 50 %");
-        check(h.verdict().equals("BAD"), "25 frames/s: BAD");
+        check(h.verdict(t2 + 2 * P).equals("BAD"), "25 frames/s: BAD (wall coverage 50 %)");
         // counter that does not step per frame (always 0): implied rate wrong -> receipt rate only
         ObdLossMeter z = new ObdLossMeter(20000);
         long t3 = 0;
@@ -186,7 +200,34 @@ public final class ObdTests {
         eq(r.add(9, 5_000_000_000L), 0, "after breakChain: no loss inferred");
         eq(r.elapsedNs(), P, "elapsed excludes the time between chains");
         eq(r.chainBreaks, 1, "chain break counted");
-        eq(new ObdLossMeter(20000).verdict().equals("NONE") ? 1 : 0, 1, "no frames: NONE");
+        eq(new ObdLossMeter(20000).verdict(5_000_000_000L).equals("NONE") ? 1 : 0, 1, "no frames: NONE");
+        // F2 (review E8): 20 clean 2 s chains, each followed by a 1 s hole (BUFFER FULL / stall
+        // restarts). The in-chain measures see 50 fps and 0 % loss; the wall clock sees 1/3 missing.
+        ObdLossMeter e8 = new ObdLossMeter(20000);
+        long t8 = 0;
+        int c8 = 0;
+        for (int chain = 0; chain < 20; chain++) {
+            for (int i = 0; i < 100; i++) { e8.add(c8, t8); c8 = (c8 + 1) & 15; t8 += P; }
+            e8.breakChain();
+            t8 += 1_000_000_000L;
+            c8 = (c8 + 50) & 15;
+        }
+        long end8 = t8;   // 60 s after the first frame
+        check(Math.abs(e8.fps() - 50) < 0.1 && e8.lossPercent() < 1e-9, "E8: in-chain fps 50 and loss 0 (the blind spot)");
+        check(!e8.verdict(end8).equals("GOOD"), "E8: 20 x (2 s chain + 1 s hole) is NOT GOOD: " + e8.verdict(end8));
+        check(e8.verdict(end8).equals("MARGINAL"), "E8: wall coverage 2/3 is MARGINAL: " + e8.verdict(end8));
+        check(Math.abs(e8.wallCoverage(end8) - 2000.0 / 3000.0) < 0.001, "E8: wall coverage " + e8.wallCoverage(end8));
+        eq(e8.restarts(), 20, "E8: 20 restarts reported");
+        // a 40 s clean run with 3 restarts of 20 ms holes: coverage fine, but restarts > 1 -> not GOOD
+        ObdLossMeter rs = new ObdLossMeter(20000);
+        long t9 = 0;
+        int c9 = 0;
+        for (int i = 0; i < 2000; i++) {
+            if (i % 600 == 599) rs.breakChain();
+            rs.add(c9, t9); c9 = (c9 + 1) & 15; t9 += P;
+        }
+        check(rs.wallCoverage(t9) > 0.99 && rs.restarts() == 3 && rs.verdict(t9).equals("MARGINAL"),
+                "3 restarts in a clean 40 s: MARGINAL (restarts " + rs.restarts() + ", " + rs.verdict(t9) + ")");
     }
 
     // ---- integrator ----
@@ -264,6 +305,21 @@ public final class ObdTests {
         for (long u = 0; u < 10 * S; u += 33_333_333L) { slow.obdFrame(u); slow.update(u); }
         check(slow.current() == SourceSelector.Source.PHONE, "30 frames/s never selects OBD");
         eq(s.switches, 2, "two switches counted");
+        // STALE_NS on its own: a Bluetooth burst leaves >= 80 frames in the 2 s window, but the newest
+        // is 0.6 s old. Freshness, not the frame count, must take the selector back to PHONE.
+        SourceSelector st = new SourceSelector(true);
+        long u = 0;
+        for (; u < 6 * S; u += P) { st.obdFrame(u); st.update(u); }
+        check(st.current() == SourceSelector.Source.OBD, "stale test: OBD chosen after 6 s of frames");
+        for (int i = 0; i < 100; i++) { u += P / 2; st.obdFrame(u); st.update(u); }   // 1 s delivered at 100/s
+        long last = u;
+        check(st.update(last + 400_000_000L) == SourceSelector.Source.OBD, "newest 0.4 s old, window full: still OBD");
+        SourceSelector.Source after = st.update(last + 600_000_000L);
+        check(after == SourceSelector.Source.PHONE, "newest 0.6 s old with >= 80 frames in 2 s: back to PHONE (STALE_NS 0.5 s)");
+        // MIN_FRAMES_2S on its own: 37.5 frames/s (75 in 2 s, fresh) is not healthy
+        SourceSelector mid = new SourceSelector(true);
+        for (long v = 0; v < 10 * S; v += 26_666_667L) { mid.obdFrame(v); mid.update(v); }
+        check(mid.current() == SourceSelector.Source.PHONE, "75 frames in 2 s (< 80) never selects OBD");
     }
 
     static void protocolFlags() {
@@ -291,6 +347,11 @@ public final class ObdTests {
         final List<String> commands = new CopyOnWriteArrayList<>();
         final Set<String> refuse = new HashSet<>();
         volatile boolean closed, echo = true, monitoring, retainStop, startMonitoring;
+        /** Settings that an adapter reset (ATZ, 'RESET' script line) puts back to the defaults. */
+        volatile boolean headers, filterSet, keepProtocol = true, doublePromptAfterAtz, blockWrites, leftoverOnAtz;
+        volatile String protocol = "AUTO";
+        /** commands.size() when the last 'RESET'/'BANNER'/'PROMPT'/'SILENTRESET' script line ran (-1: never). */
+        volatile int resetAt = -1;
         final List<String> script;
         volatile int scriptPos;
         final AtomicInteger monitorStarts = new AtomicInteger();
@@ -322,6 +383,7 @@ public final class ObdTests {
         final OutputStream out = new OutputStream() {
             @Override public void write(int b) throws IOException { write(new byte[] {(byte) b}, 0, 1); }
             @Override public synchronized void write(byte[] b, int off, int len) throws IOException {
+                while (blockWrites) sleep(5);   // a stuck Bluetooth write (not even close() frees it)
                 if (closed) throw new IOException("closed");
                 fromPhone.write(b, off, len);
                 for (int i = off; i < off + len; i++) onByte((char) (b[i] & 0xFF));
@@ -343,8 +405,16 @@ public final class ObdTests {
             if (echo) send(raw + "\r");
             if (refuse.contains(k) || !k.startsWith("AT")) { send("?\r\r>"); return; }
             switch (k) {
-                case "ATZ": echo = true; send("\r\rELM327 v1.5\r\r>"); return;
+                case "ATZ":
+                    resetSettings();
+                    if (leftoverOnAtz) send("079DF285A01FFD530A5\r");
+                    send("\r\rELM327 v1.5\r\r>" + (doublePromptAfterAtz ? "\r>" : ""));
+                    return;
                 case "ATE0": echo = false; send("OK\r\r>"); return;
+                case "ATH1": headers = true; send("OK\r\r>"); return;
+                case "ATSP6": protocol = "ISO 15765-4 (CAN 11/500)"; send("OK\r\r>"); return;
+                case "ATCRA079": filterSet = true; send("OK\r\r>"); return;
+                case "ATDP": send(protocol + "\r\r>"); return;
                 case "ATMA":
                     monitoring = true;
                     monitorStarts.incrementAndGet();
@@ -352,6 +422,14 @@ public final class ObdTests {
                     return;
                 default: send("OK\r\r>");
             }
+        }
+
+        /** What ATZ or a low-voltage reset does: echo on, no headers, no filter, protocol kept or AUTO. */
+        private void resetSettings() {
+            echo = true;
+            headers = false;
+            filterSet = false;
+            if (!keepProtocol) protocol = "AUTO";
         }
 
         private void startEmitter() {
@@ -365,6 +443,11 @@ public final class ObdTests {
                         if (!monitoring) continue;
                         scriptPos++;
                         if (l.equals("BUFFER FULL")) { monitoring = false; send("BUFFER FULL\r\r>"); continue; }
+                        // Adapter resets in the middle of a monitor: settings back to defaults.
+                        if (l.equals("RESET")) { monitoring = false; resetSettings(); resetAt = commands.size(); send("\r\rLV RESET\r\r>"); continue; }
+                        if (l.equals("BANNER")) { monitoring = false; resetSettings(); resetAt = commands.size(); send("\r\rELM327 v1.5\r\r>"); continue; }
+                        if (l.equals("PROMPT")) { monitoring = false; resetAt = commands.size(); send("\r>"); continue; }
+                        if (l.equals("SILENTRESET")) { monitoring = false; resetSettings(); resetAt = commands.size(); continue; }
                         send(l + "\r");
                     }
                     sleep(lineMs);
@@ -435,8 +518,8 @@ public final class ObdTests {
         c.stop();
         t.join(2000);
         // An idle adapter keeps the stop character: "XATZ" -> '?', then ATZ is retried once.
-        List<String> want = java.util.Arrays.asList("XATZ", "ATZ", "ATE0", "ATL0", "ATS0", "ATH1", "ATSP6", "ATCAF0", "ATCRA079", "ATMA");
-        check(elm.commands.subList(0, Math.min(10, elm.commands.size())).equals(want), "init sequence " + elm.commands);
+        List<String> want = java.util.Arrays.asList("XATZ", "ATZ", "ATDP", "ATE0", "ATL0", "ATS0", "ATH1", "ATSP6", "ATCAF0", "ATCRA079", "ATMA");
+        check(elm.commands.subList(0, Math.min(11, elm.commands.size())).equals(want), "init sequence " + elm.commands);
         eq(c.foreignFrames, 1, "foreign id counted, not delivered");
         eq(c.errorLines, 1, "RX ERROR line counted");
         check(onlySafeWrites(c.written()), "only AT commands and 'X' were written: " + c.written());
@@ -515,6 +598,284 @@ public final class ObdTests {
         check(waitFor(() -> r2.frames.size() >= 30, 3000), "ATS0 refused: monitor still runs");
         c2.stop();
         t.join(2000);
+    }
+
+    /**
+     * F1: an adapter reset in the middle of ATMA (low-voltage reset, power-on banner, a prompt that is
+     * not the BUFFER FULL prompt, or a silent reset seen only as an echoed ATMA) must lead to a full
+     * init (ATZ first), never to a bare ATMA on an adapter back at its defaults.
+     */
+    static void controllerAdapterReset() throws Exception {
+        for (String kind : new String[] {"RESET", "BANNER", "PROMPT"}) {
+            List<String> script = new ArrayList<>(lines079(20, 0));
+            script.add(kind);
+            script.addAll(lines079(40, 4));
+            FakeElm elm = new FakeElm(script, 2);
+            elm.keepProtocol = false;
+            Recorder r = new Recorder();
+            ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+            List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+            Thread t = runAsync(c, err);
+            check(waitFor(() -> r.frames.size() >= 60, 5000), kind + ": frames resume after the reset (" + r.frames.size() + ")");
+            c.stop();
+            t.join(2000);
+            int at = elm.resetAt;
+            check(at > 0 && at < elm.commands.size(), kind + ": reset happened and commands followed " + elm.commands);
+            if (at <= 0 || at >= elm.commands.size()) continue;
+            List<String> after = elm.commands.subList(at, elm.commands.size());
+            check(after.get(0).endsWith("ATZ"), kind + ": the first command after the reset is ATZ, not ATMA: " + after);
+            int atz = -1;
+            for (int i = 0; i < after.size(); i++) if (after.get(i).equals("ATZ")) { atz = i; break; }
+            int firstAtma = after.indexOf("ATMA");
+            check(atz >= 0 && firstAtma > atz, kind + ": no bare ATMA before the full init: " + after);
+            check(after.contains("ATCRA079") && after.indexOf("ATCRA079") < firstAtma, kind + ": filter re-set before ATMA: " + after);
+            check(c.inits == 2, kind + ": exactly one re-init: " + c.inits);
+            check(c.adapterResets == 1, kind + ": adapter reset counted: " + c.adapterResets + " " + r.events + " " + elm.commands);
+            check(onlySafeWrites(c.written()), kind + ": only AT commands and 'X'");
+            check(c.protocolAfterReset.equals("AUTO"), kind + ": ATDP after ATZ logged (clone that forgets ATSP6): " + c.protocolAfterReset);
+        }
+        // A silent reset (no text, no prompt): the stall restart's ATMA is echoed (echo is on again),
+        // which must also lead straight to the full init.
+        List<String> script = new ArrayList<>(lines079(20, 0));
+        script.add("SILENTRESET");
+        script.addAll(lines079(40, 4));
+        FakeElm elm = new FakeElm(script, 2);
+        Recorder r = new Recorder();
+        ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        check(waitFor(() -> r.frames.size() >= 60, 6000), "silent reset: frames resume (" + r.frames.size() + ")");
+        c.stop();
+        t.join(2000);
+        List<String> after = elm.resetAt >= 0 ? elm.commands.subList(elm.resetAt, elm.commands.size()) : new ArrayList<>();
+        int atz = after.indexOf("ATZ");
+        int atmaBefore = 0;
+        for (int i = 0; i < (atz < 0 ? after.size() : atz); i++) if (after.get(i).endsWith("ATMA")) atmaBefore++;
+        check(atz >= 0 && atmaBefore <= 1, "silent reset: at most the one stall ATMA, then ATZ: " + after);
+        check(r.events.toString().contains("elm_adapter_reset reinit"), "silent reset: echoed ATMA recognised: " + r.events);
+        check(elm.protocol.startsWith("ISO"), "default fake keeps ATSP6 over ATZ");
+    }
+
+    /** Six restarts inside the restart window (BUFFER FULL storm) re-run the whole init. */
+    static void controllerRestartStorm() throws Exception {
+        List<String> script = new ArrayList<>(lines079(5, 0));
+        for (int i = 0; i < 7; i++) { script.add("BUFFER FULL"); script.addAll(lines079(3, i)); }
+        script.addAll(lines079(30, 0));
+        FakeElm elm = new FakeElm(script, 2);
+        Recorder r = new Recorder();
+        ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        check(waitFor(() -> r.frames.size() >= 5 + 21 + 30, 6000), "storm: frames continue (" + r.frames.size() + ")");
+        c.stop();
+        t.join(2000);
+        check(r.events.contains("elm_restart_storm reinit"), "storm: logged " + r.events);
+        check(c.inits >= 2, "storm: the 6th restart within the window re-runs the init: inits " + c.inits);
+        int atz = 0;
+        for (String k : elm.commands) if (k.endsWith("ATZ")) atz++;
+        check(atz >= 3, "storm: ATZ sent again (" + elm.commands + ")");
+        check(c.adapterResets == 0, "storm: BUFFER FULL prompts are not adapter resets " + r.events);
+    }
+
+    /** F6: a clone that prints two prompts after ATZ; the stray prompt must not answer ATE0. */
+    static void controllerDoublePrompt() throws Exception {
+        FakeElm elm = new FakeElm(lines079(30, 0), 2);
+        elm.doublePromptAfterAtz = true;
+        elm.leftoverOnAtz = true;            // and a leftover monitor line before the banner
+        Recorder r = new Recorder();
+        ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        check(waitFor(() -> r.frames.size() >= 30, 4000), "double prompt after ATZ: init completes, frames flow (" + r.frames.size() + ") " + err);
+        c.stop();
+        t.join(2000);
+        check(c.strayPrompts >= 1, "stray prompt drained: " + c.strayPrompts);
+        check(!c.version.contains("079"), "leftover CAN line is not part of the version text: " + c.version);
+    }
+
+    /** '?' to ATMA forever: one retry per monitor, then a full init; the run ends, bounded. */
+    static void controllerAtmaAlwaysRefused() throws Exception {
+        FakeElm elm = new FakeElm(lines079(5, 0), 2);
+        elm.refuse.add("ATMA");
+        Recorder r = new Recorder();
+        ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        t.join(15000);
+        boolean ended = !t.isAlive();
+        if (!ended) { c.stop(); t.join(2000); }
+        check(ended, "ATMA always refused: the run ends by itself");
+        int atma = 0;
+        for (String k : elm.commands) if (k.endsWith("ATMA")) atma++;
+        check(atma <= 2 * ElmController.MAX_REINITS, "ATMA retried at most once per init: " + atma);
+    }
+
+    /** F5: a normal stop leaves the adapter at its prompt (one 'X'), bounded when the write hangs. */
+    static void controllerStopSendsX() throws Exception {
+        FakeElm elm = new FakeElm(lines079(400, 0), 5);
+        Recorder r = new Recorder();
+        ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        check(waitFor(() -> r.frames.size() >= 10, 3000), "stop test: monitoring");
+        c.stop();
+        t.join(2000);
+        List<String> w = c.written();
+        check(!w.isEmpty() && w.get(w.size() - 1).equals("X"), "normal stop: last write is the stop character: " + w);
+        check(!elm.monitoring, "normal stop: the adapter left monitoring");
+        // a hanging Bluetooth write: stop() still returns within the bound
+        FakeElm hang = new FakeElm(lines079(400, 0), 5);
+        Recorder r2 = new Recorder();
+        ElmController c2 = new ElmController(hang, Clock.SYSTEM, r2, 0x079, FAST);
+        Thread t2 = runAsync(c2, err);
+        check(waitFor(() -> r2.frames.size() >= 10, 3000), "stop test 2: monitoring");
+        hang.blockWrites = true;
+        long t0 = System.nanoTime();
+        c2.stop();
+        long ms = (System.nanoTime() - t0) / 1_000_000L;
+        t2.join(2000);
+        check(ms < ElmController.STOP_X_MS + 300, "stop with a hanging write returns in " + ms + " ms");
+        check(hang.closed, "stop with a hanging write: transport closed");
+        hang.blockWrites = false;   // release the abandoned helper thread
+        // an idle controller (no monitor) writes no 'X' on stop
+        FakeElm idle = new FakeElm(new ArrayList<>(), 2);
+        idle.refuse.add("ATCAF0");
+        ElmController c3 = new ElmController(idle, Clock.SYSTEM, new Recorder(), 0x079, FAST);
+        try { c3.run(); } catch (IOException expected) { /* refused init */ }
+        int before = c3.written().size();
+        c3.stop();
+        eq(c3.written().size(), before, "stop without a running monitor writes nothing");
+    }
+
+    /** F3: an absent adapter is paged at most MAX_CONNECT_FAILURES times per link (CMU session). */
+    static void linkConnectGiveUp() throws Exception {
+        AtomicInteger opens = new AtomicInteger();
+        Transport.Connector absent = new Transport.Connector() {
+            @Override public Transport open() throws IOException { opens.incrementAndGet(); throw new IOException("page timeout"); }
+            @Override public void abort() {}
+        };
+        final List<String> ev = new CopyOnWriteArrayList<>();
+        ObdLink.Sink sink = new ObdLink.Sink() {
+            @Override public void window(Window w) {}
+            @Override public void event(String line) { ev.add(line); }
+        };
+        ObdLink link = new ObdLink(absent, Clock.SYSTEM, sink, FAST, 10, 40);
+        long t0 = System.currentTimeMillis();
+        link.start();
+        check(waitFor(() -> link.gaveUp, 3000), "absent adapter: the link gives up");
+        long ms = System.currentTimeMillis() - t0;
+        Thread.sleep(300);
+        eq(opens.get(), ObdLink.MAX_CONNECT_FAILURES, "absent adapter: exactly 5 connect attempts in this session");
+        check(ev.toString().contains("obd_connect_giveup failures=5"), "giveup logged: " + ev);
+        check(ms >= 10 + 20 + 40 + 40 - 5, "the backoff is kept between attempts (" + ms + " ms)");
+        link.stop();
+        // the next CMU session makes a new link, which tries again
+        ObdLink next = new ObdLink(absent, Clock.SYSTEM, sink, FAST, 10, 40);
+        next.start();
+        check(waitFor(() -> next.gaveUp, 3000), "next session: tries again and gives up again");
+        eq(opens.get(), 2 * ObdLink.MAX_CONNECT_FAILURES, "next session: 5 more attempts");
+        next.stop();
+        // failures that are not consecutive do not add up: open fails, works (no frames), fails ...
+        AtomicInteger n = new AtomicInteger();
+        Transport.Connector flaky = new Transport.Connector() {
+            @Override public Transport open() throws IOException {
+                int k = n.incrementAndGet();
+                if (k % 4 != 0) throw new IOException("busy");
+                FakeElm e = new FakeElm(new ArrayList<>(), 1);
+                e.refuse.add("ATCAF0");     // run ends at once (a connected but refusing adapter)
+                return e;
+            }
+            @Override public void abort() {}
+        };
+        ObdLink fl = new ObdLink(flaky, Clock.SYSTEM, sink, FAST, 5, 10);
+        fl.start();
+        check(waitFor(() -> n.get() >= 14, 5000), "flaky adapter: keeps trying (" + n.get() + ")");
+        check(!fl.gaveUp, "flaky adapter: a successful connect resets the failure count");
+        fl.stop();
+    }
+
+    /** F8: a new session's link waits for the previous link's stop before opening the adapter. */
+    static void linkWaitsForPredecessor() throws Exception {
+        final long[] stopDone = {0};
+        Thread oldStop = new Thread(() -> { FakeElm.sleep(300); stopDone[0] = System.nanoTime(); }, "old-stop");
+        final long[] firstOpen = {0};
+        Transport.Connector conn = new Transport.Connector() {
+            @Override public Transport open() throws IOException {
+                if (firstOpen[0] == 0) firstOpen[0] = System.nanoTime();
+                throw new IOException("busy");
+            }
+            @Override public void abort() {}
+        };
+        ObdLink link = new ObdLink(conn, Clock.SYSTEM, new ObdLink.Sink() {
+            @Override public void window(Window w) {}
+            @Override public void event(String line) {}
+        }, FAST, 10, 20);
+        oldStop.start();
+        link.start(oldStop);
+        check(waitFor(() -> firstOpen[0] != 0, 3000), "predecessor test: the new link connects eventually");
+        link.stop();
+        check(stopDone[0] != 0 && firstOpen[0] > stopDone[0], "the new link opened only after the old link's stop finished");
+    }
+
+    /**
+     * A receipt gap of more than 8 periods with a counter step of one is ambiguous (Bluetooth delay
+     * or a whole lost counter cycle): the window after it carries obd_gap although no loss is counted.
+     */
+    static void linkAmbiguousGapFlag() throws Exception {
+        List<String> script = new ArrayList<>(lines079(10, 0));
+        script.add("SLEEP 350");
+        script.addAll(lines079(10, 10));            // the counter continues: step 1 across the gap
+        final FakeElm elm = new FakeElm(script, 2);
+        AtomicInteger opens = new AtomicInteger();
+        Transport.Connector conn = new Transport.Connector() {
+            @Override public Transport open() throws IOException {
+                if (opens.getAndIncrement() > 0) throw new IOException("busy");
+                return elm;
+            }
+            @Override public void abort() {}
+        };
+        final List<Window> ws = new CopyOnWriteArrayList<>();
+        // stall watchdog 1.5 s so the 350 ms gap is not a restart
+        ObdLink link = new ObdLink(conn, Clock.SYSTEM, new ObdLink.Sink() {
+            @Override public void window(Window w) { ws.add(w); }
+            @Override public void event(String line) {}
+        }, new ElmController.Timing(500, 500, 300, 1500, 3000, 3000), 50, 100);
+        link.start();
+        check(waitFor(() -> ws.size() >= 20, 5000), "ambiguous gap: 20 windows (" + ws.size() + ")");
+        link.stop();
+        int gaps = 0, at = -1;
+        for (int i = 0; i < ws.size(); i++) if ((ws.get(i).flags & Protocol.FLAG_OBD_GAP) != 0) { gaps++; at = i; }
+        check(gaps == 1 && at == 10, "ambiguous 350 ms gap with counter step 1: obd_gap on the window after it only (" + gaps + " at " + at + ")");
+    }
+
+    /**
+     * OBSERVED vectors: real 0x079 frames with their 0x078 partner from the public ND CAN log
+     * (validation/YAW_DECODE_2026-10-10, sha256 18983a36...). They show that the byte layout applied
+     * to captured bytes lands on the same integer lattice as the firmware-derived 0x078 layout and
+     * that the counters pair; they do NOT prove the scale, the sign or the owner's car.
+     */
+    @SuppressWarnings("unchecked")
+    static void observedVectors(Map<String, Object> vec) {
+        List<Map<String, Object>> obs = list(vec, "observed");
+        check(obs != null && obs.size() >= 3 && obs.size() <= 6, "3..6 observed frame pairs");
+        if (obs == null) return;
+        for (Map<String, Object> o : obs) {
+            String name = (String) o.get("name");
+            byte[] d79 = hex((String) o.get("data079")), d78 = hex((String) o.get("data078"));
+            Can079.Sample s = Can079.decode(0x079, d79);
+            check(s.ok(), name + ": decodes OK");
+            eq(s.raw12, (Long) o.get("raw079"), name + ": raw12 as recorded");
+            int raw78 = ((d78[1] & 1) << 11) | ((d78[2] & 0xFF) << 3) | ((d78[3] & 0xFF) >> 5);   // firmware 0x078 layout
+            eq(raw78, (Long) o.get("raw078"), name + ": 0x078 raw (firmware layout)");
+            eq(s.counter, (d78[6] & 0xFF) >> 4, name + ": counter pairs with the 0x078 counter");
+            long n79 = Math.round((s.raw12 - 2047.00190) / 1.52751423), n78 = Math.round((raw78 - 2047.00190) / 1.52751423);
+            eq(Math.round(2047.00190 + 1.52751423 * n79), s.raw12, name + ": 0x079 on the shared lattice");
+            eq(Math.round(2047.00190 + 1.52751423 * n78), raw78, name + ": 0x078 on the shared lattice");
+            long dn = n79 - n78;
+            check(dn >= 0 && dn <= 3, name + ": lattice step difference in 0..3: " + dn);
+            eq(dn, (Long) o.get("lattice_diff"), name + ": lattice difference as recorded");
+            check(Math.abs(s.cwDegPerS() - num(o.get("cw_dps"))) < 1e-6, name + ": deg/s equals the independent Python decoder");
+        }
     }
 
     // ---- ObdLink end to end; writes the encoded stream for the Python cross-check ----

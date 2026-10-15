@@ -13,6 +13,24 @@ final class Status {
     static volatile String obdState = "", source = "PHONE", obdCheck = "";
     static volatile double obdFps, obdLossPct;
     static volatile boolean obdServiceRunning, obdCheckRunning;
+    /**
+     * Guards the check-then-set of obdServiceRunning / obdCheckRunning (the sender's link and the
+     * parked check must never open the single-client adapter together; they run on different threads).
+     */
+    static final Object OBD_LOCK = new Object();
+
+    /** The parked check may start only when neither it nor the sender's link holds the adapter. */
+    static boolean tryStartObdCheck() {
+        synchronized (OBD_LOCK) {
+            if (obdServiceRunning || obdCheckRunning) return false;
+            obdCheckRunning = true;
+            return true;
+        }
+    }
+
+    static void endObdCheck() {
+        synchronized (OBD_LOCK) { obdCheckRunning = false; }
+    }
 
     private Status() {}
 }

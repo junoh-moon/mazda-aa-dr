@@ -3,8 +3,9 @@
 validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md. Writes phone/imu-sender/tests/obd_079_vectors.json,
 read by the JVM tests (CoreTests.obdVectors); this script is an independent Python decoder.
 
-Where the numbers come from (no captured 0x079 bytes are in the repository; the 29 MB public
-ND log stays outside it, validation/ND_CAN_LOG_2026-10-03.md):
+Where the numbers come from (the 'can' vectors are CONSTRUCTED; the public ND log stays outside
+the repository, validation/ND_CAN_LOG_2026-10-03.md; only the five 'observed' pairs below are
+captured bytes copied from it):
   layout  12-bit yaw = ((b3&3)<<10)|(b4<<2)|(b5>>6) (DBC Motorola start 25, length 12), b3>>2 == 0,
           counter = b6 & 0x0F (equal to 0x078 b6>>4 in all 14,411 pairs), Qf = b0>>6,
           lateral acceleration 13 bits ((b0&0x3F)<<7)|(b1>>1) with 0 G near 3988
@@ -19,7 +20,14 @@ ND log stays outside it, validation/ND_CAN_LOG_2026-10-03.md):
           i.e. bytes 3..4 only (cross-check field, its own sign: positive = count rising = left)
 Bytes the sources do not define (b2, b6 high nibble, b7, b5 low six bits) are filled with fixed
 non-zero patterns so that masking is tested; they carry no claimed meaning.
+OBSERVED pairs: five real 0x079 frames with their 0x078 partner (k-th 0x079 with the k-th 0x078 of
+the public log, sha256 18983a366b46d8bea62ea426652798ca24cfef23f932e3751442485938aab54f, CSV
+columns time,addr,bus,data; k and the logger time are given). They show that the 0x079 layout
+applied to CAPTURED bytes gives values on the same integer lattice as the firmware-derived 0x078
+layout, with a lattice difference in 0..3 and paired counters. They do NOT prove the scale, the
+sign, the meaning of the other bytes, or that the owner's ND2 sends the same.
 Usage: make_obd_vectors.py [--check | OUTPUT]
+       make_obd_vectors.py observed RAW_CAN.csv   re-derive the observed pairs from the public log
        make_obd_vectors.py stream FRAMES.bin   check the v1 frames the JVM ObdLink produced from
                                                this file's lines (ObdTests.linkEndToEnd)
 """
@@ -62,6 +70,69 @@ def decode(can_id, d):
     if raw in (0, 0xFFF):
         return 'SENTINEL', raw, counter, qf
     return 'OK', raw, counter, qf
+
+
+# (k, logger time s, 0x078 bytes, 0x079 bytes, why chosen): k-th frame of each id in log order.
+OBSERVED = [
+    (100, 6.081432440667413, 'DF58FFA0ABC3C0C9', 'DF4C0001FFDD8C62', 'early stop, lattice difference 1'),
+    (13499, 278.0864685792476, 'E0416DA098C340FB', 'E0940002DBDE844D', 'largest 0x079 value (left turn)'),
+    (9752, 199.63661909732036, 'DEEAD92098C3504F', 'DDEC0001B25E054F', 'smallest 0x079 value (right turn)'),
+    (8233, 168.59392795327585, 'DF80FFA0A7C310C4', 'DF4E0002005E0167', 'lattice difference 2'),
+    (6264, 129.04312583559658, 'E016FFA099C37080', 'DF3A0002009E076A', 'lattice difference 3'),
+]
+LOG_SHA256 = '18983a366b46d8bea62ea426652798ca24cfef23f932e3751442485938aab54f'
+
+
+def raw078(d):
+    """Firmware 0x078 yaw layout (VIP map; ND_CAN_LOG_2026-10-03)."""
+    return ((d[1] & 1) << 11) | (d[2] << 3) | (d[3] >> 5)
+
+
+def lattice_index(raw):
+    n = round((raw - 2047.00190) / 1.52751423)
+    if lattice(n) != raw:
+        raise SystemExit('value %d is not on the lattice' % raw)
+    return n
+
+
+def observed_vectors():
+    out = []
+    for k, t, h78, h79, why in OBSERVED:
+        d78, d79 = bytes.fromhex(h78), bytes.fromhex(h79)
+        status, raw, counter, qf = decode(0x079, d79)
+        if status != 'OK' or counter != d78[6] >> 4:
+            raise SystemExit('observed pair %d: status %s counter %d vs %d' % (k, status, counter, d78[6] >> 4))
+        r78 = raw078(d78)
+        diff = lattice_index(raw) - lattice_index(r78)
+        if not 0 <= diff <= 3:
+            raise SystemExit('observed pair %d: lattice difference %d' % (k, diff))
+        out.append({'name': 'observed_k%d' % k, 'why': why, 'k': k, 'logger_time_s': t,
+                    'data078': h78, 'data079': h79, 'raw078': r78, 'raw079': raw, 'counter': counter, 'qf': qf,
+                    'lattice_diff': diff, 'cw_dps': round(cw_dps(raw), 9)})
+    return out
+
+
+def check_observed(path):
+    """Re-derives OBSERVED from the public log (outside the repository)."""
+    import csv
+    import hashlib
+    data = pathlib.Path(path).read_bytes()
+    if hashlib.sha256(data).hexdigest() != LOG_SHA256:
+        sys.exit('not the public ND log (sha256 differs)')
+    f78, f79 = [], []
+    for row in csv.reader(data.decode('ascii').splitlines()[1:]):
+        try:
+            t, addr, d = float(row[0]), int(row[1]), row[3].upper()
+        except (ValueError, IndexError):
+            continue
+        if addr == 0x078:
+            f78.append(d)
+        elif addr == 0x079:
+            f79.append((t, d))
+    for k, t, h78, h79, _ in OBSERVED:
+        if f78[k] != h78 or f79[k][1] != h79 or abs(f79[k][0] - t) > 1e-9:
+            sys.exit('observed pair %d differs from the log' % k)
+    print('observed pairs ok', len(OBSERVED), 'of', len(f79))
 
 
 def cw_dps(raw):
@@ -150,7 +221,7 @@ def build():
     can = can_vectors()
     return {'schema': 'obd_079_vectors v1', 'source': __doc__.split('Usage:')[0].strip(),
             'zero_nominal': ZERO, 'urad_s_per_count': URAD_S_PER_COUNT, 'period_us': 20000,
-            'can': can, 'lines': line_vectors(), 'stream': stream_vectors(can)}
+            'can': can, 'lines': line_vectors(), 'stream': stream_vectors(can), 'observed': observed_vectors()}
 
 
 def check_stream(path):
@@ -185,6 +256,9 @@ def check_stream(path):
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == 'stream':
         check_stream(sys.argv[2])
+        return
+    if len(sys.argv) == 3 and sys.argv[1] == 'observed':
+        check_observed(sys.argv[2])
         return
     text = json.dumps(build(), indent=1, ensure_ascii=False) + '\n'
     if '--check' in sys.argv:

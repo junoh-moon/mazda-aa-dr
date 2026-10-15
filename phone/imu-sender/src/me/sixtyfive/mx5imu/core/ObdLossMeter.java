@@ -27,6 +27,8 @@ public final class ObdLossMeter {
     /** True when the last frame followed a receipt gap of more than 8 periods (counter may alias). */
     public boolean lastAmbiguous;
     public long ambiguousGaps;
+    /** Receipt time of the very first frame of all chains (-1 before it): start of the wall-clock span. */
+    public long firstEverNs = -1;
     public long frames, counterLost, timingLost, duplicates, gaps100ms, stalls500ms, maxGapNs, chainBreaks;
     public long minSecondFrames = Long.MAX_VALUE, maxSecondFrames, wholeSeconds;
     public final long[] stepHist = new long[16];
@@ -39,6 +41,7 @@ public final class ObdLossMeter {
      */
     public long add(int counter, long rxNs) {
         frames++;
+        if (firstEverNs < 0) firstEverNs = rxNs;
         if (!have) {
             have = true;
             firstNs = rxNs;
@@ -140,15 +143,41 @@ public final class ObdLossMeter {
                 stepHist[1]);
     }
 
+    /** Wall-clock span from the first received frame to endNs, in seconds (0 before the first frame). */
+    public double wallSeconds(long endNs) {
+        return firstEverNs < 0 ? 0 : Math.max(0, endNs - firstEverNs) / 1e9;
+    }
+
     /**
-     * Parked-check verdict (docs/OBD_YAW_CHECK_KO.md): NONE without frames, GOOD at >= 45 frames/s
-     * with <= 5 % loss and no stall over 500 ms, MARGINAL at >= 30 frames/s, else BAD.
+     * Wall-clock coverage at endNs: received frames / (span from the first frame to endNs x 50 Hz).
+     * Unlike fps() and lossPercent(), which only see the time inside chains, this counts the holes
+     * between chains (BUFFER FULL, stall and re-init restarts) as missing.
      */
-    public String verdict() {
+    public double wallCoverage(long endNs) {
+        double s = wallSeconds(endNs);
+        return s <= 0 ? 0 : frames / (s * nominalHz());
+    }
+
+    /** Monitor restarts after frames had arrived (each one is a hole the chain measures do not see). */
+    public long restarts() { return chainBreaks; }
+
+    public static final double GOOD_COVERAGE = 0.90, MARGINAL_COVERAGE = 0.60;
+    public static final long GOOD_MIN_SPAN_NS = 30_000_000_000L;
+    public static final int GOOD_MAX_RESTARTS = 1;
+
+    /**
+     * Parked-check verdict at endNs (docs/OBD_YAW_CHECK_KO.md): NONE without frames; GOOD when the
+     * first frame came at least 30 s before endNs, the wall-clock coverage is >= 90 %, the in-chain
+     * loss <= 5 %, no in-chain stall over 500 ms and at most one restart; MARGINAL at a wall-clock
+     * coverage >= 60 %; else BAD. Wall clock, so restart holes count (reviewer case E8: 20 clean 2 s
+     * chains with 1 s holes is MARGINAL, not GOOD).
+     */
+    public String verdict(long endNs) {
         if (frames == 0) return "NONE";
-        double f = fps(), l = lossPercent();
-        if (f >= 45 && l <= 5 && stalls500ms == 0) return "GOOD";
-        if (f >= 30) return "MARGINAL";
+        double cov = wallCoverage(endNs);
+        if (endNs - firstEverNs >= GOOD_MIN_SPAN_NS && cov >= GOOD_COVERAGE && lossPercent() <= 5 && stalls500ms == 0
+                && restarts() <= GOOD_MAX_RESTARTS) return "GOOD";
+        if (cov >= MARGINAL_COVERAGE) return "MARGINAL";
         return "BAD";
     }
 }

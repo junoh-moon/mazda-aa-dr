@@ -4372,6 +4372,9 @@ def phone_imu_report(rows, bad=0):
     # Stage 2 (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md): flags bit 4 = CAN 0x079 yaw via OBD,
     # bit 5 = OBD frames lost in that second; gyro frames set bit 2, so 0x14 together = mixed sources.
     obd = dict(bins=0, frames=0, gap_bins=0, mixed_bins=0, window_s=0.0)
+    # (bin start ms, flags) of every bin: frame_reset (bit 3) marks a source switch or a monitor
+    # restart, around which rotation can be lost (up to ~0.5 s) or counted twice (~the BT delay).
+    bin_flags = []
     nbytes = 0
     for _, size, r in rows:
         nbytes += size
@@ -4393,7 +4396,8 @@ def phone_imu_report(rows, bad=0):
                                    ("dropped_bytes", "dr"), ("frame_resets", "fr")):
                     data[key] += int(r[field])
                 spans.append((r["m"], r["m"] + 1000 * len(r["d"])))
-                for n, dth, wu_ms, gap, fl in r["d"]:
+                for i, (n, dth, wu_ms, gap, fl) in enumerate(r["d"]):
+                    bin_flags.append((r["m"] + 1000 * i, fl))
                     data["bins"] += 1
                     data["connected_bins"] += 1 if n > 0 else 0
                     data["frames"] += n
@@ -4425,6 +4429,17 @@ def phone_imu_report(rows, bad=0):
         # One 0x079 frame per DATA frame and window_us = 20 ms each: covered time / bin time is the
         # CMU-side view of the OBD path's loss (adapter + both Bluetooth hops).
         obd["window_s"] = round(obd["window_s"], 3)
+        # Integral evaluation must skip OBD bins with frame_reset (bit 3) and their neighbours (the
+        # bins one second before and after a frame_reset bin of either source): a source switch
+        # loses up to ~0.5 s of rotation or counts ~the Bluetooth delay twice
+        # (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md, section 8).
+        reset_m = {m for m, fl in bin_flags if fl & 8}
+        excluded = sorted(m for m, fl in bin_flags
+                          if fl & 16 and (m in reset_m or m - 1000 in reset_m or m + 1000 in reset_m))
+        obd["reset_bins"] = sum(1 for m, fl in bin_flags if fl & 16 and fl & 8)
+        obd["eval_excluded_bins"] = len(excluded)
+        obd["eval_bins"] = obd["bins"] - len(excluded)
+        obd["eval_excluded_m"] = excluded[:200]
         obd["frames_per_s"] = round(obd["frames"] / float(obd["bins"]), 2)
         obd["coverage"] = round(obd["window_s"] / obd["bins"], 4)
         report["obd"] = obd
@@ -4469,7 +4484,9 @@ def print_phone_imu(imu):
     if imu.get("obd"):
         o = imu["obd"]
         print("OBD 0x079 yaw (stage 2, record only): %d bins, %d frames (%s/s), coverage %s, bins with loss %d, "
-              "mixed-source bins %d" % (o["bins"], o["frames"], o["frames_per_s"], o["coverage"], o["gap_bins"], o["mixed_bins"]))
+              "mixed-source bins %d, frame_reset bins %d, bins to exclude from integral evaluation %d (usable %d)"
+              % (o["bins"], o["frames"], o["frames_per_s"], o["coverage"], o["gap_bins"], o["mixed_bins"],
+                 o["reset_bins"], o["eval_excluded_bins"], o["eval_bins"]))
 
 
 def print_drive_data(drive, limit=40):

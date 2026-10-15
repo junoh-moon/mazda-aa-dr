@@ -1,6 +1,6 @@
 {
  "schema": "obd_079_vectors v1",
- "source": "Decode vectors of the stage-2 OBD yaw source (CAN 0x079 through an ELM327 monitor),\nvalidation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md. Writes phone/imu-sender/tests/obd_079_vectors.json,\nread by the JVM tests (CoreTests.obdVectors); this script is an independent Python decoder.\n\nWhere the numbers come from (no captured 0x079 bytes are in the repository; the 29 MB public\nND log stays outside it, validation/ND_CAN_LOG_2026-10-03.md):\n  layout  12-bit yaw = ((b3&3)<<10)|(b4<<2)|(b5>>6) (DBC Motorola start 25, length 12), b3>>2 == 0,\n          counter = b6 & 0x0F (equal to 0x078 b6>>4 in all 14,411 pairs), Qf = b0>>6,\n          lateral acceleration 13 bits ((b0&0x3F)<<7)|(b1>>1) with 0 G near 3988\n          (validation/YAW_DECODE_2026-10-10 in the owner's tree, VIP_0X079_GHIDRA_2026-10-12,\n          ND_CAN_LOG_2026-10-03, VIM_CHANNEL_CAPTURE_2026-10-10)\n  values  on the integer lattice round(2047.00190 + 1.52751423*n) that reproduces every observed\n          0x078 and 0x079 value of the public log; 1737 and 2925 are the observed 0x078 extremes\n          (the same lattice); the six stop means of 0x079 were 2047.50..2047.69\n  units   the CMU product constant for 0x078: rad/s = -(raw-2047)*0.000658615 (src/navigation/\n          pipeline.cpp), clockwise positive; the count rises in LEFT turns (public log)\n  DBC     berumiya MX5ND_6thGenMazda_HSCAN.dbc: YawRate_Corr 31|16@0+ (0.223437,-114.4) deg/s,\n          i.e. bytes 3..4 only (cross-check field, its own sign: positive = count rising = left)\nBytes the sources do not define (b2, b6 high nibble, b7, b5 low six bits) are filled with fixed\nnon-zero patterns so that masking is tested; they carry no claimed meaning.",
+ "source": "Decode vectors of the stage-2 OBD yaw source (CAN 0x079 through an ELM327 monitor),\nvalidation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md. Writes phone/imu-sender/tests/obd_079_vectors.json,\nread by the JVM tests (CoreTests.obdVectors); this script is an independent Python decoder.\n\nWhere the numbers come from (the 'can' vectors are CONSTRUCTED; the public ND log stays outside\nthe repository, validation/ND_CAN_LOG_2026-10-03.md; only the five 'observed' pairs below are\ncaptured bytes copied from it):\n  layout  12-bit yaw = ((b3&3)<<10)|(b4<<2)|(b5>>6) (DBC Motorola start 25, length 12), b3>>2 == 0,\n          counter = b6 & 0x0F (equal to 0x078 b6>>4 in all 14,411 pairs), Qf = b0>>6,\n          lateral acceleration 13 bits ((b0&0x3F)<<7)|(b1>>1) with 0 G near 3988\n          (validation/YAW_DECODE_2026-10-10 in the owner's tree, VIP_0X079_GHIDRA_2026-10-12,\n          ND_CAN_LOG_2026-10-03, VIM_CHANNEL_CAPTURE_2026-10-10)\n  values  on the integer lattice round(2047.00190 + 1.52751423*n) that reproduces every observed\n          0x078 and 0x079 value of the public log; 1737 and 2925 are the observed 0x078 extremes\n          (the same lattice); the six stop means of 0x079 were 2047.50..2047.69\n  units   the CMU product constant for 0x078: rad/s = -(raw-2047)*0.000658615 (src/navigation/\n          pipeline.cpp), clockwise positive; the count rises in LEFT turns (public log)\n  DBC     berumiya MX5ND_6thGenMazda_HSCAN.dbc: YawRate_Corr 31|16@0+ (0.223437,-114.4) deg/s,\n          i.e. bytes 3..4 only (cross-check field, its own sign: positive = count rising = left)\nBytes the sources do not define (b2, b6 high nibble, b7, b5 low six bits) are filled with fixed\nnon-zero patterns so that masking is tested; they carry no claimed meaning.\nOBSERVED pairs: five real 0x079 frames with their 0x078 partner (k-th 0x079 with the k-th 0x078 of\nthe public log, sha256 18983a366b46d8bea62ea426652798ca24cfef23f932e3751442485938aab54f, CSV\ncolumns time,addr,bus,data; k and the logger time are given). They show that the 0x079 layout\napplied to CAPTURED bytes gives values on the same integer lattice as the firmware-derived 0x078\nlayout, with a lattice difference in 0..3 and paired counters. They do NOT prove the scale, the\nsign, the meaning of the other bytes, or that the owner's ND2 sends the same.",
  "zero_nominal": 2047,
  "urad_s_per_count": 658.615,
  "period_us": 20000,
@@ -311,5 +311,77 @@
    "counter_15_wrap_before"
   ],
   "sum_dtheta_urad": -7481.8664
- }
+ },
+ "observed": [
+  {
+   "name": "observed_k100",
+   "why": "early stop, lattice difference 1",
+   "k": 100,
+   "logger_time_s": 6.081432440667413,
+   "data078": "DF58FFA0ABC3C0C9",
+   "data079": "DF4C0001FFDD8C62",
+   "raw078": 2045,
+   "raw079": 2047,
+   "counter": 12,
+   "qf": 3,
+   "lattice_diff": 1,
+   "cw_dps": 0.0
+  },
+  {
+   "name": "observed_k13499",
+   "why": "largest 0x079 value (left turn)",
+   "k": 13499,
+   "logger_time_s": 278.0864685792476,
+   "data078": "E0416DA098C340FB",
+   "data079": "E0940002DBDE844D",
+   "raw078": 2925,
+   "raw079": 2927,
+   "counter": 4,
+   "qf": 3,
+   "lattice_diff": 1,
+   "cw_dps": -33.207556645
+  },
+  {
+   "name": "observed_k9752",
+   "why": "smallest 0x079 value (right turn)",
+   "k": 9752,
+   "logger_time_s": 199.63661909732036,
+   "data078": "DEEAD92098C3504F",
+   "data079": "DDEC0001B25E054F",
+   "raw078": 1737,
+   "raw079": 1737,
+   "counter": 5,
+   "qf": 3,
+   "lattice_diff": 0,
+   "cw_dps": 11.698116545
+  },
+  {
+   "name": "observed_k8233",
+   "why": "lattice difference 2",
+   "k": 8233,
+   "logger_time_s": 168.59392795327585,
+   "data078": "DF80FFA0A7C310C4",
+   "data079": "DF4E0002005E0167",
+   "raw078": 2045,
+   "raw079": 2049,
+   "counter": 1,
+   "qf": 3,
+   "lattice_diff": 2,
+   "cw_dps": -0.07547172
+  },
+  {
+   "name": "observed_k6264",
+   "why": "lattice difference 3",
+   "k": 6264,
+   "logger_time_s": 129.04312583559658,
+   "data078": "E016FFA099C37080",
+   "data079": "DF3A0002009E076A",
+   "raw078": 2045,
+   "raw079": 2050,
+   "counter": 7,
+   "qf": 3,
+   "lattice_diff": 3,
+   "cw_dps": -0.113207579
+  }
+ ]
 }

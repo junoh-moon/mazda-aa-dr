@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -16,14 +17,20 @@ import java.util.regex.Pattern;
  * (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md, sections 2 and 7). run() blocks until stop() or
  * a fatal condition (IOException); the caller (ObdLink) reconnects.
  *
- * Init: ATZ, ATE0, ATL0, ATS0, ATH1, ATSP6, ATCAF0, ATCRA &lt;id&gt;, then ATMA. Only AT commands and a
- * single 'X' (which stops a running monitor) are ever written: no OBD request is sent, so the
- * adapter never transmits a diagnostic frame on the car's bus (SAFE_COMMAND is enforced).
+ * Init: ATZ, ATDP (logged only: which protocol the adapter kept over the reset), ATE0, ATL0, ATS0,
+ * ATH1, ATSP6, ATCAF0, ATCRA &lt;id&gt;, then ATMA. Only AT commands and a single 'X' (which stops a
+ * running monitor) are ever written: no OBD request is sent, so the app never asks the adapter to
+ * transmit a diagnostic frame on the car's bus (SAFE_COMMAND is enforced).
  *
- * Watchdog: no frame of the id for STALL_MS after frames were flowing, or an unexpected prompt
- * (after BUFFER FULL), restarts the monitor (X, prompt, ATMA). More than MAX_RESTARTS restarts in
- * RESTART_WINDOW_MS, or no frame within NO_TRAFFIC_MS of a monitor start, re-runs the whole init;
- * MAX_REINITS consecutive re-inits without a frame end the run (the link reconnects with backoff).
+ * Watchdog: no frame of the id for STALL_MS after frames were flowing, or the prompt that follows
+ * BUFFER FULL, restarts the monitor (X, prompt, ATMA). Any sign that the adapter itself reset
+ * (a 'LV RESET' or 'ELM327' banner line, an echoed ATMA, or a prompt NOT preceded by BUFFER FULL)
+ * re-runs the whole init at once, never a bare ATMA: after a reset the adapter is back at its
+ * defaults (echo on, no headers, no filter, possibly automatic protocol). More than MAX_RESTARTS
+ * restarts in RESTART_WINDOW_MS, or no frame within NO_TRAFFIC_MS of a monitor start, also re-runs
+ * the whole init; MAX_REINITS consecutive re-inits without a frame end the run (the link reconnects
+ * with backoff). A normal stop() sends a best-effort 'X' (bounded by STOP_X_MS) when a monitor runs,
+ * so the adapter is left at its prompt for the next client.
  */
 public final class ElmController {
     /** Commands we may write: AT commands only. */
@@ -48,6 +55,9 @@ public final class ElmController {
     }
 
     public static final int MAX_RESTARTS = 5, MAX_REINITS = 3;
+    /** Bound of the best-effort stop character in stop(); entries kept in written() (oldest dropped). */
+    public static final long STOP_X_MS = 200;
+    public static final int WRITTEN_CAP = 256;
 
     private final Transport transport;
     private final Clock clock;
@@ -60,11 +70,17 @@ public final class ElmController {
     private volatile IOException readError;
     private OutputStream out;
     private Thread reader;
-    private final List<String> written = new ArrayList<>();
+    private final ArrayDeque<String> written = new ArrayDeque<>();
+    /** True while an ATMA we sent may still be running (cleared when its prompt is consumed). */
+    private volatile boolean monitorActive;
     private final long[] restartTimes = new long[MAX_RESTARTS + 1];
     private int restartIdx, monitors;
 
     public long canFrames, foreignFrames, bufferFull, errorLines, textLines, malformedLines, restarts, inits, stalls;
+    /** Adapter resets seen while monitoring (re-init at once); stray prompts drained before a command. */
+    public long adapterResets, strayPrompts, writtenTotal;
+    /** The adapter's ATDP answer after the last ATZ (does the clone keep ATSP6 over a reset?). */
+    public volatile String protocolAfterReset = "";
     public volatile String version = "";
 
     public ElmController(Transport transport, Clock clock, Listener listener, int canId, Timing timing) {
@@ -75,11 +91,26 @@ public final class ElmController {
         this.timing = timing;
     }
 
-    /** Every string written so far (tests assert the command set). */
+    /** The last WRITTEN_CAP strings written (tests assert the command set); writtenTotal counts all. */
     public synchronized List<String> written() { return new ArrayList<>(written); }
 
+    /**
+     * Stops the controller. When a monitor may be running, one best-effort 'X' is written first so the
+     * adapter returns to its prompt (another app can then use it); the write runs on a helper thread
+     * and is abandoned after STOP_X_MS, so a stuck Bluetooth write cannot delay the stop.
+     */
     public void stop() {
+        boolean sendX = monitorActive && !stopped && out != null;
         stopped = true;
+        if (sendX) {
+            Thread x = new Thread(() -> {
+                try { write("X"); } catch (IOException | RuntimeException ignored) {}
+            }, "obd-stop-x");
+            x.setDaemon(true);
+            x.start();
+            try { x.join(STOP_X_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+        monitorActive = false;
         transport.close();
         if (reader != null) reader.interrupt();
     }
@@ -135,7 +166,9 @@ public final class ElmController {
     }
 
     private synchronized void write(String s) throws IOException {
-        written.add(s);
+        written.addLast(s);
+        writtenTotal++;
+        while (written.size() > WRITTEN_CAP) written.removeFirst();
         out.write(s.getBytes(StandardCharsets.US_ASCII));
         out.flush();
     }
@@ -145,8 +178,20 @@ public final class ElmController {
         write(cmd + "\r");
     }
 
-    /** Sends cmd and collects the response lines until the prompt; null on timeout. */
+    /**
+     * Sends cmd and collects the response lines until the prompt; null on timeout. Events already
+     * queued before the command cannot be its response: they are dropped first, so a clone that prints
+     * two prompts (e.g. after ATZ) does not make the next command take the stray prompt as its answer.
+     */
     private List<ElmLineParser.Event> transact(String cmd, long timeoutMs) throws IOException {
+        ElmLineParser.Event old;
+        while ((old = queue.poll()) != null) {
+            if (old.kind == ElmLineParser.Kind.PROMPT) strayPrompts++;
+            else if (old.kind == ElmLineParser.Kind.TEXT && "<closed>".equals(old.text) && old.id == -1) {
+                queue.add(old);  // keep the reader's end marker for poll()
+                break;
+            }
+        }
         command(cmd);
         List<ElmLineParser.Event> got = new ArrayList<>();
         long end = clock.nanos() + timeoutMs * 1_000_000L;
@@ -173,13 +218,20 @@ public final class ElmController {
         return b.toString();
     }
 
+    /** The response text without the echo of the command (echo is still on right after ATZ). */
+    private static String textWithout(List<ElmLineParser.Event> r, String echo) {
+        List<ElmLineParser.Event> k = new ArrayList<>();
+        for (ElmLineParser.Event e : r) if (!echo.equals(e.text)) k.add(e);
+        return text(k);
+    }
+
     /** Stops a running monitor: one 'X', then wait for the prompt (absent when the adapter was idle). */
     private void interrupt() throws IOException {
         write("X");
         long end = clock.nanos() + timing.stopMs * 1_000_000L;
         while (!stopped && clock.nanos() < end) {
             ElmLineParser.Event e = poll(50);
-            if (e != null && e.kind == ElmLineParser.Kind.PROMPT) return;
+            if (e != null && e.kind == ElmLineParser.Kind.PROMPT) { monitorActive = false; return; }
         }
     }
 
@@ -195,6 +247,10 @@ public final class ElmController {
         if (r == null) throw new IOException("init ATZ: no prompt");
         version = text(r);
         listener.event("elm_version " + version);
+        // Which protocol the adapter came back with after ATZ (6 kept vs AUTO): logged, never required.
+        r = transact("ATDP", timing.cmdMs);
+        protocolAfterReset = r == null ? "timeout" : textWithout(r, "ATDP");
+        listener.event("elm_protocol_after_reset " + protocolAfterReset);
         String[] cmds = {"ATE0", "ATL0", "ATS0", "ATH1", "ATSP6", "ATCAF0", String.format(Locale.ROOT, "ATCRA %03X", canId)};
         for (String c : cmds) {
             r = transact(c, timing.cmdMs);
@@ -210,6 +266,7 @@ public final class ElmController {
     /** Starts ATMA; '?' (a leftover stop character) is retried once. */
     private void startMonitor(String why) throws IOException {
         command("ATMA");
+        monitorActive = true;
         monitors++;
         listener.monitorStarted(monitors, why);
     }
@@ -219,13 +276,15 @@ public final class ElmController {
         boolean any = false;
         startMonitor("init");
         long monitorStart = clock.nanos(), lastFrame = 0;
-        boolean questionRetried = false;
+        boolean questionRetried = false, afterBufferFull = false;
         while (!stopped) {
             ElmLineParser.Event e = poll(50);
             long now = clock.nanos();
+            if (stopped) break;   // e.g. the prompt that answers stop()'s own 'X'
             if (e != null) {
                 switch (e.kind) {
                     case CAN:
+                        afterBufferFull = false;
                         if (e.id == canId) {
                             canFrames++;
                             any = true;
@@ -235,6 +294,7 @@ public final class ElmController {
                         break;
                     case BUFFER_FULL:
                         bufferFull++;
+                        afterBufferFull = true;
                         listener.event("elm_buffer_full");
                         break;
                     case UNKNOWN_COMMAND:
@@ -242,12 +302,21 @@ public final class ElmController {
                             questionRetried = true;
                             listener.event("elm_atma_question_retry");
                             if (poll(timing.stopMs) != null) { /* the prompt after '?' */ }
+                            monitorActive = false;
                             startMonitor("question");
                             monitorStart = clock.nanos();
                         }
                         break;
                     case PROMPT:
-                        // The monitor ended by itself (BUFFER FULL or an adapter reset).
+                        monitorActive = false;
+                        if (!afterBufferFull) {
+                            // Not the prompt of BUFFER FULL: the adapter reset or ended the monitor for an
+                            // unknown reason, so its settings cannot be trusted. Full init, no bare ATMA.
+                            adapterResets++;
+                            listener.event("elm_unexpected_prompt reinit");
+                            return any;
+                        }
+                        afterBufferFull = false;
                         if (!restart("prompt")) return any;
                         monitorStart = clock.nanos();
                         lastFrame = 0;
@@ -261,6 +330,11 @@ public final class ElmController {
                     default:
                         textLines++;
                         if (textLines <= 20) listener.event("elm_text " + e.text);
+                        if (adapterResetLine(e.text)) {
+                            adapterResets++;
+                            listener.event("elm_adapter_reset reinit line=" + e.text);
+                            return any;
+                        }
                         break;
                 }
                 continue;
@@ -278,6 +352,15 @@ public final class ElmController {
             }
         }
         return any;
+    }
+
+    /**
+     * A monitor-time text line that only an adapter back at its defaults prints: the low-voltage reset
+     * notice, the ATZ/power-on banner, or an echo of ATMA (echo is off after our init).
+     */
+    static boolean adapterResetLine(String text) {
+        String t = text == null ? "" : text.trim().toUpperCase(Locale.ROOT);
+        return t.contains("LV RESET") || t.contains("ELM327") || t.endsWith("ATMA");
     }
 
     /** Restarts ATMA unless restarts are too frequent (then false: the caller re-inits). */

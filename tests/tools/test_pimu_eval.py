@@ -142,6 +142,26 @@ class AnalyzerSection(unittest.TestCase):
             self.assertAlmostEqual(obd['coverage'], 0.9667, places=4)
             self.assertNotIn('obd', self.analyze(write_trip(Path(tmp) / 'b'))['phone_imu'])
 
+    def test_obd_reset_bins_excluded(self):
+        """Bins with frame_reset (flag bit 3) and their neighbours are marked for exclusion."""
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = write_trip(Path(tmp))
+            path = logs / 'pimu.0.jsonl'
+            rows = path.read_text().splitlines()
+            # 8 bins from m=50000: phone, phone->OBD switch (mixed + reset), OBD x4, OBD->phone
+            # (OBD bin, then a phone bin with frame_reset), phone.
+            d = [[50, 0, 1000, 0, 4], [50, 0, 1000, 0, 28], [50, 0, 1000, 0, 16], [50, 0, 1000, 0, 16],
+                 [50, 0, 1000, 0, 16], [50, 0, 1000, 0, 16], [50, 0, 1000, 0, 16], [50, 0, 1000, 0, 12]]
+            rows.insert(1, json.dumps(dict(kind='pimu', m=50000, s0=0, s1=1, b=0, pt=0, ce=0, bv=0, sk=0, dr=0, fr=2, d=d)))
+            path.write_text('\n'.join(rows))
+            obd = self.analyze(logs)['phone_imu']['obd']
+            self.assertEqual(obd['bins'], 6)
+            self.assertEqual(obd['reset_bins'], 1)
+            # 51000 (reset) and 52000 (after it); 56000 (before the phone reset bin at 57000)
+            self.assertEqual(obd['eval_excluded_m'], [51000, 52000, 56000])
+            self.assertEqual(obd['eval_excluded_bins'], 3)
+            self.assertEqual(obd['eval_bins'], 3)
+
     def test_reports_without_pimu_files_have_no_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs = write_trip(Path(tmp), phone=False)
