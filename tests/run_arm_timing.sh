@@ -41,16 +41,39 @@ reason() {
 # Host load at the start of each attempt (Linux; "-" elsewhere): a timing
 # failure under heavy load is expected, one on an idle host deserves a look.
 load() { cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo -; }
+# Load gate (validation/ARM_TIMING_STABILISATION_2026-10-10.md, cause 3):
+# a sustained CPU-share shortage (1-min load well above the core count)
+# fails every attempt regardless of retries. Before each attempt wait, in
+# MX5DR_TIMING_LOAD_STEP (default 15) s steps and at most
+# MX5DR_TIMING_LOAD_WAIT (default 300) s in total, for the 1-min load to
+# fall to MX5DR_TIMING_LOAD_MAX (default: number of online CPUs). The
+# attempt then runs whatever the load is, so a deterministic failure still
+# fails; the wait and the load are recorded on the attempt line. No
+# assertion, threshold or product constant changes.
+load_max=${MX5DR_TIMING_LOAD_MAX:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
+load_wait=${MX5DR_TIMING_LOAD_WAIT:-300}
+load_step=${MX5DR_TIMING_LOAD_STEP:-15}
+gate() {
+    waited=0
+    while [ "$waited" -lt "$load_wait" ]; do
+        l=$(load)
+        [ "$l" = - ] && return 0
+        awk -v l="$l" -v m="$load_max" 'BEGIN { exit !(l > m) }' || return 0
+        sleep "$load_step"
+        waited=$((waited + load_step))
+    done
+}
 first=
 first_load=
 n=1
 while :; do
     result=0
+    gate
     started=$(load)
     "$@" >"$log" 2>&1 || result=$?
     cat "$log"
     if [ "$result" -eq 0 ]; then
-        echo "ARM_TIMING_ATTEMPT name=\"$name\" attempt=$n/$attempts exit=0 load=$started"
+        echo "ARM_TIMING_ATTEMPT name=\"$name\" attempt=$n/$attempts exit=0 load=$started load_wait_s=$waited"
         if [ "$n" -gt 1 ] && [ -n "${MX5DR_TIMING_LEDGER:-}" ]; then
             printf 'RETRIED\t%s\t%s\t%s\t%s\n' "$name" "$n" "$first_load" "$first" >>"$MX5DR_TIMING_LEDGER"
         fi
@@ -58,7 +81,7 @@ while :; do
     fi
     why=$(reason)
     [ -n "$first" ] || { first=$why; first_load=$started; }
-    echo "ARM_TIMING_ATTEMPT name=\"$name\" attempt=$n/$attempts exit=$result load=$started assertion=\"$why\""
+    echo "ARM_TIMING_ATTEMPT name=\"$name\" attempt=$n/$attempts exit=$result load=$started load_wait_s=$waited assertion=\"$why\""
     if [ "$n" -ge "$attempts" ]; then
         [ -z "${MX5DR_TIMING_LEDGER:-}" ] ||
             printf 'FAILED\t%s\t%s\t%s\t%s\n' "$name" "$n" "$first_load" "$first" >>"$MX5DR_TIMING_LEDGER"
