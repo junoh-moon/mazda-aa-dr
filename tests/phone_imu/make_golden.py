@@ -66,6 +66,12 @@ DATA = [
     ('cmu_seq_wrapped', 0b0101, 0, 2, 20943, 19999, 3),
     ('cmu_t_end_zero', 0b1111, 17, 0, 1, 40000, -1),
     ('cmu_negative_phone_time', 0b0100, 18, -1, -1745329, 1000000, 0),
+    # stage 2 OBD source (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md): bit4 source_obd, bit5 obd_gap;
+    # one CAN 0x079 sample per frame, window_us = 20000 producer period, bias 0, bits 0..2 clear
+    ('obd_first_after_reset', 0x18, 100, T0 + 185_000_000, 0, 20000, 0),
+    ('obd_left_turn', 0x10, 101, T0 + 205_000_000, -26, 20000, 0),
+    ('obd_gap_right_turn', 0x30, 102, T0 + 265_000_000, 4083, 20000, 0),
+    ('obd_seq_max', 0x10, 0xFFFFFFFF, T0 + 285_000_000, -11565, 20000, 0),
 ]
 SYNC = [
     ('ping_basic', 0, 1, 987_654_321_000, 0),

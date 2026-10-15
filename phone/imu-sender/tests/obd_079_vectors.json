@@ -1,0 +1,315 @@
+{
+ "schema": "obd_079_vectors v1",
+ "source": "Decode vectors of the stage-2 OBD yaw source (CAN 0x079 through an ELM327 monitor),\nvalidation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md. Writes phone/imu-sender/tests/obd_079_vectors.json,\nread by the JVM tests (CoreTests.obdVectors); this script is an independent Python decoder.\n\nWhere the numbers come from (no captured 0x079 bytes are in the repository; the 29 MB public\nND log stays outside it, validation/ND_CAN_LOG_2026-10-03.md):\n  layout  12-bit yaw = ((b3&3)<<10)|(b4<<2)|(b5>>6) (DBC Motorola start 25, length 12), b3>>2 == 0,\n          counter = b6 & 0x0F (equal to 0x078 b6>>4 in all 14,411 pairs), Qf = b0>>6,\n          lateral acceleration 13 bits ((b0&0x3F)<<7)|(b1>>1) with 0 G near 3988\n          (validation/YAW_DECODE_2026-10-10 in the owner's tree, VIP_0X079_GHIDRA_2026-10-12,\n          ND_CAN_LOG_2026-10-03, VIM_CHANNEL_CAPTURE_2026-10-10)\n  values  on the integer lattice round(2047.00190 + 1.52751423*n) that reproduces every observed\n          0x078 and 0x079 value of the public log; 1737 and 2925 are the observed 0x078 extremes\n          (the same lattice); the six stop means of 0x079 were 2047.50..2047.69\n  units   the CMU product constant for 0x078: rad/s = -(raw-2047)*0.000658615 (src/navigation/\n          pipeline.cpp), clockwise positive; the count rises in LEFT turns (public log)\n  DBC     berumiya MX5ND_6thGenMazda_HSCAN.dbc: YawRate_Corr 31|16@0+ (0.223437,-114.4) deg/s,\n          i.e. bytes 3..4 only (cross-check field, its own sign: positive = count rising = left)\nBytes the sources do not define (b2, b6 high nibble, b7, b5 low six bits) are filled with fixed\nnon-zero patterns so that masking is tested; they carry no claimed meaning.",
+ "zero_nominal": 2047,
+ "urad_s_per_count": 658.615,
+ "period_us": 20000,
+ "can": [
+  {
+   "name": "centre_n0",
+   "line": "079DF285A01FFD530A5",
+   "id": 121,
+   "data": "df285a01ffd530a5",
+   "status": "OK",
+   "raw12": 2047,
+   "counter": 0,
+   "qf": 3,
+   "cw_dps": 0.0,
+   "dtheta_urad_20ms": 0.0,
+   "dbc_yawrate_corr_dps": -0.223693
+  },
+  {
+   "name": "lattice_n1_left",
+   "line": "079 DF 28 5A 02 00 55 31 A5",
+   "id": 121,
+   "data": "df285a02005531a5",
+   "status": "OK",
+   "raw12": 2049,
+   "counter": 1,
+   "qf": 3,
+   "cw_dps": -0.07547172,
+   "dtheta_urad_20ms": -26.3446,
+   "dbc_yawrate_corr_dps": -0.000256
+  },
+  {
+   "name": "lattice_n-1_right",
+   "line": "079 8 DF 28 5A 01 FF 55 32 A5",
+   "id": 121,
+   "data": "df285a01ff5532a5",
+   "status": "OK",
+   "raw12": 2045,
+   "counter": 2,
+   "qf": 3,
+   "cw_dps": 0.07547172,
+   "dtheta_urad_20ms": 26.3446,
+   "dbc_yawrate_corr_dps": -0.223693
+  },
+  {
+   "name": "lattice_n2_left",
+   "line": "079df285a02009533a5",
+   "id": 121,
+   "data": "df285a02009533a5",
+   "status": "OK",
+   "raw12": 2050,
+   "counter": 3,
+   "qf": 3,
+   "cw_dps": -0.113207579,
+   "dtheta_urad_20ms": -39.5169,
+   "dbc_yawrate_corr_dps": -0.000256
+  },
+  {
+   "name": "lattice_n-2_right",
+   "line": "0798DF285A01FF1534A5",
+   "id": 121,
+   "data": "df285a01ff1534a5",
+   "status": "OK",
+   "raw12": 2044,
+   "counter": 4,
+   "qf": 3,
+   "cw_dps": 0.113207579,
+   "dtheta_urad_20ms": 39.5169,
+   "dbc_yawrate_corr_dps": -0.223693
+  },
+  {
+   "name": "observed_min_1737_right_turn",
+   "line": "079DF285A01B25535A5",
+   "id": 121,
+   "data": "df285a01b25535a5",
+   "status": "OK",
+   "raw12": 1737,
+   "counter": 5,
+   "qf": 3,
+   "cw_dps": 11.698116545,
+   "dtheta_urad_20ms": 4083.413,
+   "dbc_yawrate_corr_dps": -17.428342
+  },
+  {
+   "name": "observed_max_2925_left_turn",
+   "line": "079 DF 28 5A 02 DB 55 36 A5",
+   "id": 121,
+   "data": "df285a02db5536a5",
+   "status": "OK",
+   "raw12": 2925,
+   "counter": 6,
+   "qf": 3,
+   "cw_dps": -33.132084925,
+   "dtheta_urad_20ms": -11565.2794,
+   "dbc_yawrate_corr_dps": 48.932447
+  },
+  {
+   "name": "counter_15_wrap_before",
+   "line": "079 8 DF 28 5A 01 FF D5 3F A5",
+   "id": 121,
+   "data": "df285a01ffd53fa5",
+   "status": "OK",
+   "raw12": 2047,
+   "counter": 15,
+   "qf": 3,
+   "cw_dps": 0.0,
+   "dtheta_urad_20ms": 0.0,
+   "dbc_yawrate_corr_dps": -0.223693
+  },
+  {
+   "name": "qf_not_3",
+   "line": "0795f285a02005530a5",
+   "id": 121,
+   "data": "5f285a02005530a5",
+   "status": "OK",
+   "raw12": 2049,
+   "counter": 0,
+   "qf": 1,
+   "cw_dps": -0.07547172,
+   "dtheta_urad_20ms": -26.3446,
+   "dbc_yawrate_corr_dps": -0.000256
+  },
+  {
+   "name": "all_low_bits_set",
+   "line": "0798DF285A03FFBF37A5",
+   "id": 121,
+   "data": "df285a03ffbf37a5",
+   "status": "OK",
+   "raw12": 4094,
+   "counter": 7,
+   "qf": 3,
+   "cw_dps": -77.24530506,
+   "dtheta_urad_20ms": -26963.6981,
+   "dbc_yawrate_corr_dps": 114.176051
+  },
+  {
+   "name": "one_count_above_sentinel",
+   "line": "079DF285A00005538A5",
+   "id": 121,
+   "data": "df285a00005538a5",
+   "status": "OK",
+   "raw12": 1,
+   "counter": 8,
+   "qf": 3,
+   "cw_dps": 77.2075692,
+   "dtheta_urad_20ms": 26950.5258,
+   "dbc_yawrate_corr_dps": -114.4
+  },
+  {
+   "name": "reserved_bits_set",
+   "line": "079 DF 28 5A 05 FF D5 39 A5",
+   "id": 121,
+   "data": "df285a05ffd539a5",
+   "status": "RESERVED_BITS",
+   "raw12": -1,
+   "counter": 9,
+   "qf": 3,
+   "dbc_yawrate_corr_dps": 228.575795
+  },
+  {
+   "name": "sentinel_zero",
+   "line": "079 8 DF 28 5A 00 00 15 3A A5",
+   "id": 121,
+   "data": "df285a0000153aa5",
+   "status": "SENTINEL",
+   "raw12": 0,
+   "counter": 10,
+   "qf": 3,
+   "dbc_yawrate_corr_dps": -114.4
+  },
+  {
+   "name": "sentinel_fff",
+   "line": "079df285a03ffd53ba5",
+   "id": 121,
+   "data": "df285a03ffd53ba5",
+   "status": "SENTINEL",
+   "raw12": 4095,
+   "counter": 11,
+   "qf": 3,
+   "dbc_yawrate_corr_dps": 114.176051
+  },
+  {
+   "name": "wrong_id_078",
+   "line": "0788DF285A01FFD53CA5",
+   "id": 120,
+   "data": "df285a01ffd53ca5",
+   "status": "WRONG_ID",
+   "raw12": -1,
+   "counter": -1,
+   "qf": -1,
+   "dbc_yawrate_corr_dps": -0.223693
+  },
+  {
+   "name": "short_5_bytes",
+   "line": "079DF285A01FF",
+   "id": 121,
+   "data": "df285a01ff",
+   "status": "SHORT",
+   "raw12": -1,
+   "counter": -1,
+   "qf": -1,
+   "dbc_yawrate_corr_dps": -0.223693
+  },
+  {
+   "name": "six_bytes_no_counter",
+   "line": "079 DF 28 5A 02 01 15",
+   "id": 121,
+   "data": "df285a020115",
+   "status": "OK",
+   "raw12": 2052,
+   "counter": -1,
+   "qf": 3,
+   "cw_dps": -0.188679299,
+   "dtheta_urad_20ms": -65.8615,
+   "dbc_yawrate_corr_dps": 0.223181
+  }
+ ],
+ "lines": [
+  {
+   "text": "OK",
+   "kind": "OK"
+  },
+  {
+   "text": "?",
+   "kind": "UNKNOWN_COMMAND"
+  },
+  {
+   "text": "BUFFER FULL",
+   "kind": "BUFFER_FULL"
+  },
+  {
+   "text": "STOPPED",
+   "kind": "STOPPED"
+  },
+  {
+   "text": "CAN ERROR",
+   "kind": "ERROR"
+  },
+  {
+   "text": "079DF285A01FFD5A3A5<RX ERROR",
+   "kind": "ERROR"
+  },
+  {
+   "text": "ELM327 v1.5",
+   "kind": "TEXT"
+  },
+  {
+   "text": "NO DATA",
+   "kind": "TEXT"
+  },
+  {
+   "text": "SEARCHING...",
+   "kind": "TEXT"
+  },
+  {
+   "text": "ATE0",
+   "kind": "TEXT"
+  },
+  {
+   "text": "LV RESET",
+   "kind": "TEXT"
+  },
+  {
+   "text": "07",
+   "kind": "MALFORMED"
+  },
+  {
+   "text": "079DF2",
+   "kind": "MALFORMED"
+  },
+  {
+   "text": "8001122",
+   "kind": "MALFORMED"
+  },
+  {
+   "text": "0799DF285A01FFD5A3A5",
+   "kind": "MALFORMED"
+  },
+  {
+   "text": "0798DF28",
+   "kind": "MALFORMED"
+  },
+  {
+   "text": "079 2 DF 28",
+   "kind": "CAN"
+  },
+  {
+   "text": "079",
+   "kind": "CAN"
+  },
+  {
+   "text": "079 DF 28",
+   "kind": "CAN"
+  },
+  {
+   "text": "079DF285A01FFD5A3A5AA",
+   "kind": "MALFORMED"
+  }
+ ],
+ "stream": {
+  "names": [
+   "centre_n0",
+   "lattice_n1_left",
+   "lattice_n-1_right",
+   "lattice_n2_left",
+   "lattice_n-2_right",
+   "observed_min_1737_right_turn",
+   "observed_max_2925_left_turn",
+   "counter_15_wrap_before"
+  ],
+  "sum_dtheta_urad": -7481.8664
+ }
+}

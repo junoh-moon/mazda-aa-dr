@@ -22,16 +22,21 @@ import android.widget.TextView;
 import java.io.File;
 import java.util.Locale;
 import java.util.Set;
+import me.sixtyfive.mx5imu.core.ElmController;
+import me.sixtyfive.mx5imu.core.ObdLink;
 import me.sixtyfive.mx5imu.core.ReconnectPolicy;
 import me.sixtyfive.mx5imu.core.RollingLog;
+import me.sixtyfive.mx5imu.core.Window;
 
 /** One-time setup screen: permissions, choose the CMU among bonded devices, on/off, status, log export. */
 public final class MainActivity extends Activity {
     private static final int PERMS = 7;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private TextView status, deviceHint;
-    private RadioGroup devices;
-    private Button toggle, permit, retry;
+    private TextView status, deviceHint, obdHint;
+    private RadioGroup devices, obdDevices;
+    private Button toggle, permit, retry, obdCheck;
+    /** Length of the in-app parked OBD check (docs/OBD_YAW_CHECK_KO.md). */
+    private static final long OBD_CHECK_MS = 60_000L;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -64,6 +69,18 @@ public final class MainActivity extends Activity {
         layout.addView(deviceHint);
         devices = new RadioGroup(this);
         layout.addView(devices);
+        // Stage 2 (optional): an OBD-II adapter whose CAN 0x079 yaw is recorded instead of the gyro.
+        obdHint = new TextView(this);
+        obdHint.setTextSize(15);
+        obdHint.setText("OBD 어댑터(선택 사항): 차량 OBD 단자에 꽂은 블루투스 어댑터를 고르면, 연결된 동안 "
+                + "자이로 대신 차량 yaw(CAN 0x079)를 보냅니다. CMU는 기록만 합니다.");
+        layout.addView(obdHint);
+        obdDevices = new RadioGroup(this);
+        layout.addView(obdDevices);
+        obdCheck = new Button(this);
+        obdCheck.setText("OBD 점검 (60초, 주차 중)");
+        obdCheck.setOnClickListener(v -> runObdCheck());
+        layout.addView(obdCheck);
         toggle = new Button(this);
         toggle.setOnClickListener(v -> onToggle());
         layout.addView(toggle);
@@ -135,6 +152,77 @@ public final class MainActivity extends Activity {
             });
             devices.addView(r);
         }
+        listObdDevices(bonded);
+    }
+
+    private void listObdDevices(Set<BluetoothDevice> bonded) {
+        obdDevices.removeAllViews();
+        String chosen = Prefs.obdAddress(this);
+        RadioButton none = new RadioButton(this);
+        none.setId(View.generateViewId());
+        none.setText("OBD 사용 안 함 (휴대폰 자이로)");
+        none.setChecked(chosen == null);
+        none.setOnClickListener(v -> setObd(null, null));
+        obdDevices.addView(none);
+        for (BluetoothDevice d : bonded) {
+            RadioButton r = new RadioButton(this);
+            r.setId(View.generateViewId());
+            String name;
+            try { name = d.getName(); } catch (SecurityException e) { name = null; }
+            final String label = name == null ? "(이름 없음)" : name;
+            r.setText("OBD: " + label + "\n" + d.getAddress());
+            r.setChecked(d.getAddress().equals(chosen));
+            r.setOnClickListener(v -> setObd(d.getAddress(), label));
+            obdDevices.addView(r);
+        }
+    }
+
+    /** The sender reads the choice at every CMU connection, so a change applies from the next connection. */
+    private void setObd(String address, String label) {
+        Prefs.setObd(this, address, label);
+        Status.obdCheck = Status.connected ? "OBD 선택은 다음 CMU 연결부터 적용됩니다." : "";
+    }
+
+    /**
+     * The parked check: runs the OBD link alone for 60 s (no CMU needed) and shows frames per second
+     * and the self-measured loss. Refused while the sender itself is using the adapter.
+     */
+    private void runObdCheck() {
+        String addr = Prefs.obdAddress(this);
+        if (addr == null) { Status.obdCheck = "먼저 OBD 어댑터를 고르십시오."; return; }
+        if (Status.obdServiceRunning || Status.obdCheckRunning) { Status.obdCheck = "어댑터 사용 중입니다. '송신 끄기' 후 다시 누르십시오."; return; }
+        BluetoothManager m = getSystemService(BluetoothManager.class);
+        BluetoothAdapter a = m == null ? null : m.getAdapter();
+        if (a == null || !bluetoothGranted()) { Status.obdCheck = "Bluetooth를 쓸 수 없습니다."; return; }
+        final BluetoothDevice dev;
+        try { dev = a.getRemoteDevice(addr); } catch (IllegalArgumentException e) { Status.obdCheck = "주소가 잘못됐습니다."; return; }
+        Status.obdCheckRunning = true;
+        obdCheck.setEnabled(false);
+        final RollingLog log = new RollingLog(getFilesDir(), SenderService.CLOCK);
+        new Thread(() -> {
+            ObdLink link = new ObdLink(new SppConnector(dev), SenderService.CLOCK, new ObdLink.Sink() {
+                @Override public void window(Window w) {}
+                @Override public void event(String line) { log.event("check " + line); }
+            }, ElmController.Timing.DEFAULT, 2000, 4000);
+            log.event("obd_check_start device=" + addr);
+            link.start();
+            long end = SenderService.CLOCK.nanos() + OBD_CHECK_MS * 1_000_000L;
+            while (SenderService.CLOCK.nanos() < end) {
+                long left = (end - SenderService.CLOCK.nanos()) / 1_000_000_000L;
+                Status.obdCheck = String.format(Locale.ROOT, "점검 중 %d초 남음 · %s · 초당 %.1f프레임 · 손실 %.1f%%",
+                        left, link.state(), link.fps(), link.lossPercent());
+                try { Thread.sleep(500); } catch (InterruptedException e) { break; }
+            }
+            link.stop();
+            String verdict = link.verdict();
+            log.event("obd_check_end verdict=" + verdict + " | " + link.summary());
+            String word = "GOOD".equals(verdict) ? "좋음" : "MARGINAL".equals(verdict) ? "보통(누락 있음)"
+                    : "BAD".equals(verdict) ? "나쁨(누락 많음)" : "0x079 수신 없음";
+            Status.obdCheck = String.format(Locale.ROOT, "점검 결과: %s · 초당 %.1f프레임(기준 50) · 손실 %.1f%% · 받은 프레임 %d",
+                    word, link.fps(), link.lossPercent(), link.frames());
+            Status.obdCheckRunning = false;
+            ui.post(() -> { if (!isDestroyed()) obdCheck.setEnabled(true); });
+        }, "obd-check").start();
     }
 
     private void onToggle() {
@@ -172,6 +260,15 @@ public final class MainActivity extends Activity {
                         Status.lastPingElapsedMs / 1000.0, Status.gyroRateHz));
             }
             b.append("왕복 시간(RTT)은 CMU가 PING/PONG으로 계산하여 CMU 기록에 남깁니다.\n");
+            if (Prefs.obdAddress(MainActivity.this) != null) {
+                b.append("OBD 어댑터: ").append(Prefs.obdName(MainActivity.this)).append(" · 보내는 값: ")
+                        .append("OBD".equals(Status.source) ? "차량 yaw(OBD)" : "휴대폰 자이로").append('\n');
+                if (Status.obdServiceRunning) {
+                    b.append(String.format(Locale.ROOT, "OBD 상태: %s · 초당 %.1f프레임 · 손실 %.1f%%%n",
+                            Status.obdState, Status.obdFps, Status.obdLossPct));
+                }
+            }
+            if (!Status.obdCheck.isEmpty()) b.append(Status.obdCheck).append('\n');
             if (!Status.breaker.isEmpty()) b.append("연결 차단: ").append(Status.breaker).append('\n');
             b.append("최근 오류: ").append(Status.lastError.isEmpty() ? "없음" : Status.lastError);
             status.setText(b.toString());

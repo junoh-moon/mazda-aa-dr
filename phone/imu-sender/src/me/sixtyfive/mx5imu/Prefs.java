@@ -40,6 +40,13 @@ final class Prefs {
         return android.provider.Settings.Global.getInt(c.getContentResolver(), android.provider.Settings.Global.BOOT_COUNT, -1);
     }
 
+    /** Stage 2: the paired OBD-II adapter (ELM327 SPP) whose CAN 0x079 yaw may replace the gyro; null = none. */
+    static String obdAddress(Context c) { return p(c).getString("obd_address", null); }
+    static String obdName(Context c) { return p(c).getString("obd_name", ""); }
+    static void setObd(Context c, String address, String name) {
+        p(c).edit().putString("obd_address", address).putString("obd_name", name == null ? "" : name).apply();
+    }
+
     static void setEnabled(Context c, boolean on) { p(c).edit().putBoolean("enabled", on).apply(); }
     static void setDevice(Context c, String address, String name) {
         p(c).edit().putString("address", address).putString("name", name == null ? "" : name).apply();

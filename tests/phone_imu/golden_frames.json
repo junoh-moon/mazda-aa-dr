@@ -320,6 +320,70 @@
   }
  },
  {
+  "name": "obd_first_after_reset",
+  "kind": "data",
+  "hex": "4d580118640000000be5017d1f01000000000000204e0000000000002ceed3a3",
+  "fields": {
+   "magic": "MX",
+   "version": 1,
+   "flags": 24,
+   "seq": 100,
+   "t_end_ns": 1234752890123,
+   "dtheta_urad": 0,
+   "window_us": 20000,
+   "bias_urad_s": 0,
+   "crc32": 2748575276
+  }
+ },
+ {
+  "name": "obd_left_turn",
+  "kind": "data",
+  "hex": "4d580110650000000b12337e1f010000e6ffffff204e00000000000043d02c96",
+  "fields": {
+   "magic": "MX",
+   "version": 1,
+   "flags": 16,
+   "seq": 101,
+   "t_end_ns": 1234772890123,
+   "dtheta_urad": -26,
+   "window_us": 20000,
+   "bias_urad_s": 0,
+   "crc32": 2519519299
+  }
+ },
+ {
+  "name": "obd_gap_right_turn",
+  "kind": "data",
+  "hex": "4d580130660000000b99c6811f010000f30f0000204e0000000000007477c960",
+  "fields": {
+   "magic": "MX",
+   "version": 1,
+   "flags": 48,
+   "seq": 102,
+   "t_end_ns": 1234832890123,
+   "dtheta_urad": 4083,
+   "window_us": 20000,
+   "bias_urad_s": 0,
+   "crc32": 1623816052
+  }
+ },
+ {
+  "name": "obd_seq_max",
+  "kind": "data",
+  "hex": "4d580110ffffffff0bc6f7821f010000d3d2ffff204e00000000000052b7e442",
+  "fields": {
+   "magic": "MX",
+   "version": 1,
+   "flags": 16,
+   "seq": 4294967295,
+   "t_end_ns": 1234852890123,
+   "dtheta_urad": -11565,
+   "window_us": 20000,
+   "bias_urad_s": 0,
+   "crc32": 1122285394
+  }
+ },
+ {
   "name": "ping_basic",
   "kind": "ping",
   "hex": "4d5001000100000068f3c8f4e50000000000000000000000d724b221",

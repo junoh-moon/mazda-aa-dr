@@ -33,18 +33,24 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import me.sixtyfive.mx5imu.core.Clock;
+import me.sixtyfive.mx5imu.core.ElmController;
 import me.sixtyfive.mx5imu.core.Integrator;
 import me.sixtyfive.mx5imu.core.Link;
+import me.sixtyfive.mx5imu.core.ObdLink;
 import me.sixtyfive.mx5imu.core.Protocol;
 import me.sixtyfive.mx5imu.core.ReconnectPolicy;
 import me.sixtyfive.mx5imu.core.RollingLog;
 import me.sixtyfive.mx5imu.core.Session;
+import me.sixtyfive.mx5imu.core.SourceSelector;
 import me.sixtyfive.mx5imu.core.Transport;
 import me.sixtyfive.mx5imu.core.Window;
 
 /**
  * connectedDevice foreground service. While enabled it keeps an RFCOMM client connection to the
  * chosen CMU; sensors, the partial wake lock and the sender run only while connected.
+ * Stage 2 (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md): when an OBD-II adapter is chosen, the
+ * OBD link (CAN 0x079 monitor) also runs while connected, and SourceSelector sends either the gyro
+ * windows or the OBD windows (FLAG_SOURCE_OBD) on the same stream. The CMU only records them.
  */
 public final class SenderService extends Service implements SensorEventListener, Link.Listener {
     static final String ACTION_STOP = "me.sixtyfive.mx5imu.STOP";
@@ -67,6 +73,8 @@ public final class SenderService extends Service implements SensorEventListener,
     private SensorManager sensors;
     private final Integrator integrator = new Integrator(); // sensor thread only
     private volatile Session active;
+    private volatile SourceSelector selector = new SourceSelector(false);
+    private volatile ObdLink obd;
     private PowerManager.WakeLock wake;
     private BroadcastReceiver receiver;
     private int ticks, gyroCount;
@@ -231,6 +239,18 @@ public final class SenderService extends Service implements SensorEventListener,
                 Status.crcErrors = s.crcErrors();
                 Status.lastPingElapsedMs = (CLOCK.nanos() - s.lastPingNs()) / 1_000_000L;
             }
+            ObdLink o = obd;
+            SourceSelector sel = selector;
+            Status.source = sel.update(CLOCK.nanos()).name();
+            if (o != null) {
+                Status.obdState = o.state();
+                Status.obdFps = o.fps();
+                Status.obdLossPct = o.lossPercent();
+            }
+            if (ticks % 60 == 59 && o != null) {
+                log.event("obd_stats source=" + Status.source + " switches=" + sel.switches + " phone_sent=" + sel.phoneWindowsSent
+                        + " obd_sent=" + sel.obdWindowsSent + " obd_held=" + sel.obdWindowsHeld + " | " + o.summary());
+            }
             if (++ticks % 60 == 0 && s != null) {
                 log.event(String.format(Locale.ROOT, "stats frames=%d pongs=%d crc_errors=%d unknown_version=%d unexpected=%d gyro_hz=%d",
                         s.framesSent.get(), s.pongsSent.get(), s.crcErrors(), s.unknownVersion(), s.unexpectedFrames.get(), Status.gyroRateHz));
@@ -250,6 +270,7 @@ public final class SenderService extends Service implements SensorEventListener,
         wake.acquire();
         log.event("connected seq=" + (s == null ? 0 : linkSeq()));
         sensorHandler.post(this::registerSensors);
+        startObd();
         updateNote("CMU 연결됨 · 자이로 송신 중");
     }
 
@@ -261,6 +282,7 @@ public final class SenderService extends Service implements SensorEventListener,
         Status.connected = false;
         Status.state = "연결 대기 중";
         sensorHandler.post(this::unregisterSensors);
+        stopObd();
         if (wake.isHeld()) wake.release();
         log.event(String.format(Locale.ROOT, "disconnected reason=%s frames=%d pongs=%d crc_errors=%d unknown_version=%d unexpected=%d dropped_before_ping=%d dropped_stale_ping=%d ping_span_ms=%d",
                 reason, s.framesSent.get(), s.pongsSent.get(), s.crcErrors(), s.unknownVersion(), s.unexpectedFrames.get(),
@@ -338,7 +360,7 @@ public final class SenderService extends Service implements SensorEventListener,
             case Sensor.TYPE_GYROSCOPE:
                 gyroCount++;
                 Window w = integrator.gyro(e.timestamp, e.values[0], e.values[1], e.values[2]);
-                if (w != null) s.offer(w);
+                if (w != null) send(s, SourceSelector.Source.PHONE, w);
                 break;
             default:
                 break;
@@ -346,6 +368,53 @@ public final class SenderService extends Service implements SensorEventListener,
     }
 
     @Override public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+
+    // ---- stage 2: OBD 0x079 source (record-only at the CMU) ----
+
+    /** Offers a window of one source; the selector passes only the chosen source (order kept by its lock). */
+    private void send(Session s, SourceSelector.Source from, Window w) {
+        SourceSelector sel = selector;
+        synchronized (sel) {
+            Window x = sel.admit(from, w, CLOCK.nanos());
+            if (x != null) s.offer(x);
+        }
+    }
+
+    private void startObd() {
+        String obdAddr = Prefs.obdAddress(this);
+        if (obdAddr == null || Status.obdCheckRunning) { selector = new SourceSelector(false); return; }
+        final BluetoothDevice dev;
+        try { dev = adapter.getRemoteDevice(obdAddr); }
+        catch (IllegalArgumentException e) { log.event("obd_bad_address " + obdAddr); selector = new SourceSelector(false); return; }
+        selector = new SourceSelector(true);
+        ObdLink o = new ObdLink(new SppConnector(dev), CLOCK, new ObdLink.Sink() {
+            @Override public void window(Window w) {
+                SourceSelector sel = selector;
+                sel.obdFrame(w.tEndNs);
+                Session s = active;
+                if (s != null) send(s, SourceSelector.Source.OBD, w);
+            }
+            @Override public void event(String line) { log.event(line); }
+        }, ElmController.Timing.DEFAULT, 2000, 30000);
+        obd = o;
+        Status.obdServiceRunning = true;
+        log.event("obd_start device=" + obdAddr);
+        o.start();
+    }
+
+    private void stopObd() {
+        final ObdLink o = obd;
+        obd = null;
+        if (o == null) return;
+        new Thread(() -> {
+            o.stop();
+            log.event("obd_stop | " + o.summary());
+            if (obd == null) {  // a new connection may already run its own link
+                Status.obdServiceRunning = false;
+                Status.obdState = "";
+            }
+        }, "obd-stop").start();
+    }
 
     // ---- notification ----
 
@@ -375,6 +444,7 @@ public final class SenderService extends Service implements SensorEventListener,
 
     @Override public void onDestroy() {
         main.removeCallbacks(tick);
+        stopObd();
         final Link l = link;
         link = null;
         if (receiver != null) { try { unregisterReceiver(receiver); } catch (IllegalArgumentException ignored) {} receiver = null; }

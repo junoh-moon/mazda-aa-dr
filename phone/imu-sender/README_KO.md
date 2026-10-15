@@ -45,6 +45,15 @@
 
 차량 쪽에서 이 서비스가 꺼지면(CMU 메뉴 11, 또는 CMU의 자동 안전장치) 차가 있는 상태의 연결이 계속 실패하므로 폰은 늦어도 다음 주행 안에 '연결 중지됨'으로 멈춥니다. 차 쪽을 다시 켠 뒤 앱의 **지금 다시 시도**를 한 번 누르십시오.
 
+## (선택) OBD 어댑터 — 2단계, 기록 전용
+
+'OBD 어댑터' 목록에서 OBD-II 블루투스 어댑터(ELM327 계열)를 고르면, CMU에 연결된 동안 앱이 어댑터를 표준 SPP로
+열어 CAN 0x079(차량 yaw, 초당 약 50개)만 **듣기 전용**으로 받습니다(`atz` … `atcra 079`, `atma`; 진단 요청은 보내지 않음).
+받은 yaw는 같은 프레임 형식에 실려(flags 비트 4) CMU 기록에 남습니다. 어댑터가 2초에 80개 이상을 3초 연속 넘겨줄 때만
+OBD로 바꾸고, 끊기면 즉시 자이로로 돌아갑니다. **OBD 점검 (60초, 주차 중)** 버튼이 초당 프레임과 손실률을 보여 줍니다
+(`docs/OBD_YAW_CHECK_KO.md`). 어댑터는 앱 하나만 받으므로 Car Scanner와 동시에 쓰지 마십시오. 진단 기록에는 어댑터의
+Bluetooth 주소와 상태·개수가 남습니다(공개 장소에 올리지 마십시오). 설계: `validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md`.
+
 ## 끄는 방법
 
 앱의 **송신 끄기** 또는 알림의 **송신 끄기**를 누르십시오. 꺼진 동안은 아무 작업도 하지 않으며 재부팅 후에도 시작하지 않습니다.
@@ -62,6 +71,7 @@
 phone/imu-sender/test.sh          # 호스트 시험(JDK 11+, python3)
 phone/imu-sender/build.sh [SDK]   # 서명된 디버그 APK: phone/imu-sender/build/mx5imu-sender.apk
 python3 tests/phone_imu/make_golden.py   # 양쪽 공용 골든 벡터 재생성(결정적, tests/phone_imu/golden_frames.json)
+python3 phone/imu-sender/tests/make_obd_vectors.py   # OBD 0x079 디코드 벡터 재생성(독립 Python 디코더)
 ```
 
 서명 키는 git에 포함되지 않는 `build/`에서 처음 빌드할 때 만들어집니다. 프로토콜은 'PHONE IMU CHANNEL v1'

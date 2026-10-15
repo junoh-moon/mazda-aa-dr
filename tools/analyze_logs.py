@@ -4369,6 +4369,9 @@ def phone_imu_report(rows, bad=0):
     data = dict(rows=0, bins=0, connected_bins=0, frames=0, gaps=0, crc_errors=0, bad_version=0,
                 skipped_bytes=0, dropped_bytes=0, frame_resets=0, window_s=0.0, dtheta_deg=0.0, flags_or=0)
     biases, syncs, drops, spans = [], [], None, []
+    # Stage 2 (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md): flags bit 4 = CAN 0x079 yaw via OBD,
+    # bit 5 = OBD frames lost in that second; gyro frames set bit 2, so 0x14 together = mixed sources.
+    obd = dict(bins=0, frames=0, gap_bins=0, mixed_bins=0, window_s=0.0)
     nbytes = 0
     for _, size, r in rows:
         nbytes += size
@@ -4398,6 +4401,12 @@ def phone_imu_report(rows, bad=0):
                     data["window_s"] += wu_ms / 1000.0
                     data["dtheta_deg"] += math.degrees(dth * 1e-6)
                     data["flags_or"] |= fl
+                    if fl & 16:
+                        obd["bins"] += 1
+                        obd["frames"] += n
+                        obd["window_s"] += wu_ms / 1000.0
+                        obd["gap_bins"] += 1 if fl & 32 else 0
+                        obd["mixed_bins"] += 1 if fl & 4 else 0
                 if r["s1"] >= 0:
                     biases.append(r["b"])
         except (KeyError, TypeError, ValueError):
@@ -4412,6 +4421,13 @@ def phone_imu_report(rows, bad=0):
     report = dict(boots=[dict(boot_id=b.get("boot_id"), budget_bph=b.get("budget_bph"), cap=b.get("cap")) for b in boots],
                   malformed_rows=bad, links=dict(links), link_reasons=dict(link_reasons), bt_watch=bt,
                   data=data, drops=drops)
+    if obd["bins"]:
+        # One 0x079 frame per DATA frame and window_us = 20 ms each: covered time / bin time is the
+        # CMU-side view of the OBD path's loss (adapter + both Bluetooth hops).
+        obd["window_s"] = round(obd["window_s"], 3)
+        obd["frames_per_s"] = round(obd["frames"] / float(obd["bins"]), 2)
+        obd["coverage"] = round(obd["window_s"] / obd["bins"], 4)
+        report["obd"] = obd
     if biases:
         report["bias_deg_s"] = dict(min=round(math.degrees(min(biases) * 1e-6), 4),
                                     max=round(math.degrees(max(biases) * 1e-6), 4),
@@ -4450,6 +4466,10 @@ def print_phone_imu(imu):
                s["clock_drift_ppm"]))
     if imu.get("bias_deg_s"):
         print("Phone IMU reported gyro bias (deg/s): %s" % imu["bias_deg_s"])
+    if imu.get("obd"):
+        o = imu["obd"]
+        print("OBD 0x079 yaw (stage 2, record only): %d bins, %d frames (%s/s), coverage %s, bins with loss %d, "
+              "mixed-source bins %d" % (o["bins"], o["frames"], o["frames_per_s"], o["coverage"], o["gap_bins"], o["mixed_bins"]))
 
 
 def print_drive_data(drive, limit=40):

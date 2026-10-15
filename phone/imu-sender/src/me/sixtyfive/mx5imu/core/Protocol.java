@@ -15,7 +15,16 @@ public final class Protocol {
     public static final int FLAG_STATIONARY = 2;
     public static final int FLAG_GRAVITY_VALID = 4;
     public static final int FLAG_FRAME_RESET = 8;
-    public static final int FLAG_MASK = 15;
+    /**
+     * Stage 2 (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md), wire-compatible: the frame carries
+     * one CAN 0x079 yaw sample read through the OBD-II adapter instead of the phone gyro. Such a frame
+     * never sets bits 0..2, its window_us is the nominal producer period (20000 us per CAN frame) and
+     * its bias is 0. The stage-1 CMU receiver records the flags OR per second unchanged.
+     */
+    public static final int FLAG_SOURCE_OBD = 16;
+    /** Stage 2: OBD frame whose CAN rolling counter (or receipt gap) shows lost CAN frames before it. */
+    public static final int FLAG_OBD_GAP = 32;
+    public static final int FLAG_MASK = 63;
     public static final int TYPE_PING = 0;
     public static final int TYPE_PONG = 1;
 
@@ -47,7 +56,7 @@ public final class Protocol {
         return v;
     }
 
-    /** Encodes one DATA frame. seq and windowUs are taken modulo 2^32; flags must use only bits 0..3. */
+    /** Encodes one DATA frame. seq and windowUs are taken modulo 2^32; flags must use only bits 0..5. */
     public static byte[] encodeData(int flags, long seq, long tEndNs, int dthetaUrad, long windowUs, int biasUradS) {
         if ((flags & ~FLAG_MASK) != 0) throw new IllegalArgumentException("reserved flag bits");
         byte[] b = new byte[DATA_LEN];

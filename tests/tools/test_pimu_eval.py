@@ -125,6 +125,23 @@ class AnalyzerSection(unittest.TestCase):
             codes = [i['code'] for i in report['issues']]
             self.assertNotIn('unknown_record_kind', codes)
 
+    def test_obd_source_bins(self):
+        """Stage 2: bins whose flags carry bit 4 (OBD 0x079 yaw) are summarised separately."""
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = write_trip(Path(tmp))
+            path = logs / 'pimu.0.jsonl'
+            rows = path.read_text().splitlines()
+            d = [[50, 0, 1000, 0, 16], [45, 0, 900, 0, 48], [50, 0, 1000, 0, 21]]
+            rows.insert(1, json.dumps(dict(kind='pimu', m=50000, s0=0, s1=1, b=0, pt=0, ce=0, bv=0, sk=0, dr=0, fr=0, d=d)))
+            path.write_text('\n'.join(rows))
+            obd = self.analyze(logs)['phone_imu']['obd']
+            self.assertEqual(obd['bins'], 3)
+            self.assertEqual(obd['frames'], 145)
+            self.assertEqual(obd['gap_bins'], 1)
+            self.assertEqual(obd['mixed_bins'], 1)
+            self.assertAlmostEqual(obd['coverage'], 0.9667, places=4)
+            self.assertNotIn('obd', self.analyze(write_trip(Path(tmp) / 'b'))['phone_imu'])
+
     def test_reports_without_pimu_files_have_no_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs = write_trip(Path(tmp), phone=False)

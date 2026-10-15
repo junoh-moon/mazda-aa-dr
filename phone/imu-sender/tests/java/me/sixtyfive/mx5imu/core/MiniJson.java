@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Minimal JSON reader for the golden vectors (objects, arrays, strings, integers, true/false/null). */
+/** Minimal JSON reader for the test vectors (objects, arrays, strings, integers, decimals, true/false/null). */
 final class MiniJson {
     private final String s;
     private int p;
@@ -62,7 +62,11 @@ final class MiniJson {
         int start = p;
         if (s.charAt(p) == '-') p++;
         while (p < s.length() && Character.isDigit(s.charAt(p))) p++;
-        if (p < s.length() && ".eE".indexOf(s.charAt(p)) >= 0) throw new IllegalArgumentException("non-integer number at " + start);
+        if (p < s.length() && ".eE".indexOf(s.charAt(p)) >= 0) {
+            // Decimals (the OBD decode vectors) are Doubles; integers stay Longs.
+            while (p < s.length() && "0123456789.eE+-".indexOf(s.charAt(p)) >= 0) p++;
+            return Double.parseDouble(s.substring(start, p));
+        }
         return Long.parseLong(s.substring(start, p));
     }
 

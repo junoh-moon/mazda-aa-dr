@@ -9,6 +9,10 @@ final class Status {
     static volatile String breaker = "";
     static volatile long framesSentTotal, pongsTotal, connections, lastPingElapsedMs, crcErrors;
     static volatile int gyroRateHz;
+    /** Stage 2 OBD source: link state, received 0x079 frames/s, loss %, the source sent to the CMU, last parked check. */
+    static volatile String obdState = "", source = "PHONE", obdCheck = "";
+    static volatile double obdFps, obdLossPct;
+    static volatile boolean obdServiceRunning, obdCheckRunning;
 
     private Status() {}
 }

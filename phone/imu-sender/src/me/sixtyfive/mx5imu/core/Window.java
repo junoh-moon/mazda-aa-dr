@@ -20,6 +20,11 @@ public final class Window {
 
     public byte[] encode(long seq) { return encode(seq, 0); }
 
+    /** The same window with extra flags ORed in (a source switch marks the first window of the new source). */
+    public Window withFlags(int extra) {
+        return new Window(flags | extra, tEndNs, dthetaUrad, windowUs, biasUradS, samples);
+    }
+
     /** extraFlags are ORed in (the session's frame_reset on its first sent window). */
     public byte[] encode(long seq, int extraFlags) {
         return Protocol.encodeData(flags | extraFlags, seq, tEndNs, dthetaUrad, windowUs, biasUradS);
