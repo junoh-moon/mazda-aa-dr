@@ -1028,9 +1028,38 @@ int main(int argc,char** argv) {
             // The cancel reason is the condition injected: BETA replacing.
             assert(cancelled_rename==1 && cancel_why=="beta_replacing" && cancel_latency_ms>=2900 && lost_ns &&
                    begun<lost_ns);
+            // Tail retry (validation/G3_CANCEL_FLAKE_2026-10-16.md): the cancelled
+            // fsync write may be requested again by this stop. After the loop
+            // the motion feed ends, BETA withdraws (sensor_silence, 250-300 ms)
+            // while the wheel stream is still fresh (G3_WHEEL_GAP_NS + reorder,
+            // 350 ms), so the worker can post the retry in that window. The
+            // store thread is never joined: the retry may still be inside its
+            // 3 s fsync hook (temporary file present) when the worker has been
+            // joined, and its result row is never journaled (worker gone).
+            // The capture stop set the stop flag before the join, so it ends
+            // at the rename gate (stopped) and removes its temporary file.
+            // Wait for the store thread to finish (bounded) instead of racing it.
+            for(unsigned k=0;k<80 && g3_mailbox.pending.load();++k) { struct timespec p={0,100000000};nanosleep(&p,0); }
+            const bool store_idle=!g3_mailbox.pending.load();
+            const int hooks=hook_calls.load();
+            mx5::runtime::G3Record now_stored;
+            const mx5::runtime::G3Load now_load=mx5::runtime::g3_load(logs.c_str(),&now_stored);
+            const bool temp_absent=access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0;
+            printf("g3_cancel terms: written=%u written_sync=%u load_at_join=%d seq_at_join=%u store_idle=%d hook_calls=%d "
+                   "tail_retry=%d last_stage=%s last_step=%s load=%d seq=%u temp_absent=%d\n",
+                   written,written_sync,int(load),unsigned(stored.seq),int(store_idle),hooks,int(hooks>=2),
+                   mx5::runtime::g3_io_stage_name(g3_mailbox.done_stage.load()),
+                   mx5::runtime::g3_step_name(g3_mailbox.done_step.load()),int(now_load),unsigned(now_stored.seq),
+                   int(temp_absent));
             // Only the 15 s record (no fsync) is stored; the 60 s fsync write was not renamed.
-            assert(written==1 && !written_sync && load==mx5::runtime::G3_LOAD_OK && stored.seq==1 &&
-                   access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0);
+            assert(written==1 && !written_sync && load==mx5::runtime::G3_LOAD_OK && stored.seq==1);
+            // A tail retry (at most one) never replaced the record: it ended at
+            // the rename gate without renaming, and no temporary file is left.
+            assert(store_idle && hooks>=1 && hooks<=2 &&
+                   (hooks==1 || ((g3_mailbox.done_stage.load()==mx5::runtime::G3_IO_STOPPED ||
+                                  g3_mailbox.done_stage.load()==mx5::runtime::G3_IO_CANCELLED) &&
+                                 g3_mailbox.done_step.load()==mx5::runtime::G3_STEP_RENAME)));
+            assert(now_load==mx5::runtime::G3_LOAD_OK && now_stored.seq==1 && temp_absent);
             assert(!lagging && max_summary_gap<1600000000ULL);
         } else if(scenario=="g3_move") {
             // The car drove off (a wheel above zero) during the blocked fsync
