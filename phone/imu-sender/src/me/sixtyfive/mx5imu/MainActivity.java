@@ -24,6 +24,7 @@ import java.util.Locale;
 import java.util.Set;
 import me.sixtyfive.mx5imu.core.ElmController;
 import me.sixtyfive.mx5imu.core.ObdLink;
+import me.sixtyfive.mx5imu.core.ObdLossMeter;
 import me.sixtyfive.mx5imu.core.ReconnectPolicy;
 import me.sixtyfive.mx5imu.core.RollingLog;
 import me.sixtyfive.mx5imu.core.Window;
@@ -196,7 +197,7 @@ public final class MainActivity extends Activity {
         final BluetoothDevice dev;
         try { dev = a.getRemoteDevice(addr); } catch (IllegalArgumentException e) { Status.obdCheck = "주소가 잘못됐습니다."; return; }
         // Atomic with the sender's startObd(): never both on the single-client adapter.
-        if (!Status.tryStartObdCheck()) { Status.obdCheck = "어댑터 사용 중입니다. '송신 끄기' 후 다시 누르십시오."; return; }
+        if (!Status.OBD.tryStartCheck()) { Status.obdCheck = "어댑터 사용 중입니다. '송신 끄기' 후 다시 누르십시오."; return; }
         obdCheck.setEnabled(false);
         final RollingLog log = new RollingLog(getFilesDir(), SenderService.CLOCK);
         new Thread(() -> {
@@ -211,7 +212,7 @@ public final class MainActivity extends Activity {
                 long now = SenderService.CLOCK.nanos();
                 long left = (end - now) / 1_000_000_000L;
                 Status.obdCheck = String.format(Locale.ROOT, "점검 중 %d초 남음 · %s · 덮개율 %.0f%% · 재시작 %d회 · 손실 %.1f%%",
-                        left, link.state(), 100 * link.wallCoverage(now), link.restarts(), link.lossPercent());
+                        left, link.state(), 100 * ObdLossMeter.displayCoverage(link.wallCoverage(now)), link.restarts(), link.lossPercent());
                 try { Thread.sleep(500); } catch (InterruptedException e) { break; }
             }
             long endNs = SenderService.CLOCK.nanos();
@@ -221,11 +222,10 @@ public final class MainActivity extends Activity {
             double coverage = link.wallCoverage(endNs);
             log.event(String.format(Locale.ROOT, "obd_check_end verdict=%s wall_coverage=%.3f restarts=%d | %s",
                     verdict, coverage, link.restarts(), link.summary()));
-            String word = "GOOD".equals(verdict) ? "좋음" : "MARGINAL".equals(verdict) ? "보통(누락 있음)"
-                    : "BAD".equals(verdict) ? "나쁨(누락 많음)" : "0x079 수신 없음";
-            Status.obdCheck = String.format(Locale.ROOT, "점검 결과: %s · 덮개율 %.0f%%(기준 100) · 재시작 %d회 · 손실 %.1f%% · 받은 프레임 %d",
-                    word, 100 * coverage, link.restarts(), link.lossPercent(), link.frames());
-            Status.endObdCheck();
+            Status.obdCheck = ObdLossMeter.resultLine(verdict, coverage, link.restarts(), link.lossPercent(), link.frames(),
+                    link.notGoodReasons(endNs));
+            // Runs a sender link start that a CMU (re)connection deferred while the check held the adapter.
+            Status.OBD.endCheck();
             ui.post(() -> { if (!isDestroyed()) obdCheck.setEnabled(true); });
         }, "obd-check").start();
     }
@@ -268,7 +268,7 @@ public final class MainActivity extends Activity {
             if (Prefs.obdAddress(MainActivity.this) != null) {
                 b.append("OBD 어댑터: ").append(Prefs.obdName(MainActivity.this)).append(" · 보내는 값: ")
                         .append("OBD".equals(Status.source) ? "차량 yaw(OBD)" : "휴대폰 자이로").append('\n');
-                if (Status.obdServiceRunning) {
+                if (Status.OBD.serviceRunning()) {
                     b.append(String.format(Locale.ROOT, "OBD 상태: %s · 초당 %.1f프레임 · 손실 %.1f%%%n",
                             Status.obdState, Status.obdFps, Status.obdLossPct));
                 }

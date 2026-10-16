@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Stage-2 OBD yaw source tests (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md), plain JVM.
- * Usage: ObdTests OBD_VECTORS.json OUT_STREAM.bin
+ * Usage: ObdTests OBD_VECTORS.json OUT_STREAM.bin OWNER_DOC.md (docs/OBD_YAW_CHECK_KO.md: verdict table check)
  *   decode vectors (shared with the independent Python decoder make_obd_vectors.py), line parser,
  *   loss meter, integrator, source selector, ElmController/ObdLink against a fake ELM327; writes the
  *   v1 DATA frames of a scripted monitor run to OUT_STREAM.bin for the Python cross-check.
@@ -46,6 +46,7 @@ public final class ObdTests {
         lineVectors(vec);
         parserStream();
         lossMeter();
+        verdictTable(args[2]);
         integrator(vec);
         selector();
         protocolFlags();
@@ -59,7 +60,13 @@ public final class ObdTests {
         controllerDoublePrompt();
         controllerAtmaAlwaysRefused();
         controllerStopSendsX();
+        controllerLateStopPrompt();
+        controllerLateStopPromptAtInit();
+        controllerEchoPersists();
+        controllerNoAtmaAfterStop();
         linkConnectGiveUp();
+        linkSlowRetryAfterGiveUp();
+        arbiterDefersSessionStart();
         linkWaitsForPredecessor();
         linkAmbiguousGapFlag();
         observedVectors(vec);
@@ -342,7 +349,13 @@ public final class ObdTests {
      * (some clones), otherwise it is discarded.
      */
     static final class FakeElm implements Transport {
+        /** Adapter-to-phone chunks with their delivery time (latencyMs: a congested Bluetooth link). */
+        final LinkedBlockingQueue<long[]> due = new LinkedBlockingQueue<>();
         final LinkedBlockingQueue<byte[]> toPhone = new LinkedBlockingQueue<>();
+        /** Constant adapter-to-phone delay of every byte (order kept), 0 = none. */
+        volatile long latencyMs;
+        /** A clone that answers OK to ATE0 but keeps echoing every command. */
+        volatile boolean ignoreAte0;
         final ByteArrayOutputStream fromPhone = new ByteArrayOutputStream();
         final List<String> commands = new CopyOnWriteArrayList<>();
         final Set<String> refuse = new HashSet<>();
@@ -361,7 +374,11 @@ public final class ObdTests {
 
         FakeElm(List<String> script, long lineMs) { this.script = script; this.lineMs = lineMs; }
 
-        void send(String s) { if (!closed) toPhone.add(s.getBytes(StandardCharsets.US_ASCII)); }
+        synchronized void send(String s) {
+            if (closed) return;
+            due.add(new long[] {System.nanoTime() + latencyMs * 1_000_000L});
+            toPhone.add(s.getBytes(StandardCharsets.US_ASCII));
+        }
 
         final InputStream in = new InputStream() {
             byte[] cur;
@@ -372,6 +389,13 @@ public final class ObdTests {
                     if (closed) throw new IOException("closed");
                     try { cur = toPhone.poll(20, TimeUnit.MILLISECONDS); } catch (InterruptedException e) { throw new InterruptedIOException(); }
                     pos = 0;
+                    if (cur != null) {
+                        long at = due.poll()[0];   // same order as toPhone (both added under the fake's lock)
+                        while (System.nanoTime() < at) {
+                            if (closed) throw new IOException("closed");
+                            try { Thread.sleep(1); } catch (InterruptedException e) { throw new InterruptedIOException(); }
+                        }
+                    }
                 }
                 int n = Math.min(len, cur.length - pos);
                 System.arraycopy(cur, pos, b, off, n);
@@ -410,7 +434,7 @@ public final class ObdTests {
                     if (leftoverOnAtz) send("079DF285A01FFD530A5\r");
                     send("\r\rELM327 v1.5\r\r>" + (doublePromptAfterAtz ? "\r>" : ""));
                     return;
-                case "ATE0": echo = false; send("OK\r\r>"); return;
+                case "ATE0": echo = ignoreAte0; send("OK\r\r>"); return;
                 case "ATH1": headers = true; send("OK\r\r>"); return;
                 case "ATSP6": protocol = "ISO 15765-4 (CAN 11/500)"; send("OK\r\r>"); return;
                 case "ATCRA079": filterSet = true; send("OK\r\r>"); return;
@@ -745,6 +769,249 @@ public final class ObdTests {
         int before = c3.written().size();
         c3.stop();
         eq(c3.written().size(), before, "stop without a running monitor writes nothing");
+    }
+
+    /**
+     * Review 2 R1: adapter-to-phone latency (400 ms) above stopMs (FAST: 300 ms). The prompt that answers
+     * a stall's 'X' arrives after the stall restart's ATMA; it must be taken as the late answer to our
+     * stop (the monitor goes on), not as an adapter reset (full re-init, which under the same latency
+     * used to fail with 'init ATE0' and end the run).
+     */
+    static void controllerLateStopPrompt() throws Exception {
+        List<String> script = new ArrayList<>(lines079(20, 0));
+        script.add("SLEEP 600");                   // stall > FAST.stallMs 250
+        script.addAll(lines079(40, 4));
+        script.add("SLEEP 600");
+        script.addAll(lines079(40, 12));
+        FakeElm elm = new FakeElm(script, 2);
+        elm.latencyMs = 400;
+        Recorder r = new Recorder();
+        ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        check(waitFor(() -> r.frames.size() >= 100, 15000), "late stop prompt (400 ms > stopMs): all 100 frames arrive (" + r.frames.size() + ")");
+        boolean alive = t.isAlive();
+        String errBefore = err.toString();
+        c.stop();
+        t.join(3000);
+        check(alive && errBefore.equals("[]"), "late stop prompt: the run kept the connection: " + errBefore);
+        check(!r.events.toString().contains("init ATE0"), "late stop prompt: no 'init ATE0' failure: " + r.events);
+        eq(c.adapterResets, 0, "late stop prompt: not counted as an adapter reset");
+        eq(c.inits, 1, "late stop prompt: no full re-init");
+        check(c.lateStopPrompts >= 1 && r.events.toString().contains("elm_late_stop_prompt"), "late stop prompt logged: " + c.lateStopPrompts + " " + r.events);
+        check(onlySafeWrites(c.written()), "late stop prompt: only AT commands and 'X'");
+        // A prompt that is NOT within 2 x stopMs of our 'X' is still an adapter reset (F1 unchanged):
+        // covered by controllerAdapterReset ('PROMPT' script line, no 'X' before it).
+    }
+
+    /**
+     * Review 2 R1(b): the adapter is still monitoring when we connect (a previous client left ATMA
+     * running) and the latency exceeds stopMs, so the init's 'X' is answered only after ATZ was sent.
+     * That bare prompt must not be taken as the ATZ answer (it shifted every later answer by one).
+     */
+    static void controllerLateStopPromptAtInit() throws Exception {
+        FakeElm elm = new FakeElm(lines079(40, 0), 2);
+        elm.latencyMs = 400;
+        elm.monitoring = true;
+        Recorder r = new Recorder();
+        ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        check(waitFor(() -> r.frames.size() >= 40, 10000), "late prompt at init: init completes and frames flow (" + r.frames.size() + ") " + err + " " + r.events);
+        c.stop();
+        t.join(3000);
+        check(c.version.contains("ELM327"), "late prompt at init: the ATZ answer is the banner, not the bare prompt: '" + c.version + "'");
+        check(c.atzBarePrompts >= 1, "late prompt at init: the bare prompt was recognised: " + c.atzBarePrompts);
+        eq(c.inits, 1, "late prompt at init: one init");
+        check(c.protocolAfterReset.equals("AUTO"), "late prompt at init: ATDP got its own answer (AUTO before any ATSP6), not the banner: " + c.protocolAfterReset);
+    }
+
+    /**
+     * Review 2 R2: a clone that answers OK to ATE0 but keeps echoing. The echoed ATMA must not be read
+     * as an adapter reset (it used to re-init forever and never monitor).
+     */
+    static void controllerEchoPersists() throws Exception {
+        FakeElm elm = new FakeElm(lines079(40, 0), 2);
+        elm.ignoreAte0 = true;
+        Recorder r = new Recorder();
+        ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        check(waitFor(() -> r.frames.size() >= 40, 5000), "echo persists: the monitor starts and frames flow (" + r.frames.size() + ") " + r.events);
+        c.stop();
+        t.join(2000);
+        check(!c.echoVerifiedOff, "echo persists: echo not verified off");
+        eq(c.adapterResets, 0, "echo persists: the echoed ATMA is not an adapter reset");
+        int logged = 0;
+        for (String e : r.events) if (e.startsWith("elm_echo_persists")) logged++;
+        eq(logged, 1, "echo persists: logged once");
+        check(ElmController.adapterResetLine("ATMA", true) && !ElmController.adapterResetLine("ATMA", false)
+                && ElmController.adapterResetLine("LV RESET", false), "echoed ATMA is a reset sign only when echo was verified off");
+    }
+
+    /**
+     * Review 2 R3: stop() lands after the monitor loop's stopped check but before the restart's ATMA
+     * (forced here: the controller's clock calls stop() from inside restart()). No ATMA may follow the
+     * stop character, or the adapter is left monitoring.
+     */
+    static void controllerNoAtmaAfterStop() throws Exception {
+        List<String> script = new ArrayList<>(lines079(20, 0));
+        script.add("BUFFER FULL");
+        script.addAll(lines079(20, 4));
+        FakeElm elm = new FakeElm(script, 2);
+        final ElmController[] holder = new ElmController[1];
+        final long[] writtenAtStop = {-1};
+        final java.util.concurrent.atomic.AtomicBoolean armed = new java.util.concurrent.atomic.AtomicBoolean();
+        Clock clk = () -> {
+            if (armed.get() && "elm-test".equals(Thread.currentThread().getName())) {
+                for (StackTraceElement f : Thread.currentThread().getStackTrace()) {
+                    if (f.getClassName().endsWith("ElmController") && f.getMethodName().equals("restart") && armed.compareAndSet(true, false)) {
+                        holder[0].stop();
+                        writtenAtStop[0] = holder[0].writtenTotal;
+                        break;
+                    }
+                }
+            }
+            return System.nanoTime();
+        };
+        ElmController.Listener l = new ElmController.Listener() {
+            @Override public void frame(ElmLineParser.Event e) {}
+            @Override public void monitorStarted(int count, String why) {}
+            @Override public void event(String line) { if (line.equals("elm_buffer_full")) armed.set(true); }
+        };
+        ElmController c = new ElmController(elm, clk, l, 0x079, FAST);
+        holder[0] = c;
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        t.join(5000);
+        check(!t.isAlive(), "stop inside restart: the run ended");
+        check(writtenAtStop[0] > 0, "stop inside restart: stop() was forced inside restart()");
+        eq(c.writtenTotal, writtenAtStop[0], "stop inside restart: no ATMA (nothing) written after stop(): " + c.written());
+    }
+
+    /**
+     * Review 2 R5: after the give-up the link keeps one slow attempt every GIVEUP_RETRY_MS (5 minutes,
+     * injected clock) instead of never trying again in that session; a free adapter is picked up again.
+     */
+    static void linkSlowRetryAfterGiveUp() throws Exception {
+        final java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1_000_000_000L);
+        Clock clk = now::get;
+        AtomicInteger opens = new AtomicInteger();
+        final java.util.concurrent.atomic.AtomicBoolean free = new java.util.concurrent.atomic.AtomicBoolean();
+        Transport.Connector conn = new Transport.Connector() {
+            @Override public Transport open() throws IOException {
+                opens.incrementAndGet();
+                if (!free.get()) throw new IOException("busy (Car Scanner holds it)");
+                FakeElm e = new FakeElm(new ArrayList<>(), 1);
+                e.refuse.add("ATCAF0");     // connected; the run ends at once
+                return e;
+            }
+            @Override public void abort() {}
+        };
+        final List<String> ev = new CopyOnWriteArrayList<>();
+        ObdLink link = new ObdLink(conn, clk, new ObdLink.Sink() {
+            @Override public void window(Window w) {}
+            @Override public void event(String line) { ev.add(line); }
+        }, FAST, 10, 40);
+        link.start();
+        check(waitFor(() -> link.gaveUp, 3000), "slow retry: the link gives up fast retries");
+        eq(opens.get(), ObdLink.MAX_CONNECT_FAILURES, "slow retry: 5 fast attempts");
+        now.addAndGet((ObdLink.GIVEUP_RETRY_MS - 1000) * 1_000_000L);
+        Thread.sleep(1200);
+        eq(opens.get(), ObdLink.MAX_CONNECT_FAILURES, "slow retry: no attempt before 5 minutes");
+        now.addAndGet(1000 * 1_000_000L);
+        check(waitFor(() -> opens.get() == ObdLink.MAX_CONNECT_FAILURES + 1, 2000), "slow retry: one attempt at 5 minutes (" + opens.get() + ")");
+        Thread.sleep(1200);
+        eq(opens.get(), ObdLink.MAX_CONNECT_FAILURES + 1, "slow retry: at most one attempt per 5 minutes");
+        check(link.gaveUp && ev.toString().contains("obd_connect_slow_retry n=1"), "slow retry logged: " + ev);
+        free.set(true);
+        now.addAndGet(ObdLink.GIVEUP_RETRY_MS * 1_000_000L);
+        check(waitFor(() -> link.connects >= 1, 2000), "slow retry: a freed adapter is connected again (" + link.connects + ")");
+        link.stop();
+        check(link.slowRetries >= 2, "slow retries counted: " + link.slowRetries);
+    }
+
+    /**
+     * Review 2 R6: a CMU session that starts while the parked check holds the adapter is deferred, not
+     * dropped: its link starts as soon as the check ends, unless the session ended first.
+     */
+    static void arbiterDefersSessionStart() {
+        ObdArbiter a = new ObdArbiter();
+        check(a.tryStartCheck(), "arbiter: the check starts on a free adapter");
+        AtomicInteger started = new AtomicInteger();
+        Runnable startLink = () -> { if (a.startServiceOrDefer(() -> {})) started.incrementAndGet(); };
+        check(!a.startServiceOrDefer(startLink), "arbiter: a session start during the check is deferred");
+        check(!a.serviceRunning() && a.hasDeferred(), "arbiter: not running, start pending");
+        a.endCheck();
+        eq(started.get(), 1, "arbiter: the deferred start runs once when the check ends");
+        check(a.serviceRunning() && !a.hasDeferred(), "arbiter: the session's link now holds the adapter");
+        check(!a.tryStartCheck(), "arbiter: the check is refused while the link holds the adapter");
+        a.serviceStopped();
+        check(a.tryStartCheck(), "arbiter: free again after the link stopped");
+        AtomicInteger late = new AtomicInteger();
+        check(!a.startServiceOrDefer(late::incrementAndGet), "arbiter: second deferral");
+        a.cancelDeferred();   // the session ended before the check
+        a.endCheck();
+        eq(late.get(), 0, "arbiter: a cancelled deferred start does not run");
+        check(!a.serviceRunning() && !a.checkRunning(), "arbiter: idle at the end");
+    }
+
+    /**
+     * Review 2 R4: the verdict rule's boundary cases, asserted on ObdLossMeter.verdictOf and compared
+     * row by row with the table between the verdict-cases markers in the owner document, plus the
+     * result-line example of that document and the 100 % display clamp.
+     */
+    static final Object[][] VERDICT_CASES = {
+        // coverage %, restarts, loss %, stalls over 0.5 s, span s, expected
+        {90.0, 1L, 5.0, 0L, 30L, "GOOD"},
+        {89.0, 0L, 0.0, 0L, 60L, "MARGINAL"},
+        {95.0, 2L, 0.0, 0L, 60L, "MARGINAL"},
+        {95.0, 0L, 5.1, 0L, 60L, "MARGINAL"},
+        {95.0, 0L, 0.0, 1L, 60L, "MARGINAL"},
+        {95.0, 0L, 0.0, 0L, 29L, "MARGINAL"},
+        {60.0, 5L, 0.0, 0L, 60L, "MARGINAL"},
+        {59.0, 2L, 0.0, 0L, 60L, "BAD"},
+        {50.0, 0L, 0.0, 0L, 60L, "BAD"},
+    };
+
+    static void verdictTable(String docPath) throws IOException {
+        for (Object[] k : VERDICT_CASES) {
+            String got = ObdLossMeter.verdictOf(1000, (Long) k[4] * 1_000_000_000L, (Double) k[0] / 100, (Double) k[2], (Long) k[3], (Long) k[1]);
+            check(got.equals(k[5]), "verdict case " + java.util.Arrays.toString(k) + " -> " + got);
+        }
+        eq(ObdLossMeter.verdictOf(0, 60_000_000_000L, 1, 0, 0, 0).equals("NONE") ? 1 : 0, 1, "verdict: no frames is NONE");
+        String doc = new String(Files.readAllBytes(Paths.get(docPath)), StandardCharsets.UTF_8);
+        int b = doc.indexOf("<!-- verdict-cases:begin -->"), e = doc.indexOf("<!-- verdict-cases:end -->");
+        check(b >= 0 && e > b, "owner doc has the verdict-cases table");
+        if (b < 0 || e <= b) return;
+        List<String[]> rows = new ArrayList<>();
+        for (String line : doc.substring(b, e).split("\n")) {
+            String[] cells = line.trim().split("\\|");
+            if (cells.length < 7 || !cells[1].trim().matches("[0-9.]+")) continue;   // header, rule, prose
+            String[] r = new String[6];
+            for (int i = 0; i < 6; i++) r[i] = cells[i + 1].trim();
+            rows.add(r);
+        }
+        eq(rows.size(), VERDICT_CASES.length, "owner doc verdict table: same number of rows as the code table");
+        for (int i = 0; i < Math.min(rows.size(), VERDICT_CASES.length); i++) {
+            Object[] k = VERDICT_CASES[i];
+            String[] r = rows.get(i);
+            boolean same = Double.parseDouble(r[0]) == (Double) k[0] && Long.parseLong(r[1]) == (Long) k[1]
+                    && Double.parseDouble(r[2]) == (Double) k[2] && Long.parseLong(r[3]) == (Long) k[3] && Long.parseLong(r[4]) == (Long) k[4];
+            String word = ObdLossMeter.verdictWord((String) k[5]);
+            check(same && r[5].startsWith(word), "owner doc row " + (i + 1) + " = code case " + java.util.Arrays.toString(k) + " (" + word + "): " + String.join(" | ", r));
+            String fromDoc = ObdLossMeter.verdictOf(1000, Long.parseLong(r[4]) * 1_000_000_000L, Double.parseDouble(r[0]) / 100,
+                    Double.parseDouble(r[2]), Long.parseLong(r[3]), Long.parseLong(r[1]));
+            check(r[5].startsWith(ObdLossMeter.verdictWord(fromDoc)), "owner doc row " + (i + 1) + " agrees with verdictOf: " + fromDoc);
+        }
+        // the result-line examples of the owner doc are exactly what the app prints
+        String good = ObdLossMeter.resultLine("GOOD", 0.98, 0, 0.0, 2900, new ArrayList<>());
+        check(doc.contains("`" + good + "`"), "owner doc shows the GOOD result line: " + good);
+        List<String> why = ObdLossMeter.notGoodReasons(60_000_000_000L, 0.85, 0.0, 0, 2);
+        String marginal = ObdLossMeter.resultLine("MARGINAL", 0.85, 2, 0.0, 2550, why);
+        check(doc.contains("`" + marginal + "`"), "owner doc shows the MARGINAL result line: " + marginal);
+        check(ObdLossMeter.resultLine("MARGINAL", 1.3, 0, 0.0, 2, ObdLossMeter.notGoodReasons(0, 1.3, 0, 0, 0)).contains("덮개율 100%(기준 100)"),
+                "displayed coverage is clamped to 100 %");
     }
 
     /** F3: an absent adapter is paged at most MAX_CONNECT_FAILURES times per link (CMU session). */

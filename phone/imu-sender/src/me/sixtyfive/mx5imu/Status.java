@@ -1,5 +1,7 @@
 package me.sixtyfive.mx5imu;
 
+import me.sixtyfive.mx5imu.core.ObdArbiter;
+
 /** Process-wide status for the setup screen (written by the service, polled by the activity). */
 final class Status {
     static volatile boolean running, connected;
@@ -12,25 +14,12 @@ final class Status {
     /** Stage 2 OBD source: link state, received 0x079 frames/s, loss %, the source sent to the CMU, last parked check. */
     static volatile String obdState = "", source = "PHONE", obdCheck = "";
     static volatile double obdFps, obdLossPct;
-    static volatile boolean obdServiceRunning, obdCheckRunning;
     /**
-     * Guards the check-then-set of obdServiceRunning / obdCheckRunning (the sender's link and the
-     * parked check must never open the single-client adapter together; they run on different threads).
+     * Who holds the single-client adapter (the sender's link or the parked check; they run on different
+     * threads). Its monitor is the lock for every check-then-set; a session start during the check is
+     * deferred until the check ends (ObdArbiter).
      */
-    static final Object OBD_LOCK = new Object();
-
-    /** The parked check may start only when neither it nor the sender's link holds the adapter. */
-    static boolean tryStartObdCheck() {
-        synchronized (OBD_LOCK) {
-            if (obdServiceRunning || obdCheckRunning) return false;
-            obdCheckRunning = true;
-            return true;
-        }
-    }
-
-    static void endObdCheck() {
-        synchronized (OBD_LOCK) { obdCheckRunning = false; }
-    }
+    static final ObdArbiter OBD = new ObdArbiter();
 
     private Status() {}
 }

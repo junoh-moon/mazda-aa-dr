@@ -8,9 +8,12 @@ import java.util.Locale;
  * opens the adapter, runs ElmController as a 0x079 monitor, decodes each frame (Can079), measures
  * loss (ObdLossMeter) and turns samples into v1 windows (ObdIntegrator) for the sink. Reconnects with
  * backoff MIN..MAX ms (doubling; reset after a run that delivered frames). After MAX_CONNECT_FAILURES
- * consecutive failed connects (an absent or busy adapter) the link gives up for its lifetime, which
- * is one CMU session (SenderService makes a new link per session), so an unplugged adapter is not
- * paged over Bluetooth for the whole drive. Nothing is ever written to the adapter except
+ * consecutive failed connects (an unplugged adapter, or one held by another app such as Car Scanner)
+ * the link gives up fast retries and only tries once every GIVEUP_RETRY_MS (5 minutes) for the rest of
+ * its lifetime (one CMU session; SenderService makes a new link per session), so an unplugged adapter
+ * is not paged continuously, yet an adapter that becomes free later in a long drive is picked up again
+ * (a successful connect ends the slow mode). Times are taken from the injected clock. Nothing is ever
+ * written to the adapter except
  * ElmController's AT commands and its stop character.
  */
 public final class ObdLink {
@@ -26,6 +29,8 @@ public final class ObdLink {
     private final Sink sink;
     /** Consecutive connect failures after which the link stops until the next CMU session. */
     public static final int MAX_CONNECT_FAILURES = 5;
+    /** After the give-up: one connect attempt per this many ms (injected clock). */
+    public static final long GIVEUP_RETRY_MS = 300_000L;
     private final ElmController.Timing timing;
     private final long minBackoffMs, maxBackoffMs;
     private final int maxConnectFailures;
@@ -36,8 +41,8 @@ public final class ObdLink {
     private volatile ElmController current;
     private Thread thread;
     private volatile String state = "꺼짐";
-    public volatile long connects, connectFailures, runs;
-    /** True after the link gave up connecting (MAX_CONNECT_FAILURES in a row). */
+    public volatile long connects, connectFailures, runs, slowRetries;
+    /** True while the link is in its slow mode after MAX_CONNECT_FAILURES failed connects in a row. */
     public volatile boolean gaveUp;
     private final long[] decodeStatus = new long[Can079.Status.values().length];
     private long qfNot3;
@@ -112,10 +117,14 @@ public final class ObdLink {
                 connectFailures++;
                 failuresInRow++;
                 if (failuresInRow >= maxConnectFailures) {
+                    if (!gaveUp) sink.event("obd_connect_giveup failures=" + failuresInRow + " retry_every_ms=" + GIVEUP_RETRY_MS + " " + e.getMessage());
+                    else sink.event("obd_connect_slow_retry_failed n=" + slowRetries + " " + e.getMessage());
                     gaveUp = true;
-                    sink.event("obd_connect_giveup failures=" + failuresInRow + " " + e.getMessage());
-                    state = "OBD 연결 포기 · 다음 CMU 연결 때 다시 시도";
-                    return;
+                    state = "OBD 연결 안 됨 · " + GIVEUP_RETRY_MS / 60_000L + "분마다 다시 시도";
+                    if (!sleepUntil(clock.nanos() + GIVEUP_RETRY_MS * 1_000_000L)) break;
+                    slowRetries++;
+                    sink.event("obd_connect_slow_retry n=" + slowRetries);
+                    continue;
                 }
                 sink.event("obd_connect_failed n=" + failuresInRow + " next_ms=" + backoff + " " + e.getMessage());
                 state = "OBD 재시도 대기 " + backoff / 1000 + "초";
@@ -124,6 +133,7 @@ public final class ObdLink {
                 continue;
             }
             failuresInRow = 0;
+            gaveUp = false;
             connects++;
             runs++;
             long framesBefore;
@@ -175,6 +185,16 @@ public final class ObdLink {
         if (w != null) sink.window(w);
     }
 
+    /** Waits until the injected clock reaches untilNs (checked at least every 500 ms); false when stopped. */
+    private boolean sleepUntil(long untilNs) {
+        while (running) {
+            long leftMs = (untilNs - clock.nanos()) / 1_000_000L;
+            if (leftMs <= 0) return true;
+            if (!sleep(Math.min(leftMs, 500))) return false;
+        }
+        return false;
+    }
+
     private boolean sleep(long ms) {
         try { Thread.sleep(ms); return running; }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
@@ -196,4 +216,5 @@ public final class ObdLink {
     public synchronized String verdict(long endNs) { return meter.verdict(endNs); }
     public synchronized double wallCoverage(long endNs) { return meter.wallCoverage(endNs); }
     public synchronized long restarts() { return meter.restarts(); }
+    public synchronized java.util.List<String> notGoodReasons(long endNs) { return meter.notGoodReasons(endNs); }
 }

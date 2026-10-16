@@ -17,7 +17,7 @@ java -cp "$imu_tmp/classes" me.sixtyfive.mx5imu.core.CoreTests "$imu_golden" "$i
 # Stage 2 OBD yaw source (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md): decode vectors from the
 # independent Python decoder, fake-ELM327 controller tests, and the Python check of the Java frames.
 python3 "$imu_project/tests/make_obd_vectors.py" --check
-java -cp "$imu_tmp/classes" me.sixtyfive.mx5imu.core.ObdTests "$imu_project/tests/obd_079_vectors.json" "$imu_tmp/obd.bin"
+java -cp "$imu_tmp/classes" me.sixtyfive.mx5imu.core.ObdTests "$imu_project/tests/obd_079_vectors.json" "$imu_tmp/obd.bin" "$imu_repo/docs/OBD_YAW_CHECK_KO.md"
 (cd "$imu_project/tests" && python3 make_obd_vectors.py stream "$imu_tmp/obd.bin")
 python3 "$imu_project/tests/e2e_check.py" pings "$imu_tmp/pings.bin" "$imu_tmp/pings.json"
 java -cp "$imu_tmp/classes" me.sixtyfive.mx5imu.core.E2EDump "$imu_tmp/pings.bin" "$imu_tmp/phone.bin" "$imu_tmp/samples.csv"

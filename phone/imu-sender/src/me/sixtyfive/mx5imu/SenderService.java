@@ -382,6 +382,9 @@ public final class SenderService extends Service implements SensorEventListener,
         }
     }
 
+    /** The deferred start of this session's OBD link while the parked check holds the adapter (or null). */
+    private volatile Runnable obdAfterCheck;
+
     private void startObd() {
         String obdAddr = Prefs.obdAddress(this);
         if (obdAddr == null) { selector = new SourceSelector(false); return; }
@@ -398,9 +401,21 @@ public final class SenderService extends Service implements SensorEventListener,
             }
             @Override public void event(String line) { log.event(line); }
         }, ElmController.Timing.DEFAULT, 2000, 30000);
-        synchronized (Status.OBD_LOCK) {  // atomic with the parked check's tryStartObdCheck()
-            if (Status.obdCheckRunning) { selector = new SourceSelector(false); log.event("obd_skip check_running"); return; }
-            Status.obdServiceRunning = true;
+        final Session session = active;
+        final Runnable later = () -> main.post(() -> {
+            // Only for the session that asked, and only while it is still the active one.
+            if (link == null || session == null || active != session || obd != null) return;
+            log.event("obd_start_after_check");
+            startObd();
+        });
+        synchronized (Status.OBD) {  // atomic with the parked check's tryStartCheck()
+            if (!Status.OBD.startServiceOrDefer(later)) {
+                selector = new SourceSelector(false);
+                obdAfterCheck = later;
+                log.event("obd_deferred check_running (starts when the check ends)");
+                return;
+            }
+            obdAfterCheck = null;
             obd = o;
         }
         log.event("obd_start device=" + obdAddr);
@@ -408,15 +423,18 @@ public final class SenderService extends Service implements SensorEventListener,
     }
 
     private void stopObd() {
+        synchronized (Status.OBD) {  // a start deferred for this session must not run after it ended
+            if (obdAfterCheck != null) { Status.OBD.cancelDeferred(); obdAfterCheck = null; }
+        }
         final ObdLink o = obd;
         obd = null;
         if (o == null) return;
         Thread t = new Thread(() -> {
             o.stop();
             log.event("obd_stop | " + o.summary());
-            synchronized (Status.OBD_LOCK) {
+            synchronized (Status.OBD) {
                 if (obd == null) {  // a new connection may already run its own link
-                    Status.obdServiceRunning = false;
+                    Status.OBD.serviceStopped();
                     Status.obdState = "";
                 }
             }

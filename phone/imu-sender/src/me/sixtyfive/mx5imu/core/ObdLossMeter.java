@@ -1,5 +1,7 @@
 package me.sixtyfive.mx5imu.core;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -173,11 +175,53 @@ public final class ObdLossMeter {
      * chains with 1 s holes is MARGINAL, not GOOD).
      */
     public String verdict(long endNs) {
+        return verdictOf(frames, endNs - firstEverNs, wallCoverage(endNs), lossPercent(), stalls500ms, restarts());
+    }
+
+    /** The reasons why verdict(endNs) is not GOOD (owner wording; empty when GOOD or NONE). */
+    public List<String> notGoodReasons(long endNs) {
+        if (frames == 0) return new ArrayList<>();
+        return notGoodReasons(endNs - firstEverNs, wallCoverage(endNs), lossPercent(), stalls500ms, restarts());
+    }
+
+    public static final double GOOD_MAX_LOSS_PERCENT = 5;
+
+    /**
+     * The verdict rule on its inputs (docs/OBD_YAW_CHECK_KO.md lists boundary cases of exactly this
+     * function, checked by ObdTests): NONE without frames; GOOD when every GOOD condition holds;
+     * otherwise MARGINAL when the wall-clock coverage is >= 60 % (whatever the reasons), else BAD.
+     */
+    public static String verdictOf(long frames, long spanNs, double coverage, double lossPercent, long stalls500, long restarts) {
         if (frames == 0) return "NONE";
-        double cov = wallCoverage(endNs);
-        if (endNs - firstEverNs >= GOOD_MIN_SPAN_NS && cov >= GOOD_COVERAGE && lossPercent() <= 5 && stalls500ms == 0
-                && restarts() <= GOOD_MAX_RESTARTS) return "GOOD";
-        if (cov >= MARGINAL_COVERAGE) return "MARGINAL";
+        if (notGoodReasons(spanNs, coverage, lossPercent, stalls500, restarts).isEmpty()) return "GOOD";
+        if (coverage >= MARGINAL_COVERAGE) return "MARGINAL";
         return "BAD";
+    }
+
+    /** Each GOOD condition that fails, in owner wording (the result line's '사유'). */
+    public static List<String> notGoodReasons(long spanNs, double coverage, double lossPercent, long stalls500, long restarts) {
+        List<String> r = new ArrayList<>();
+        if (coverage < GOOD_COVERAGE) r.add("덮개율 90% 미만");
+        if (restarts > GOOD_MAX_RESTARTS) r.add("재시작 2회 이상");
+        if (!(lossPercent <= GOOD_MAX_LOSS_PERCENT)) r.add("손실 5% 초과");
+        if (stalls500 != 0) r.add("0.5초 넘는 끊김");
+        if (spanNs < GOOD_MIN_SPAN_NS) r.add("측정 30초 미만");
+        return r;
+    }
+
+    /** Coverage as shown to the owner: at most 100 % (the count includes the first frame). */
+    public static double displayCoverage(double coverage) { return Math.min(1.0, coverage); }
+
+    /** The owner word for a verdict (app screen and docs/OBD_YAW_CHECK_KO.md). */
+    public static String verdictWord(String verdict) {
+        return "GOOD".equals(verdict) ? "좋음" : "MARGINAL".equals(verdict) ? "보통(누락 있음)"
+                : "BAD".equals(verdict) ? "나쁨(누락 많음)" : "0x079 수신 없음";
+    }
+
+    /** The parked check's result line (MainActivity; the example in docs/OBD_YAW_CHECK_KO.md is checked against it). */
+    public static String resultLine(String verdict, double coverage, long restarts, double lossPercent, long frames, List<String> reasons) {
+        String line = String.format(Locale.ROOT, "점검 결과: %s · 덮개율 %.0f%%(기준 100) · 재시작 %d회 · 손실 %.1f%% · 받은 프레임 %d",
+                verdictWord(verdict), 100 * displayCoverage(coverage), restarts, lossPercent, frames);
+        return reasons.isEmpty() ? line : line + " · 사유: " + String.join(", ", reasons);
     }
 }
