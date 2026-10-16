@@ -13,7 +13,10 @@ test -r "$imu_android"
 javac --release 11 -Xlint:all,-deprecation -Werror -cp "$imu_android" -d "$imu_out/classes" "$imu_project"/src/me/sixtyfive/mx5imu/*.java "$imu_project"/src/me/sixtyfive/mx5imu/core/*.java
 jar cf "$imu_out/classes.jar" -C "$imu_out/classes" .
 "$imu_tools/d8" --lib "$imu_android" --min-api 30 --output "$imu_out/dex" "$imu_out/classes.jar"
-"$imu_tools/aapt2" link -I "$imu_android" --manifest "$imu_project/AndroidManifest.xml" -o "$imu_out/base.apk"
+# the screen shows versionName; append the repository commit (MX5IMU_COMMIT, e.g. git rev-parse --short HEAD) so builds can be told apart
+imu_version=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$imu_project/AndroidManifest.xml")
+imu_commit=${MX5IMU_COMMIT:-unknown}
+"$imu_tools/aapt2" link -I "$imu_android" --manifest "$imu_project/AndroidManifest.xml" --version-name "$imu_version+$imu_commit" -o "$imu_out/base.apk"
 python3 - "$imu_out" <<'PY'
 from pathlib import Path
 import sys,zipfile

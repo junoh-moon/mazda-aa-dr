@@ -53,6 +53,10 @@ public final class MainActivity extends Activity {
         title.setText("MX5DR IMU 송신기");
         title.setTextSize(25);
         layout.addView(title);
+        TextView version = new TextView(this);
+        version.setText(versionText());
+        version.setTextSize(13);
+        layout.addView(version);
         TextView about = new TextView(this);
         about.setText("이 앱은 휴대폰 자이로의 회전량을 Bluetooth로 차량 CMU에 보냅니다. "
                 + "현재 단계에서는 CMU가 기록만 하며 내비게이션 위치나 차량 동작은 바꾸지 않습니다.\n"
@@ -325,5 +329,15 @@ public final class MainActivity extends Activity {
                 startActivity(Intent.createChooser(send, "진단 기록 내보내기"));
             });
         }, "imu-export").start();
+    }
+
+    // versionName carries the build commit (build.sh appends it), so two APKs with the same code can be told apart
+    private String versionText() {
+        try {
+            android.content.pm.PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return "버전 " + info.versionName + " (코드 " + info.getLongVersionCode() + ")";
+        } catch (Exception e) {
+            return "버전 확인 불가";
+        }
     }
 }
