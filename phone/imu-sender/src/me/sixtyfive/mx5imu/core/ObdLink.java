@@ -95,6 +95,12 @@ public final class ObdLink {
 
     public String state() { return state; }
 
+    /** Shown by the parked check (60 s) instead of the slow-mode text: the check never waits 5 minutes. */
+    public static final String CHECK_GIVEUP_STATE = "OBD 연결 안 됨 · 전원과 Car Scanner 사용 여부를 확인하십시오";
+
+    /** state() for the parked check: in the slow mode, CHECK_GIVEUP_STATE (no "every 5 minutes" promise). */
+    public String checkState() { return gaveUp ? CHECK_GIVEUP_STATE : state; }
+
     public static final long PREDECESSOR_WAIT_MS = 4000;
 
     private void loop() {

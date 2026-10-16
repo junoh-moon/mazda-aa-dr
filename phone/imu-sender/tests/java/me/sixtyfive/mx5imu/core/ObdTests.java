@@ -60,13 +60,19 @@ public final class ObdTests {
         controllerDoublePrompt();
         controllerAtmaAlwaysRefused();
         controllerStopSendsX();
-        controllerLateStopPrompt();
-        controllerLateStopPromptAtInit();
+        controllerLateStopPrompt(false);
+        controllerLateStopPrompt(true);
+        controllerLateStopPromptAtInit(false);
+        controllerLateStopPromptAtInit(true);
         controllerEchoPersists();
         controllerNoAtmaAfterStop();
+        controllerStopInsideAtmaWrite();
+        controllerStopAfterAtmaWrite();
         linkConnectGiveUp();
         linkSlowRetryAfterGiveUp();
         arbiterDefersSessionStart();
+        arbiterDeferredRunsOnce();
+        arbiterAbortedCheck();
         linkWaitsForPredecessor();
         linkAmbiguousGapFlag();
         observedVectors(vec);
@@ -346,7 +352,8 @@ public final class ObdTests {
      * A scripted ELM327 v1.5 behind a Transport. Echo is on until ATE0. Every complete command gets a
      * response and a prompt; ATMA starts the monitor script, which emits lines with delays. Any byte
      * received while monitoring stops it (prompt); retainStop keeps that byte in the command buffer
-     * (some clones), otherwise it is discarded.
+     * (some clones), otherwise it is discarded; stoppedLine prints STOPPED before that prompt (as the
+     * ELM327 data sheet describes for an interrupted monitor).
      */
     static final class FakeElm implements Transport {
         /** Adapter-to-phone chunks with their delivery time (latencyMs: a congested Bluetooth link). */
@@ -359,7 +366,7 @@ public final class ObdTests {
         final ByteArrayOutputStream fromPhone = new ByteArrayOutputStream();
         final List<String> commands = new CopyOnWriteArrayList<>();
         final Set<String> refuse = new HashSet<>();
-        volatile boolean closed, echo = true, monitoring, retainStop, startMonitoring;
+        volatile boolean closed, echo = true, monitoring, retainStop, startMonitoring, stoppedLine;
         /** Settings that an adapter reset (ATZ, 'RESET' script line) puts back to the defaults. */
         volatile boolean headers, filterSet, keepProtocol = true, doublePromptAfterAtz, blockWrites, leftoverOnAtz;
         volatile String protocol = "AUTO";
@@ -417,7 +424,7 @@ public final class ObdTests {
         private synchronized void onByte(char c) {
             if (monitoring) {
                 monitoring = false;
-                send("\r>");
+                send(stoppedLine ? "\rSTOPPED\r\r>" : "\r>");
                 if (retainStop) cmd.append(c);
                 return;
             }
@@ -777,7 +784,8 @@ public final class ObdTests {
      * stop (the monitor goes on), not as an adapter reset (full re-init, which under the same latency
      * used to fail with 'init ATE0' and end the run).
      */
-    static void controllerLateStopPrompt() throws Exception {
+    static void controllerLateStopPrompt(boolean stoppedLine) throws Exception {
+        String v = stoppedLine ? " [STOPPED]" : "";
         List<String> script = new ArrayList<>(lines079(20, 0));
         script.add("SLEEP 600");                   // stall > FAST.stallMs 250
         script.addAll(lines079(40, 4));
@@ -785,21 +793,22 @@ public final class ObdTests {
         script.addAll(lines079(40, 12));
         FakeElm elm = new FakeElm(script, 2);
         elm.latencyMs = 400;
+        elm.stoppedLine = stoppedLine;
         Recorder r = new Recorder();
         ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
         List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
         Thread t = runAsync(c, err);
-        check(waitFor(() -> r.frames.size() >= 100, 15000), "late stop prompt (400 ms > stopMs): all 100 frames arrive (" + r.frames.size() + ")");
+        check(waitFor(() -> r.frames.size() >= 100, 15000), "late stop prompt (400 ms > stopMs)" + v + ": all 100 frames arrive (" + r.frames.size() + ")");
         boolean alive = t.isAlive();
         String errBefore = err.toString();
         c.stop();
         t.join(3000);
-        check(alive && errBefore.equals("[]"), "late stop prompt: the run kept the connection: " + errBefore);
-        check(!r.events.toString().contains("init ATE0"), "late stop prompt: no 'init ATE0' failure: " + r.events);
-        eq(c.adapterResets, 0, "late stop prompt: not counted as an adapter reset");
-        eq(c.inits, 1, "late stop prompt: no full re-init");
-        check(c.lateStopPrompts >= 1 && r.events.toString().contains("elm_late_stop_prompt"), "late stop prompt logged: " + c.lateStopPrompts + " " + r.events);
-        check(onlySafeWrites(c.written()), "late stop prompt: only AT commands and 'X'");
+        check(alive && errBefore.equals("[]"), "late stop prompt" + v + ": the run kept the connection: " + errBefore);
+        check(!r.events.toString().contains("init ATE0"), "late stop prompt" + v + ": no 'init ATE0' failure: " + r.events);
+        eq(c.adapterResets, 0, "late stop prompt" + v + ": not counted as an adapter reset");
+        eq(c.inits, 1, "late stop prompt" + v + ": no full re-init");
+        check(c.lateStopPrompts >= 1 && r.events.toString().contains("elm_late_stop_prompt"), "late stop prompt" + v + " logged: " + c.lateStopPrompts + " " + r.events);
+        check(onlySafeWrites(c.written()), "late stop prompt" + v + ": only AT commands and 'X'");
         // A prompt that is NOT within 2 x stopMs of our 'X' is still an adapter reset (F1 unchanged):
         // covered by controllerAdapterReset ('PROMPT' script line, no 'X' before it).
     }
@@ -809,21 +818,24 @@ public final class ObdTests {
      * running) and the latency exceeds stopMs, so the init's 'X' is answered only after ATZ was sent.
      * That bare prompt must not be taken as the ATZ answer (it shifted every later answer by one).
      */
-    static void controllerLateStopPromptAtInit() throws Exception {
+    static void controllerLateStopPromptAtInit(boolean stoppedLine) throws Exception {
+        // Review 3 F1: with stoppedLine the late answer is [STOPPED, prompt]; STOPPED is not ATZ's answer.
+        String v = stoppedLine ? " [STOPPED]" : "";
         FakeElm elm = new FakeElm(lines079(40, 0), 2);
         elm.latencyMs = 400;
         elm.monitoring = true;
+        elm.stoppedLine = stoppedLine;
         Recorder r = new Recorder();
         ElmController c = new ElmController(elm, Clock.SYSTEM, r, 0x079, FAST);
         List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
         Thread t = runAsync(c, err);
-        check(waitFor(() -> r.frames.size() >= 40, 10000), "late prompt at init: init completes and frames flow (" + r.frames.size() + ") " + err + " " + r.events);
+        check(waitFor(() -> r.frames.size() >= 40, 10000), "late prompt at init" + v + ": init completes and frames flow (" + r.frames.size() + ") " + err + " " + r.events);
         c.stop();
         t.join(3000);
-        check(c.version.contains("ELM327"), "late prompt at init: the ATZ answer is the banner, not the bare prompt: '" + c.version + "'");
-        check(c.atzBarePrompts >= 1, "late prompt at init: the bare prompt was recognised: " + c.atzBarePrompts);
-        eq(c.inits, 1, "late prompt at init: one init");
-        check(c.protocolAfterReset.equals("AUTO"), "late prompt at init: ATDP got its own answer (AUTO before any ATSP6), not the banner: " + c.protocolAfterReset);
+        check(c.version.contains("ELM327"), "late prompt at init" + v + ": the ATZ answer is the banner, not the bare prompt: '" + c.version + "'");
+        check(c.atzBarePrompts >= 1, "late prompt at init" + v + ": the bare prompt was recognised: " + c.atzBarePrompts);
+        eq(c.inits, 1, "late prompt at init" + v + ": one init");
+        check(c.protocolAfterReset.equals("AUTO"), "late prompt at init" + v + ": ATDP got its own answer (AUTO before any ATSP6), not the banner: " + c.protocolAfterReset);
     }
 
     /**
@@ -889,6 +901,131 @@ public final class ObdTests {
         eq(c.writtenTotal, writtenAtStop[0], "stop inside restart: no ATMA (nothing) written after stop(): " + c.written());
     }
 
+    /** Whether t is BLOCKED on lock's monitor (lock name as the JVM reports it). */
+    static boolean blockedOn(Thread t, Object lock) {
+        if (t.getState() != Thread.State.BLOCKED) return false;
+        java.lang.management.ThreadInfo i = java.lang.management.ManagementFactory.getThreadMXBean().getThreadInfo(t.getId());
+        return i != null && (lock.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(lock))).equals(i.getLockName());
+    }
+
+    static boolean onStack(String method) {
+        for (StackTraceElement f : Thread.currentThread().getStackTrace()) {
+            if (f.getClassName().endsWith("ElmController") && f.getMethodName().equals(method)) return true;
+        }
+        return false;
+    }
+
+    /** The writes after the first `since` of all writes (writtenTotal counts every write). */
+    static List<String> writtenSince(ElmController c, long since) {
+        List<String> w = c.written();
+        long after = c.writtenTotal - since;
+        return after <= 0 ? new ArrayList<>() : new ArrayList<>(w.subList((int) Math.max(0, w.size() - after), w.size()));
+    }
+
+    /**
+     * Review 3 F2(a): stop() lands after the controller thread decided to write the restart's ATMA but
+     * before the write itself. Forced without sleeps: from inside restart() (clock hook) a helper takes
+     * the controller's write lock, waits until the controller thread is BLOCKED on it, then calls
+     * stop(). The stopped check runs under that lock, so the ATMA is refused; the only write allowed
+     * after stop() is stop()'s own 'X'.
+     */
+    static void controllerStopInsideAtmaWrite() throws Exception {
+        List<String> script = new ArrayList<>(lines079(20, 0));
+        script.add("BUFFER FULL");
+        script.addAll(lines079(20, 4));
+        FakeElm elm = new FakeElm(script, 2);
+        final ElmController[] holder = new ElmController[1];
+        final long[] writtenAtStop = {-1};
+        final List<String> problems = new CopyOnWriteArrayList<>();
+        final java.util.concurrent.atomic.AtomicBoolean armed = new java.util.concurrent.atomic.AtomicBoolean();
+        final Thread[] locker = new Thread[1];
+        Clock clk = () -> {
+            if (armed.get() && "elm-test".equals(Thread.currentThread().getName()) && onStack("restart") && armed.compareAndSet(true, false)) {
+                final Thread ctl = Thread.currentThread();
+                final java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
+                locker[0] = new Thread(() -> {
+                    synchronized (holder[0]) {
+                        locked.countDown();
+                        long end = System.nanoTime() + 5_000_000_000L;
+                        while (!blockedOn(ctl, holder[0]) && System.nanoTime() < end) Thread.onSpinWait();
+                        if (!blockedOn(ctl, holder[0])) problems.add("controller not blocked on the write lock: " + ctl.getState());
+                        holder[0].stop();
+                        writtenAtStop[0] = holder[0].writtenTotal;
+                    }
+                }, "locker");
+                locker[0].start();
+                try { locked.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            }
+            return System.nanoTime();
+        };
+        ElmController.Listener l = new ElmController.Listener() {
+            @Override public void frame(ElmLineParser.Event e) {}
+            @Override public void monitorStarted(int count, String why) {}
+            @Override public void event(String line) { if (line.equals("elm_buffer_full")) armed.set(true); }
+        };
+        ElmController c = new ElmController(elm, clk, l, 0x079, FAST);
+        holder[0] = c;
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        t.join(5000);
+        if (locker[0] != null) locker[0].join(2000);
+        check(!t.isAlive(), "stop inside the ATMA write: the run ended");
+        check(writtenAtStop[0] > 0 && problems.isEmpty(), "stop inside the ATMA write: stop() forced while the ATMA write waited for the lock " + problems);
+        List<String> after = writtenSince(c, writtenAtStop[0]);
+        boolean onlyX = true;
+        for (String w : after) if (!w.equals("X")) onlyX = false;
+        check(onlyX, "stop inside the ATMA write: nothing but stop()'s 'X' written after stop(): " + after + " all " + c.written());
+    }
+
+    /**
+     * Review 3 F2(b): stop() lands right after the ATMA left but before startMonitor() returned (forced
+     * without sleeps: the transport calls stop() from another thread when it sees "ATMA\r" and waits
+     * until stop() has decided about its 'X'). monitorActive is raised before the ATMA write, so stop()
+     * sends its 'X' and the adapter is not left monitoring.
+     */
+    static void controllerStopAfterAtmaWrite() throws Exception {
+        final FakeElm elm = new FakeElm(lines079(400, 0), 5);
+        final ElmController[] holder = new ElmController[1];
+        final java.util.concurrent.atomic.AtomicBoolean fired = new java.util.concurrent.atomic.AtomicBoolean();
+        final Thread[] stopper = new Thread[1];
+        final List<String> problems = new CopyOnWriteArrayList<>();
+        final OutputStream hooked = new OutputStream() {
+            @Override public void write(int b) throws IOException { write(new byte[] {(byte) b}, 0, 1); }
+            @Override public void write(byte[] b, int off, int len) throws IOException {
+                elm.out.write(b, off, len);
+                if (new String(b, off, len, StandardCharsets.US_ASCII).equals("ATMA\r") && fired.compareAndSet(false, true)) {
+                    Thread s = new Thread(() -> holder[0].stop(), "stopper");
+                    stopper[0] = s;
+                    s.start();
+                    long end = System.nanoTime() + 5_000_000_000L;
+                    Thread.State st = s.getState();
+                    while (st != Thread.State.TIMED_WAITING && st != Thread.State.TERMINATED && System.nanoTime() < end) {
+                        Thread.onSpinWait();
+                        st = s.getState();
+                    }
+                    if (st != Thread.State.TIMED_WAITING && st != Thread.State.TERMINATED) problems.add("stopper state " + st);
+                }
+            }
+        };
+        Transport tr = new Transport() {
+            @Override public InputStream input() { return elm.in; }
+            @Override public OutputStream output() { return hooked; }
+            @Override public void close() { elm.close(); }
+        };
+        ElmController c = new ElmController(tr, Clock.SYSTEM, new Recorder(), 0x079, FAST);
+        holder[0] = c;
+        List<Throwable> err = Collections.synchronizedList(new ArrayList<>());
+        Thread t = runAsync(c, err);
+        t.join(5000);
+        check(waitFor(() -> stopper[0] != null, 3000), "stop after the ATMA write: stop() was forced");
+        if (stopper[0] != null) stopper[0].join(2000);
+        check(!t.isAlive() && problems.isEmpty(), "stop after the ATMA write: the run ended " + problems);
+        List<String> w = c.written();
+        int atma = w.lastIndexOf("ATMA\r");
+        check(atma >= 0 && w.subList(atma, w.size()).contains("X"), "stop after the ATMA write: stop()'s 'X' follows the ATMA: " + w);
+        check(!elm.monitoring, "stop after the ATMA write: the adapter left monitoring");
+    }
+
     /**
      * Review 2 R5: after the give-up the link keeps one slow attempt every GIVEUP_RETRY_MS (5 minutes,
      * injected clock) instead of never trying again in that session; a free adapter is picked up again.
@@ -919,6 +1056,9 @@ public final class ObdTests {
         now.addAndGet((ObdLink.GIVEUP_RETRY_MS - 1000) * 1_000_000L);
         Thread.sleep(1200);
         eq(opens.get(), ObdLink.MAX_CONNECT_FAILURES, "slow retry: no attempt before 5 minutes");
+        // Review 3 F6: the parked check (60 s) does not show the slow mode's "every 5 minutes" text.
+        check(link.state().contains("분마다") && link.checkState().equals(ObdLink.CHECK_GIVEUP_STATE)
+                && !link.checkState().contains("분"), "slow mode: the check shows its own text: " + link.state() + " / " + link.checkState());
         now.addAndGet(1000 * 1_000_000L);
         check(waitFor(() -> opens.get() == ObdLink.MAX_CONNECT_FAILURES + 1, 2000), "slow retry: one attempt at 5 minutes (" + opens.get() + ")");
         Thread.sleep(1200);
@@ -927,6 +1067,8 @@ public final class ObdTests {
         free.set(true);
         now.addAndGet(ObdLink.GIVEUP_RETRY_MS * 1_000_000L);
         check(waitFor(() -> link.connects >= 1, 2000), "slow retry: a freed adapter is connected again (" + link.connects + ")");
+        // Review 3 F3: a successful connect ends the slow mode (gaveUp means "in the slow mode").
+        check(!link.gaveUp && !link.checkState().equals(ObdLink.CHECK_GIVEUP_STATE), "slow retry: the connect ended the slow mode (gaveUp false)");
         link.stop();
         check(link.slowRetries >= 2, "slow retries counted: " + link.slowRetries);
     }
@@ -954,6 +1096,39 @@ public final class ObdTests {
         a.endCheck();
         eq(late.get(), 0, "arbiter: a cancelled deferred start does not run");
         check(!a.serviceRunning() && !a.checkRunning(), "arbiter: idle at the end");
+    }
+
+    /**
+     * Review 3 F3: a pure counting executor (it does not call back into the arbiter, unlike the
+     * SenderService path) and endCheck() twice: the deferred start runs exactly once.
+     */
+    static void arbiterDeferredRunsOnce() {
+        ObdArbiter a = new ObdArbiter();
+        check(a.tryStartCheck(), "arbiter once: check started");
+        AtomicInteger runs = new AtomicInteger();
+        check(!a.startServiceOrDefer(runs::incrementAndGet), "arbiter once: start deferred");
+        a.endCheck();
+        a.endCheck();
+        eq(runs.get(), 1, "arbiter once: the deferred start ran exactly once over two endCheck() calls");
+        check(!a.hasDeferred() && !a.checkRunning(), "arbiter once: nothing pending");
+    }
+
+    /**
+     * Review 3 F4 (contract only; MainActivity itself is Android code, compile-checked): a check that
+     * ends with an exception and calls endCheck() in finally still frees the arbiter and runs the
+     * deferred session start once.
+     */
+    static void arbiterAbortedCheck() {
+        ObdArbiter a = new ObdArbiter();
+        check(a.tryStartCheck(), "aborted check: started");
+        AtomicInteger runs = new AtomicInteger();
+        a.startServiceOrDefer(runs::incrementAndGet);
+        boolean thrown = false;
+        try {
+            try { throw new IllegalStateException("check failed"); } finally { a.endCheck(); }
+        } catch (IllegalStateException expected) { thrown = true; }
+        check(thrown && runs.get() == 1, "aborted check: the deferred start still ran once: " + runs.get());
+        check(!a.checkRunning() && a.tryStartCheck(), "aborted check: the arbiter is free again");
     }
 
     /**

@@ -205,28 +205,36 @@ public final class MainActivity extends Activity {
                 @Override public void window(Window w) {}
                 @Override public void event(String line) { log.event("check " + line); }
             }, ElmController.Timing.DEFAULT, 2000, 4000);
-            log.event("obd_check_start device=" + addr);
-            link.start();
-            long end = SenderService.CLOCK.nanos() + OBD_CHECK_MS * 1_000_000L;
-            while (SenderService.CLOCK.nanos() < end) {
-                long now = SenderService.CLOCK.nanos();
-                long left = (end - now) / 1_000_000_000L;
-                Status.obdCheck = String.format(Locale.ROOT, "점검 중 %d초 남음 · %s · 덮개율 %.0f%% · 재시작 %d회 · 손실 %.1f%%",
-                        left, link.state(), 100 * ObdLossMeter.displayCoverage(link.wallCoverage(now)), link.restarts(), link.lossPercent());
-                try { Thread.sleep(500); } catch (InterruptedException e) { break; }
+            try {
+                log.event("obd_check_start device=" + addr);
+                link.start();
+                long end = SenderService.CLOCK.nanos() + OBD_CHECK_MS * 1_000_000L;
+                while (SenderService.CLOCK.nanos() < end) {
+                    long now = SenderService.CLOCK.nanos();
+                    long left = (end - now) / 1_000_000_000L;
+                    Status.obdCheck = String.format(Locale.ROOT, "점검 중 %d초 남음 · %s · 덮개율 %.0f%% · 재시작 %d회 · 손실 %.1f%%",
+                            left, link.checkState(), 100 * ObdLossMeter.displayCoverage(link.wallCoverage(now)), link.restarts(), link.lossPercent());
+                    try { Thread.sleep(500); } catch (InterruptedException e) { break; }
+                }
+                long endNs = SenderService.CLOCK.nanos();
+                link.stop();
+                // Wall clock from the first frame to the end of the check: restart holes count as missing.
+                String verdict = link.verdict(endNs);
+                double coverage = link.wallCoverage(endNs);
+                log.event(String.format(Locale.ROOT, "obd_check_end verdict=%s wall_coverage=%.3f restarts=%d | %s",
+                        verdict, coverage, link.restarts(), link.summary()));
+                Status.obdCheck = ObdLossMeter.resultLine(verdict, coverage, link.restarts(), link.lossPercent(), link.frames(),
+                        link.notGoodReasons(endNs));
+            } catch (RuntimeException e) {
+                log.event("obd_check_failed " + e);
+                Status.obdCheck = "점검이 오류로 끝났습니다: " + e.getClass().getSimpleName();
+            } finally {
+                // Always release the adapter and the arbiter, even after an exception above: endCheck()
+                // runs a sender link start that a CMU (re)connection deferred while the check held it.
+                link.stop();
+                Status.OBD.endCheck();
+                ui.post(() -> { if (!isDestroyed()) obdCheck.setEnabled(true); });
             }
-            long endNs = SenderService.CLOCK.nanos();
-            link.stop();
-            // Wall clock from the first frame to the end of the check: restart holes count as missing.
-            String verdict = link.verdict(endNs);
-            double coverage = link.wallCoverage(endNs);
-            log.event(String.format(Locale.ROOT, "obd_check_end verdict=%s wall_coverage=%.3f restarts=%d | %s",
-                    verdict, coverage, link.restarts(), link.summary()));
-            Status.obdCheck = ObdLossMeter.resultLine(verdict, coverage, link.restarts(), link.lossPercent(), link.frames(),
-                    link.notGoodReasons(endNs));
-            // Runs a sender link start that a CMU (re)connection deferred while the check held the adapter.
-            Status.OBD.endCheck();
-            ui.post(() -> { if (!isDestroyed()) obdCheck.setEnabled(true); });
         }, "obd-check").start();
     }
 
