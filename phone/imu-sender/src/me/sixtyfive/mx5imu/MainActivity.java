@@ -315,13 +315,21 @@ public final class MainActivity extends Activity {
         final File out = LogProvider.exportFile(this);
         new Thread(() -> {
             String error = null;
+            String saved = null;
             try { new RollingLog(getFilesDir(), SenderService.CLOCK).exportTo(out); }
             catch (Exception e) { error = e.toString(); }
+            if (error == null) {
+                try { saved = saveToDownloads(out); }
+                catch (Exception e) { saved = "다운로드 폴더 저장 실패: " + e; }
+            }
             final String failed = error;
+            final String savedText = saved;
             ui.post(() -> {
                 if (isDestroyed()) return;
                 if (failed != null) { status.setText("진단 기록을 만들지 못했습니다: " + failed); return; }
-                Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain")
+                status.setText(savedText + "\n공유 창에서 앱을 고르지 않아도 파일 관리자의 '다운로드' 폴더에서 찾을 수 있습니다.");
+                // not text/plain: some uploader apps treat a text/plain share as a text snippet and send only the file path
+                Intent send = new Intent(Intent.ACTION_SEND).setType("application/octet-stream")
                         .putExtra(Intent.EXTRA_STREAM, LogProvider.uri())
                         .putExtra(Intent.EXTRA_SUBJECT, "MX5DR IMU 진단 기록")
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -329,6 +337,33 @@ public final class MainActivity extends Activity {
                 startActivity(Intent.createChooser(send, "진단 기록 내보내기"));
             });
         }, "imu-export").start();
+    }
+
+    /** Copies the exported log into the public Download folder (no permission needed for our own insert) and returns a message. */
+    private String saveToDownloads(File src) throws java.io.IOException {
+        String name = "mx5imu-log-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new java.util.Date()) + ".txt";
+        android.content.ContentValues v = new android.content.ContentValues();
+        v.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name);
+        v.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+        v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS);
+        v.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1);
+        Uri uri = getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+        if (uri == null) throw new java.io.IOException("insert failed");
+        long total = 0;
+        try (java.io.InputStream in = new java.io.FileInputStream(src);
+             java.io.OutputStream o = getContentResolver().openOutputStream(uri)) {
+            if (o == null) throw new java.io.IOException("no output stream");
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = in.read(buf)) > 0) { o.write(buf, 0, n); total += n; }
+        } catch (java.io.IOException e) {
+            getContentResolver().delete(uri, null, null);
+            throw e;
+        }
+        android.content.ContentValues done = new android.content.ContentValues();
+        done.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0);
+        getContentResolver().update(uri, done, null, null);
+        return String.format(Locale.US, "다운로드 폴더에 저장했습니다: %s (%d KB)", name, (total + 1023) / 1024);
     }
 
     // versionName carries the build commit (build.sh appends it), so two APKs with the same code can be told apart

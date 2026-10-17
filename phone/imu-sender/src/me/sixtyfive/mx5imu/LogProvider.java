@@ -35,7 +35,7 @@ public final class LogProvider extends ContentProvider {
         return ParcelFileDescriptor.open(resolve(uri), ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
-    @Override public String getType(Uri uri) { return "text/plain"; }
+    @Override public String getType(Uri uri) { return "application/octet-stream"; }
 
     @Override public Cursor query(Uri uri, String[] projection, String selection, String[] args, String sort) {
         File f;
