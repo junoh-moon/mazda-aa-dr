@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import select
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -85,6 +86,8 @@ class PhoneImuReceiverTests(unittest.TestCase):
         daemon = subprocess.Popen(['dbus-daemon', '--nofork', '--config-file', str(conf)],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(self.stop, daemon)
+        self.daemons = getattr(self, 'daemons', {})
+        self.daemons[name] = daemon
         deadline = time.monotonic() + 5
         while not bus.exists():
             self.assertLess(time.monotonic(), deadline, 'dbus-daemon did not start')
@@ -816,6 +819,135 @@ class PhoneImuReceiverTests(unittest.TestCase):
         self.finish()
         kinds = [json.loads(l)['kind'] for l in (self.root / 'logs/collector.0.jsonl').read_text().splitlines()]
         self.assertGreaterEqual(len([k for k in kinds if k.startswith('position_poll')]), 10, 'position polling unaffected')
+
+
+    # ---- a stuck HMI daemon (validation/BCA_HMI_BUS_FIX_REVIEW_FABLE_2026-10-17.md 1-A) ----
+    # The socket accepts but the peer never answers SASL ('silent'), or answers
+    # SASL and then never answers Hello ('auth_only'). Before the fix,
+    # dbus_bus_register() blocked the receiver thread (the PTY's only reader)
+    # without limit in SASL and for 25 s per Hello attempt.
+
+    class StuckBus:
+        """A unix socket in place of the HMI dbus-daemon. Records per connection
+        the accept time, the time BEGIN arrived (auth_only) and the EOF time."""
+        def __init__(self, path, kind):
+            self.kind, self.conns, self.path = kind, [], str(path)
+            self.srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.srv.bind(self.path)
+            self.srv.listen(64)
+            threading.Thread(target=self.accept_loop, daemon=True).start()
+
+        def accept_loop(self):
+            while True:
+                try:
+                    c, _ = self.srv.accept()
+                except OSError:
+                    return
+                rec = {'accept': time.monotonic(), 'begin': None, 'eof': None, 'sock': c}
+                self.conns.append(rec)
+                threading.Thread(target=self.serve, args=(rec,), daemon=True).start()
+
+        def serve(self, rec):
+            c, buf, authed = rec['sock'], b'', False
+            try:
+                while True:
+                    chunk = c.recv(4096)
+                    if not chunk:
+                        break
+                    if self.kind != 'auth_only' or authed:
+                        continue                      # silent: never a byte back
+                    buf += chunk
+                    while b'\r\n' in buf:
+                        line, buf = buf.split(b'\r\n', 1)
+                        line = line.lstrip(b'\0')
+                        if line.startswith(b'AUTH'):
+                            c.sendall(b'OK ' + b'0123456789abcdef' * 2 + b'\r\n')
+                        elif line.startswith(b'NEGOTIATE_UNIX_FD'):
+                            c.sendall(b'AGREE_UNIX_FD\r\n')
+                        elif line.startswith(b'BEGIN'):
+                            rec['begin'] = time.monotonic()
+                            authed = True              # Hello follows: never answered
+                            break
+                        else:
+                            c.sendall(b'ERROR\r\n')
+            except OSError:
+                pass
+            rec['eof'] = time.monotonic()
+
+        def close(self):
+            self.srv.close()
+            for rec in self.conns:
+                try:
+                    rec['sock'].close()
+                except OSError:
+                    pass
+
+    def pump(self, phone, seconds, seq, pings):
+        """The phone streams 50 Hz frames and answers PINGs for `seconds`;
+        appends PING arrival times. Phone.send fails if the receiver stops
+        reading for 2 s."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            phone.send(data_frame(seq[0], 0)); seq[0] += 1
+            before = phone.pings
+            phone.service()
+            if phone.pings > before:
+                pings.append(time.monotonic())
+            time.sleep(.02)
+
+    def stuck_hmi_daemon_case(self, kind, name, attempt_max_s):
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        master, path = self.new_pty(raw=True)
+        self.connect(master, path, via='poll')
+        phone, seq, pings = self.Phone(master, 0, []), [0], []
+        self.pump(phone, 6, seq, pings)
+        self.assertTrue(pings, 'PING before the hang')
+        # The HMI daemon dies and a stuck peer takes its socket path.
+        sock = self.root / 'hmibus'
+        self.stop(self.bca)
+        self.stop(self.daemons['hmibus'])
+        if sock.exists():
+            sock.unlink()
+        stuck = self.StuckBus(sock, kind)
+        self.addCleanup(stuck.close)
+        t_hang = time.monotonic()
+        pings = []
+        self.pump(phone, 32, seq, pings)
+        gaps = [b - a for a, b in zip([t_hang] + pings, pings + [time.monotonic()])]
+        attempts = [(r['accept'] - t_hang, (r['eof'] or time.monotonic()) - r['accept'], r['begin'])
+                    for r in list(stuck.conns)]
+        print(f'\n{kind}: PINGs at', [round(t - t_hang, 1) for t in pings], 'max gap %.2f s' % max(gaps),
+              'attempts (start s, duration s):', [(round(a, 1), round(d, 2)) for a, d, _ in attempts], flush=True)
+        self.assertGreaterEqual(len(attempts), 2, 'retries every 10 s')
+        for _, duration, begin in attempts:
+            self.assertLessEqual(duration, attempt_max_s, attempts)   # every attempt ends, the socket is closed
+            if kind == 'auth_only':
+                self.assertIsNotNone(begin, 'SASL completed, Hello sent')
+        self.assertLess(max(gaps), 7.5, ('the receiver kept reading and PINGing', gaps))
+        self.assertGreaterEqual(len(pings), 5)
+        rows = [r for r in self.rows('pimu_link') if r['ev'] == 'bus']
+        self.assertTrue(rows and rows[0]['name'] == name and rows[0]['why'] == 'unavailable', rows)
+        self.assertEqual(len(rows), 1, 'one row per distinct error name')
+        # A real daemon returns at the same path: the receiver reconnects and
+        # re-registers (matches and owner), so a new signal replaces the PTY.
+        stuck.close()
+        sock.unlink()
+        self.hmi_address = self.start_daemon('hmibus')
+        self.bca = self.spawn_bca()
+        master2, path2 = self.new_pty(raw=True)
+        deadline = time.monotonic() + 25
+        while not [r for r in self.rows('pimu_link') if r['ev'] == 'replace' and r['path'] == path2]:
+            self.assertLess(time.monotonic(), deadline, self.rows()[-8:])
+            self.bca_cmd(self.bca, f'signal 15 3 3 0 {path2}')
+            self.pump(phone, 1, seq, [])
+        self.assertTrue(self.ping_seen(master2, 6))
+
+    def test_silent_hmi_socket_times_out_auth_and_keeps_reading(self):
+        self.stuck_hmi_daemon_case('silent', 'mx5dr.AuthTimeout', 2.6)
+
+    def test_hello_never_answered_times_out_and_keeps_reading(self):
+        self.stuck_hmi_daemon_case('auth_only', 'org.freedesktop.DBus.Error.NoReply', 1.6)
 
 
 ARGS = ['-interface', 'dbus', '-configFilePath', XML]

@@ -448,8 +448,10 @@ private:
     // carries only BCA traffic (GetNameOwner/NameOwnerChanged for com.jci.bca,
     // ConnectionStatusResp, QueryConnectStatus); the collector's position
     // polling keeps its own service-bus connection in the main thread. An
-    // absent or refusing socket fails closed: no PTY, a retry every 10 s, a
-    // pimu_link bus row per distinct error name (then every 10th attempt).
+    // absent, refusing or silent socket fails closed: no PTY, a retry every
+    // 10 s, a pimu_link bus row per distinct error name (then every 10th
+    // attempt). A connect attempt is bounded (bus_register: 2 s handshake +
+    // 1 s Hello, then refresh_owner 350 ms).
     void bus_close() { if (conn_) { dbus_connection_close(conn_); dbus_connection_unref(conn_); conn_ = 0; } owner_[0] = 0; }
     void bus_open(uint64_t now) {
         if (conn_ && dbus_connection_get_is_connected(conn_)) return;
@@ -458,7 +460,7 @@ private:
         next_bus_ = now + 10 * SEC_NS;
         DBusError e; dbus_error_init(&e);
         conn_ = dbus_connection_open_private(o_.bca_bus_address, &e);
-        if (conn_ && !dbus_bus_register(conn_, &e)) { dbus_connection_close(conn_); dbus_connection_unref(conn_); conn_ = 0; }
+        if (conn_ && !bus_register(&e)) { dbus_connection_close(conn_); dbus_connection_unref(conn_); conn_ = 0; }
         if (!conn_) {
             const char* name = dbus_error_is_set(&e) && e.name ? e.name : "unknown";
             if (err_row_due(name, last_bus_err_, &bus_fail_))
@@ -467,12 +469,67 @@ private:
         if (conn_) {
             bus_fail_ = 0; last_bus_err_[0] = 0;
             dbus_connection_set_exit_on_disconnect(conn_, 0);
-            dbus_bus_add_match(conn_, "type='signal',interface='com.jci.bca',member='ConnectionStatusResp'", &e);
-            if (dbus_error_is_set(&e)) { dbus_error_free(&e); dbus_error_init(&e); }
-            dbus_bus_add_match(conn_, "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='com.jci.bca'", &e);
+            // No DBusError: dbus_bus_add_match then only queues the AddMatch
+            // call and never blocks (with an error it waits up to the 25 s
+            // libdbus default for a daemon that answered Hello and then went
+            // silent). Its outcome was never used; the replies are popped and
+            // dropped by bus_tick. refresh_owner()'s call flushes both
+            // AddMatch calls first, so NameOwnerChanged is matched before the
+            // owner is read.
+            dbus_bus_add_match(conn_, "type='signal',interface='com.jci.bca',member='ConnectionStatusResp'", 0);
+            dbus_bus_add_match(conn_, "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='com.jci.bca'", 0);
             refresh_owner();
         }
         if (dbus_error_is_set(&e)) dbus_error_free(&e);
+    }
+    // Bounded replacement of dbus_bus_register(). libdbus waits without any
+    // limit in the SASL handshake when the socket accepts but never answers
+    // (a stuck daemon; measured > 140 s, validation/BCA_HMI_BUS_FIX_REVIEW_FABLE_2026-10-17.md
+    // 1-A); its 25 s default covers only the Hello call. Here the handshake
+    // gets AUTH_NS in 50 ms steps with the PTY drained and PINGed between the
+    // steps, and Hello gets HELLO_MS; then the unique name is stored exactly
+    // like dbus_bus_register does. On false the caller closes the connection
+    // (never half-registered) and e carries the error name for the bus row.
+    // All calls exist in the CMU's libdbus 1.7.2 (dynamic symbols checked) and
+    // in the toolchain's 1.6.30 headers.
+    static const uint64_t AUTH_NS = 2 * SEC_NS;
+    static const int HELLO_MS = 1000;
+    bool bus_register(DBusError* e) {
+        const uint64_t deadline = mono_ns() + AUTH_NS;
+        while (!dbus_connection_get_is_authenticated(conn_)) {
+            if (!dbus_connection_read_write(conn_, 50)) {
+                dbus_set_error_const(e, "mx5dr.AuthFailed", "disconnected during authentication");
+                return false;
+            }
+            if (dbus_connection_get_is_authenticated(conn_)) break;
+            const uint64_t t = mono_ns();
+            if (stop_ || t >= deadline) {
+                dbus_set_error_const(e, "mx5dr.AuthTimeout", stop_ ? "receiver stopping" : "no SASL answer within 2000 ms");
+                return false;
+            }
+            service_link(t);
+        }
+        DBusMessage* m = dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "Hello");
+        if (!m) { dbus_set_error_const(e, DBUS_ERROR_NO_MEMORY, "Hello"); return false; }
+        DBusMessage* r = dbus_connection_send_with_reply_and_block(conn_, m, HELLO_MS, e);  // NoReply on timeout
+        dbus_message_unref(m);
+        if (!r) {
+            if (!dbus_error_is_set(e)) dbus_set_error_const(e, "mx5dr.HelloFailed", "no reply to Hello");
+            return false;
+        }
+        const char* name = 0;
+        bool ok = dbus_message_get_args(r, e, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID) && name && name[0];
+        if (ok) ok = dbus_bus_set_unique_name(conn_, name);  // copies the name before r is freed
+        if (!ok && !dbus_error_is_set(e)) dbus_set_error_const(e, "mx5dr.HelloFailed", "no unique name");
+        dbus_message_unref(r);
+        return ok;
+    }
+    // The PTY keeps its reader while bus_register waits (bds blocks when its
+    // PTY is not drained): a non-blocking read and the PING/silence tick.
+    void service_link(uint64_t now) {
+        if (fd_ < 0) return;
+        read_link(now);
+        if (fd_ >= 0) link_tick(now);
     }
     void refresh_owner() {
         owner_[0] = 0;

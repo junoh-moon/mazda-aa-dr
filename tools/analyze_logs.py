@@ -4365,6 +4365,7 @@ def phone_imu_report(rows, bad=0):
     boots = [r for _, _, r in rows if r["kind"] == "pimu_boot"]
     links = Counter()
     link_reasons = Counter()
+    dbus_errors, other_services = {}, []
     bt = []
     data = dict(rows=0, bins=0, connected_bins=0, frames=0, gaps=0, crc_errors=0, bad_version=0,
                 skipped_bytes=0, dropped_bytes=0, frame_resets=0, window_s=0.0, dtheta_deg=0.0, flags_or=0)
@@ -4381,9 +4382,27 @@ def phone_imu_report(rows, bad=0):
         kind = r["kind"]
         try:
             if kind == "pimu_link":
-                links[r["ev"]] += 1
+                if r["ev"] == "poll" and r.get("why") == "other":
+                    # A QueryConnectStatus reply for another serviceId (0 = the BCA table lacks 15):
+                    # its own list, not a service-15 poll change.
+                    links["poll_other"] += 1
+                    other_services.append(dict(m=int(r["m"]), svc=int(r["svc"]), cs=int(r["cs"])))
+                else:
+                    links[r["ev"]] += 1
                 if r["ev"] in ("open_fail", "disconnect", "poll_error", "bus"):
                     link_reasons["%s:%s" % (r["ev"], r.get("why", ""))] += 1
+                if "name" in r:
+                    # bus/poll_error rows carry the D-Bus error name, the start of its message and the
+                    # consecutive failure count n (one row per distinct name, then every 10th failure).
+                    key = (r["ev"], str(r["name"]))
+                    e = dbus_errors.get(key)
+                    if e is None:
+                        e = dbus_errors[key] = dict(ev=r["ev"], why=r.get("why", ""), name=str(r["name"]),
+                                                    msg=str(r.get("msg", "")), rows=0, n_max=0,
+                                                    first_m=int(r["m"]), last_m=int(r["m"]))
+                    e["rows"] += 1
+                    e["n_max"] = max(e["n_max"], int(r.get("n", 0)))
+                    e["last_m"] = int(r["m"])
             elif kind == "bt_watch":
                 bt.append("%s:%s" % (r["ev"], r.get("why", "")))
             elif kind == "pimu_sync":
@@ -4424,7 +4443,9 @@ def phone_imu_report(rows, bad=0):
                                  if data["frames"] + data["gaps"] else None)
     report = dict(boots=[dict(boot_id=b.get("boot_id"), budget_bph=b.get("budget_bph"), cap=b.get("cap")) for b in boots],
                   malformed_rows=bad, links=dict(links), link_reasons=dict(link_reasons), bt_watch=bt,
-                  data=data, drops=drops)
+                  data=data, drops=drops,
+                  dbus_errors=sorted(dbus_errors.values(), key=lambda e: (e["first_m"], e["ev"], e["name"])),
+                  other_services=other_services)
     if obd["bins"]:
         # One 0x079 frame per DATA frame and window_us = 20 ms each: covered time / bin time is the
         # CMU-side view of the OBD path's loss (adapter + both Bluetooth hops).
@@ -4474,6 +4495,13 @@ def print_phone_imu(imu):
            d["crc_errors"], d["bad_version"], d["skipped_bytes"], d["dropped_bytes"], d["frame_resets"],
            d["dtheta_deg"]))
     print("Phone IMU links: %s; reasons %s; bds watch %s" % (imu["links"], imu["link_reasons"], imu["bt_watch"]))
+    for e in imu.get("dbus_errors", []):
+        print("   D-Bus error (%s:%s) %s, %d row(s), failures up to %d, %.1f-%.1f s: %s" %
+              (e["ev"], e["why"], e["name"], e["rows"], e["n_max"], e["first_m"] / 1000.0, e["last_m"] / 1000.0,
+               e["msg"]))
+    if imu.get("other_services"):
+        print("   BCA poll replies for another service (svc 0 = no service 15 in the BCA table): %s" %
+              ", ".join("svc %d cs %d at %.1f s" % (o["svc"], o["cs"], o["m"] / 1000.0) for o in imu["other_services"]))
     if imu.get("sync"):
         s = imu["sync"]
         print("Phone IMU sync: %d pongs, rtt median/p90/max %s/%s/%s ms, offset median %s ms, drift %s ppm" %

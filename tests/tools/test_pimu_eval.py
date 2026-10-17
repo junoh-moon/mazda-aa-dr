@@ -421,6 +421,42 @@ class AnalyzerSection(unittest.TestCase):
             codes = [i['code'] for i in report['issues']]
             self.assertNotIn('unknown_record_kind', codes)
 
+    def test_bca_error_names_and_other_service_rows(self):
+        """pimu_link name/msg/n (bus, poll_error) and poll why=other (svc/cs) are summarised."""
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = write_trip(Path(tmp))
+            path = logs / 'pimu.0.jsonl'
+            rows = path.read_text().splitlines()
+            link = lambda **k: json.dumps(dict(kind='pimu_link', path='', svc=15, cs=-1, st=-1, err=0, **k))
+            um = 'org.freedesktop.DBus.Error.UnknownMethod'
+            rows[1:1] = [
+                link(m=20000, ev='bus', why='unavailable', name='mx5dr.AuthTimeout',
+                     msg='no SASL answer within 2000 ms', n=1),
+                link(m=30000, ev='poll_error', why='error', name=um, msg="Method 'QueryConnectStatus' with", n=1),
+                link(m=80000, ev='poll_error', why='error', name=um, msg="Method 'QueryConnectStatus' with", n=10),
+                json.dumps(dict(kind='pimu_link', m=40000, ev='poll', why='other', path='', svc=0, cs=6, st=0, err=0)),
+                json.dumps(dict(kind='pimu_link', m=45000, ev='poll', why='other', path='', svc=14, cs=3, st=0, err=0)),
+                json.dumps(dict(kind='pimu_link', m=50000, ev='poll', why='not_connected', path='/dev/pts/3',
+                                svc=15, cs=6, st=0, err=0)),
+            ]
+            path.write_text('\n'.join(rows))
+            imu = self.analyze(logs)['phone_imu']
+            self.assertEqual(imu['links'], {'connect': 1, 'bus': 1, 'poll_error': 2, 'poll_other': 2, 'poll': 1})
+            self.assertEqual(imu['other_services'], [dict(m=40000, svc=0, cs=6), dict(m=45000, svc=14, cs=3)])
+            self.assertEqual(imu['dbus_errors'], [
+                dict(ev='bus', why='unavailable', name='mx5dr.AuthTimeout', msg='no SASL answer within 2000 ms',
+                     rows=1, n_max=1, first_m=20000, last_m=20000),
+                dict(ev='poll_error', why='error', name=um, msg="Method 'QueryConnectStatus' with",
+                     rows=2, n_max=10, first_m=30000, last_m=80000)])
+            text = subprocess.run([sys.executable, str(REPO / 'tools/analyze_logs.py'), str(logs)],
+                                  capture_output=True, text=True).stdout
+            self.assertIn('D-Bus error (bus:unavailable) mx5dr.AuthTimeout, 1 row(s), failures up to 1', text)
+            self.assertIn('D-Bus error (poll_error:error) %s, 2 row(s), failures up to 10' % um, text)
+            self.assertIn('svc 0 cs 6 at 40.0 s, svc 14 cs 3 at 45.0 s', text)
+            # Without such rows the lists are empty.
+            imu = self.analyze(write_trip(Path(tmp) / 'b'))['phone_imu']
+            self.assertEqual((imu['dbus_errors'], imu['other_services']), ([], []))
+
     def test_obd_source_bins(self):
         """Stage 2: bins whose flags carry bit 4 (OBD 0x079 yaw) are summarised separately."""
         with tempfile.TemporaryDirectory() as tmp:
