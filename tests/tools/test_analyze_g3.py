@@ -148,6 +148,46 @@ class G3Rows(unittest.TestCase):
         self.assertIn("G3 write overlap check: 2 writes, max lat_ms 600.0, overlaps with beta_journal_lag/GPS_LOST: 0 "
                       "-> pre-registered rule: next build defaults the store OFF", out.getvalue())
 
+    def test_garage_write_overlap_rule(self):
+        # Garage carry (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md): writes
+        # without fsync tagged "garage":1 run while BETA replaces by design; a
+        # GPS loss in their window is expected, a journal lag or lat_ms > 500
+        # trips the garage rule; the store rule (fsync writes) is unchanged.
+        def write(seq, start, end, lat, sync=0, st="S", mark=False):
+            row = dict(kind="g3_store", mono_ns=end + 10, event="written", seq=seq, st=st, hv=0 if st == "M" else 1,
+                       h=0 if st == "M" else 100, unc=0 if st == "M" else 40, sync=sync, m_b=1.0, wait_s=0.0,
+                       lat_ms=lat, start_ns=start, end_ns=end, ref_s=None, beta=None, garage=1)
+            if mark:
+                row["mark"] = 1
+            return row
+        lost = dict(kind="beta_state", mono_ns=10 * S + 1000, domain="beta", assist_ready=False, **{"from": "ARMED"},
+                    to="GPS_LOST", reason="gps_lost")
+        base_rows = [boot(BOOT_A),
+                     dict(kind="g3_store", mono_ns=1, event="missing", reason="missing", g3="UNKNOWN", age_s=None,
+                          age_src="none", boot="none", chain="none", seq=0),
+                     write(1, 10 * S, 10 * S + 4000000, 4.0), write(2, 30 * S, 30 * S + 3000000, 3.0, st="M", mark=True)]
+        _, report = consume(base_rows + [lost])
+        o = report["g3"]["write_overlap"]
+        self.assertEqual((o["writes"], o["overlaps"], o["default_off_next_build"]), (0, 0, False))
+        self.assertEqual((o["garage_writes"], o["garage_lag_overlaps"], o["garage_off_next_build"]), (2, 0, False))
+        lag = dict(kind="beta_journal_lag", mono_ns=31 * S, domain="beta", assist_ready=False, event="lagging",
+                   lag_ms=1510, unwritten_rows=3, limit_ms=1500, clear_ms=500)
+        _, report = consume(base_rows + [lost, lag])
+        o = report["g3"]["write_overlap"]
+        self.assertEqual((o["garage_lag_overlaps"], o["garage_off_next_build"], o["default_off_next_build"]),
+                         (1, True, False))
+        _, report = consume(base_rows + [write(3, 50 * S, 51 * S, 700.0)])
+        self.assertEqual(report["g3"]["write_overlap"]["garage_lat_over_500"], 1)
+        # A garage fsync write keeps the store rule (a GPS loss in its window counts).
+        _, report = consume(base_rows + [write(4, 10 * S, 11 * S, 90.0, sync=1), lost])
+        o = report["g3"]["write_overlap"]
+        self.assertEqual((o["writes"], o["overlaps"], o["default_off_next_build"]), (1, 1, True))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_g3_data(report["g3"])
+        self.assertIn("G3 garage writes without fsync: 2, lat_ms > 500: 0, journal lag overlaps: 0", out.getvalue())
+        self.assertNotIn("malformed_g3_row", codes(report))
+
     def test_malformed_rows(self):
         bad = [dict(kind="g3_store", mono_ns=1, event="exploded", reason="x"),
                dict(kind="g3_store", mono_ns=1, event="written", seq=1, st="X", hv=1, h=1, unc=1),

@@ -3880,11 +3880,28 @@ def g3_write_overlap(rows, events):
     event or a GPS_LOST/ENGAGED transition makes the next build default the
     store OFF (menu 8 opt-in)."""
     writes, max_lat, slow, hits = 0, None, 0, []
+    # Garage carry (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md): its writes
+    # without fsync ("garage":1, "sync":0) run while BETA replaces by design;
+    # for them a GPS_LOST/ENGAGED transition is expected. Pre-registered rule:
+    # any of them with lat_ms > 500 or a beta_journal_lag "lagging" event in
+    # [start_ns, end_ns + 2 s] makes the next build default the garage carry
+    # OFF (menu 12 opt-in). Their fsync writes keep the rule above.
+    g_writes, g_slow, g_hits = 0, 0, []
     for session, row in rows:
         if row["kind"] != "g3_store" or row["event"] not in ("written", "failed", "cancelled"):
             continue
         start, end, lat = row.get("start_ns"), row.get("end_ns"), row.get("lat_ms")
         if not (integer(start) and integer(end)) or start <= 0 or end < start:
+            continue
+        if row.get("garage") == 1 and row.get("sync") == 0:
+            g_writes += 1
+            if type(lat) in (int, float):
+                max_lat = lat if max_lat is None else max(max_lat, lat)
+                if lat > G3_OVERLAP_LAT_MS:
+                    g_slow += 1
+            for s, mono, label in events:
+                if s == session and label == "beta_journal_lag" and start <= mono <= end + G3_OVERLAP_TAIL_NS:
+                    g_hits.append(dict(session=session, seq=row.get("seq"), event=label, mono_ns=mono))
             continue
         writes += 1
         if type(lat) in (int, float):
@@ -3894,8 +3911,12 @@ def g3_write_overlap(rows, events):
         for s, mono, label in events:
             if s == session and start <= mono <= end + G3_OVERLAP_TAIL_NS:
                 hits.append(dict(session=session, seq=row.get("seq"), event=label, mono_ns=mono))
-    return dict(writes=writes, max_lat_ms=max_lat, lat_over_500=slow, overlaps=len(hits),
-                overlap_events=hits[:10], default_off_next_build=bool(slow or hits))
+    out = dict(writes=writes, max_lat_ms=max_lat, lat_over_500=slow, overlaps=len(hits),
+               overlap_events=hits[:10], default_off_next_build=bool(slow or hits))
+    if g_writes:   # only with garage rows: earlier reports stay byte-identical
+        out.update(garage_writes=g_writes, garage_lat_over_500=g_slow, garage_lag_overlaps=len(g_hits),
+                   garage_overlap_events=g_hits[:10], garage_off_next_build=bool(g_slow or g_hits))
+    return out
 
 
 def g3_send_report(rows, boots, overlays=0):
@@ -4033,6 +4054,11 @@ def print_g3_data(g3):
           (o["writes"], f(o["max_lat_ms"]), o["overlaps"],
            " -> pre-registered rule: next build defaults the store OFF (menu 8 opt-in)"
            if o["default_off_next_build"] else ""))
+    if o.get("garage_writes"):
+        print("G3 garage writes without fsync: %d, lat_ms > 500: %d, journal lag overlaps: %d%s" %
+              (o["garage_writes"], o["garage_lat_over_500"], o["garage_lag_overlaps"],
+               " -> pre-registered rule: next build defaults the garage carry OFF (menu 12 opt-in)"
+               if o["garage_off_next_build"] else ""))
     send = g3.get("send")
     if send:
         print("G3 bearing send: %d windows, ends %s, overlaid FIX sends %d" %

@@ -197,6 +197,7 @@ startup_verdict() {
         # Menu 10 tunnel ceiling: shown only when switched off (not a GO condition).
         if (field("acc_cap_marker=")=="present") print "CAP 25 m tunnel cap OFF (menu 10)"
         if (field("bt_marker=")=="present") print "BT phone IMU OFF (menu 11)"
+        if (field("g3_garage_marker=")=="present") print "GAR garage heading OFF (menu 12)"
         v=field("bt_fail=")
         if (v!="" && v!="absent") print substr("BT fallback " v ": menu 1",1,40)
         for (i=1;i<=NR;i++) if (index(line[i],"BETA NO_FIX: ")==1) print substr(line[i],1,40)
@@ -472,6 +473,52 @@ acc_cap_toggle() {
     return 0
 }
 
+# Menu 12 (2026-10-17, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md): the
+# owner switch of the G3 garage heading carry (departure marks, the 5 s park
+# record also in a garage, the restore without a wall clock and the bearing
+# at the garage exit; default on). While BASE/g3-garage-off exists (any type)
+# the BETA worker uses the beta.16 G3 rules; read once at CMU start. Menu 8
+# (g3-off) turns the whole G3 heading off. Never touches mx5dr.conf.
+garage_toggle() {
+    marker=$BASE/g3-garage-off
+    if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
+        echo 'Garage heading: package not installed;'
+        echo 'nothing changed.'
+        return 0
+    fi
+    if [ -d "$marker" ] && [ ! -L "$marker" ]; then
+        echo 'Garage heading: OFF (marker is a dir).'
+        echo 'Not changed here; menu 6 removes it.'
+        return 0
+    fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then state=OFF; next=ON
+    else state=ON; next=OFF; fi
+    printf '%s\n' "Garage heading now: $state" \
+        'BETA only. OFF = beta.16 heading rules.' \
+        "Enter 12 again to switch it $next," \
+        'anything else cancels.'
+    printf 'Number, then Enter: '
+    if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
+    if [ "$confirm" != 12 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
+    if [ "$next" = OFF ]; then
+        marker_tmp=$BASE/g3-garage-off.new.$$
+        rm -f "$marker_tmp" || fail 'Cannot stage the g3-garage-off marker'
+        if ! printf 'off\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
+            rm -f "$marker_tmp" || :
+            fail 'Cannot write the g3-garage-off marker'
+        fi
+    else
+        # The marker itself (also a symlink, even to a directory) is removed;
+        # nothing is written through it.
+        rm -f "$marker" || fail 'Cannot remove the g3-garage-off marker'
+    fi
+    sync
+    echo "Garage heading set to $next."
+    echo 'Read once at CMU start: choose 5'
+    echo '(parked reboot) for it to take effect.'
+    return 0
+}
+
 # Menu 11 (2026-10-14, validation/PHONE_IMU_CHANNEL_2026-10-14.md): the
 # owner switch of the phone IMU Bluetooth service (record only, default on).
 # While BASE/bt-off exists (any type) the guard starts bds with the stock
@@ -565,6 +612,7 @@ while :; do
             '9 Tunnel test on/off (BETA diagnostic)' \
             '10 Tunnel 25 m cap on/off (BETA)' \
             '11 Phone IMU Bluetooth on/off (record only)' \
+            '12 Garage heading on/off (BETA)' \
             '0 Exit'
         echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
@@ -594,6 +642,7 @@ while :; do
         9) if ! diag_toggle; then exit "$last_rc"; fi;;
         10) if ! acc_cap_toggle; then exit "$last_rc"; fi;;
         11) if ! bt_toggle; then exit "$last_rc"; fi;;
+        12) if ! garage_toggle; then exit "$last_rc"; fi;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac

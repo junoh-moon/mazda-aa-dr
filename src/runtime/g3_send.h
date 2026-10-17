@@ -30,6 +30,16 @@
 //    still be overlaid once (the call in progress). Rows: g3_send (start,
 //    none, count, end with the deciding call) and g3_send_conflict;
 //    diagnostic class, never j.fail().
+//  * Garage carry (G3_GARAGE_*, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md,
+//    owner switch g3-garage-off): the window also opens for CARRIED with
+//    reason chain_depart, also after the car moved since boot (a garage
+//    start reaches its first FIX only at the exit), provided no yaw chain
+//    break happened after the first moving wheel of the boot while the car
+//    was not standing (G3_SEND_PARKED_BREAK_M test) since the first tick; it
+//    waits (no time limit) while the latch says reverse, the wheel stream is
+//    stale or the session is not observed. An unknown latch counts as
+//    forward (no 0x118 change since boot: the car was not shifted into
+//    reverse); a latch that reports reverse ends an open window as before.
 // MODEL evidence only: no qualified claim, no Domain::QUALIFIED.
 #include "adapter/adapter.h"
 #include "runtime/beta_controller.h"
@@ -100,7 +110,10 @@ class G3Send {
 public:
     G3Send() { clear(); }
     // Worker start. enabled: the G3 tracker is active (BETA, no g3-off marker).
-    void start(bool enabled) { clear();phase_=enabled?G3_SEND_IDLE:G3_SEND_OFF; }
+    // garage: the garage carry rules (no g3-garage-off marker).
+    void start(bool enabled,bool garage=false) {
+        clear();phase_=enabled?G3_SEND_IDLE:G3_SEND_OFF;garage_=enabled && garage;
+    }
     G3SendPhase phase() const { return phase_; }
     bool active() const { return phase_==G3_SEND_ACTIVE; }
     const char* end_reason() const { return end_reason_; }
@@ -172,7 +185,7 @@ public:
             reason="session";why=v.session_epoch!=session_epoch_?"send_session":
                 v.source_epoch!=source_epoch_?"source":"cadence_fence";
         }
-        else if(s.reverse!=0) { reason="latch";why=s.reverse==1?"reverse":"unknown"; }
+        else if(garage_?s.reverse==1:s.reverse!=0) { reason="latch";why=s.reverse==1?"reverse":"unknown"; }
         else if(g3.state()==G3_CONFIRMED) { reason="trusted";why="m_course"; }
         else if(g3.state()!=G3_CARRIED) { reason="rejected";why=g3.reason(); }
         else if(v.now-open_ns_>=G3_SEND_STATIONARY_CAP_NS) { reason="cap";why="stationary_900s"; }
@@ -206,6 +219,11 @@ private:
     unsigned gated_,agree_,conflict_,parked_breaks_;
     bool have_position_,published_,withdraw_pending_,last_parked_;
     double last_m_;
+    // Garage carry: switch; IDLE break watch (breaks seen at the previous
+    // tick, a break while not standing, the previous tick stood).
+    bool garage_,idle_seen_,idle_moving_break_,idle_parked_;
+    uint32_t idle_breaks_;
+    double idle_m_;
     adapter::PositionClass last_class_;
 
     void clear() {
@@ -214,6 +232,7 @@ private:
         travel_=unc_=session_m_=0;breaks_=session_epoch_=source_epoch_=last_generation_=last_call_=0;
         gated_=agree_=conflict_=parked_breaks_=0;
         have_position_=published_=withdraw_pending_=last_parked_=false;last_m_=0;
+        garage_=idle_seen_=idle_moving_break_=idle_parked_=false;idle_breaks_=0;idle_m_=0;
         last_class_=adapter::POSITION_UNDECODED;
     }
     double tolerance() const { return unc_>G3_SEND_AGREE_MIN_DEG?unc_:G3_SEND_AGREE_MIN_DEG; }
@@ -228,18 +247,33 @@ private:
     // heading, a known forward latch, fresh wheels and an observed session;
     // wait for the last three while the car stands, at most OPEN_WAIT.
     template<class J> bool try_open(J& j,const G3Tracker& g3,const G3Sample& s,const G3SendView& v) {
+        if(garage_) {
+            // Same standing test as the ACTIVE break tolerance.
+            const bool standing=s.wheels_fresh && !s.wheels_moving && idle_parked_ && std::isfinite(s.motion.distance_m) &&
+                fabs(s.motion.distance_m-idle_m_)<G3_SEND_PARKED_BREAK_M;
+            // Before the first moving wheel of the boot a break hides no rotation
+            // (unobserved motion before it is the tracker's moving_at_boot check).
+            if(idle_seen_ && s.motion.breaks!=idle_breaks_ && !standing && s.motion.first_move_ns)
+                idle_moving_break_=true;
+            idle_seen_=true;idle_breaks_=s.motion.breaks;
+            idle_parked_=s.wheels_fresh && !s.wheels_moving;idle_m_=s.motion.distance_m;
+        }
         if(!session_ns_) {
             if(!g3.session_ns())return false;
             session_ns_=g3.session_ns();last_now_=v.now;
             session_m_=std::isfinite(s.motion.distance_m)?s.motion.distance_m:0;
         }
-        if(g3.state()!=G3_CARRIED || !g3.have_carried() || strcmp(g3.reason(),"chain_ok")) {
+        const bool depart=garage_ && !strcmp(g3.reason(),"chain_depart");
+        if(g3.state()!=G3_CARRIED || !g3.have_carried() || (strcmp(g3.reason(),"chain_ok") && !depart)) {
             none(j,v.now,g3_state_name(g3.state()),g3.reason());return false;
         }
         const bool moved=s.wheels_moving || (std::isfinite(s.motion.distance_m) &&
             s.motion.distance_m-session_m_>=G3_SEND_PARKED_BREAK_M);
         const bool session=v.session_epoch && v.session_epoch!=UINT32_MAX && v.source_epoch;
-        if(s.reverse!=0 || !s.wheels_fresh || !session) {
+        if(garage_) {
+            if(idle_moving_break_) { none(j,v.now,g3_state_name(g3.state()),"yaw_break");return false; }
+            if(s.reverse==1 || !s.wheels_fresh || !session)return false;   // wait
+        } else if(s.reverse!=0 || !s.wheels_fresh || !session) {
             if(moved || v.now<session_ns_ || v.now-session_ns_>=G3_SEND_OPEN_WAIT_NS)
                 none(j,v.now,g3_state_name(g3.state()),s.reverse!=0?"latch":!s.wheels_fresh?"wheel_stale":"session");
             return false;
@@ -252,10 +286,11 @@ private:
         char age[32];
         if(g3.age_known())snprintf(age,sizeof age,"%llu",(unsigned long long)g3.age_s());else strcpy(age,"null");
         row(j,",\"mono_ns\":%llu,\"event\":\"start\",\"g3\":\"%s\",\"t_s\":%.1f,\"h\":%ld,\"carried\":[%ld,%ld],"
-              "\"unc\":%ld,\"tol\":%ld,\"age_s\":%s,\"rev\":%d,\"m_b\":%.1f,\"session\":%lu}",
+              "\"unc\":%ld,\"tol\":%ld,\"age_s\":%s,\"rev\":%d,\"m_b\":%.1f,\"session\":%lu%s}",
             "g3_send",(unsigned long long)v.now,g3_state_name(g3.state()),session_s(v.now),lround(travel_*10),
             lround(g3.carried_deg()*10),lround(g3.carried_unc()*10),lround(unc_*10),lround(tolerance()*10),
-            age,s.reverse,std::isfinite(s.motion.distance_m)?s.motion.distance_m:0.0,(unsigned long)session_epoch_);
+            age,s.reverse,std::isfinite(s.motion.distance_m)?s.motion.distance_m:0.0,(unsigned long)session_epoch_,
+            garage_?(moved?",\"garage\":1,\"moved\":1":",\"garage\":1,\"moved\":0"):"");
         adapter::set_bearing_overlay(true);
         return true;
     }

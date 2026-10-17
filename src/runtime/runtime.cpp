@@ -941,12 +941,15 @@ bool journal_writer_bulk_pending(JournalWriter*);
 // Not strict (cancelling an in-flight write): a RAW-window drain or queued
 // bulk rows count, a momentarily queued prompt row does not (every worker
 // turn queues some), so the cancel follows real journal pressure only.
-const char* g3_io_block(const Journal& j,mx5::runtime::BetaState state,uint64_t now,bool strict=true) {
+// garage: the garage carry lets a write without fsync run while BETA
+// replaces (the tracker never requests the fsync step then).
+const char* g3_io_block(const Journal& j,mx5::runtime::BetaState state,uint64_t now,bool strict=true,
+                        bool garage=false) {
   const JournalLag lag=journal_writer_lag(j.writer,now);
   const bool draining=(j.filter && j.filter->draining()) ||
       (j.writer && (strict?!journal_writer_bulk_ready(j.writer):journal_writer_bulk_pending(j.writer)));
   return mx5::runtime::g3_io_block_reason(g3_mailbox.started.load(std::memory_order_acquire)!=0,
-      g3_beta_replacing(state),journal_current.load(std::memory_order_acquire)!=0,j.writer!=0 && !j.failed,
+      !garage && g3_beta_replacing(state),journal_current.load(std::memory_order_acquire)!=0,j.writer!=0 && !j.failed,
       draining,lag.oldest_ns);
 }
 // Worker, after each G3 tick: cancel an in-flight write whose conditions no
@@ -1696,13 +1699,16 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       load=n>0 && size_t(n)<sizeof dir?mx5::runtime::g3_load(dir,&stored):mx5::runtime::G3_LOAD_UNREADABLE;
       mx5::runtime::g3_chain_token(root,chain);
     }
+    // Garage carry (G3_GARAGE_*, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md):
+    // default on with the tracker; <root>/g3-garage-off restores beta.16.
+    const bool g3_garage=g3_on && mx5::runtime::g3_garage_on(root);
     g3.start(clock_ns(0),g3_on,!beta_core?"beta_core_unavailable":"marker",boot_id,chain,
-             mx5::runtime::g3_realtime_s(),load,stored);
+             mx5::runtime::g3_realtime_s(),load,stored,g3_garage);
   }
   // G3 first-connection bearing send (g3_send.h): only with the tracker
   // (BETA, no g3-off marker); one window per worker, never re-armed.
   mx5::runtime::G3Send g3_send;
-  g3_send.start(g3.active());
+  g3_send.start(g3.active(),g3.garage());
   char g3_fields[160]="";
   if(beta_requested) {
     g3.boot_fields(g3_fields,sizeof g3_fields);
@@ -1964,14 +1970,14 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       mx5::runtime::G3Course course;
       const bool found=g3.wants_course() && mx5::runtime::g3_find_course(navigation,&g3_anchor_seen,&course);
       const uint64_t g3_now=clock_ns(0);
-      const mx5::runtime::G3Sample g3_sample_now=
+      mx5::runtime::G3Sample g3_sample_now=
           mx5::runtime::g3_sample(navigation,g3_now,mx5::runtime::g3_realtime_s());
-      const char* g3_block=g3_io_block(j,beta.state(),g3_now);
+      g3_sample_now.beta_replacing=g3_beta_replacing(beta.state());
+      const char* g3_block=g3_io_block(j,beta.state(),g3_now,true,g3.garage());
       g3.tick(j,g3_sample_now,found?&course:0,g3_block);
-      const char* g3_cancel=g3_io_block(j,beta.state(),g3_now,false);
-      if(!g3_cancel && g3_sample_now.wheels_moving)g3_cancel="wheels_moving";
-      if(!g3_cancel && !g3_sample_now.wheels_fresh)g3_cancel="wheels_stale";
-      if(!g3_cancel)g3_cancel=g3.discard_cancel(g3_sample_now);   // rule F taint end (v4)
+      // Cancel rule (g3_cancel_reason; garage carry exemptions there).
+      const char* g3_cancel=mx5::runtime::g3_cancel_reason(
+          g3_io_block(j,beta.state(),g3_now,false,mx5::runtime::g3_cancel_ignores_replacing(g3)),g3_sample_now,g3);
       g3_pump(j,g3,g3_worker_epoch,g3_cancel);
       mx5::runtime::G3SendView view;
       view.now=g3_now;view.journal_ok=!j.failed;

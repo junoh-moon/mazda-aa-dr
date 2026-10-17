@@ -284,6 +284,11 @@ echo "diag_marker=$diag_marker (read at CMU start; on = tunnel test, invalid = o
 acc_cap_marker=absent
 if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then acc_cap_marker=present; fi
 echo "acc_cap_marker=$acc_cap_marker (read at CMU start; present = 25 m tunnel cap off)"
+# Owner switch of the G3 garage heading carry (menu 12); read once at start.
+# Any marker type counts as present (beta.16 G3 rules).
+g3_garage_marker=absent
+if [ -e "$BASE/g3-garage-off" ] || [ -L "$BASE/g3-garage-off" ]; then g3_garage_marker=present; fi
+echo "g3_garage_marker=$g3_garage_marker (read at CMU start; present = garage heading off)"
 # Phone IMU Bluetooth service (menu 11; validation/PHONE_IMU_CHANNEL_2026-10-14.md).
 # bt_fail names the automatic fallback record (collector or guard); either
 # keeps bds on its stock arguments until menu 1. bds_args reads the kernel's

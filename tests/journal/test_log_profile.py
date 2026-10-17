@@ -635,3 +635,40 @@ class DriveRows(unittest.TestCase):
         self.assertEqual(drive['summary']['fix1_rows'],
                          collections.Counter(r['kind'] for r in self.runs[('drive', 'on')][1])['fix1'])
         self.assertTrue(all(abs(e['zero'] - 2048) < 0.2 for e in drive['learn'] if e['zero'] is not None))
+
+class G3GarageRows(unittest.TestCase):
+    """The garage carry rows (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md) on
+    the product journal path: with the switch on the tracker's parked records
+    and departure marks are journaled (in-memory store); every non-G3 row
+    stays the same and the added rate stays far below 600 KB per hour."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='mx5dr-g3-garage-')
+        cls.runs = {}
+        for state in ('on', 'off'):
+            directory = os.path.join(cls.tmp.name, state)
+            cls.runs[state] = run('persistent', directory, 3600,
+                                  extra=('--nofix', '0', '--g3', 'on', '--g3-send', 'on', '--g3-garage', state)) + (directory,)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_only_g3_rows_change_and_the_rate_is_bounded(self):
+        on, off = self.runs['on'], self.runs['off']
+        self.assertEqual(evidence([r for r in on[1] if r['kind'] != 'send']),
+                         evidence([r for r in off[1] if r['kind'] != 'send']))
+        kinds = lambda rows: collections.Counter(r['kind'] for r in rows if not r['kind'].startswith('g3_'))
+        self.assertEqual(kinds(on[1]), kinds(off[1]))
+        self.assertEqual((on[0]['beta_state'], on[0]['outages']), (off[0]['beta_state'], off[0]['outages']))
+        written = [r for r in on[1] if r['kind'] == 'g3_store' and r.get('event') == 'written']
+        marks = [r for r in written if r['st'] == 'M']
+        self.assertGreater(len(written), 0)
+        self.assertGreater(len(marks), 0)
+        self.assertFalse([r for r in written if r['st'] == 'M' and r['hv'] != 0])
+        size = lambda rows: sum(len(json.dumps(r, separators=(',', ':'))) + 1 for r in rows if r['kind'].startswith('g3_'))
+        added = (size(on[1]) - size(off[1])) / float(on[0]['seconds'])
+        self.assertLess(added, DRIVE_BUDGET_B_S / 10.0)        # < 60 KB per hour on this drive
+        print('g3 garage rows: %d writes (%d marks), added %.1f B/s (%.1f KB/h)' %
+              (len(written), len(marks), added, added * 3.6))

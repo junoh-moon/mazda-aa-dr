@@ -98,6 +98,33 @@ static const double G3_CONFIRM_MAX_DEG=30.0;
 static const unsigned G3_WRITE_FAILURES_MAX=3;
 // A clock value below this (2020-09-13) is not a usable wall time.
 static const uint64_t G3_PLAUSIBLE_UTC_S=1600000000ULL;
+// Garage carry (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md). BETA only,
+// default on; the owner switch <root>/g3-garage-off (any type, read once at
+// worker start) restores the beta.16 store/restore/send rules exactly.
+//  * Departure mark: once the car has moved G3_GARAGE_DEPART_M (or turned
+//    G3_GARAGE_DEPART_DEG) after the S record on disk, the record is replaced
+//    by a state 'M' record without heading (no fsync). An 'S' record on disk
+//    therefore means "parked since it was written" for every boot that ran
+//    this rule (flag G3_FLAG_DEPART in the record).
+//  * The parked write needs G3_GARAGE_PARKED_NS of exact standstill and may
+//    run (without fsync) while BETA replaces (GPS lost / NO_FIX in a garage);
+//    the fsync write never runs while BETA replaces. 2026-10-17 trip: the
+//    final garage park lasted 7.5 s before the sensors stopped and BETA was
+//    ENGAGED, so beta.16 kept a record from 320 s and 1.2 km earlier.
+//  * Restore: a G3_FLAG_DEPART record (S, heading, chain ok, other boot) is
+//    CARRIED with reason chain_depart when no wall clock proves its age (the
+//    CMU clock is 1970 until GPS; never in a garage). A known age > 7 days
+//    still rejects; the first-fix position and GPS age checks still apply.
+//  * Uncertainty: the rule-5 time term and the rail allowance unchanged, the
+//    rotation term G3_GARAGE_ROTATION_PER_RAD (2 %) instead of BETA's 10 %;
+//    limit G3_GARAGE_UNC_MAX_DEG for these records (2026-10-17: 1,392 deg of
+//    |rotation| through a garage descent and climb left about 3 deg of error).
+static const char G3_GARAGE_OFF_NAME[]="g3-garage-off";
+static const uint64_t G3_GARAGE_PARKED_NS=5000000000ULL;
+static const double G3_GARAGE_DEPART_M=0.5;
+static const double G3_GARAGE_DEPART_DEG=2.0;
+static const double G3_GARAGE_ROTATION_PER_RAD=0.02;
+static const double G3_GARAGE_UNC_MAX_DEG=60.0;
 
 // ---- CRC32 (IEEE 802.3, reflected 0xEDB88320) --------------------------------
 inline uint32_t g3_crc32(const void* data,size_t n) {
@@ -114,12 +141,13 @@ inline uint32_t g3_crc32(const void* data,size_t n) {
 // One text line:
 //   mx5g3 <version> <seq> <boot_id> <S|M> <flags> <heading_cdeg> <unc_cdeg>
 //         <lat_e7> <lon_e7> <pos_err_dm> <utc_s> <rt_s> <mono_ms> <chain> <crc32>
-// flags: 1 heading valid, 2 position valid. utc_s: GPS-derived wall time at
+// flags: 1 heading valid, 2 position valid, 4 written by a build that marks
+// departures (garage carry: an S record means parked since). utc_s: GPS-derived wall time at
 // the write (0 unknown); rt_s: CLOCK_REALTIME at the write; mono_ms: the
 // writing boot's CLOCK_MONOTONIC; chain: the guard's last-decision token at
 // the writing boot ("none", "unread" or 8 hex). crc32 covers every byte
 // before the space that precedes it.
-enum { G3_FLAG_HEADING=1, G3_FLAG_POSITION=2 };
+enum { G3_FLAG_HEADING=1, G3_FLAG_POSITION=2, G3_FLAG_DEPART=4 };
 struct G3Record {
     unsigned version;
     uint32_t seq;
@@ -253,7 +281,7 @@ inline G3Load g3_decode(const char* buf,size_t n,G3Record* out) {
     memcpy(r.boot_id,tok[3],len[3]);r.boot_id[len[3]]=0;
     if(len[4]!=1 || (tok[4][0]!='S' && tok[4][0]!='M'))return G3_LOAD_FORMAT;
     r.state=tok[4][0];
-    if(!parse_u64(tok[5],len[5],3,&u))return G3_LOAD_FORMAT;
+    if(!parse_u64(tok[5],len[5],7,&u))return G3_LOAD_FORMAT;
     r.flags=unsigned(u);
     if(!parse_i64(tok[6],len[6],0,35999,&x))return G3_LOAD_FORMAT;
     r.heading_cdeg=int32_t(x);
@@ -413,6 +441,15 @@ inline bool g3_switch_on(const char* root) {
     if(!lstat(path,&st))return false;
     return errno==ENOENT;
 }
+// Garage carry switch: <root>/g3-garage-off present (or not provably absent) = off.
+inline bool g3_garage_on(const char* root) {
+    char path[512];
+    const int p=root?snprintf(path,sizeof path,"%s/%s",root,G3_GARAGE_OFF_NAME):-1;
+    if(p<=0 || size_t(p)>=sizeof path)return false;
+    struct stat st;
+    if(!lstat(path,&st))return false;
+    return errno==ENOENT;
+}
 
 // ---- store I/O idle rule and the dedicated store thread -----------------------
 // Why the parked write must wait now (0: it may be handed to the store thread).
@@ -536,6 +573,7 @@ struct G3Sample {
     bool wheels_moving;          // the newest drained wheel event has a wheel above exactly zero
     int reverse;                 // reverse latch now: -1 unknown, 0, 1
     double yaw_error_rad_s, rotation_per_rad; // heading budget growth (BETA rule 5)
+    bool beta_replacing;         // BETA replaces or overlays sends now (garage carry: no fsync write)
 };
 inline G3Sample g3_sample(const navigation::Pipeline& nav,uint64_t now,uint64_t rt_s) {
     G3Sample s;
@@ -615,12 +653,17 @@ public:
     uint64_t session_ns() const { return session_ns_; }
     bool age_known() const { return age_known_; }
     uint64_t age_s() const { return age_s_; }
+    // Garage carry (G3_GARAGE_*): the switch, and whether the carried
+    // heading came from a departure-marked record (its own limit).
+    bool garage() const { return garage_; }
+    bool garage_carry() const { return garage_carry_; }
+    double unc_max() const { return garage_carry_?G3_GARAGE_UNC_MAX_DEG:G3_UNC_MAX_DEG; }
 
     // Worker start. stored is read only when load == G3_LOAD_OK.
     void start(uint64_t now,bool enabled,const char* off_reason,const char* boot_id,const char* chain_now,
-               uint64_t rt_now_s,G3Load load,const G3Record& stored) {
+               uint64_t rt_now_s,G3Load load,const G3Record& stored,bool garage=false) {
         clear();
-        start_ns_=now;
+        start_ns_=now;garage_=enabled && garage;
         if(!enabled) { state_=G3_OFF;reason_=off_reason?off_reason:"off";return; }
         store_on_=true;
         copy(boot_id_,sizeof boot_id_,boot_id?boot_id:"unknown");
@@ -634,7 +677,8 @@ public:
         if(!have_stored_) { reason_=g3_load_name(load);return; }
         if(stored.state!='S') { reason_="moving_at_end";return; }
         if(!(stored.flags&G3_FLAG_HEADING)) { reason_="no_heading";return; }
-        if(stored.unc_cdeg>G3_UNC_MAX_DEG*100) { reason_="unc";return; }
+        const bool depart=garage_ && (stored.flags&G3_FLAG_DEPART);
+        if(stored.unc_cdeg>(depart?G3_GARAGE_UNC_MAX_DEG:G3_UNC_MAX_DEG)*100) { reason_="unc";return; }
         if(strcmp(boot_id_,"unknown") && !strcmp(stored.boot_id,boot_id_))chain_="same_boot";
         else if(!strcmp(stored.chain,"unread") || !strcmp(chain_now_,"unread"))chain_="unknown";
         else if(strcmp(stored.chain,chain_now_))chain_="broken";
@@ -644,9 +688,12 @@ public:
             age_known_=true;age_s_=rt_now_s-stored.rt_s;age_src_="rt";
             if(age_s_>G3_AGE_MAX_S) { reason_="age";return; }
         }
-        have_carried_=true;
+        have_carried_=true;garage_carry_=depart;
         carried_deg_=stored.heading_cdeg/100.0;carried_unc_=stored.unc_cdeg/100.0;
         if(!strcmp(chain_,"ok") && age_known_) { state_=G3_CARRIED;reason_="chain_ok"; }
+        // Garage carry: the departure-marked S record says the car stood
+        // since the write; no wall clock is needed (a known age still counts).
+        else if(depart && !strcmp(chain_,"ok")) { state_=G3_CARRIED;reason_="chain_depart"; }
         else {
             state_=G3_CARRIED_UNVERIFIED;
             reason_=!strcmp(chain_,"same_boot")?"same_boot":strcmp(chain_,"ok")?"chain_unknown":"age_unknown";
@@ -671,7 +718,8 @@ public:
     }
     // shadow_boot fields (",\"g3\":{...}").
     size_t boot_fields(char* out,size_t cap) const {
-        const int n=snprintf(out,cap,",\"g3\":{\"state\":\"%s\",\"reason\":\"%s\"}",g3_state_name(state_),reason_);
+        const int n=snprintf(out,cap,",\"g3\":{\"state\":\"%s\",\"reason\":\"%s\"%s}",g3_state_name(state_),reason_,
+                             garage_?",\"garage\":1":"");
         if(n<0 || size_t(n)>=cap) { if(cap)out[0]=0;return 0; }
         return size_t(n);
     }
@@ -732,7 +780,7 @@ public:
     template<class J> void tick(J& j,const G3Sample& s,const G3Course* course,const char* io_block) {
         if(!active())return;
         if(have_carried_)propagate(s);
-        if((state_==G3_CARRIED || state_==G3_CARRIED_UNVERIFIED) && prop_unc_>G3_UNC_MAX_DEG) {
+        if((state_==G3_CARRIED || state_==G3_CARRIED_UNVERIFIED) && prop_unc_>unc_max()) {
             state_=G3_REJECTED;reason_="unc_grew";
             row(j,",\"mono_ns\":%llu,\"event\":\"checked\",\"reason\":\"%s\",\"g3\":\"%s\",\"punc\":%ld,\"m_b\":%.1f}",
                 "g3_store",(unsigned long long)s.now,reason_,g3_state_name(state_),lround(prop_unc_*10),
@@ -784,6 +832,11 @@ public:
     // The worker cancelled the in-flight write; the first reason is journaled.
     void note_cancel(const char* why) { if(in_flight_ && !cancel_why_)cancel_why_=why; }
     bool in_flight(uint32_t* seq) const { if(in_flight_)*seq=pending_rec_.seq;return in_flight_; }
+    // Garage carry: the in-flight write is a departure mark (static content:
+    // the worker does not cancel it for a moving wheel or a stale stream) /
+    // runs the fsync step.
+    bool in_flight_mark() const { return in_flight_ && pending_mark_; }
+    bool in_flight_sync() const { return in_flight_ && pending_sync_; }
     // The store thread's mailbox refused the request: nothing in flight; the
     // stop may try again (not counted as a write failure).
     void post_failed() {
@@ -801,13 +854,22 @@ public:
         in_flight_=false;
         const bool published=r.stage==G3_IO_OK;
         const bool cancelled=r.stage==G3_IO_CANCELLED || r.stage==G3_IO_STALE || r.stage==G3_IO_STOPPED;
-        if(published) {
+        if(published && pending_mark_) {
+            // Departure mark: the S record is gone; the motion reference of
+            // the last S record (g3_since, the 2 m rule) stays.
+            failures_=0;disk_=pending_rec_.state;disk_flags_=pending_rec_.flags;disk_cdeg_=0;written_=true;
+            disk_synced_=false;++writes_;
+        } else if(published) {
             failures_=0;disk_=pending_rec_.state;
             m_ref_=pending_m_;turn_ref_=pending_turn_;aturn_ref_=pending_aturn_;written_ns_=now?now:1;
             disk_flags_=pending_rec_.flags;disk_cdeg_=pending_rec_.heading_cdeg;written_=true;
             disk_discards_=pending_discards_;
             disk_synced_=pending_sync_;episode_stored_=true;
             ++writes_;
+        } else if(pending_mark_) {
+            // A departure mark that did not land is requested again (rate limit).
+            if(!cancelled && ++failures_>=G3_WRITE_FAILURES_MAX)store_on_=false;
+            if(r.stage==G3_IO_STOPPED)store_on_=false;
         } else {
             // This stop may retry after the rate limit (the short write, or
             // the fsync write once the stop is long).
@@ -833,11 +895,12 @@ public:
         else snprintf(extra,sizeof extra,",\"stage\":\"%s\",\"errno\":%d%s",g3_io_stage_name(r.stage),
                       r.error,store_on_?"":",\"disabled\":true");
         row(j,",\"mono_ns\":%llu,\"event\":\"%s\",\"seq\":%lu,\"st\":\"%c\",\"hv\":%u,\"h\":%ld,\"unc\":%ld,"
-              "\"sync\":%d,\"m_b\":%.1f,\"wait_s\":%.1f,\"lat_ms\":%.1f,\"start_ns\":%llu,\"end_ns\":%llu%s%s}",
+              "\"sync\":%d,\"m_b\":%.1f,\"wait_s\":%.1f,\"lat_ms\":%.1f,\"start_ns\":%llu,\"end_ns\":%llu%s%s%s}",
             "g3_store",(unsigned long long)now,published?"written":cancelled?"cancelled":"failed",(unsigned long)seq,
             pending_rec_.state,pending_rec_.flags&G3_FLAG_HEADING,lround(pending_rec_.heading_cdeg/10.0),
             lround(pending_rec_.unc_cdeg/10.0),pending_sync_?1:0,pending_m_,pending_wait_s_,r.latency_ns/1e6,
-            (unsigned long long)r.start_ns,(unsigned long long)r.end_ns,ref,extra);
+            (unsigned long long)r.start_ns,(unsigned long long)r.end_ns,ref,extra,
+            garage_?(pending_mark_?",\"garage\":1,\"mark\":1":",\"garage\":1"):"");
     }
     // No store thread: the store is off for this boot (never written inline).
     template<class J> void store_unavailable(J& j,uint64_t now,const char* why) {
@@ -849,6 +912,7 @@ public:
 
 private:
     G3State state_;
+    bool garage_, garage_carry_, pending_mark_;
     const char* reason_;
     const char* chain_;
     const char* age_src_;
@@ -910,6 +974,7 @@ private:
 
     void clear() {
         state_=G3_OFF;reason_="not_started";chain_="none";age_src_="none";pos_check_="none";
+        garage_=garage_carry_=pending_mark_=false;
         strcpy(boot_id_,"unknown");strcpy(chain_now_,"unread");
         load_=G3_LOAD_MISSING;have_stored_=have_carried_=age_known_=first_fix_=have_utc_=false;
         stored_=g3_record();
@@ -953,7 +1018,7 @@ private:
         const double turn=std::isfinite(m.turn_rad)?m.turn_rad:0;
         prop_body_=g3_wrap360(carried_deg_+turn*180.0/G3_PI);
         const double grow=s.yaw_error_rad_s*(std::isfinite(m.moving_s)?m.moving_s:0)+
-            s.rotation_per_rad*(std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0)+
+            rotation_coef(s)*(std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0)+
             (std::isfinite(m.rail_excess_rad)?m.rail_excess_rad:0);   // yaw rail allowance
         prop_unc_=carried_unc_+grow*180.0/G3_PI;
     }
@@ -975,7 +1040,7 @@ private:
         head_valid_=false;
         if(ref_valid_) {
             head_deg_=g3_wrap360(ref_deg_+(turn-ref_turn_)*180.0/G3_PI);
-            const double grow=s.yaw_error_rad_s*(moving-ref_moving_s_)+s.rotation_per_rad*(aturn-ref_aturn_)+
+            const double grow=s.yaw_error_rad_s*(moving-ref_moving_s_)+rotation_coef(s)*(aturn-ref_aturn_)+
                 (rail-ref_rail_);
             head_unc_=ref_unc_+(grow>0?grow:0)*180.0/G3_PI;
             head_valid_=std::isfinite(head_deg_) && std::isfinite(head_unc_);
@@ -987,6 +1052,8 @@ private:
             head_valid_=true;head_deg_=ref_deg_;head_unc_=ref_unc_;
         }
     }
+    // Rotation term of the G3 heading uncertainty (garage carry: 2 %).
+    double rotation_coef(const G3Sample& s) const { return garage_?G3_GARAGE_ROTATION_PER_RAD:s.rotation_per_rad; }
     // Travel direction of the carried heading: body + 180 deg while the
     // reverse latch says reverse; an unknown latch is journaled as forward.
     double travel(const G3Sample& s) const { return g3_wrap360(prop_body_+(s.reverse==1?180.0:0.0)); }
@@ -1075,12 +1142,15 @@ private:
             episode_id_=stop_id;episode_needed_=episode_done_=episode_parked_=episode_stored_=episode_synced_=false;
             episode_block_="none";
         }
-        // Parked: >= 15 s of exactly-zero samples and the stream still fresh.
+        // Parked: >= 15 s (garage carry: 5 s) of exactly-zero samples and the
+        // stream still fresh.
         const bool parked=stop_id && s.wheels_fresh && !s.wheels_moving && m.last_speed_ns>stop_id &&
-            m.last_speed_ns-stop_id>=G3_PARKED_NS;
+            m.last_speed_ns-stop_id>=(garage_?G3_GARAGE_PARKED_NS:G3_PARKED_NS);
         if(parked)episode_parked_=true;
-        if(!parked)return;
+        if(!parked) { if(garage_)depart(s,io_block);return; }
         const bool long_stop=m.last_speed_ns-stop_id>=G3_FSYNC_MIN_STOP_NS;
+        // Garage carry: no fsync while BETA replaces (the write itself may run).
+        const bool sync_ok=!(garage_ && s.beta_replacing);
         bool want=false,sync=false;
         // Rule F discard (v3): the record on disk (written in this boot) holds
         // a heading built before a discard: rewrite it at this stop, even
@@ -1093,11 +1163,11 @@ private:
             const bool turned=head_valid_ && (!(disk_flags_&G3_FLAG_HEADING) ||
                 fabs(g3_wrap180(head_deg_-disk_cdeg_/100.0))>=G3_HEADING_CHANGE_DEG);
             if(!moved && !turned && !stale)episode_done_=true;   // nothing new to store
-            else { episode_needed_=true;want=true;sync=long_stop; }
+            else { episode_needed_=true;want=true;sync=long_stop && sync_ok; }
         }
         // The stop passed 60 s: the record written in this boot without fsync
         // is written once more with the fsync.
-        if(!want && long_stop && written_ && !disk_synced_ && !episode_synced_) { want=true;sync=true; }
+        if(!want && long_stop && written_ && !disk_synced_ && !episode_synced_ && sync_ok) { want=true;sync=true; }
         if(!want)return;
         if(!store_on_) { episode_block_="store_off";return; }
         if(pending_ || in_flight_)return;
@@ -1109,6 +1179,7 @@ private:
         G3Record r=g3_record();
         r.seq=next_seq_++;if(!next_seq_)next_seq_=1;
         copy(r.boot_id,sizeof r.boot_id,boot_id_);r.state=state;
+        if(garage_)r.flags|=G3_FLAG_DEPART;
         if(head_valid_) {
             r.flags|=G3_FLAG_HEADING;
             r.heading_cdeg=int32_t(lround(g3_wrap360(head_deg_)*100))%36000;
@@ -1129,13 +1200,51 @@ private:
         copy(r.chain,sizeof r.chain,chain_now_);
         const size_t n=g3_encode(r,pending_line_,sizeof pending_line_);
         if(!n)return;
-        pending_len_=n;pending_rec_=r;pending_=true;pending_m_=m.distance_m;
+        pending_len_=n;pending_rec_=r;pending_=true;pending_mark_=false;pending_m_=m.distance_m;
         pending_turn_=m.turn_rad;pending_aturn_=m.abs_turn_rad;
         pending_wait_s_=(m.last_speed_ns>stop_id+G3_PARKED_NS?m.last_speed_ns-stop_id-G3_PARKED_NS:0)/1e9;
         last_request_ns_=s.now?s.now:1;episode_done_=true;
         pending_sync_=sync;if(sync)episode_synced_=true;
     }
+    // Garage carry departure mark: the car moved (G3_GARAGE_DEPART_M) or
+    // turned (G3_GARAGE_DEPART_DEG) since the S record with heading on disk
+    // (written this boot, or restored): request one 'M' record without
+    // heading (no fsync), retried under the rate limit and the idle rule.
+    void depart(const G3Sample& s,const char* io_block) {
+        const navigation::G3Motion& m=s.motion;
+        if(!store_on_ || disk_!='S' || !(disk_flags_&G3_FLAG_HEADING) || pending_ || in_flight_)return;
+        const bool moved=std::isfinite(m.distance_m) && m.distance_m-m_ref_>=G3_GARAGE_DEPART_M;
+        const bool turned=std::isfinite(m.turn_rad) &&
+            fabs(m.turn_rad-turn_ref_)*180.0/G3_PI>=G3_GARAGE_DEPART_DEG;
+        if(!moved && !turned)return;
+        if(last_request_ns_ && s.now>=last_request_ns_ && s.now-last_request_ns_<G3_WRITE_MIN_NS)return;
+        if(io_block)return;
+        G3Record r=g3_record();
+        r.seq=next_seq_++;if(!next_seq_)next_seq_=1;
+        copy(r.boot_id,sizeof r.boot_id,boot_id_);r.state='M';r.flags=G3_FLAG_DEPART;
+        if(have_utc_ && s.now>=last_utc_mono_)r.utc_s=last_utc_s_+(s.now-last_utc_mono_)/1000000000ULL;
+        r.rt_s=s.rt_s;r.mono_ms=s.now/1000000ULL;
+        copy(r.chain,sizeof r.chain,chain_now_);
+        const size_t n=g3_encode(r,pending_line_,sizeof pending_line_);
+        if(!n)return;
+        pending_len_=n;pending_rec_=r;pending_=true;pending_mark_=true;pending_sync_=false;
+        pending_m_=m.distance_m;pending_turn_=m.turn_rad;pending_aturn_=m.abs_turn_rad;pending_wait_s_=0;
+        pending_beta_valid_=s.heading_valid;pending_beta_deg_=s.heading_deg;pending_beta_unc_=s.unc_deg;
+        pending_discards_=m.discards;pending_ref_ns_=0;
+        last_request_ns_=s.now?s.now:1;
+    }
 };
+// The worker's cancel decision for an in-flight store write (runtime.cpp,
+// after each tick). Garage carry: a write without fsync is not cancelled
+// because BETA replaces (cancel_ignores_replacing() feeds the idle rule), and
+// a departure mark (static content) not for a moving wheel or a stale stream.
+inline bool g3_cancel_ignores_replacing(const G3Tracker& g3) { return g3.garage() && !g3.in_flight_sync(); }
+inline const char* g3_cancel_reason(const char* io_cancel,const G3Sample& s,const G3Tracker& g3) {
+    if(io_cancel)return io_cancel;
+    if(s.wheels_moving && !g3.in_flight_mark())return "wheels_moving";
+    if(!s.wheels_fresh && !g3.in_flight_mark())return "wheels_stale";
+    return g3.discard_cancel(s);   // rule F taint end (v4)
+}
 template<class J> void G3Tracker::row(J& j,const char* fmt,const char* kind,...) {
     char line[768];
     const int head=snprintf(line,sizeof line,"{\"kind\":\"%s\"",kind);

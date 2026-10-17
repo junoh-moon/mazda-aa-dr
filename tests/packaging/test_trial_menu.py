@@ -372,6 +372,60 @@ class TrialMenuTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(marker.exists())
 
+    def test_menu_twelve_toggles_the_g3_garage_off_marker(self):
+        # G3 garage heading (2026-10-17, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md):
+        # the menu 10 pattern (present = off), 40-column text, mx5dr.conf
+        # untouched, cleared by menu 1 and menu 4.
+        marker = self.base / 'g3-garage-off'
+        result = self.menu('12\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('12 Garage heading on/off (BETA)', result.stdout)
+        self.assertIn('Garage heading: package not installed;', result.stdout)
+        self.fixture.run_script('install.sh')
+        config = (self.base / 'mx5dr.conf').read_bytes()
+        for keys in ('12\n0\n', '12\n\n0\n', '12\n10\n0\n', '12\n1\n0\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('Garage heading now: ON', result.stdout)
+                self.assertIn('Enter 12 again to switch it OFF,', result.stdout)
+                self.assertIn('Cancelled; nothing changed.', result.stdout)
+                self.assertFalse(marker.exists())
+        result = self.menu('12\n12\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Garage heading set to OFF.', result.stdout)
+        self.assertEqual(marker.read_bytes(), b'off\n')
+        self.assertFalse(list(self.base.glob('g3-garage-off.new.*')))
+        for other in ('diag', 'g3-off', 'vimchan-off', 'acc-cap-off'):
+            self.assertFalse((self.base / other).exists())
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        out = result.stdout
+        start = out.index('Garage heading now:')
+        for line in out[start:out.index('(parked reboot) for it to take effect.') + 40].splitlines():
+            self.assertLessEqual(len(line.replace('Number, then Enter: ', '')), 40, line)
+        status = self.menu('2\n0\n')
+        self.assertIn('g3_garage_marker=present', status.stdout)
+        self.assertIn('GAR garage heading OFF (menu 12)', status.stdout)
+        result = self.menu('12\n12\n0\n')
+        self.assertIn('Garage heading now: OFF', result.stdout)
+        self.assertIn('Garage heading set to ON.', result.stdout)
+        self.assertFalse(marker.exists())
+        self.assertNotIn('GAR garage', self.menu('2\n0\n').stdout)
+        marker.mkdir()
+        result = self.menu('12\n12\n0\n')
+        self.assertIn('Garage heading: OFF (marker is a dir).', result.stdout)
+        self.assertTrue(marker.is_dir())
+        marker.rmdir()
+        marker.write_text('off\n')
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Cleared g3-garage-off', result.stdout)
+        self.assertFalse(marker.exists())
+        marker.write_text('off\n')
+        result = self.menu('4\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+
     def test_install_uses_bundle_mode_without_more_typed_commands(self):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         result = self.menu('1\n')

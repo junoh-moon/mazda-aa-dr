@@ -189,6 +189,12 @@ if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then
     rm -f "$BASE/acc-cap-off" || fail 'Cannot clear the acc-cap-off marker'
     echo 'Cleared acc-cap-off: the 25 m tunnel cap is on again from the next start.'
 fi
+# Likewise the G3 garage heading switch from menu 12 (default on).
+if [ -e "$BASE/g3-garage-off" ] || [ -L "$BASE/g3-garage-off" ]; then
+    if [ -d "$BASE/g3-garage-off" ] && [ ! -L "$BASE/g3-garage-off" ]; then fail 'Cannot clear g3-garage-off: it is a directory'; fi
+    rm -f "$BASE/g3-garage-off" || fail 'Cannot clear the g3-garage-off marker'
+    echo 'Cleared g3-garage-off: the garage heading is on again from the next start.'
+fi
 # Likewise the phone IMU Bluetooth switch from menu 11 (default on) and both
 # automatic fallback records (collector logs/bt-fail, guard/bt-fail).
 if [ -e "$BASE/bt-off" ] || [ -L "$BASE/bt-off" ]; then

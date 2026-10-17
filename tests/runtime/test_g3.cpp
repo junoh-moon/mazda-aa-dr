@@ -124,7 +124,7 @@ static void codec() {
         "mx5g3 1 7 aaaaaaaa-1111-2222-3333-444444444444 S 3 36000 450 0 0 0 0 0 0 none",   // heading
         "mx5g3 1 7 aaaaaaaa-1111-2222-3333-444444444444 S 3 100 18001 0 0 0 0 0 0 none",   // unc
         "mx5g3 1 7 aaaaaaaa-1111-2222-3333-444444444444 X 3 100 1 0 0 0 0 0 0 none",       // state
-        "mx5g3 1 7 aaaaaaaa-1111-2222-3333-444444444444 S 4 100 1 0 0 0 0 0 0 none",       // flags
+        "mx5g3 1 7 aaaaaaaa-1111-2222-3333-444444444444 S 8 100 1 0 0 0 0 0 0 none",       // flags
         "mx5g3 1 7 aaaaaaaa-1111-2222-3333-444444444444 S 3 100 1 0 0 0 0 0 0 ABCDEF12",   // chain case
         "mx5g3 1 7 not-a-boot-id S 3 100 1 0 0 0 0 0 0 none",                               // boot id
         "mx5g3 1 07 aaaaaaaa-1111-2222-3333-444444444444 S 3 100 1 0 0 0 0 0 0 none",      // leading zero
@@ -1365,6 +1365,244 @@ static int two_boot(const char* dir) {
     return 0;
 }
 
+
+// ---- garage carry (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md) ---------------
+static G3Record depart_record(int32_t unc_cdeg=790) {
+    G3Record r=good_record();r.flags=G3_FLAG_HEADING|G3_FLAG_POSITION|G3_FLAG_DEPART;r.unc_cdeg=unc_cdeg;
+    r.heading_cdeg=16360;r.rt_s=0;r.utc_s=0;return r;
+}
+static G3Tracker started_garage(const G3Record& r,const char* chain="none",uint64_t rt=100,const char* boot=BOOT_B,
+                                bool garage=true,G3Load load=G3_LOAD_OK) {
+    G3Tracker t;t.start(0,true,"marker",boot,chain,rt,load,r,garage);return t;
+}
+static void garage_codec_restore() {
+    // Flags 4..7 decode (old builds reject them as a format error: fail closed).
+    const G3Record r=depart_record();
+    const std::string l=encode(r);G3Record d;
+    CHECK(g3_decode(l.data(),l.size(),&d)==G3_LOAD_OK && d.flags==7);
+    // No wall clock (1970), chain ok: CARRIED/chain_depart with the switch on ...
+    { G3Tracker t=started_garage(r);CHECK(t.state()==G3_CARRIED && !strcmp(t.reason(),"chain_depart") &&
+                                           t.garage() && t.garage_carry() && t.unc_max()==G3_GARAGE_UNC_MAX_DEG);
+      Rows j;t.journal_start(j,1);CHECK(has(j.last("g3_store"),"\"reason\":\"chain_depart\"") &&
+                                        has(j.last("g3_store"),"\"age_s\":null"));
+      char f[128];CHECK(t.boot_fields(f,sizeof f)>0 &&
+                        has(f,",\"g3\":{\"state\":\"CARRIED\",\"reason\":\"chain_depart\",\"garage\":1}")); }
+    // ... beta.16 behaviour with the switch off (and no "garage" field).
+    { G3Tracker t=started_garage(r,"none",100,BOOT_B,false);
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"age_unknown") && !t.garage() && !t.garage_carry());
+      char f[128];CHECK(t.boot_fields(f,sizeof f)>0 && !has(f,"garage")); }
+    // A record without the departure flag (beta.16 writer) stays unverified.
+    { G3Record o=r;o.flags=G3_FLAG_HEADING|G3_FLAG_POSITION;G3Tracker t=started_garage(o);
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"age_unknown") && !t.garage_carry()); }
+    // Continuity still required: broken / unknown chain, same boot, stale age, M record.
+    { G3Tracker t=started_garage(r,"12345678");CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"chain_broken")); }
+    { G3Tracker t=started_garage(r,"unread");CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"chain_unknown")); }
+    { G3Tracker t=started_garage(r,"none",100,BOOT_A);CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"same_boot")); }
+    { G3Record a=r;a.rt_s=RT;G3Tracker t=started_garage(a,"none",RT+G3_AGE_MAX_S+1);
+      CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"age")); }
+    { G3Record a=r;a.rt_s=RT;G3Tracker t=started_garage(a,"none",RT+3600);
+      CHECK(t.state()==G3_CARRIED && !strcmp(t.reason(),"chain_ok") && t.garage_carry()); }
+    { G3Record m=r;m.state='M';m.flags=G3_FLAG_DEPART;G3Tracker t=started_garage(m);
+      CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"moving_at_end")); }
+    // Limit 60 deg for departure-marked records, 30 deg otherwise.
+    { G3Tracker t=started_garage(depart_record(6000));CHECK(t.state()==G3_CARRIED); }
+    { G3Tracker t=started_garage(depart_record(6001));CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"unc")); }
+    { G3Record o=depart_record(3001);o.flags=3;o.rt_s=RT;G3Tracker t=started_garage(o,"none",RT+60);
+      CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"unc")); }
+    { G3Tracker t=started_garage(depart_record(4500),"none",100,BOOT_B,false);
+      CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"unc")); }
+    // Propagation: rotation term 2 % (garage) instead of 10 %: 20 deg + 600 deg
+    // of |rotation| = 32 deg stays CARRIED (limit 60) ...
+    { G3Tracker t=started_garage(depart_record(2000));Rows j;
+      G3Sample s=sample(2*S,30,0,0,true);s.motion.abs_turn_rad=600*G3_PI/180;s.motion.first_move_ns=1;
+      t.tick(j,s,0,0);CHECK(t.state()==G3_CARRIED && fabs(t.propagated_unc()-32.0)<1e-6);
+      // ... and 20 + 0.02 * 2101 deg = 62.02 deg is rejected (unc_grew).
+      s.motion.abs_turn_rad=2101*G3_PI/180;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"unc_grew")); }
+    // The beta.16 coefficient with the switch off: 20 + 60 deg.
+    { G3Record o=depart_record(2000);o.rt_s=RT;G3Tracker t=started_garage(o,"none",RT+60,BOOT_B,false);
+      CHECK(t.state()==G3_CARRIED && !strcmp(t.reason(),"chain_ok"));
+      Rows j;G3Sample s=sample(2*S,30,0,0,true);s.motion.abs_turn_rad=600*G3_PI/180;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"unc_grew")); }
+}
+static G3Sample replacing(G3Sample s) { s.beta_replacing=true;return s; }
+static void garage_store() {
+    G3Record d;
+    // 5 s of exact standstill is enough; the record carries the departure flag.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));st.tick(park(5999*S/1000,50,1*S));CHECK(st.written.empty());
+      st.tick(park(6*S,50,1*S));
+      CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.state=='S' && d.flags==7);
+      CHECK(has(st.j.last("\"event\":\"written\""),"\"sync\":0")); }
+    // The switch off: still 15 s and no departure flag.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),false);
+      st.tick(drive(1*S,50));for(unsigned k=2;k<=15;++k)st.tick(park(k*S,50,1*S));CHECK(st.written.empty());
+      st.tick(park(16*S,50,1*S));CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.flags==3);
+      // ... and no write while driving away (no departure mark).
+      for(unsigned k=17;k<=30;++k)st.tick(drive(k*S,50+k));
+      CHECK(st.written.size()==1);
+      CHECK(g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.state=='S'); }
+    // BETA replacing (garage, GPS lost): the write runs without fsync; the
+    // fsync write waits until BETA no longer replaces.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(replacing(drive(1*S,50)));
+      for(unsigned k=2;k<=6;++k)st.tick(replacing(park(k*S,50,1*S)));
+      CHECK(st.written.size()==1 && has(st.j.last("\"event\":\"written\""),"\"sync\":0"));
+      for(unsigned k=7;k<=90;++k)st.tick(replacing(park(k*S,50,1*S)));
+      CHECK(st.written.size()==1);                                   // 89 s parked, still replacing
+      st.tick(park(91*S,50,1*S));
+      CHECK(st.written.size()==2 && has(st.j.last("\"event\":\"written\""),"\"sync\":1")); }
+    // A first write of a long stop while replacing is requested without fsync.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(replacing(drive(1*S,50)));
+      for(unsigned k=2;k<=70;++k)st.tick(replacing(park(k*S,50,1*S)),k<65?"journal_lagging":0);
+      CHECK(st.written.size()==1 && has(st.j.last("\"event\":\"written\""),"\"sync\":0")); }
+    // Departure mark: after the S record, 0.4 m does not mark, 0.6 m does;
+    // the mark has no heading and decodes as moving_at_end.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));for(unsigned k=2;k<=6;++k)st.tick(park(k*S,50,1*S));CHECK(st.written.size()==1);
+      st.tick(drive(12*S,50.4));CHECK(st.written.size()==1);
+      st.tick(drive(13*S,50.6));
+      CHECK(st.written.size()==2 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.state=='M' && d.flags==G3_FLAG_DEPART &&
+            d.heading_cdeg==0 && d.seq==2);
+      CHECK(has(st.j.last("\"event\":\"written\""),"\"st\":\"M\",\"hv\":0") && st.t.disk_state()=='M');
+      { G3Tracker n=started_garage(d);CHECK(n.state()==G3_UNKNOWN && !strcmp(n.reason(),"moving_at_end")); }
+      // Only once; the next park writes S again (heading valid, disk has none).
+      for(unsigned k=14;k<=30;++k)st.tick(drive(k*S,51+k));
+      CHECK(st.written.size()==2);
+      for(unsigned k=31;k<=36;++k)st.tick(park(k*S,52,30*S));
+      CHECK(st.written.size()==3 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.state=='S' && d.flags==7); }
+    // A turn alone (2.5 deg, 0.1 m) marks the departure; 1.5 deg does not.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));for(unsigned k=2;k<=6;++k)st.tick(park(k*S,50,1*S));
+      G3Sample a=drive(12*S,50.1);a.motion.turn_rad=(20+1.5)*G3_PI/180;st.tick(a);CHECK(st.written.size()==1);
+      G3Sample b=drive(13*S,50.1);b.motion.turn_rad=(20+2.5)*G3_PI/180;st.tick(b);
+      CHECK(st.written.size()==2 && st.t.disk_state()=='M'); }
+    // The mark waits for the rate limit and the idle rule; a cancelled mark is retried.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));for(unsigned k=2;k<=6;++k)st.tick(park(k*S,50,1*S));
+      st.tick(drive(8*S,60));CHECK(st.written.size()==1);             // 2 s after the write: rate limit
+      st.tick(drive(11*S,61),"journal_lagging");CHECK(st.written.size()==1);
+      st.tick(drive(12*S,62),0,G3_IO_CANCELLED);
+      CHECK(st.written.size()==1 && has(st.j.last("\"event\":\"cancelled\""),"\"st\":\"M\"") && st.t.store_on());
+      st.tick(drive(17*S,70));CHECK(st.written.size()==2 && st.t.disk_state()=='M'); }
+    // A restored S record is marked when the car leaves (seq continues).
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,depart_record(),true);
+      G3Sample a=drive(1*S,0.3);a.motion.turn_rad=a.motion.abs_turn_rad=0;st.tick(a);CHECK(st.written.empty());
+      a=drive(2*S,1.0);a.motion.turn_rad=a.motion.abs_turn_rad=0;st.tick(a);
+      CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.state=='M' && d.seq==8);
+      CHECK(st.t.state()==G3_CARRIED); }                            // the carried heading in memory stays
+    // No mark for an S record without heading, nor with the switch off.
+    { Store st;st.dir=temp_dir();G3Record nh=depart_record();nh.flags=G3_FLAG_DEPART;
+      st.t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,nh,true);
+      for(unsigned k=1;k<=10;++k)st.tick(drive(k*S,10.0*k));
+      CHECK(st.written.empty()); }
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_OK,good_record(),false);
+      for(unsigned k=1;k<=10;++k)st.tick(drive(k*S,10.0*k));
+      CHECK(st.written.empty()); }
+    // In-flight views for the worker's cancel rule.
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,depart_record(),true);Rows j;
+      t.tick(j,drive(1*S,2),0,0);char b[G3_RECORD_MAX];size_t n;uint32_t q;bool sync=true;
+      CHECK(t.take_request(b,sizeof b,&n,&q,&sync) && !sync && t.in_flight_mark() && !t.in_flight_sync());
+      // The worker's cancel rule: a moving wheel or a stale stream never
+      // cancels a mark; the idle rule (io_cancel) still does.
+      CHECK(!g3_cancel_reason(0,drive(2*S,3),t));
+      G3Sample stale=drive(2*S,3);stale.wheels_fresh=false;CHECK(!g3_cancel_reason(0,stale,t));
+      CHECK(same(g3_cancel_reason("journal_lagging",drive(2*S,3),t),"journal_lagging"));
+      CHECK(g3_cancel_ignores_replacing(t));
+      G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};t.store_result(j,3*S,q,ok);CHECK(!t.in_flight_mark()); }
+    // A parked record in flight (no fsync): a moving wheel / stale stream cancel
+    // it, BETA replacing does not; its fsync rewrite is cancelled by replacing.
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);Rows j;
+      t.tick(j,drive(1*S,50),0,0);t.tick(j,park(7*S,50,1*S),0,0);
+      char b[G3_RECORD_MAX];size_t n;uint32_t q;bool sync=true;
+      CHECK(t.take_request(b,sizeof b,&n,&q,&sync) && !sync && !t.in_flight_mark());
+      CHECK(same(g3_cancel_reason(0,drive(8*S,51),t),"wheels_moving"));
+      G3Sample stale=park(8*S,50,1*S);stale.wheels_fresh=false;CHECK(same(g3_cancel_reason(0,stale,t),"wheels_stale"));
+      CHECK(!g3_cancel_reason(0,park(8*S,50,1*S),t) && g3_cancel_ignores_replacing(t));
+      G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};t.store_result(j,8*S,q,ok);
+      for(unsigned k=9;k<=61;++k)t.tick(j,park(k*S,50,1*S),0,0);
+      CHECK(t.take_request(b,sizeof b,&n,&q,&sync) && sync && t.in_flight_sync() && !g3_cancel_ignores_replacing(t)); }
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),false);
+      CHECK(!g3_cancel_ignores_replacing(t)); }
+}
+static G3Sample garage_sample(uint64_t now,double distance,bool moving,int reverse,uint32_t breaks=0) {
+    G3Sample s=sample(now,distance,0,moving?now/S:0,moving,reverse);s.motion.breaks=breaks;return s;
+}
+static void garage_send() {
+    adapter::set_bearing_overlay(false);
+    // chain_depart, unknown latch: opens at the session start (beta.16 would
+    // wait for a known forward latch and give up).
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(1*S,true,0,0));
+      const G3Sample s=garage_sample(1*S,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
+      CHECK(g.active() && adapter::bearing_overlay() && has(j.last("\"event\":\"start\""),"\"garage\":1,\"moved\":0") &&
+            has(j.last("\"event\":\"start\""),"\"rev\":-1"));
+      // Unknown stays open; reverse ends it.
+      const G3Sample m=garage_sample(5*S,20,true,-1);t.tick(j,m,0,0);g.tick(j,t,m,view(5*S));CHECK(g.active());
+      const G3Sample r=garage_sample(6*S,21,true,1);t.tick(j,r,0,0);g.tick(j,t,r,view(6*S));
+      CHECK(!g.active() && !adapter::bearing_overlay() && !strcmp(g.end_reason(),"latch")); }
+    // The switch off in G3Send: chain_depart never opens.
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,false);Rows j;
+      t.send(location(1*S,true,0,0));const G3Sample s=garage_sample(1*S,0,false,0);
+      t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
+      CHECK(!g.active() && g.phase()==G3_SEND_ENDED && has(j.last("\"event\":\"none\""),"\"reason\":\"chain_depart\"")); }
+    // Opens after the car moved since boot (the session started while driving).
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      for(unsigned k=1;k<=4;++k) { const G3Sample s=garage_sample(k*S,5.0*k,true,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(k*S)); }
+      CHECK(!g.active() && g.phase()==G3_SEND_IDLE);               // no session yet
+      t.send(location(5*S,true,0,0));
+      const G3Sample s=garage_sample(5*S,25,true,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(5*S));
+      CHECK(g.active() && has(j.last("\"event\":\"start\""),"\"moved\":1")); }
+    // A yaw chain break while moving (before the open) prevents the open.
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      const G3Sample a=garage_sample(1*S,1,true,-1,0);t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
+      const G3Sample b=garage_sample(2*S,6,true,-1,1);t.tick(j,b,0,0);g.tick(j,t,b,view(2*S));
+      t.send(location(3*S,true,0,0));
+      const G3Sample c=garage_sample(3*S,11,true,-1,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
+      CHECK(!g.active() && g.phase()==G3_SEND_ENDED && has(j.last("\"event\":\"none\""),"\"reason\":\"yaw_break\"")); }
+    // Before the first moving wheel (stream not yet fresh) a break is tolerated;
+    // after motion a break with a stale stream is not.
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      G3Sample a=garage_sample(1*S,0,false,-1,0);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
+      a=garage_sample(2*S,0,false,-1,3);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(2*S));
+      t.send(location(3*S,true,0,0));
+      const G3Sample c=garage_sample(3*S,0,false,-1,3);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
+      CHECK(g.active()); }
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      G3Sample a=garage_sample(1*S,5,false,-1,0);t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
+      a=garage_sample(2*S,5,false,-1,1);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(2*S));
+      t.send(location(3*S,true,0,0));
+      const G3Sample c=garage_sample(3*S,5,false,-1,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
+      CHECK(!g.active() && has(j.last("\"event\":\"none\""),"\"reason\":\"yaw_break\"")); }
+    // A break while standing is tolerated.
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      const G3Sample a=garage_sample(1*S,0,false,-1,0);t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
+      const G3Sample b=garage_sample(2*S,0,false,-1,1);t.tick(j,b,0,0);g.tick(j,t,b,view(2*S));
+      t.send(location(3*S,true,0,0));
+      const G3Sample c=garage_sample(3*S,0,false,-1,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
+      CHECK(g.active()); }
+    // Reverse at the session start: wait (no time limit), open once forward.
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(1*S,true,0,0));
+      for(unsigned k=1;k<=40;++k) { const G3Sample s=garage_sample(k*S,0.2*k,k>2,1);t.tick(j,s,0,0);g.tick(j,t,s,view(k*S)); }
+      CHECK(g.phase()==G3_SEND_IDLE && !j.count("\"kind\":\"g3_send\""));
+      const G3Sample s=garage_sample(41*S,8.2,true,0);t.tick(j,s,0,0);g.tick(j,t,s,view(41*S));
+      CHECK(g.active()); }
+    // The propagated heading is what the window sends; a 60 deg garage limit
+    // passed ends it (rejected/unc_grew).
+    { G3Tracker t=started_garage(depart_record(5000));G3Send g;g.start(true,true);Rows j;
+      t.send(location(1*S,true,0,0));
+      G3Sample s=garage_sample(1*S,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));CHECK(g.active());
+      s=garage_sample(2*S,30,true,-1);s.motion.turn_rad=45*G3_PI/180;s.motion.abs_turn_rad=45*G3_PI/180;
+      t.tick(j,s,0,0);g.tick(j,t,s,view(2*S));
+      CHECK(g.active() && fabs(g.heading()-208.6)<1e-6);
+      s=garage_sample(3*S,60,true,-1);s.motion.turn_rad=45*G3_PI/180;s.motion.abs_turn_rad=600*G3_PI/180;
+      t.tick(j,s,0,0);g.tick(j,t,s,view(3*S));
+      CHECK(!g.active() && !strcmp(g.end_reason(),"rejected") && !strcmp(g.end_why(),"unc_grew")); }
+    adapter::set_bearing_overlay(false);
+}
+
 int main(int argc,char** argv) {
     if(argc==3 && !strcmp(argv[1],"--two-boot"))return two_boot(argv[2]);
     codec();
@@ -1389,6 +1627,9 @@ int main(int argc,char** argv) {
     rule_f_discard();
     rule_f_discard_in_flight();
     g3_send_rules();
+    garage_codec_restore();
+    garage_store();
+    garage_send();
     g3_send_adapter();   // configures the process-global adapter: last
     std::printf("test_g3: %u checks passed\n",checks);
     return 0;

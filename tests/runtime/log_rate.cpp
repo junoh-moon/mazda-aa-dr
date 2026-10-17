@@ -84,6 +84,11 @@ bool record_rows=true;
 // store thread: no store write). --g3-send on also runs the bearing send
 // window. Default off: the journal is the one without G3, byte for byte.
 bool g3_on=false,g3_send_on=false;double g3_heading_deg=90.0;
+// --g3-garage on (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md): the garage
+// carry rules; the stored record carries the departure flag and the tracker's
+// store requests (parked records, departure marks) complete at once in memory
+// (no file I/O, no store thread), so their journal rows count in the rate.
+bool g3_garage=false;
 // This harness journal is synchronous (no writer thread), where the product
 // gate refuses drive rows (GATE_NO_WRITER). Here they are written as a
 // current writer thread would accept them; every other gate reason is the
@@ -218,6 +223,7 @@ int main(int argc,char** argv) {
         else if(k=="--g3" && (v=="on" || v=="off"))g3_on=v=="on";
         else if(k=="--g3-send" && (v=="on" || v=="off"))g3_send_on=v=="on";
         else if(k=="--g3-heading")g3_heading_deg=atof(v.c_str());
+        else if(k=="--g3-garage" && (v=="on" || v=="off"))g3_garage=v=="on";
         else { fprintf(stderr,"unknown option %s\n",k.c_str());return 64; }
     }
     if(out.empty() || (profile!="full" && profile!="persistent") || !motion_ms || motion_ms%20 ||
@@ -225,7 +231,7 @@ int main(int argc,char** argv) {
         fprintf(stderr,"usage: log_rate --profile full|persistent --out DIR [--seconds N] "
                        "[--event-every S] [--nofix S] [--outage S] [--motion-ms 20k] [--turn-ms 10k] [--drive normal|stopgo] "
                        "[--yaw-rows on|off] [--yaw-count 1-15] [--yaw-noise 0|1] [--chan on|off] "
-                       "[--record-rows on|off] [--g3 on|off] [--g3-send on|off] [--g3-heading DEG]\n");return 64;
+                       "[--record-rows on|off] [--g3 on|off] [--g3-send on|off] [--g3-heading DEG] [--g3-garage on|off]\n");return 64;
     }
     const std::string logs=out+"/logs";
     if(mkdir(out.c_str(),0700) && errno!=EEXIST)return 73;
@@ -290,10 +296,11 @@ int main(int argc,char** argv) {
         r.flags=mx5::runtime::G3_FLAG_HEADING|mx5::runtime::G3_FLAG_POSITION;
         r.heading_cdeg=int32_t(lround(g3_heading_deg*100))%36000;r.unc_cdeg=450;
         r.lat_e7=350000000;r.lon_e7=1350000000;r.pos_err_dm=50;r.rt_s=g3_rt;strcpy(r.chain,"none");
-        g3.start(clock_ns(0),true,"marker",boot_id,"none",g3_rt+3600,mx5::runtime::G3_LOAD_OK,r);
+        if(g3_garage)r.flags|=mx5::runtime::G3_FLAG_DEPART;
+        g3.start(clock_ns(0),true,"marker",boot_id,"none",g3_rt+3600,mx5::runtime::G3_LOAD_OK,r,g3_garage);
         g3.journal_start(j,clock_ns(0));
     }
-    g3_send.start(g3_send_on && g3.active());
+    g3_send.start(g3_send_on && g3.active(),g3.garage());
     mx5::runtime::MotionBatch batch;SimReceiver receiver;SimChanReceiver side;
     unsigned last_speed_raw=0,last_rpm_raw=0;bool side_started=false;double previous_kmh=0;
     Drive drive;Truth frozen=drive.truth();
@@ -400,8 +407,17 @@ int main(int argc,char** argv) {
         if(beta.cadence_fence(j,now))navigation.fence_beta();
         beta.tick(j,now,navigation,true,navigation.status().last_received_ns,1,0);
         if(g3.active()) {
-            const mx5::runtime::G3Sample g3s=mx5::runtime::g3_sample(navigation,now,g3_rt+3600+(now-start)/1000000000ULL);
-            g3.tick(j,g3s,0,"no_store_thread");
+            mx5::runtime::G3Sample g3s=mx5::runtime::g3_sample(navigation,now,g3_rt+3600+(now-start)/1000000000ULL);
+            g3s.beta_replacing=beta.state()==mx5::runtime::BETA_GPS_LOST || beta.state()==mx5::runtime::BETA_ENGAGED ||
+                beta.state()==mx5::runtime::BETA_NO_FIX || beta.state()==mx5::runtime::BETA_SPEED_ENGAGED;
+            g3.tick(j,g3s,0,g3_garage?0:"no_store_thread");
+            if(g3_garage) {
+                char line[mx5::runtime::G3_RECORD_MAX];size_t n=0;uint32_t seq=0;bool sync=false;
+                if(g3.take_request(line,sizeof line,&n,&seq,&sync)) {
+                    const mx5::runtime::G3IoResult ok={mx5::runtime::G3_IO_OK,0,0,mx5::runtime::G3_STEP_NONE,now,now};
+                    g3.store_result(j,now,seq,ok);
+                }
+            }
             mx5::runtime::G3SendView v;
             v.now=now;v.journal_ok=!j.failed;v.journal_current=journal_current.load()!=0;
             v.beta_live=beta.live();v.beta_armed=beta.state()==mx5::runtime::BETA_ARMED;

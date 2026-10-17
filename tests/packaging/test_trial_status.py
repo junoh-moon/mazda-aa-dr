@@ -341,6 +341,24 @@ exec "$MX5DR_REAL_OD" "$@"
         marker.rmdir()
         self.assertIn('acc_cap_marker=absent', self.run_status().stdout)
 
+    def test_g3_garage_marker(self):
+        # Menu 12 G3 garage heading (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md):
+        # any marker type is present (off).
+        self.assertIn('g3_garage_marker=absent', self.run_status().stdout)
+        marker = self.base / 'g3-garage-off'
+        for data in ('off\n', '', 'on\n'):
+            with self.subTest(data=data):
+                marker.write_text(data)
+                self.assertIn('g3_garage_marker=present', self.run_status().stdout)
+        marker.unlink()
+        marker.symlink_to('elsewhere')
+        self.assertIn('g3_garage_marker=present', self.run_status().stdout)
+        marker.unlink()
+        marker.mkdir()
+        self.assertIn('g3_garage_marker=present', self.run_status().stdout)
+        marker.rmdir()
+        self.assertIn('g3_garage_marker=absent', self.run_status().stdout)
+
     def test_runtime_disable_marker_blocks_old_boot_evidence(self):
         (self.logs / 'disable-next-start').write_text('restore_failed_fatal\n')
         result = self.run_status()

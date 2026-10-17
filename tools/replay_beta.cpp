@@ -426,6 +426,10 @@ struct Options {
     // (stock and sent bearing, the POSITION's course and speed, the G3 motion
     // integral and the window state) for the acceptance analysis.
     bool g3_send;
+    // --g3-garage on|off: the garage carry rules (validation/
+    // G3_GARAGE_EXIT_FIX_2026-10-17.md). Default off here so that existing
+    // replays stay byte-identical; the product default is on (marker absent).
+    bool g3_garage;
     std::string g3_send_out;
     // --g3-rt S: the CLOCK_REALTIME seconds the tracker sees at worker start
     // (the product reads it; default 0 = unknown, the record-only replays).
@@ -671,9 +675,12 @@ void g3_turn(uint64_t now) {
     R::G3Course course;
     const bool found = g3.wants_course() && R::g3_find_course(nav, &g3_anchor_seen, &course);
     // --g3-rt: the wall clock advances with the replay (stored records carry it).
-    const R::G3Sample sample = R::g3_sample(nav, now, opt.g3_rt ? opt.g3_rt + now / 1000000000ULL : 0);
+    R::G3Sample sample = R::g3_sample(nav, now, opt.g3_rt ? opt.g3_rt + now / 1000000000ULL : 0);
+    sample.beta_replacing = g3_replacing(beta->state());
+    // --g3-garage on: the runtime's garage idle rule (a write without fsync
+    // may run while BETA replaces; the tracker requests no fsync then).
     g3.tick(g3_journal, sample, found ? &course : 0,
-            g3_replacing(beta->state()) ? "beta_replacing" : 0);
+            sample.beta_replacing && !opt.g3_garage ? "beta_replacing" : 0);
     // runtime.cpp g3_pump: a rule F taint end cancels the in-flight write.
     if (g3_job.active) {
         const char* why = g3.discard_cancel(sample);
@@ -855,10 +862,10 @@ bool start_product(uint64_t t) {
         R::G3Load load = R::G3_LOAD_MISSING;
         if (!opt.g3_store.empty()) load = R::g3_load(opt.g3_store.c_str(), &stored);
         const std::string boot = in.boot_id.size() == 36 ? in.boot_id : std::string("unknown");
-        g3.start(t, true, "replay", boot.c_str(), "none", opt.g3_rt, load, stored);
+        g3.start(t, true, "replay", boot.c_str(), "none", opt.g3_rt, load, stored, opt.g3_garage);
         g3.journal_start(g3_journal, t);
     }
-    g3send.start(opt.g3_send && g3.active());
+    g3send.start(opt.g3_send && g3.active(), g3.garage());
     return true;
 }
 
@@ -1292,7 +1299,7 @@ void usage() {
         "                   [--boot-id ID] [--poll-hdop H] [--position-source auto|adapter|poll] [--report FILE.json] [--csv FILE.csv] [--check]\n"
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
         "                   [--g3 off|on|slow] [--g3-store DIR] [--g3-out FILE]\n"
-        "                   [--g3-send off|on] [--g3-send-out FILE] [--g3-rt S]\n"
+        "                   [--g3-send off|on] [--g3-send-out FILE] [--g3-rt S] [--g3-garage off|on]\n"
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "                   [--assume-forward on|off] [--seed-report] [--reverse-fence feed|runtime]\n"
         "                   [--diag SEED] [--diag-out FILE] [--acc-cap on|off]\n"
@@ -1310,7 +1317,7 @@ int main(int argc, char** argv) {
     opt.truth_gap_ns = 3000000000ULL; opt.course_min_kmh = 15; opt.coverage_min = 0.95;
     opt.poll_hdop = 1.0; opt.position_source = "auto";
     opt.engagement = "continuous";
-    opt.g3 = "off"; opt.g3_send = false; opt.g3_rt = 0;
+    opt.g3 = "off"; opt.g3_send = false; opt.g3_rt = 0; opt.g3_garage = false;
     opt.assume_forward = true; opt.seed_report = false; opt.reverse_fence = false;
     opt.acc_cap_off = false;
     opt.yaw_rail = true; opt.trace_from = opt.trace_to = 0;
@@ -1360,6 +1367,11 @@ int main(int argc, char** argv) {
             opt.g3_send = v == "on";
         }
         else if (a == "--g3-send-out" && more) opt.g3_send_out = argv[++i];
+        else if (a == "--g3-garage" && more) {
+            const std::string v = argv[++i];
+            if (v != "on" && v != "off") { usage(); return 2; }
+            opt.g3_garage = v == "on";
+        }
         else if (a == "--g3-rt" && more) opt.g3_rt = strtoull(argv[++i], 0, 10);
         else if (a == "--stopped-accuracy-m" && more) opt.stopped_accuracy_m = atof(argv[++i]);
         else if (a == "--stopped-honest-max-m" && more) opt.stopped_honest_max_m = atof(argv[++i]);

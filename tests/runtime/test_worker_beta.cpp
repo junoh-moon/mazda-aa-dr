@@ -98,7 +98,7 @@ static void slow_fsync() {
     hook_active.store(0);
 }
 static bool g3_scenario(const std::string& s) {
-    return s=="g3_park" || s=="g3_cancel" || s=="g3_move" || s=="g3_stop" || s=="g3_fault";
+    return s=="g3_park" || s=="g3_cancel" || s=="g3_move" || s=="g3_stop" || s=="g3_fault" || s=="g3_garage";
 }
 static bool g3_send_scenario(const std::string& s) {
     return s=="g3_send" || s=="g3_send_conflict" || s=="g3_send_off" || s=="g3_send_abort" ||
@@ -201,6 +201,7 @@ static Rows read_rows(const std::string& logs) {
     }
     return r;
 }
+static bool has_text(const std::string& s,const char* t) { return s.find(t)!=std::string::npos; }
 static bool has(const Rows& r,const char* t) {
     for(size_t i=0;i<r.transitions.size();++i)if(r.transitions[i]==t)return true;
     return false;
@@ -256,6 +257,13 @@ int main(int argc,char** argv) {
     const std::string logs=std::string(root)+"/logs";
     assert(!mkdir(logs.c_str(),0700));
     if(cap_off) { const int fd=open((std::string(root)+"/acc-cap-off").c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);assert(fd>=0);close(fd); }
+    // The beta.16 store scenarios run with the garage carry switched off
+    // (g3-garage-off); g3_garage runs the product default (garage on).
+    const bool garage_off=g3_scenario(scenario) && scenario!="g3_garage";
+    if(garage_off) {
+        const int fd=open((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+        assert(fd>=0);close(fd);
+    }
     const bool g3_send_case=g3_send_scenario(scenario);
     if(g3_send_case) {
         // A parked record of an earlier boot at the start position: the
@@ -342,7 +350,7 @@ int main(int argc,char** argv) {
     const bool shifted=!nofix && !cadence && scenario!="no_anchor" && !g3_send_case;
     const unsigned scenario_end=scenario=="budget"?20000:scenario=="main"?9600:
                                 scenario=="nofix_rearm"?17000:scenario=="cadence_gap"?30400:
-                                scenario=="cadence_gap_speed"?16000:scenario=="g3_park"?68000:scenario=="g3_cancel" || scenario=="g3_move"?70000:scenario=="g3_stop"?63000:scenario=="g3_fault"?66000:g3_send_case?14000:6400;
+                                scenario=="cadence_gap_speed"?16000:scenario=="g3_park"?68000:scenario=="g3_garage"?72000:scenario=="g3_cancel" || scenario=="g3_move"?70000:scenario=="g3_stop"?63000:scenario=="g3_fault"?66000:g3_send_case?14000:6400;
     const unsigned end_ms=scenario_end+(shifted?PRELUDE:0)+(scenario=="main"?PRELUDE2:0);
     const uint64_t start=clock_ns(0);
     bool motion=true;
@@ -381,7 +389,7 @@ int main(int argc,char** argv) {
         if(scenario=="silence" && !prelude && t==4000)motion=false;
         // nofix: the car drives, then stands still, all before the first fix.
         const double wheel_kmh=g3_send_case?(ms>=6000?kmh:0.0):(scenario=="nofix" && ms>=2500) || (g3_scenario(scenario) && !prelude && t>=2000 &&
-                                  !(scenario=="g3_move" && g3_injected))?0.0:kmh;
+                                  !(scenario=="g3_move" && g3_injected) && !(scenario=="g3_garage" && t>=67000))?0.0:kmh;
         for(unsigned kind=1;kind<=3 && motion;++kind) {
             if(kind==N::YAW && ms%100)continue;
             // Change-only producer: reverse at boot, then forward (a 1->0
@@ -428,7 +436,9 @@ int main(int argc,char** argv) {
             if(lost ? t%200==0 : t%500==0)oem_call(ms,lost?0:1);
             continue;
         }
-        if(scenario=="g3_park") {
+        if(scenario=="g3_park" || scenario=="g3_garage") {
+            // g3_garage (garage carry on): the same POSITION schedule; the car
+            // drives off again at 67 s (departure mark while moving).
             // Moving fixes until 2 s, then parked: the stored no-fix value
             // (NO_FIX: BETA overlays speed 0, so the store must wait) until
             // 19 s, then real fixes at the parked place (ARMED: the parked
@@ -776,7 +786,7 @@ int main(int argc,char** argv) {
     // Continuous position/heading maintenance needs a fresh pair, not the
     // historical 10 s settling period. Keep checking actual accepted rows.
     else assert(anchor_accepted>=1 && anchor_settling==0);
-    if(!nofix && scenario!="g3_park")assert(!overlay_total);
+    if(!nofix && scenario!="g3_park" && scenario!="g3_garage")assert(!overlay_total);
     unsigned fence_position=0,fence_send=0;
     for(size_t i=0;i<rows.lines.size();++i) if(rows.lines[i].find("\"kind\":\"beta_cadence_fence\"")!=std::string::npos) {
         assert(rows.lines[i].find("\"assist_ready\":false")!=std::string::npos &&
@@ -924,7 +934,7 @@ int main(int argc,char** argv) {
         expected.push_back("WITHDRAWN>ARMED:gps_returned");
         expected.push_back("ARMED>DISABLED:capture_stop");
         assert(ordered(rows,expected) && rows.transitions.size()==expected.size());
-    } else if(scenario=="g3_park") {
+    } else if(scenario=="g3_park" || scenario=="g3_garage") {
         assert(!replaced_total && overlay_total>=10 && has(rows,"SPEED_ENGAGED>ARMED:gps_returned"));
     } else if(scenario=="g3_cancel") {
         assert(has(rows,"ARMED>GPS_LOST:gps_lost"));
@@ -966,6 +976,7 @@ int main(int argc,char** argv) {
         bool boot_field=false,missing=false,failed=false,armed_after_nofix=false,written_while_replacing=false;
         bool lagging=false;
         unsigned written=0,written_sync=0,cancelled_rename=0;double latency_ms=0,cancel_latency_ms=0;
+        std::vector<std::string> garage_rows;
         std::string cancel_why;
         uint64_t lost_ns=0,cancel_end=0;
         uint64_t armed_ns=0,state_ns=0;
@@ -973,7 +984,9 @@ int main(int argc,char** argv) {
         std::string state="DISABLED";
         while(std::getline(f,line)) {
             if(line.find("\"kind\":\"shadow_boot\"")!=std::string::npos &&
-               line.find(",\"g3\":{\"state\":\"UNKNOWN\",\"reason\":\"missing\"}")!=std::string::npos)boot_field=true;
+               line.find(garage_off?",\"g3\":{\"state\":\"UNKNOWN\",\"reason\":\"missing\"}":
+                                    ",\"g3\":{\"state\":\"UNKNOWN\",\"reason\":\"missing\",\"garage\":1}")!=std::string::npos)
+                boot_field=true;
             if(line.find("{\"kind\":\"beta_state\"")==0) {
                 const std::string from=field(line,"from"),to=field(line,"to");
                 state_ns=strtoull(line.c_str()+line.find("\"mono_ns\":")+10,0,10);
@@ -1002,6 +1015,12 @@ int main(int argc,char** argv) {
             }
             if(line.find("\"event\":\"written\"")!=std::string::npos) {
                 ++written;
+                if(scenario=="g3_garage") {
+                    // Garage carry: the first record is written while BETA
+                    // overlays NO_FIX (no fsync), the departure mark while moving.
+                    garage_rows.push_back(line+"|"+state);
+                    continue;
+                }
                 if(line.find("\"sync\":1")!=std::string::npos)++written_sync;
                 const size_t at=line.find("\"lat_ms\":");
                 if(at!=std::string::npos)latency_ms=atof(line.c_str()+at+9);
@@ -1087,6 +1106,24 @@ int main(int argc,char** argv) {
             mx5::runtime::G3Record now_stored;
             assert(mx5::runtime::g3_load(logs.c_str(),&now_stored)==mx5::runtime::G3_LOAD_OK && now_stored.seq==1 &&
                    access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0);
+        } else if(scenario=="g3_garage") {
+            for(size_t i=0;i<garage_rows.size();++i)printf("g3_garage: %s\n",garage_rows[i].c_str());
+            // 1: the parked record at >= 5 s, while BETA overlays NO_FIX, no fsync;
+            // 2: the same stop at 60 s with the fsync (BETA ARMED again);
+            // 3: the departure mark while driving off (not cancelled by the wheels).
+            assert(garage_rows.size()==3 && hook_calls.load()==1);
+            assert(has_text(garage_rows[0],"\"st\":\"S\",\"hv\":") && has_text(garage_rows[0],"\"sync\":0") &&
+                   (has_text(garage_rows[0],"|SPEED_ENGAGED") || has_text(garage_rows[0],"|NO_FIX")));
+            assert(has_text(garage_rows[1],"\"st\":\"S\"") && has_text(garage_rows[1],"\"sync\":1") &&
+                   has_text(garage_rows[1],"|ARMED"));
+            assert(has_text(garage_rows[2],"\"st\":\"M\",\"hv\":0") && has_text(garage_rows[2],"\"sync\":0"));
+            assert(load==mx5::runtime::G3_LOAD_OK && stored.state=='M' && stored.flags==mx5::runtime::G3_FLAG_DEPART &&
+                   stored.seq==3);
+            assert(!lagging && max_summary_gap<1600000000ULL);
+            Journal plain(root);
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_ENGAGED,clock_ns(0),true,true),"no_writer"));
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_SPEED_ENGAGED,clock_ns(0),false,true),"no_writer"));
+            assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_ENGAGED,clock_ns(0),true,false),"beta_replacing"));
         } else if(scenario=="g3_park") {
             printf("g3_park: written=%u with_fsync=%u hook_calls=%d last_latency_ms=%.0f max_summary_gap_ms=%llu lagging=%d\n",
                    written,written_sync,hook_calls.load(),latency_ms,(unsigned long long)(max_summary_gap/1000000ULL),
@@ -1112,6 +1149,7 @@ int main(int argc,char** argv) {
     unlink((logs+"/capture.done").c_str());rmdir((logs+"/capture.stop").c_str());
     for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
     if(cap_off)unlink((std::string(root)+"/acc-cap-off").c_str());
+    if(garage_off)unlink((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str());
     assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);
     puts("BETA runtime wiring checks passed");
     return 0;
