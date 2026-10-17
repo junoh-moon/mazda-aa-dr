@@ -185,8 +185,65 @@ class G3Rows(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             audit.print_g3_data(report["g3"])
-        self.assertIn("G3 garage writes without fsync: 2, lat_ms > 500: 0, journal lag overlaps: 0", out.getvalue())
+        self.assertIn("G3 garage writes without fsync: 2, max lat_ms 4.0, lat_ms > 500: 0, journal lag overlaps: 0",
+                      out.getvalue())
         self.assertNotIn("malformed_g3_row", codes(report))
+
+    def test_garage_max_latency_by_state_and_unmarked(self):
+        # Review C3: the store rule's max lat_ms excludes garage writes (each
+        # has its own); review P3: garage writes by the BETA state at their
+        # start (> 100 ms = slow); review P1: an S record left without a mark.
+        def write(seq, start, lat, sync=0, st="S", m_b=10.0):
+            return dict(kind="g3_store", mono_ns=start + 10**7, event="written", seq=seq, st=st,
+                        hv=0 if st == "M" else 1, h=0 if st == "M" else 100, unc=0 if st == "M" else 40, sync=sync,
+                        m_b=m_b, wait_s=0.0, lat_ms=lat, start_ns=start, end_ns=start + int(lat * 1e6), ref_s=None,
+                        beta=None, garage=1)
+        def state(mono, to):
+            return dict(kind="beta_state", mono_ns=mono, domain="beta", assist_ready=False, **{"from": "ARMED"},
+                        to=to, reason="x")
+        def since(mono, m_b):
+            return dict(kind="g3_since", mono_ns=mono, event="left", reason="stored", g3="UNKNOWN", m=0.0, rot=0,
+                        arot=0, age_s=1.0, m_b=m_b)
+        rows = [boot(BOOT_A),
+                dict(kind="g3_store", mono_ns=1, event="missing", reason="missing", g3="UNKNOWN", age_s=None,
+                     age_src="none", boot="none", chain="none", seq=0, prev="none"),
+                write(1, 10 * S, 20.0), write(2, 12 * S, 30.0, sync=1),
+                state(20 * S, "ENGAGED"), write(3, 25 * S, 150.0, m_b=50.0), write(4, 31 * S, 8.0, st="M", m_b=51.0),
+                write(5, 40 * S, 7.0, m_b=80.0), since(50 * S, 80.0), since(60 * S, 95.0)]
+        _, report = consume(rows)
+        o = report["g3"]["write_overlap"]
+        self.assertEqual((o["writes"], o["max_lat_ms"]), (1, 30.0))
+        self.assertEqual((o["garage_writes"], o["garage_max_lat_ms"]), (4, 150.0))
+        self.assertEqual(o["garage_by_beta_state"], {"unknown": dict(writes=1, max_lat_ms=20.0, lat_over_100=0),
+                                                     "ENGAGED": dict(writes=3, max_lat_ms=150.0, lat_over_100=1)})
+        # S seq 3 was marked (M seq 4); S seq 5 at 80 m: 80 m later ok, 95 m unmarked.
+        self.assertEqual(report["g3"]["garage_s_left_unmarked"], 1)
+        self.assertEqual(report["g3"]["garage_s_left_unmarked_rows"], [dict(session=1, seq=5, m_b=95.0)])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_g3_data(report["g3"])
+        self.assertIn("G3 write overlap check: 1 writes, max lat_ms 30.0", out.getvalue())
+        self.assertIn("G3 garage writes by BETA state: ENGAGED 3 (max lat_ms 150.0, > 100 ms 1), "
+                      "unknown 1 (max lat_ms 20.0, > 100 ms 0)", out.getvalue())
+        self.assertIn("G3 garage S records left without a departure mark: 1", out.getvalue())
+        # A restored garage S record (restore row with "prev") counts from 0 m.
+        restored = [boot(BOOT_B),
+                    dict(kind="g3_store", mono_ns=1, event="loaded", reason="chain_depart", g3="CARRIED", st="S",
+                         hv=1, h=1636, unc=79, age_s=None, age_src="none", boot="aaaaaaaa", chain="none", seq=38,
+                         prev="aaaaaaaa"),
+                    write(39, 5 * S, 5.0, st="M", m_b=0.6)]
+        _, report = consume(restored)
+        self.assertEqual(report["g3"]["garage_s_left_unmarked"], 0)
+        _, report = consume(restored[:2] + [since(9 * S, 3.0)])         # moved 3 m, never marked
+        self.assertEqual(report["g3"]["garage_s_left_unmarked"], 1)
+        _, report = consume(restored[:2] + [since(9 * S, 3.0), write(40, 20 * S, 5.0, m_b=300.0)])
+        self.assertEqual(report["g3"]["garage_s_left_unmarked"], 1)
+        # Earlier logs (no garage rows): no new fields.
+        old = dict(rows[1])
+        old.pop("prev")
+        _, report = consume([rows[0], old, dict(write(1, 10 * S, 20.0), garage=None)])
+        self.assertNotIn("garage_s_left_unmarked", report["g3"])
+        self.assertNotIn("garage_max_lat_ms", report["g3"]["write_overlap"])
 
     def test_malformed_rows(self):
         bad = [dict(kind="g3_store", mono_ns=1, event="exploded", reason="x"),
@@ -309,6 +366,21 @@ class G3BearingSend(unittest.TestCase):
         for row in bad:
             found, _ = self.bearing_codes([row])
             self.assertIn("malformed_g3_row", found, row)
+        bad_wait = [dict(kind="g3_send", mono_ns=1, event="wait", reason="latch_unsure", rev="x", rlost=1),
+                    dict(kind="g3_send", mono_ns=1, event="wait", reason="latch_unsure", rev=-1, rlost=-1)]
+        for row in bad_wait:
+            found, _ = self.bearing_codes([row])
+            self.assertIn("malformed_g3_row", found, row)
+        # Garage carry rows (review C1): wait rows and latch/session ends are valid.
+        found, report = self.bearing_codes([
+            dict(kind="g3_send", mono_ns=1, event="wait", reason="latch_unsure", t_s=0.0, rev=-1, rlost=2, m_b=0.0),
+            dict(kind="g3_send", mono_ns=2, event="end", reason="latch", why="unknown", by="tick", call=3, t_s=1.0,
+                 sent=0, stock=0, h=10, unc=10, gated=0, pbreaks=0, course=None, d=None)])
+        self.assertEqual(found, [])
+        self.assertEqual(report["g3"]["send"]["boots"][0]["waits"], ["latch_unsure"])
+        found, _ = self.bearing_codes([dict(kind="g3_send", mono_ns=2, event="end", reason="session",
+                                            why="cadence_fence", by="tick", call=3, t_s=1.0, sent=0, stock=0)])
+        self.assertEqual(found, [])
         ok = [dict(kind="g3_send", mono_ns=1, event="none", g3="UNKNOWN", reason="missing"),
               dict(kind="g3_send_conflict", mono_ns=1, t_s=4.0, h=900, unc=45, tol=100, course=[0, 360], d=900,
                    fixes=8)]

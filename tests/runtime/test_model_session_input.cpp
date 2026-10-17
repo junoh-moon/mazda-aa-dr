@@ -114,6 +114,34 @@ int main() {
     assert(raw_rows==expected_count);
     input.close();assert(!unlink((std::string(logs)+"/trace.0.jsonl").c_str()));
     assert(!rmdir(logs) && !rmdir(root));
+    // G3 garage carry (review C1): an excluded REVERSE message reaches the
+    // pipeline's reverse_unsure count through Pipeline::exclude_reverse_event
+    // unless its value is the forward value (an engine-start burst), both
+    // before the session boundary and with the MODEL off.
+    {
+        char root2[]="/tmp/mx5dr-g3-exclude-XXXXXX";assert(mkdtemp(root2));
+        char logs2[200];snprintf(logs2,sizeof logs2,"%s/logs",root2);assert(!mkdir(logs2,0700));
+        {
+            Journal journal(root2);
+            struct Case { const char* label;unsigned receipt;int value;bool enabled;uint32_t unsure; };
+            const Case cases[]={{"excluded_reverse",900,1,true,1},{"excluded_forward",900,0,true,0},
+                                {"model_off_reverse",1100,1,false,1},{"admitted_reverse",1100,1,true,0}};
+            for(size_t i=0;i<sizeof cases/sizeof cases[0];++i) {
+                N::Pipeline nav;N::GpsHoldout hold;const mx5_dr_context c={1,1,1};
+                assert(nav.init_model(N::research_model_profile(),mx5_dr_default_config(),c,true,true,true));
+                assert(hold.init_model(N::research_model_profile(),mx5_dr_default_config(),c));
+                EventReceiver receiver;N::RawEvent r=wheel(cases[i].receipt,0);r.kind=N::REVERSE;r.reverse=cases[i].value;
+                receiver.rows.push_back(r);
+                mx5::runtime::MotionBatch batch;
+                drain_motion(journal,batch,receiver,nav,hold,cases[i].enabled,T(1000),false);
+                printf("%s: reverse_unsure=%u\n",cases[i].label,(unsigned)nav.g3_motion().reverse_unsure);
+                assert(nav.g3_motion().reverse_unsure==cases[i].unsure);
+            }
+            journal.flush();assert(!journal.failed);
+        }
+        assert(!unlink((std::string(logs2)+"/trace.0.jsonl").c_str()));
+        assert(!rmdir(logs2) && !rmdir(root2));
+    }
     puts("MODEL session input: old receipt/event exclusions recorded; malformed/current clock faults preserved");
     return 0;
 }

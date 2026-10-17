@@ -79,8 +79,9 @@ G3_STORE_EVENTS = ("off", "missing", "rejected", "loaded", "checked", "written",
 G3_SINCE_EVENTS = ("unstored", "left")
 G3_FIRST_EVENTS = ("start", "t30", "course")
 # G3 bearing send (src/runtime/g3_send.h): one window per boot.
-G3_SEND_EVENTS = ("start", "none", "count", "end")
-G3_SEND_END_REASONS = ("trusted", "conflict", "cap", "fault", "rejected")
+# "wait": garage carry only (why the window has not opened yet, review C1).
+G3_SEND_EVENTS = ("start", "none", "count", "end", "wait")
+G3_SEND_END_REASONS = ("trusted", "conflict", "cap", "fault", "rejected", "session", "latch")
 # Adapter PositionClass numbers carried as the send/position "class" field.
 POSITION_CLASS_NO_FIX, POSITION_CLASS_FIX, POSITION_CLASS_LOST = 1, 2, 3
 BETA_KINDS = ("beta_state", "beta_summary", "beta_hold", "beta_session_storage", "beta_anchor",
@@ -1006,6 +1007,7 @@ class Auditor:
         self.g3_rows = []       # (session index, g3_store/g3_first row)
         self.drive_rows = []    # (session index, fix1/exit_jump/yaw_learn/rec_drop row)
         self.g3_events = []     # (session index, mono_ns, beta_journal_lag | GPS_LOST | ENGAGED)
+        self.g3_beta_states = []   # (session index, mono_ns, BETA state entered): garage write latency by state
         self.pimu_rows = []     # (file, line bytes, row) of logs/pimu.N.jsonl
         self.pimu_bad = 0
         self.capture_ends = 0
@@ -1226,6 +1228,8 @@ class Auditor:
             self.g3_events.append((len(self.sessions), row["mono_ns"], "beta_journal_lag"))
         elif kind == "beta_state" and row.get("to") in ("GPS_LOST", "ENGAGED") and integer(row.get("mono_ns")):
             self.g3_events.append((len(self.sessions), row["mono_ns"], row["to"]))
+        if kind == "beta_state" and isinstance(row.get("to"), str) and integer(row.get("mono_ns")):
+            self.g3_beta_states.append((len(self.sessions), row["mono_ns"], row["to"]))
         if kind == 'storage_stop':
             # These fixed diagnostics are separate from the failed journal,
             # including the collector's usual envelope. Never infer a complete
@@ -1727,7 +1731,7 @@ class Auditor:
         for index, session in enumerate(self.sessions):
             boot = session.get("boot") or {}
             boots[index + 1] = boot.get("boot_id") if isinstance(boot.get("boot_id"), str) else None
-        return g3_report(self.g3_rows, boots, self.g3_events, self.g3_bearing_overlays)
+        return g3_report(self.g3_rows, boots, self.g3_events, self.g3_bearing_overlays, self.g3_beta_states)
 
     def chan_report(self):
         return chan_report(self.chan_rows, self.chan_speeds,
@@ -3826,6 +3830,9 @@ def g3_row_valid(row):
             return False
         if event == "none":
             return row.get("g3") in G3_STATES and isinstance(row.get("reason"), str)
+        if event == "wait":
+            return (isinstance(row.get("reason"), str) and type(row.get("rev")) is int and
+                    bounded_int(row.get("rlost"), 0, 2**32 - 1))
         if event == "start":
             return row.get("g3") in G3_STATES and type(row.get("h")) is int and _pair(row.get("carried"))
         if event == "end":
@@ -3873,7 +3880,19 @@ G3_OVERLAP_LAT_MS = 500.0
 G3_OVERLAP_TAIL_NS = 2 * 10**9
 
 
-def g3_write_overlap(rows, events):
+G3_GARAGE_SLOW_MS = 100.0
+
+
+def _beta_state_at(states, session, mono):
+    """The BETA state entered last at or before mono in this session (None: no row yet)."""
+    state = None
+    for s, t, to in states:
+        if s == session and t <= mono:
+            state = to
+    return state
+
+
+def g3_write_overlap(rows, events, states=()):
     """Pre-registered rule (validation/G3_RECORD_ONLY_2026-10-11.md): after the
     first drive, any g3_store write with lat_ms > 500 or whose
     [start_ns, end_ns + 2 s] window contains a beta_journal_lag 'lagging'
@@ -3886,7 +3905,10 @@ def g3_write_overlap(rows, events):
     # any of them with lat_ms > 500 or a beta_journal_lag "lagging" event in
     # [start_ns, end_ns + 2 s] makes the next build default the garage carry
     # OFF (menu 12 opt-in). Their fsync writes keep the rule above.
-    g_writes, g_slow, g_hits = 0, 0, []
+    # Review C3/P3: the garage writes keep their own maximum (the store rule's
+    # max_lat_ms counts only its own writes) and are broken down by the BETA
+    # state at their start (lat_ms > 100 ms counted as slow).
+    g_writes, g_slow, g_hits, g_max, by_state = 0, 0, [], None, {}
     for session, row in rows:
         if row["kind"] != "g3_store" or row["event"] not in ("written", "failed", "cancelled"):
             continue
@@ -3895,8 +3917,14 @@ def g3_write_overlap(rows, events):
             continue
         if row.get("garage") == 1 and row.get("sync") == 0:
             g_writes += 1
+            state = _beta_state_at(states, session, start) or "unknown"
+            s = by_state.setdefault(state, dict(writes=0, max_lat_ms=None, lat_over_100=0))
+            s["writes"] += 1
             if type(lat) in (int, float):
-                max_lat = lat if max_lat is None else max(max_lat, lat)
+                g_max = lat if g_max is None else max(g_max, lat)
+                s["max_lat_ms"] = lat if s["max_lat_ms"] is None else max(s["max_lat_ms"], lat)
+                if lat > G3_GARAGE_SLOW_MS:
+                    s["lat_over_100"] += 1
                 if lat > G3_OVERLAP_LAT_MS:
                     g_slow += 1
             for s, mono, label in events:
@@ -3915,8 +3943,38 @@ def g3_write_overlap(rows, events):
                overlap_events=hits[:10], default_off_next_build=bool(slow or hits))
     if g_writes:   # only with garage rows: earlier reports stay byte-identical
         out.update(garage_writes=g_writes, garage_lat_over_500=g_slow, garage_lag_overlaps=len(g_hits),
-                   garage_overlap_events=g_hits[:10], garage_off_next_build=bool(g_slow or g_hits))
+                   garage_overlap_events=g_hits[:10], garage_off_next_build=bool(g_slow or g_hits),
+                   garage_max_lat_ms=g_max, garage_by_beta_state=by_state)
     return out
+
+
+def g3_unmarked_departures(rows):
+    """Review P1/P2: garage S records (hv 1) whose departure was not marked:
+    after the S record (written in this session, or restored at its start),
+    a later G3 row of the same session reports more than 0.5 m of wheel
+    distance since boot (m_b) beyond the record's while no M record was
+    written. A drive that ends without any later G3 row is not visible."""
+    count, details, open_ = 0, [], {}
+    for session, row in rows:
+        kind, event = row["kind"], row.get("event")
+        if kind == "g3_store" and event in ("loaded", "rejected") and row.get("st") == "S" and \
+                row.get("hv") == 1 and "prev" in row:
+            open_[session] = (0.0, row.get("seq"))
+            continue
+        if kind == "g3_store" and event == "written" and row.get("garage") == 1:
+            if row["st"] == "M":
+                open_.pop(session, None)
+            elif row["hv"] == 1 and type(row.get("m_b")) in (int, float):
+                open_[session] = (row["m_b"], row.get("seq"))
+            else:
+                open_.pop(session, None)
+            continue
+        m_b = row.get("m_b")
+        if session in open_ and type(m_b) in (int, float) and m_b - open_[session][0] > 0.5:
+            count += 1
+            details.append(dict(session=session, seq=open_[session][1], m_b=m_b))
+            open_.pop(session)
+    return count, details[:10]
 
 
 def g3_send_report(rows, boots, overlays=0):
@@ -3937,6 +3995,8 @@ def g3_send_report(rows, boots, overlays=0):
                               unc_deg=_deci(row.get("unc")), tolerance_deg=_deci(row.get("tol")), age_s=row.get("age_s"))
         elif event == "none":
             b["none"] = dict(state=row["g3"], reason=row["reason"])
+        elif event == "wait":
+            b.setdefault("waits", []).append(row["reason"])
         elif event == "count":
             b["counts"] += 1
         elif event == "end":
@@ -3949,7 +4009,7 @@ def g3_send_report(rows, boots, overlays=0):
                 scope="FIX LOCATION bearing replaced by the carried G3 heading until the stock course is trusted")
 
 
-def g3_report(rows, boots, events=(), overlays=0):
+def g3_report(rows, boots, events=(), overlays=0, states=()):
     """Per boot: the restore decision, continuity checks, store writes and the
     first-session rows; overall: the first-course error distribution (the
     validation metric of the record-only build) and reverse starts."""
@@ -4018,6 +4078,11 @@ def g3_report(rows, boots, events=(), overlays=0):
                if "course" in b["first"] and b["first"]["course"]["err_carried_deg"] is not None]
     stock = [b["first"]["course"]["err_stock_deg"] for b in boots_out
              if "course" in b["first"] and b["first"]["course"]["err_stock_deg"] is not None]
+    garage = any(row["kind"] == "g3_store" and (row.get("garage") == 1 or "prev" in row) for _, row in rows)
+    extra = {}
+    if garage:   # only with garage rows: earlier reports stay byte-identical
+        unmarked, unmarked_rows = g3_unmarked_departures(rows)
+        extra = dict(garage_s_left_unmarked=unmarked, garage_s_left_unmarked_rows=unmarked_rows)
     return dict(boots=boots_out,
                 restore_events=dict(Counter(b["restore"]["event"] for b in boots_out if b["restore"])),
                 restore_reasons=dict(Counter(b["restore"]["reason"] for b in boots_out if b["restore"])),
@@ -4029,9 +4094,9 @@ def g3_report(rows, boots, events=(), overlays=0):
                 writes=sum(b["writes"] for b in boots_out), write_failures=sum(b["failures"] for b in boots_out),
                 parked_stops_unstored=sum(sum(b["unstored"].values()) for b in boots_out),
                 writes_cancelled=sum(sum(b["cancelled"].values()) for b in boots_out),
-                write_overlap=g3_write_overlap(rows, events),
+                write_overlap=g3_write_overlap(rows, events, states),
                 scope="record_only_would_be_heading_not_sent; GPS course is a reference, not ground truth",
-                **({"send": g3_send_report(sends, boots, overlays)} if sends or overlays else {}))
+                **dict(extra, **({"send": g3_send_report(sends, boots, overlays)} if sends or overlays else {})))
 
 
 def print_g3_data(g3):
@@ -4055,10 +4120,15 @@ def print_g3_data(g3):
            " -> pre-registered rule: next build defaults the store OFF (menu 8 opt-in)"
            if o["default_off_next_build"] else ""))
     if o.get("garage_writes"):
-        print("G3 garage writes without fsync: %d, lat_ms > 500: %d, journal lag overlaps: %d%s" %
-              (o["garage_writes"], o["garage_lat_over_500"], o["garage_lag_overlaps"],
+        print("G3 garage writes without fsync: %d, max lat_ms %s, lat_ms > 500: %d, journal lag overlaps: %d%s" %
+              (o["garage_writes"], f(o.get("garage_max_lat_ms")), o["garage_lat_over_500"], o["garage_lag_overlaps"],
                " -> pre-registered rule: next build defaults the garage carry OFF (menu 12 opt-in)"
                if o["garage_off_next_build"] else ""))
+        print("G3 garage writes by BETA state: %s" % ", ".join(
+            "%s %d (max lat_ms %s, > 100 ms %d)" % (k, v["writes"], f(v["max_lat_ms"]), v["lat_over_100"])
+            for k, v in sorted(o.get("garage_by_beta_state", {}).items())))
+    if "garage_s_left_unmarked" in g3:
+        print("G3 garage S records left without a departure mark: %d" % g3["garage_s_left_unmarked"])
     send = g3.get("send")
     if send:
         print("G3 bearing send: %d windows, ends %s, overlaid FIX sends %d" %

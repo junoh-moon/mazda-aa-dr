@@ -216,6 +216,9 @@ void Pipeline::reset_state(mx5_dr_context x) {
     if(reverse_latch_) {
         bool queued_reverse=false;
         for(size_t j=0;j<size_;++j)if(queue_[j].kind==REVERSE_EVENT)queued_reverse=true;
+        // G3 (observation only): a discarded queued change is lost even
+        // when the latch was not valid.
+        if(queued_reverse)++g3_.reverse_unsure;
         if(keep_latch_on_reset_) {
             if(queued_reverse)drop_latch(LATCH_CLEAR_RESET);
         } else {
@@ -321,6 +324,7 @@ PipelineResult Pipeline::enqueue_raw(const RawEvent& r) {
     // Rule F: an assumption belongs to its source epoch like the real latch.
     if(reverse_latch_&&assumed_forward_&&r.epoch!=assumed_epoch_) { clear_latch(); assumption_lost(); }
     const PipelineResult result=enqueue_raw_event(r);
+    if(r.kind==REVERSE&&result!=PIPELINE_OK)++g3_.reverse_unsure;   // G3 observation only
     if(reverse_latch_&&r.kind==REVERSE&&result!=PIPELINE_OK) {
         drop_latch(LATCH_CLEAR_REJECTED_REVERSE); assumption_lost();
     }
@@ -1099,7 +1103,14 @@ bool Pipeline::beta_anchor_record(uint64_t seq,BetaAnchorRecord* out) const {
     *out=r; return true;
 }
 void Pipeline::exclude_reverse(LatchClear why) {
+    // G3 (observation only): a motion input gap may hide a REVERSE change.
+    if (why==LATCH_CLEAR_INPUT_GAP) ++g3_.reverse_unsure;
     if (reverse_latch_) { drop_latch(why); assumption_lost(); }
+}
+void Pipeline::exclude_reverse_event(const RawEvent& r) {
+    // G3 (observation only): an excluded forward value hides no reverse.
+    if (r.reverse!=profile_.reverse_forward_value) ++g3_.reverse_unsure;
+    exclude_reverse();
 }
 // Rule F (v3): a seed made under the assumption whose reverse state became
 // unknown again without a real forward confirmation (an excluded or rejected
@@ -1136,6 +1147,7 @@ void Pipeline::reset_keep_reverse(mx5_dr_context x) {
 }
 void Pipeline::drop_latch(LatchClear why) {
     if (latch_valid_&&why<LATCH_CLEAR_COUNT) { ++latch_clears_[why]; last_latch_clear_=why; }
+    if (latch_valid_) ++g3_.reverse_unsure;   // G3 observation only
     // Rule F mitigation: a latch cleared while it said reverse keeps rule F
     // off until a real message is latched again (the car may still reverse).
     if (latch_valid_) af_blocked_=latch_value_==1;

@@ -1199,7 +1199,7 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
           uint64_t(raw.source_mono_ms)*1000000ULL<model_since_ns;
       if(enabled && (raw.received_ns<model_since_ns || old_transport)) {
         // BETA_DECISIONS 3.4: an excluded REVERSE change ends the latch.
-        if(raw.kind==N::REVERSE)navigation.exclude_reverse();
+        if(raw.kind==N::REVERSE)navigation.exclude_reverse_event(raw);
         motion_gap_accept(j,raw,navigation,enabled);
         journal_motion(j,batch,raw);flush_motion(j,batch);
         journal_model_motion_excluded(j,raw,model_since_ns,
@@ -1211,7 +1211,7 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
       const uint64_t resets=navigation.status().resets;
       motion_gap_accept(j,raw,navigation,enabled);
       if(enabled) {navigation.enqueue_raw(raw);holdout.enqueue_raw(raw);}
-      else if(raw.kind==N::REVERSE)navigation.exclude_reverse(); // change not computed
+      else if(raw.kind==N::REVERSE)navigation.exclude_reverse_event(raw); // change not computed
       journal_motion(j,batch,raw);
       if(enabled && navigation.status().resets!=resets) {
         // Write the offending raw input before its diagnostic. These are
@@ -1693,17 +1693,26 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     mx5::runtime::G3Record stored=mx5::runtime::g3_record();
     mx5::runtime::G3Load load=mx5::runtime::G3_LOAD_MISSING;
     char chain[9]="unread";
+    char dir[512];
+    const int n=snprintf(dir,sizeof dir,"%s/logs",root);
+    const bool dir_ok=n>0 && size_t(n)<sizeof dir;
+    // Previous-product-boot token (review P1): swapped at EVERY BETA worker
+    // start, before the record is read and whatever the g3-off or
+    // g3-garage-off marker says, so that a boot which did not mark
+    // departures still makes the next boot refuse an older S record. One
+    // small temp+rename write without fsync on this startup path; no row,
+    // send or store record depends on it except the garage carry restore.
+    char prev_boot[37]="unread";
+    if(dir_ok)mx5::runtime::g3_last_start_swap(dir,boot_id,prev_boot);
     if(g3_on) {
-      char dir[512];
-      const int n=snprintf(dir,sizeof dir,"%s/logs",root);
-      load=n>0 && size_t(n)<sizeof dir?mx5::runtime::g3_load(dir,&stored):mx5::runtime::G3_LOAD_UNREADABLE;
+      load=dir_ok?mx5::runtime::g3_load(dir,&stored):mx5::runtime::G3_LOAD_UNREADABLE;
       mx5::runtime::g3_chain_token(root,chain);
     }
     // Garage carry (G3_GARAGE_*, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md):
     // default on with the tracker; <root>/g3-garage-off restores beta.16.
     const bool g3_garage=g3_on && mx5::runtime::g3_garage_on(root);
     g3.start(clock_ns(0),g3_on,!beta_core?"beta_core_unavailable":"marker",boot_id,chain,
-             mx5::runtime::g3_realtime_s(),load,stored,g3_garage);
+             mx5::runtime::g3_realtime_s(),load,stored,g3_garage,prev_boot);
   }
   // G3 first-connection bearing send (g3_send.h): only with the tracker
   // (BETA, no g3-off marker); one window per worker, never re-armed.
@@ -1973,6 +1982,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       mx5::runtime::G3Sample g3_sample_now=
           mx5::runtime::g3_sample(navigation,g3_now,mx5::runtime::g3_realtime_s());
       g3_sample_now.beta_replacing=g3_beta_replacing(beta.state());
+      g3_sample_now.writer_lag_ns=journal_writer_lag(j.writer,g3_now).oldest_ns;
       const char* g3_block=g3_io_block(j,beta.state(),g3_now,true,g3.garage());
       g3.tick(j,g3_sample_now,found?&course:0,g3_block);
       // Cancel rule (g3_cancel_reason; garage carry exemptions there).

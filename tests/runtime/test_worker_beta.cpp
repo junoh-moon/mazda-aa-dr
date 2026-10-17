@@ -264,6 +264,13 @@ int main(int argc,char** argv) {
         const int fd=open((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
         assert(fd>=0);close(fd);
     }
+    // Review P1: the previous-product-boot token of an earlier boot; the
+    // worker reads it before the record (g3_store "prev") and replaces it.
+    static const char PREV_TOKEN[]="mx5g3start 1 cccccccc-1111-2222-3333-444444444444\n";
+    if(scenario=="g3_garage") {
+        const int fd=open((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+        assert(fd>=0 && write(fd,PREV_TOKEN,sizeof PREV_TOKEN-1)==ssize_t(sizeof PREV_TOKEN-1));close(fd);
+    }
     const bool g3_send_case=g3_send_scenario(scenario);
     if(g3_send_case) {
         // A parked record of an earlier boot at the start position: the
@@ -641,6 +648,10 @@ int main(int argc,char** argv) {
             // Owner switch: no restore, no window, no overlaid send, no g3_send row.
             assert(!bearing && !choice6 && !starts && !ends && !conflicts);
             assert(restore.find("\"event\":\"off\",\"reason\":\"marker\"")!=std::string::npos);
+            // Review P1: the token is swapped with the g3-off marker too.
+            { char boot[37];mx5::runtime::read_boot_id(boot);
+              std::ifstream tf((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str());std::string token;std::getline(tf,token);
+              assert(strlen(boot)!=36 || token==std::string("mx5g3start 1 ")+boot); }
             unlink((std::string(root)+"/"+mx5::runtime::G3_OFF_NAME).c_str());
         } else {
             assert(restore.find("\"event\":\"loaded\",\"reason\":\"chain_ok\",\"g3\":\"CARRIED\"")!=std::string::npos);
@@ -974,7 +985,7 @@ int main(int argc,char** argv) {
         // (beta_summary at most 1.6 s apart) carried on.
         std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
         bool boot_field=false,missing=false,failed=false,armed_after_nofix=false,written_while_replacing=false;
-        bool lagging=false;
+        bool lagging=false,prev_row=false;
         unsigned written=0,written_sync=0,cancelled_rename=0;double latency_ms=0,cancel_latency_ms=0;
         std::vector<std::string> garage_rows;
         std::string cancel_why;
@@ -1004,6 +1015,8 @@ int main(int argc,char** argv) {
                 last_summary=t;
             }
             if(line.find("{\"kind\":\"g3_store\"")!=0)continue;
+            if(line.find("\"event\":\"missing\"")!=std::string::npos &&
+               line.find(garage_off?"\"seq\":0}":"\"seq\":0,\"prev\":\"cccccccc\"}")!=std::string::npos)prev_row=true;
             if(line.find("\"event\":\"missing\"")!=std::string::npos)missing=true;
             if(line.find("\"event\":\"failed\"")!=std::string::npos)failed=true;
             if(line.find("\"event\":\"cancelled\"")!=std::string::npos &&
@@ -1120,6 +1133,12 @@ int main(int argc,char** argv) {
             assert(load==mx5::runtime::G3_LOAD_OK && stored.state=='M' && stored.flags==mx5::runtime::G3_FLAG_DEPART &&
                    stored.seq==3);
             assert(!lagging && max_summary_gap<1600000000ULL);
+            // Review P1: the token read at start is the earlier boot's, the
+            // token left on disk is this boot's.
+            char boot[37];mx5::runtime::read_boot_id(boot);
+            std::ifstream tf((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str());std::string token;std::getline(tf,token);
+            printf("g3_garage: prev_row=%d token=%s\n",int(prev_row),token.c_str());
+            assert(prev_row && (strlen(boot)!=36 || token==std::string("mx5g3start 1 ")+boot));
             Journal plain(root);
             assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_ENGAGED,clock_ns(0),true,true),"no_writer"));
             assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_SPEED_ENGAGED,clock_ns(0),false,true),"no_writer"));
@@ -1128,6 +1147,11 @@ int main(int argc,char** argv) {
             printf("g3_park: written=%u with_fsync=%u hook_calls=%d last_latency_ms=%.0f max_summary_gap_ms=%llu lagging=%d\n",
                    written,written_sync,hook_calls.load(),latency_ms,(unsigned long long)(max_summary_gap/1000000ULL),
                    int(lagging));
+            // Review P1: the previous-product-boot token is swapped also with
+            // the g3-garage-off marker (this scenario runs with it).
+            { char boot[37];mx5::runtime::read_boot_id(boot);
+              std::ifstream tf((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str());std::string token;std::getline(tf,token);
+              assert(garage_off && (strlen(boot)!=36 || token==std::string("mx5g3start 1 ")+boot)); }
             // The 15 s write ran no fsync (no hook call), the 60 s write did.
             assert(written==2 && written_sync==1 && hook_calls.load()==1 && latency_ms>=2900 &&
                    load==mx5::runtime::G3_LOAD_OK && stored.state=='S' &&
@@ -1148,6 +1172,9 @@ int main(int argc,char** argv) {
     }
     unlink((logs+"/capture.done").c_str());rmdir((logs+"/capture.stop").c_str());
     for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
+    // Review P1: every BETA worker start leaves its previous-boot token.
+    unlink((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str());
+    unlink((logs+"/"+mx5::runtime::G3_LAST_START_TEMP).c_str());
     if(cap_off)unlink((std::string(root)+"/acc-cap-off").c_str());
     if(garage_off)unlink((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str());
     assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);

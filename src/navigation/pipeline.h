@@ -181,6 +181,16 @@ struct G3Motion {
     // boot did not observe before its first moving wheel event.
     unsigned boot_motion;
     uint64_t boot_gap_ns;    // largest wheel-event gap before the first motion (0: none)
+    // G3 garage carry (review C1, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md):
+    // boot-lifetime count of REVERSE information the latch could not keep:
+    // a valid latch dropped (any LatchClear reason), a REVERSE message
+    // rejected by enqueue_raw or discarded from the queue by a reset, an
+    // excluded REVERSE message whose value is not the forward value
+    // (exclude_reverse_event), a motion input gap that clears the latch.
+    // With an invalid latch and this count zero, no 0x118 change reached the
+    // runtime except excluded forward values. Observation only: no
+    // pipeline decision reads it.
+    uint32_t reverse_unsure;
 };
 // G3Motion::boot_motion flags. FIRST_MOVING: the first drained wheel event of
 // the boot already had a moving wheel. GAP_INTO_MOTION: the first moving
@@ -324,6 +334,10 @@ public:
     // A REVERSE message the runtime did not hand to this pipeline (excluded
     // or not computed): its change is lost, so the latch is cleared.
     void exclude_reverse(LatchClear why=LATCH_CLEAR_EXCLUDED_REVERSE);
+    // An excluded REVERSE raw message (runtime: before the session/bus
+    // admission or with the model off): exclude_reverse() plus the G3
+    // reverse_unsure count when its value is not the forward value.
+    void exclude_reverse_event(const RawEvent& r);
     // A reset that must not drop the reverse latch (task E, 2026-10-05): the
     // runtime's input-rejection epoch bump for a stale/sequence gap of at most
     // 2 s and 16 missing events. The latch is still dropped if a queued

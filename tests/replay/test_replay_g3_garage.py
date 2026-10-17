@@ -12,8 +12,13 @@ window and adapter, with one store directory across both boots.
                    fsync), boot B restores it as CARRIED/chain_depart and the
                    first FIX LOCATIONs at the exit carry the integrated heading.
   --g3-garage off: beta.16 rules (no store while BETA replaces; nothing carried,
-                   no overlay); every send equals the on run except bytes 40 and
-                   44..47 of the overlaid ones.
+                   no overlay). The --g3-send-out record holds only the send's
+                   bytes 40 and 44..47 (stock and sent) and the decoded fields,
+                   so this test shows that the off run sends the stock bearing
+                   and that the on run changes the bearing only in overlaid
+                   sends; that the OTHER payload bytes are unchanged is shown by
+                   the adapter test (test_adapter beta_bearing) and the worker
+                   payload comparison (tests/runtime/g3_send_identity.py).
 Synthetic receipt-time data only: not vehicle, phone or DHU evidence.
 """
 import json
@@ -27,6 +32,7 @@ import test_replay_beta as base
 
 BOOT_A = "00000000-0000-4000-8000-00000000a001"
 BOOT_B = "00000000-0000-4000-8000-00000000b002"
+BOOT_X = "00000000-0000-4000-8000-00000000c003"   # a product boot between A and B ("gap" run)
 A_LOST = 104.0          # garage entry (GPS mode 0 from here)
 A_END = 150.0
 B_EXIT = 130.0          # first GPS fix of boot B
@@ -162,15 +168,21 @@ class G3GarageChainReplay(unittest.TestCase):
         cls.states_b = write_trip(cls.trip_b, BOOT_B, speed_b, yaw_b, cls.park_heading, B_END, B_EXIT, None,
                                   lat0=states_a[-1][1], lon0=states_a[-1][2], utc0=1700003600)
         cls.runs = {}
-        for mode in ("on", "off"):
+        # gap: garage on, but another product boot (BOOT_X) started between A
+        # and B and wrote no record (review P1: its token replaces A's).
+        for mode in ("on", "off", "gap"):
             store = os.path.join(root, "store-" + mode)
             os.mkdir(store)
             out = {}
             for name, trip in (("a", cls.trip_a), ("b", cls.trip_b)):
+                if mode == "gap" and name == "b":
+                    with open(os.path.join(store, "g3-last-start"), "w") as f:
+                        f.write("mx5g3start 1 %s\n" % BOOT_X)
                 prefix = os.path.join(root, mode + "-" + name)
                 p = subprocess.run(
                     [base.TOOL, "--trip", trip, "--real-only", "--report", prefix + ".json", "--csv", prefix + ".csv",
-                     "--journal", prefix + ".jsonl", "--g3", "on", "--g3-store", store, "--g3-garage", mode,
+                     "--journal", prefix + ".jsonl", "--g3", "on", "--g3-store", store,
+                     "--g3-garage", "off" if mode == "off" else "on",
                      "--g3-send", "on", "--g3-out", prefix + ".g3.jsonl", "--g3-send-out", prefix + ".sends.jsonl"],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=600)
                 assert p.returncode == 0, p.stderr
@@ -180,6 +192,8 @@ class G3GarageChainReplay(unittest.TestCase):
                 with open(os.path.join(store, "g3-heading.v1")) if os.path.exists(
                         os.path.join(store, "g3-heading.v1")) else open(os.devnull) as f:
                     out[name]["store"] = f.read()
+                with open(os.path.join(store, "g3-last-start")) as f:
+                    out[name]["token"] = f.read()
             cls.runs[mode] = out
 
     @classmethod
@@ -205,7 +219,9 @@ class G3GarageChainReplay(unittest.TestCase):
     def test_on_restores_chain_depart_and_overlays_the_exit_fixes(self):
         b = self.runs["on"]["b"]
         loaded = [r for r in b["g3"] if r["kind"] == "g3_store" and r["event"] == "loaded"]
-        self.assertEqual([(r["g3"], r["reason"]) for r in loaded], [("CARRIED", "chain_depart")])
+        self.assertEqual([(r["g3"], r["reason"], r["prev"]) for r in loaded], [("CARRIED", "chain_depart", BOOT_A[:8])])
+        self.assertEqual((self.runs["on"]["a"]["token"], b["token"]),
+                         ("mx5g3start 1 %s\n" % BOOT_A, "mx5g3start 1 %s\n" % BOOT_B))
         start = [r for r in b["g3"] if r["kind"] == "g3_send" and r["event"] == "start"]
         self.assertEqual(len(start), 1)
         self.assertEqual((start[0]["garage"], start[0]["rev"]), (1, -1))
@@ -233,13 +249,24 @@ class G3GarageChainReplay(unittest.TestCase):
     def test_off_is_beta16(self):
         a, b = self.runs["off"]["a"], self.runs["off"]["b"]
         self.assertFalse([r for r in a["g3"] if r["kind"] == "g3_store" and r["event"] == "written"])
-        self.assertTrue([r for r in a["g3"] if r["kind"] == "g3_since" and r["event"] == "unstored"] or True)
         self.assertEqual([(r["event"], r["reason"]) for r in b["g3"] if r["kind"] == "g3_store"][:1],
                          [("missing", "missing")])
         self.assertFalse([s for s in b["sends"] if s["choice"] == 6])
         self.assertFalse([r for r in b["g3"] if r["kind"] == "g3_send" and r["event"] == "start"])
 
+    def test_gap_boot_refuses_the_carry(self):
+        # Review P1: the record of boot A is not carried when another product
+        # boot started in between (it might have moved the car unmarked).
+        b = self.runs["gap"]["b"]
+        loaded = [r for r in b["g3"] if r["kind"] == "g3_store" and r["event"] == "loaded"]
+        self.assertEqual([(r["g3"], r["reason"], r["prev"]) for r in loaded],
+                         [("CARRIED_UNVERIFIED", "not_prev_boot", BOOT_X[:8])])
+        self.assertFalse([s for s in b["sends"] if s["choice"] == 6])
+        self.assertFalse([r for r in b["g3"] if r["kind"] == "g3_send" and r["event"] == "start"])
+        self.assertEqual(self.runs["gap"]["a"]["store"], self.runs["on"]["a"]["store"])
+
     def test_sends_differ_only_in_the_bearing_of_overlaid_fixes(self):
+        # Bytes 40 and 44..47 only (the record holds no other payload byte).
         for name in ("a", "b"):
             on, off = self.runs["on"][name], self.runs["off"][name]
             self.assertEqual(on["journal"], off["journal"])           # BETA rows unchanged

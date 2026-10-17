@@ -771,7 +771,7 @@ void worker_turn(uint64_t now) {
                     uint64_t(r.event.source_mono_ms) <= UINT64_MAX / 1000000ULL &&
                     uint64_t(r.event.source_mono_ms) * 1000000ULL < since;
                 if (!fence.session_available || !fence.bus_available ||
-                    r.event.received_ns < since || old_transport) { nav.exclude_reverse(); continue; }
+                    r.event.received_ns < since || old_transport) { nav.exclude_reverse_event(r.event); continue; }
             }
             nav.enqueue_raw(r.event);
         }
@@ -860,9 +860,13 @@ bool start_product(uint64_t t) {
     if (opt.g3 == "on" || opt.g3 == "slow") {
         R::G3Record stored = R::g3_record();
         R::G3Load load = R::G3_LOAD_MISSING;
-        if (!opt.g3_store.empty()) load = R::g3_load(opt.g3_store.c_str(), &stored);
         const std::string boot = in.boot_id.size() == 36 ? in.boot_id : std::string("unknown");
-        g3.start(t, true, "replay", boot.c_str(), "none", opt.g3_rt, load, stored, opt.g3_garage);
+        // runtime.cpp: the previous-product-boot token is swapped at every
+        // worker start, before the record is read (it lives next to it).
+        char prev_boot[37] = "unread";
+        if (!opt.g3_store.empty()) R::g3_last_start_swap(opt.g3_store.c_str(), boot.c_str(), prev_boot);
+        if (!opt.g3_store.empty()) load = R::g3_load(opt.g3_store.c_str(), &stored);
+        g3.start(t, true, "replay", boot.c_str(), "none", opt.g3_rt, load, stored, opt.g3_garage, prev_boot);
         g3.journal_start(g3_journal, t);
     }
     g3send.start(opt.g3_send && g3.active(), g3.garage());

@@ -36,10 +36,22 @@
 //    start reaches its first FIX only at the exit), provided no yaw chain
 //    break happened after the first moving wheel of the boot while the car
 //    was not standing (G3_SEND_PARKED_BREAK_M test) since the first tick; it
-//    waits (no time limit) while the latch says reverse, the wheel stream is
-//    stale or the session is not observed. An unknown latch counts as
-//    forward (no 0x118 change since boot: the car was not shifted into
-//    reverse); a latch that reports reverse ends an open window as before.
+//    waits (no time limit) while the latch is not usable (below), the wheel
+//    stream is stale or the session is not observed.
+//    Reverse latch (review C1): the latch is NOT VALID ("unknown") not only
+//    when no 0x118 change arrived since boot but also after a message before
+//    the session/bus admission was excluded and after EVERY pipeline reset
+//    or latch clear. Usable for this window: a valid latch saying forward;
+//    or a latch that is not valid while G3Motion::reverse_unsure is zero (no
+//    0x118 change reached the runtime except excluded forward values, so
+//    none was lost) AND the car has moved G3_SEND_UNKNOWN_LATCH_MIN_M since
+//    boot (driving that far without any 0x118 change means driving forward,
+//    unless the car reversed that far from power-on). Not usable: a valid
+//    latch saying reverse, or a latch that is not valid after lost 0x118
+//    information (reverse_unsure > 0). An open window ends ("latch") when
+//    the latch says reverse or becomes not valid after lost information.
+//    Residual: a car in reverse since before the product started (its
+//    0x118 change before the product ran) that reverses more than 20 m.
 // MODEL evidence only: no qualified claim, no Domain::QUALIFIED.
 #include "adapter/adapter.h"
 #include "runtime/beta_controller.h"
@@ -86,6 +98,12 @@ static const uint64_t G3_SEND_COUNT_ROW_NS=10000000000ULL;
 static const double G3_SEND_PARKED_BREAK_M=0.01;
 // Candidate lease (the BETA profile lease and Options.max_snapshot_age_ns).
 static const uint64_t G3_SEND_LEASE_NS=500000000ULL;
+// Garage carry (review C1): a latch that is not valid, without any lost 0x118
+// information, counts as forward only after this much wheel distance since
+// boot (a reverse out of a parking space is a few metres; a garage exit is
+// hundreds), and g3_send "wait" rows per boot are bounded by WAIT_ROWS_MAX.
+static const double G3_SEND_UNKNOWN_LATCH_MIN_M=20.0;
+static const unsigned G3_SEND_WAIT_ROWS_MAX=8;
 
 enum G3SendPhase { G3_SEND_OFF=0, G3_SEND_IDLE, G3_SEND_ACTIVE, G3_SEND_ENDED };
 inline const char* g3_send_phase_name(G3SendPhase p) {
@@ -185,7 +203,9 @@ public:
             reason="session";why=v.session_epoch!=session_epoch_?"send_session":
                 v.source_epoch!=source_epoch_?"source":"cadence_fence";
         }
-        else if(garage_?s.reverse==1:s.reverse!=0) { reason="latch";why=s.reverse==1?"reverse":"unknown"; }
+        else if(garage_?(s.reverse==1 || (s.reverse<0 && s.motion.reverse_unsure)):s.reverse!=0) {
+            reason="latch";why=s.reverse==1?"reverse":"unknown";
+        }
         else if(g3.state()==G3_CONFIRMED) { reason="trusted";why="m_course"; }
         else if(g3.state()!=G3_CARRIED) { reason="rejected";why=g3.reason(); }
         else if(v.now-open_ns_>=G3_SEND_STATIONARY_CAP_NS) { reason="cap";why="stationary_900s"; }
@@ -224,6 +244,9 @@ private:
     bool garage_,idle_seen_,idle_moving_break_,idle_parked_;
     uint32_t idle_breaks_;
     double idle_m_;
+    // Garage carry: the last journaled wait reason and the wait rows so far.
+    const char* wait_why_;
+    unsigned wait_rows_;
     adapter::PositionClass last_class_;
 
     void clear() {
@@ -233,6 +256,7 @@ private:
         gated_=agree_=conflict_=parked_breaks_=0;
         have_position_=published_=withdraw_pending_=last_parked_=false;last_m_=0;
         garage_=idle_seen_=idle_moving_break_=idle_parked_=false;idle_breaks_=0;idle_m_=0;
+        wait_why_="none";wait_rows_=0;
         last_class_=adapter::POSITION_UNDECODED;
     }
     double tolerance() const { return unc_>G3_SEND_AGREE_MIN_DEG?unc_:G3_SEND_AGREE_MIN_DEG; }
@@ -272,7 +296,13 @@ private:
         const bool session=v.session_epoch && v.session_epoch!=UINT32_MAX && v.source_epoch;
         if(garage_) {
             if(idle_moving_break_) { none(j,v.now,g3_state_name(g3.state()),"yaw_break");return false; }
-            if(s.reverse==1 || !s.wheels_fresh || !session)return false;   // wait
+            // Review C1: the latch rule above; wait (no time limit) otherwise.
+            const char* why=s.reverse==1?"reverse":
+                s.reverse<0 && s.motion.reverse_unsure?"latch_unsure":
+                s.reverse<0 && !(std::isfinite(s.motion.distance_m) &&
+                                 s.motion.distance_m>=G3_SEND_UNKNOWN_LATCH_MIN_M)?"latch_unknown":
+                !s.wheels_fresh?"wheel_stale":!session?"session":0;
+            if(why) { wait(j,v.now,s,why);return false; }
         } else if(s.reverse!=0 || !s.wheels_fresh || !session) {
             if(moved || v.now<session_ns_ || v.now-session_ns_>=G3_SEND_OPEN_WAIT_NS)
                 none(j,v.now,g3_state_name(g3.state()),s.reverse!=0?"latch":!s.wheels_fresh?"wheel_stale":"session");
@@ -283,16 +313,29 @@ private:
         last_parked_=!s.wheels_moving;last_m_=s.motion.distance_m;last_now_=v.now>last_now_?v.now:last_now_;
         session_epoch_=v.session_epoch;source_epoch_=v.source_epoch;fences_=v.cadence_fences;
         phase_=G3_SEND_ACTIVE;open_ns_=last_count_=v.now;
-        char age[32];
+        char age[32],gar[64];
         if(g3.age_known())snprintf(age,sizeof age,"%llu",(unsigned long long)g3.age_s());else strcpy(age,"null");
+        if(garage_)snprintf(gar,sizeof gar,",\"garage\":1,\"moved\":%d,\"rlost\":%lu",moved?1:0,
+                            (unsigned long)s.motion.reverse_unsure);
+        else gar[0]=0;
         row(j,",\"mono_ns\":%llu,\"event\":\"start\",\"g3\":\"%s\",\"t_s\":%.1f,\"h\":%ld,\"carried\":[%ld,%ld],"
               "\"unc\":%ld,\"tol\":%ld,\"age_s\":%s,\"rev\":%d,\"m_b\":%.1f,\"session\":%lu%s}",
             "g3_send",(unsigned long long)v.now,g3_state_name(g3.state()),session_s(v.now),lround(travel_*10),
             lround(g3.carried_deg()*10),lround(g3.carried_unc()*10),lround(unc_*10),lround(tolerance()*10),
-            age,s.reverse,std::isfinite(s.motion.distance_m)?s.motion.distance_m:0.0,(unsigned long)session_epoch_,
-            garage_?(moved?",\"garage\":1,\"moved\":1":",\"garage\":1,\"moved\":0"):"");
+            age,s.reverse,std::isfinite(s.motion.distance_m)?s.motion.distance_m:0.0,(unsigned long)session_epoch_,gar);
+        if(garage_)wait_why_="open";
         adapter::set_bearing_overlay(true);
         return true;
+    }
+    // Garage carry: one g3_send "wait" row when the reason the window waits
+    // changes (bounded per boot): reverse, latch_unsure, latch_unknown,
+    // wheel_stale, session. Diagnostic only.
+    template<class J> void wait(J& j,uint64_t now,const G3Sample& s,const char* why) {
+        if(!strcmp(why,wait_why_) || wait_rows_>=G3_SEND_WAIT_ROWS_MAX)return;
+        wait_why_=why;++wait_rows_;
+        row(j,",\"mono_ns\":%llu,\"event\":\"wait\",\"reason\":\"%s\",\"t_s\":%.1f,\"rev\":%d,\"rlost\":%lu,\"m_b\":%.1f}",
+            "g3_send",(unsigned long long)now,why,session_s(now),s.reverse,(unsigned long)s.motion.reverse_unsure,
+            std::isfinite(s.motion.distance_m)?s.motion.distance_m:0.0);
     }
     // by_fix: decided while processing the POSITION of call last_call_ (the
     // send of that call was decided before and may be overlaid); otherwise a

@@ -1371,9 +1371,11 @@ static G3Record depart_record(int32_t unc_cdeg=790) {
     G3Record r=good_record();r.flags=G3_FLAG_HEADING|G3_FLAG_POSITION|G3_FLAG_DEPART;r.unc_cdeg=unc_cdeg;
     r.heading_cdeg=16360;r.rt_s=0;r.utc_s=0;return r;
 }
+// prev: the previous product boot (g3_last_start_swap); depart_record() was
+// written by BOOT_A, so the default is the record's own boot.
 static G3Tracker started_garage(const G3Record& r,const char* chain="none",uint64_t rt=100,const char* boot=BOOT_B,
-                                bool garage=true,G3Load load=G3_LOAD_OK) {
-    G3Tracker t;t.start(0,true,"marker",boot,chain,rt,load,r,garage);return t;
+                                bool garage=true,G3Load load=G3_LOAD_OK,const char* prev=BOOT_A) {
+    G3Tracker t;t.start(0,true,"marker",boot,chain,rt,load,r,garage,prev);return t;
 }
 static void garage_codec_restore() {
     // Flags 4..7 decode (old builds reject them as a format error: fail closed).
@@ -1387,10 +1389,38 @@ static void garage_codec_restore() {
                                         has(j.last("g3_store"),"\"age_s\":null"));
       char f[128];CHECK(t.boot_fields(f,sizeof f)>0 &&
                         has(f,",\"g3\":{\"state\":\"CARRIED\",\"reason\":\"chain_depart\",\"garage\":1}")); }
-    // ... beta.16 behaviour with the switch off (and no "garage" field).
+    // ... beta.16 behaviour with the switch off (and no "garage" field):
+    // beta.16 decodes flags > 3 as a format error, so the marker rejects a
+    // flag-4 record the same way (no 30 deg rules on a 2 % record, C2).
     { G3Tracker t=started_garage(r,"none",100,BOOT_B,false);
-      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"age_unknown") && !t.garage() && !t.garage_carry());
+      CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"format") && !t.garage() && !t.garage_carry() &&
+            !t.have_carried() && t.disk_state()==0);
+      Rows j;t.journal_start(j,1);CHECK(has(j.last("g3_store"),"\"event\":\"rejected\",\"reason\":\"format\"") &&
+                                        !has(j.last("g3_store"),"\"prev\""));
       char f[128];CHECK(t.boot_fields(f,sizeof f)>0 && !has(f,"garage")); }
+    { G3Record a=r;a.rt_s=RT;G3Tracker t=started_garage(a,"none",RT+60,BOOT_B,false);
+      CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"format")); }
+    // Previous product boot (review P1): the record must come from the boot
+    // that started just before this one; otherwise CARRIED_UNVERIFIED (no window).
+    { G3Tracker t=started_garage(r,"none",100,BOOT_B,true,G3_LOAD_OK,BOOT_B);
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot") && t.have_carried());
+      Rows j;t.journal_start(j,1);CHECK(has(j.last("g3_store"),"\"prev\":\"bbbbbbbb\"")); }
+    { G3Tracker t=started_garage(r,"none",100,BOOT_B,true,G3_LOAD_OK,"none");
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot"));
+      Rows j;t.journal_start(j,1);CHECK(has(j.last("g3_store"),"\"prev\":\"none\"")); }
+    { G3Tracker t=started_garage(r,"none",100,BOOT_B,true,G3_LOAD_OK,"unread");
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot")); }
+    { G3Tracker t;t.start(0,true,"marker",BOOT_B,"none",100,G3_LOAD_OK,r,true);   // no token passed
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot")); }
+    { G3Record u=r;strcpy(u.boot_id,"unknown");G3Tracker t=started_garage(u,"none",100,BOOT_B,true,G3_LOAD_OK,"unknown");
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot")); }
+    // ... also when a wall clock proves the age (chain_ok is not a way around it).
+    { G3Record a=r;a.rt_s=RT;G3Tracker t=started_garage(a,"none",RT+3600,BOOT_B,true,G3_LOAD_OK,BOOT_B);
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot")); }
+    // A record without flag 4 keeps beta.15 (no previous-boot condition).
+    { G3Record o=r;o.flags=G3_FLAG_HEADING|G3_FLAG_POSITION;o.rt_s=RT;
+      G3Tracker t=started_garage(o,"none",RT+60,BOOT_B,true,G3_LOAD_OK,"none");
+      CHECK(t.state()==G3_CARRIED && !strcmp(t.reason(),"chain_ok") && !t.garage_carry()); }
     // A record without the departure flag (beta.16 writer) stays unverified.
     { G3Record o=r;o.flags=G3_FLAG_HEADING|G3_FLAG_POSITION;G3Tracker t=started_garage(o);
       CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"age_unknown") && !t.garage_carry()); }
@@ -1410,7 +1440,7 @@ static void garage_codec_restore() {
     { G3Record o=depart_record(3001);o.flags=3;o.rt_s=RT;G3Tracker t=started_garage(o,"none",RT+60);
       CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"unc")); }
     { G3Tracker t=started_garage(depart_record(4500),"none",100,BOOT_B,false);
-      CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"unc")); }
+      CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"format")); }
     // Propagation: rotation term 2 % (garage) instead of 10 %: 20 deg + 600 deg
     // of |rotation| = 32 deg stays CARRIED (limit 60) ...
     { G3Tracker t=started_garage(depart_record(2000));Rows j;
@@ -1419,11 +1449,50 @@ static void garage_codec_restore() {
       // ... and 20 + 0.02 * 2101 deg = 62.02 deg is rejected (unc_grew).
       s.motion.abs_turn_rad=2101*G3_PI/180;t.tick(j,s,0,0);
       CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"unc_grew")); }
-    // The beta.16 coefficient with the switch off: 20 + 60 deg.
-    { G3Record o=depart_record(2000);o.rt_s=RT;G3Tracker t=started_garage(o,"none",RT+60,BOOT_B,false);
+    // The beta.16 coefficient with the switch off (a record without flag 4):
+    // 20 + 60 deg.
+    { G3Record o=depart_record(2000);o.flags=3;o.rt_s=RT;G3Tracker t=started_garage(o,"none",RT+60,BOOT_B,false);
       CHECK(t.state()==G3_CARRIED && !strcmp(t.reason(),"chain_ok"));
       Rows j;G3Sample s=sample(2*S,30,0,0,true);s.motion.abs_turn_rad=600*G3_PI/180;t.tick(j,s,0,0);
       CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"unc_grew")); }
+    // Review C2: with the switch ON, a carried record WITHOUT flag 4 keeps the
+    // BETA terms (10 %, 0.002 rad/s) and the 30 deg limit: 20 + 0.1 * 99 deg
+    // = 29.9 stays, 20 + 0.1 * 101 deg = 30.1 is rejected.
+    { G3Record o=depart_record(2000);o.flags=3;o.rt_s=RT;G3Tracker t=started_garage(o,"none",RT+60);
+      CHECK(t.state()==G3_CARRIED && !strcmp(t.reason(),"chain_ok") && !t.garage_carry() && t.unc_max()==G3_UNC_MAX_DEG);
+      Rows j;G3Sample s=sample(2*S,30,0,0,true);s.motion.abs_turn_rad=99*G3_PI/180;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_CARRIED && fabs(t.propagated_unc()-29.9)<1e-6);
+      s.motion.abs_turn_rad=101*G3_PI/180;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"unc_grew")); }
+    // Review P4: the time term of a carried flag-4 record is 0.0023 rad/s
+    // (100 s moving: 13.178 deg), of a record without flag 4 BETA's 0.002.
+    { G3Tracker t=started_garage(depart_record(1000));Rows j;
+      G3Sample s=sample(2*S,30,0,100,true);s.motion.abs_turn_rad=0;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_CARRIED && fabs(t.propagated_unc()-(10.0+0.0023*100*180/G3_PI))<1e-6); }
+    { G3Record o=depart_record(1000);o.flags=3;o.rt_s=RT;G3Tracker t=started_garage(o,"none",RT+60);Rows j;
+      G3Sample s=sample(2*S,30,0,100,true);s.motion.abs_turn_rad=0;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_CARRIED && fabs(t.propagated_unc()-(10.0+0.002*100*180/G3_PI))<1e-6); }
+}
+// Review C2: the uncertainty a garage-on boot STORES grows with the garage
+// chain terms (2 %, 0.0023 rad/s); with the switch off with BETA's (10 %,
+// 0.002 rad/s). Reference 5 deg from BETA at 1 s, then BETA invalid while
+// 500 deg of |rotation| and 100 s of motion pass; the record at the park.
+static uint32_t stored_unc_cdeg(bool garage) {
+    Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),garage);
+    G3Sample a=drive(1*S,10);a.motion.turn_rad=a.motion.abs_turn_rad=0;a.motion.moving_s=0;st.tick(a);
+    G3Sample b=drive(2*S,60);b.heading_valid=false;b.motion.turn_rad=0;b.motion.abs_turn_rad=500*G3_PI/180;
+    b.motion.moving_s=100;st.tick(b);
+    for(unsigned k=3;k<=20;++k) {
+        G3Sample p=park(k*S,60,2*S);p.heading_valid=false;p.motion.turn_rad=0;p.motion.abs_turn_rad=500*G3_PI/180;
+        p.motion.moving_s=100;st.tick(p);
+    }
+    G3Record d;CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && (d.flags&G3_FLAG_HEADING));
+    return uint32_t(d.unc_cdeg);
+}
+static void garage_stored_uncertainty() {
+    const double on=5.0+0.0023*100*180/G3_PI+0.02*500,off=5.0+0.002*100*180/G3_PI+0.10*500;
+    CHECK(fabs(stored_unc_cdeg(true)-on*100)<=1.0);
+    CHECK(fabs(stored_unc_cdeg(false)-off*100)<=1.0);
 }
 static G3Sample replacing(G3Sample s) { s.beta_replacing=true;return s; }
 static void garage_store() {
@@ -1457,6 +1526,42 @@ static void garage_store() {
       st.tick(replacing(drive(1*S,50)));
       for(unsigned k=2;k<=70;++k)st.tick(replacing(park(k*S,50,1*S)),k<65?"journal_lagging":0);
       CHECK(st.written.size()==1 && has(st.j.last("\"event\":\"written\""),"\"sync\":0")); }
+    // wait_s counts from the 5 s garage threshold (review C3): blocked until 9 s.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));
+      for(unsigned k=2;k<=9;++k)st.tick(park(k*S,50,1*S),k<9?"journal_lagging":0);
+      CHECK(st.written.size()==1 && has(st.j.last("\"event\":\"written\""),"\"wait_s\":3.0")); }
+    // Review P3, while BETA replaces (tunnel jam): a second S request within
+    // 30 s of the previous one waits ("replacing_rate"); the departure mark
+    // between them is not spaced. Without replacing the next S comes at 5 s.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(replacing(drive(1*S,50)));
+      for(unsigned k=2;k<=6;++k)st.tick(replacing(park(k*S,50,1*S)));
+      CHECK(st.written.size()==1 && st.t.disk_state()=='S');                     // S requested at 6 s
+      st.tick(replacing(drive(7*S,51)));st.tick(replacing(drive(11*S,60)));
+      CHECK(st.written.size()==2 && st.t.disk_state()=='M');                     // mark at 11 s
+      for(unsigned k=12;k<=35;++k)st.tick(replacing(park(k*S,60,11*S)));
+      CHECK(st.written.size()==2 && st.t.disk_state()=='M');                     // 35 s < 6 + 30
+      st.tick(replacing(park(36*S,60,11*S)));
+      CHECK(st.written.size()==3 && st.t.disk_state()=='S'); }
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));for(unsigned k=2;k<=6;++k)st.tick(park(k*S,50,1*S));
+      st.tick(drive(7*S,51));st.tick(drive(11*S,60));CHECK(st.written.size()==2);
+      for(unsigned k=12;k<=16;++k)st.tick(park(k*S,60,11*S));
+      CHECK(st.written.size()==3 && st.t.disk_state()=='S'); }
+    // Review P3: the departure mark while BETA replaces needs a journal writer
+    // lag <= 100 ms; without replacing the lag does not hold it (the runtime's
+    // idle rule, 300 ms, comes through io_block).
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));for(unsigned k=2;k<=6;++k)st.tick(park(k*S,50,1*S));
+      G3Sample a=replacing(drive(12*S,60));a.writer_lag_ns=G3_GARAGE_REPLACING_MARK_LAG_NS+1;st.tick(a);
+      CHECK(st.written.size()==1 && st.t.disk_state()=='S');
+      a=replacing(drive(13*S,61));a.writer_lag_ns=G3_GARAGE_REPLACING_MARK_LAG_NS;st.tick(a);
+      CHECK(st.written.size()==2 && st.t.disk_state()=='M'); }
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));for(unsigned k=2;k<=6;++k)st.tick(park(k*S,50,1*S));
+      G3Sample a=drive(12*S,60);a.writer_lag_ns=250000000ULL;st.tick(a);
+      CHECK(st.written.size()==2 && st.t.disk_state()=='M'); }
     // Departure mark: after the S record, 0.4 m does not mark, 0.6 m does;
     // the mark has no heading and decodes as moving_at_end.
     { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
@@ -1487,21 +1592,21 @@ static void garage_store() {
       CHECK(st.written.size()==1 && has(st.j.last("\"event\":\"cancelled\""),"\"st\":\"M\"") && st.t.store_on());
       st.tick(drive(17*S,70));CHECK(st.written.size()==2 && st.t.disk_state()=='M'); }
     // A restored S record is marked when the car leaves (seq continues).
-    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,depart_record(),true);
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,depart_record(),true,BOOT_A);
       G3Sample a=drive(1*S,0.3);a.motion.turn_rad=a.motion.abs_turn_rad=0;st.tick(a);CHECK(st.written.empty());
       a=drive(2*S,1.0);a.motion.turn_rad=a.motion.abs_turn_rad=0;st.tick(a);
       CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.state=='M' && d.seq==8);
       CHECK(st.t.state()==G3_CARRIED); }                            // the carried heading in memory stays
     // No mark for an S record without heading, nor with the switch off.
     { Store st;st.dir=temp_dir();G3Record nh=depart_record();nh.flags=G3_FLAG_DEPART;
-      st.t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,nh,true);
+      st.t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,nh,true,BOOT_A);
       for(unsigned k=1;k<=10;++k)st.tick(drive(k*S,10.0*k));
       CHECK(st.written.empty()); }
     { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_OK,good_record(),false);
       for(unsigned k=1;k<=10;++k)st.tick(drive(k*S,10.0*k));
       CHECK(st.written.empty()); }
     // In-flight views for the worker's cancel rule.
-    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,depart_record(),true);Rows j;
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_OK,depart_record(),true,BOOT_A);Rows j;
       t.tick(j,drive(1*S,2),0,0);char b[G3_RECORD_MAX];size_t n;uint32_t q;bool sync=true;
       CHECK(t.take_request(b,sizeof b,&n,&q,&sync) && !sync && t.in_flight_mark() && !t.in_flight_sync());
       // The worker's cancel rule: a moving wheel or a stale stream never
@@ -1531,17 +1636,53 @@ static G3Sample garage_sample(uint64_t now,double distance,bool moving,int rever
 }
 static void garage_send() {
     adapter::set_bearing_overlay(false);
-    // chain_depart, unknown latch: opens at the session start (beta.16 would
-    // wait for a known forward latch and give up).
+    // chain_depart, a latch that is not valid and no lost 0x118 information
+    // (review C1): waits ("latch_unknown") until the car has moved 20 m since
+    // boot, then opens (beta.16 would wait for a known forward latch and give up).
     { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
       t.send(location(1*S,true,0,0));
-      const G3Sample s=garage_sample(1*S,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
-      CHECK(g.active() && adapter::bearing_overlay() && has(j.last("\"event\":\"start\""),"\"garage\":1,\"moved\":0") &&
+      G3Sample s=garage_sample(1*S,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
+      CHECK(!g.active() && g.phase()==G3_SEND_IDLE && !adapter::bearing_overlay() &&
+            has(j.last("\"event\":\"wait\""),"\"reason\":\"latch_unknown\",\"t_s\":0.0,\"rev\":-1,\"rlost\":0"));
+      s=garage_sample(2*S,19.9,true,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(2*S));
+      CHECK(!g.active() && j.count("\"event\":\"wait\"")==1);                // one row per reason change
+      s=garage_sample(3*S,20.0,true,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(3*S));
+      CHECK(g.active() && adapter::bearing_overlay() && has(j.last("\"event\":\"start\""),"\"garage\":1,\"moved\":1,\"rlost\":0") &&
             has(j.last("\"event\":\"start\""),"\"rev\":-1"));
-      // Unknown stays open; reverse ends it.
-      const G3Sample m=garage_sample(5*S,20,true,-1);t.tick(j,m,0,0);g.tick(j,t,m,view(5*S));CHECK(g.active());
-      const G3Sample r=garage_sample(6*S,21,true,1);t.tick(j,r,0,0);g.tick(j,t,r,view(6*S));
-      CHECK(!g.active() && !adapter::bearing_overlay() && !strcmp(g.end_reason(),"latch")); }
+      // Not valid without lost information stays open; reverse ends it.
+      const G3Sample m=garage_sample(5*S,40,true,-1);t.tick(j,m,0,0);g.tick(j,t,m,view(5*S));CHECK(g.active());
+      const G3Sample r=garage_sample(6*S,41,true,1);t.tick(j,r,0,0);g.tick(j,t,r,view(6*S));
+      CHECK(!g.active() && !adapter::bearing_overlay() && !strcmp(g.end_reason(),"latch") && !strcmp(g.end_why(),"reverse")); }
+    // A valid forward latch opens at once, standing (moved 0).
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(1*S,true,0,0));
+      const G3Sample s=garage_sample(1*S,0,false,0);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));
+      CHECK(g.active() && has(j.last("\"event\":\"start\""),"\"moved\":0") && !j.count("\"event\":\"wait\""));
+      adapter::set_bearing_overlay(false); }
+    // Review C1, lost information: the car was shifted into reverse before
+    // the session (excluded REVERSE 1: reverse_unsure > 0, latch not valid):
+    // never opens however far it drives; a later valid forward latch opens.
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(1*S,true,0,0));
+      for(unsigned k=1;k<=30;++k) {
+          G3Sample s=garage_sample(k*S,10.0*k,k>1,-1);s.motion.reverse_unsure=1;t.tick(j,s,0,0);g.tick(j,t,s,view(k*S));
+      }
+      CHECK(g.phase()==G3_SEND_IDLE && !adapter::bearing_overlay() && j.count("\"event\":\"wait\"")==1 &&
+            has(j.last("\"event\":\"wait\""),"\"reason\":\"latch_unsure\"") && has(j.last("\"event\":\"wait\""),"\"rlost\":1"));
+      G3Sample s=garage_sample(31*S,310,true,0);s.motion.reverse_unsure=1;t.tick(j,s,0,0);g.tick(j,t,s,view(31*S));
+      CHECK(g.active() && has(j.last("\"event\":\"start\""),"\"rlost\":1")); }
+    // Review C1/P6: an open window whose latch is dropped (a pipeline reset
+    // while standing: not valid, reverse_unsure > 0) ends with latch/unknown.
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(1*S,true,0,0));
+      G3Sample s=garage_sample(1*S,0,false,0);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));CHECK(g.active());
+      s=garage_sample(2*S,0,false,-1,1);s.motion.reverse_unsure=1;t.tick(j,s,0,0);g.tick(j,t,s,view(2*S));
+      CHECK(!g.active() && !adapter::bearing_overlay() && !strcmp(g.end_reason(),"latch") && !strcmp(g.end_why(),"unknown")); }
+    // The wait rows are bounded per boot (reason flapping).
+    { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(1*S,true,0,0));
+      for(unsigned k=1;k<=40;++k) { const G3Sample s=garage_sample(k*S,0,false,k%2?1:-1);t.tick(j,s,0,0);g.tick(j,t,s,view(k*S)); }
+      CHECK(g.phase()==G3_SEND_IDLE && j.count("\"event\":\"wait\"")==G3_SEND_WAIT_ROWS_MAX); }
     // The switch off in G3Send: chain_depart never opens.
     { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,false);Rows j;
       t.send(location(1*S,true,0,0));const G3Sample s=garage_sample(1*S,0,false,0);
@@ -1559,41 +1700,42 @@ static void garage_send() {
       const G3Sample a=garage_sample(1*S,1,true,-1,0);t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
       const G3Sample b=garage_sample(2*S,6,true,-1,1);t.tick(j,b,0,0);g.tick(j,t,b,view(2*S));
       t.send(location(3*S,true,0,0));
-      const G3Sample c=garage_sample(3*S,11,true,-1,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
+      const G3Sample c=garage_sample(3*S,31,true,-1,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
       CHECK(!g.active() && g.phase()==G3_SEND_ENDED && has(j.last("\"event\":\"none\""),"\"reason\":\"yaw_break\"")); }
     // Before the first moving wheel (stream not yet fresh) a break is tolerated;
     // after motion a break with a stale stream is not.
     { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
-      G3Sample a=garage_sample(1*S,0,false,-1,0);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
-      a=garage_sample(2*S,0,false,-1,3);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(2*S));
+      G3Sample a=garage_sample(1*S,0,false,0,0);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
+      a=garage_sample(2*S,0,false,0,3);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(2*S));
       t.send(location(3*S,true,0,0));
-      const G3Sample c=garage_sample(3*S,0,false,-1,3);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
+      const G3Sample c=garage_sample(3*S,0,false,0,3);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
       CHECK(g.active()); }
     { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
-      G3Sample a=garage_sample(1*S,5,false,-1,0);t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
-      a=garage_sample(2*S,5,false,-1,1);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(2*S));
+      G3Sample a=garage_sample(1*S,5,false,0,0);t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
+      a=garage_sample(2*S,5,false,0,1);a.wheels_fresh=false;t.tick(j,a,0,0);g.tick(j,t,a,view(2*S));
       t.send(location(3*S,true,0,0));
-      const G3Sample c=garage_sample(3*S,5,false,-1,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
+      const G3Sample c=garage_sample(3*S,5,false,0,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
       CHECK(!g.active() && has(j.last("\"event\":\"none\""),"\"reason\":\"yaw_break\"")); }
     // A break while standing is tolerated.
     { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
-      const G3Sample a=garage_sample(1*S,0,false,-1,0);t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
-      const G3Sample b=garage_sample(2*S,0,false,-1,1);t.tick(j,b,0,0);g.tick(j,t,b,view(2*S));
+      const G3Sample a=garage_sample(1*S,0,false,0,0);t.tick(j,a,0,0);g.tick(j,t,a,view(1*S));
+      const G3Sample b=garage_sample(2*S,0,false,0,1);t.tick(j,b,0,0);g.tick(j,t,b,view(2*S));
       t.send(location(3*S,true,0,0));
-      const G3Sample c=garage_sample(3*S,0,false,-1,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
+      const G3Sample c=garage_sample(3*S,0,false,0,1);t.tick(j,c,0,0);g.tick(j,t,c,view(3*S));
       CHECK(g.active()); }
     // Reverse at the session start: wait (no time limit), open once forward.
     { G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
       t.send(location(1*S,true,0,0));
       for(unsigned k=1;k<=40;++k) { const G3Sample s=garage_sample(k*S,0.2*k,k>2,1);t.tick(j,s,0,0);g.tick(j,t,s,view(k*S)); }
-      CHECK(g.phase()==G3_SEND_IDLE && !j.count("\"kind\":\"g3_send\""));
+      CHECK(g.phase()==G3_SEND_IDLE && j.count("\"kind\":\"g3_send\"")==1 &&
+            has(j.last("\"kind\":\"g3_send\""),"\"event\":\"wait\",\"reason\":\"reverse\""));
       const G3Sample s=garage_sample(41*S,8.2,true,0);t.tick(j,s,0,0);g.tick(j,t,s,view(41*S));
       CHECK(g.active()); }
     // The propagated heading is what the window sends; a 60 deg garage limit
     // passed ends it (rejected/unc_grew).
     { G3Tracker t=started_garage(depart_record(5000));G3Send g;g.start(true,true);Rows j;
       t.send(location(1*S,true,0,0));
-      G3Sample s=garage_sample(1*S,0,false,-1);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));CHECK(g.active());
+      G3Sample s=garage_sample(1*S,0,false,0);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));CHECK(g.active());
       s=garage_sample(2*S,30,true,-1);s.motion.turn_rad=45*G3_PI/180;s.motion.abs_turn_rad=45*G3_PI/180;
       t.tick(j,s,0,0);g.tick(j,t,s,view(2*S));
       CHECK(g.active() && fabs(g.heading()-208.6)<1e-6);
@@ -1601,6 +1743,129 @@ static void garage_send() {
       t.tick(j,s,0,0);g.tick(j,t,s,view(3*S));
       CHECK(!g.active() && !strcmp(g.end_reason(),"rejected") && !strcmp(g.end_why(),"unc_grew")); }
     adapter::set_bearing_overlay(false);
+}
+// Review C1 with the real Pipeline: which REVERSE inputs count as lost
+// information (G3Motion::reverse_unsure) and the two scenarios end to end.
+static navigation::Pipeline* latch_pipeline(navigation::Pipeline& p) {
+    mx5_dr_context x={1,1,1};
+    CHECK(p.init_model(navigation::research_model_profile(),mx5_dr_default_config(),x,false,false,true));
+    CHECK(p.enable_beta(beta_profile_tunnel()));
+    return &p;
+}
+static void feed_still(navigation::Pipeline& p,unsigned from,unsigned to,uint64_t* seq,double kmh=0) {
+    for(unsigned ms=from;ms<=to;ms+=100) {
+        navigation::RawEvent w=raw(navigation::WHEELS,ms,++*seq);
+        for(unsigned i=0;i<4;++i)w.raw[i]=uint16_t(lround(kmh*100+10000));
+        p.enqueue_raw(w);
+        navigation::RawEvent y=raw(navigation::YAW,ms,++*seq);y.raw[0]=2048;p.enqueue_raw(y);
+        if(ms>=100)p.drain(T(ms)-100000000ULL);
+    }
+}
+static void garage_latch_pipeline() {
+    mx5_dr_context x={1,1,1};
+    // Excluded forward value (an engine-start burst before the admission): no count.
+    { navigation::Pipeline p;latch_pipeline(p);navigation::RawEvent r=raw(navigation::REVERSE,0,1);r.reverse=0;
+      p.exclude_reverse_event(r);CHECK(p.g3_motion().reverse_unsure==0 && !p.reverse_latched()); }
+    // Excluded reverse value: counted (the car may be in reverse).
+    { navigation::Pipeline p;latch_pipeline(p);navigation::RawEvent r=raw(navigation::REVERSE,0,1);r.reverse=1;
+      p.exclude_reverse_event(r);CHECK(p.g3_motion().reverse_unsure==1 && !p.reverse_latched()); }
+    // A motion input gap that clears the latch: counted even with no latch.
+    { navigation::Pipeline p;latch_pipeline(p);p.exclude_reverse(navigation::LATCH_CLEAR_INPUT_GAP);
+      CHECK(p.g3_motion().reverse_unsure==1); }
+    // A valid latch dropped by a reset while standing: counted.
+    { navigation::Pipeline p;latch_pipeline(p);uint64_t seq=0;
+      navigation::RawEvent r=raw(navigation::REVERSE,0,++seq);r.reverse=0;CHECK(p.enqueue_raw(r)==navigation::PIPELINE_OK);
+      feed_still(p,0,1500,&seq);
+      CHECK(p.reverse_latched() && p.latch_value()==0 && p.g3_motion().reverse_unsure==0);
+      p.reset(x);CHECK(!p.reverse_latched() && p.g3_motion().reverse_unsure==1); }
+    // A queued REVERSE message discarded by a reset before it was latched: counted.
+    { navigation::Pipeline p;latch_pipeline(p);uint64_t seq=0;feed_still(p,0,1000,&seq);
+      navigation::RawEvent r=raw(navigation::REVERSE,1050,++seq);r.reverse=1;CHECK(p.enqueue_raw(r)==navigation::PIPELINE_OK);
+      CHECK(!p.reverse_latched() && p.g3_motion().reverse_unsure==0);
+      p.reset(x);CHECK(!p.reverse_latched() && p.g3_motion().reverse_unsure==1); }
+    // A rejected REVERSE message (epoch 0 is invalid input): counted.
+    { navigation::Pipeline p;latch_pipeline(p);navigation::RawEvent r=raw(navigation::REVERSE,0,1);r.reverse=1;r.epoch=0;
+      CHECK(p.enqueue_raw(r)!=navigation::PIPELINE_OK && p.g3_motion().reverse_unsure==1); }
+    // Scenario 1 end to end: the car is shifted into reverse before the AA
+    // session (the runtime excludes that message), then the session starts
+    // and the car drives 100 m: the chain_depart window never opens.
+    { navigation::Pipeline p;latch_pipeline(p);uint64_t seq=0;
+      navigation::RawEvent r=raw(navigation::REVERSE,0,++seq);r.reverse=1;p.exclude_reverse_event(r);
+      G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(T(500),true,0,0));
+      feed_still(p,0,2000,&seq);
+      feed_still(p,2100,22000,&seq,18);                    // 20 s at 18 km/h: about 100 m
+      G3Sample s=g3_sample(p,T(21900),0);
+      CHECK(s.reverse==-1 && s.motion.reverse_unsure==1 && s.motion.distance_m>90);
+      t.tick(j,s,0,0);g.tick(j,t,s,view(T(21900)));
+      CHECK(!g.active() && g.phase()==G3_SEND_IDLE && has(j.last("\"event\":\"wait\""),"\"reason\":\"latch_unsure\"")); }
+    // ... and without that excluded message the same drive opens it.
+    { navigation::Pipeline p;latch_pipeline(p);uint64_t seq=0;
+      G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(T(500),true,0,0));
+      feed_still(p,0,2000,&seq);feed_still(p,2100,22000,&seq,18);
+      G3Sample s=g3_sample(p,T(21900),0);
+      CHECK(s.reverse==-1 && s.motion.reverse_unsure==0);
+      t.tick(j,s,0,0);g.tick(j,t,s,view(T(21900)));CHECK(g.active());
+      // Scenario 2 end to end: the car stops, a pipeline reset (while
+      // standing) drops nothing (no valid latch) and the window stays open;
+      // a REVERSE message queued and discarded by a reset ends it.
+      feed_still(p,22100,25000,&seq);
+      s=g3_sample(p,T(24900),0);t.tick(j,s,0,0);g.tick(j,t,s,view(T(24900)));CHECK(g.active());
+      navigation::RawEvent r=raw(navigation::REVERSE,25050,++seq);r.reverse=1;CHECK(p.enqueue_raw(r)==navigation::PIPELINE_OK);
+      p.reset(x);
+      s=g3_sample(p,T(25100),0);CHECK(s.reverse==-1 && s.motion.reverse_unsure==1);
+      t.tick(j,s,0,0);g.tick(j,t,s,view(T(25100)));
+      CHECK(!g.active() && !strcmp(g.end_reason(),"latch") && !strcmp(g.end_why(),"unknown")); }
+    // Scenario 2b: a window opened with a valid forward latch; a reset while
+    // standing drops it: the window ends (latch/unknown).
+    { navigation::Pipeline p;latch_pipeline(p);uint64_t seq=0;
+      navigation::RawEvent r=raw(navigation::REVERSE,0,++seq);r.reverse=0;CHECK(p.enqueue_raw(r)==navigation::PIPELINE_OK);
+      G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+      t.send(location(T(500),true,0,0));
+      feed_still(p,0,2000,&seq);
+      G3Sample s=g3_sample(p,T(1900),0);CHECK(s.reverse==0);
+      t.tick(j,s,0,0);g.tick(j,t,s,view(T(1900)));CHECK(g.active());
+      p.reset(x);
+      s=g3_sample(p,T(2000),0);CHECK(s.reverse==-1 && s.motion.reverse_unsure==1);
+      t.tick(j,s,0,0);g.tick(j,t,s,view(T(2000)));
+      CHECK(!g.active() && !strcmp(g.end_reason(),"latch") && !strcmp(g.end_why(),"unknown")); }
+    adapter::set_bearing_overlay(false);
+}
+// Review P1: the previous-product-boot token file.
+static void last_start_token() {
+    const std::string d=temp_dir();char prev[37];
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_A,prev) && !strcmp(prev,"none"));
+    CHECK(read_file(d+"/"+G3_LAST_START_NAME)==std::string("mx5g3start 1 ")+BOOT_A+"\n");
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_B,prev) && !strcmp(prev,BOOT_A));
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_B,prev) && !strcmp(prev,BOOT_B));     // a second start of one boot
+    CHECK(access((d+"/"+G3_LAST_START_TEMP).c_str(),F_OK)!=0);
+    // "unknown" boot: reads, writes nothing.
+    CHECK(!g3_last_start_swap(d.c_str(),"unknown",prev) && !strcmp(prev,BOOT_B));
+    CHECK(read_file(d+"/"+G3_LAST_START_NAME)==std::string("mx5g3start 1 ")+BOOT_B+"\n");
+    // Malformed / oversized / wrong boot token: "unread", then rewritten.
+    write_file(d+"/"+G3_LAST_START_NAME,"mx5g3start 1 not-a-boot-id\n");
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_A,prev) && !strcmp(prev,"unread"));
+    write_file(d+"/"+G3_LAST_START_NAME,"mx5g3start 1 zzzzzzzz-1111-2222-3333-444444444444\n");   // right length, not hex
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_A,prev) && !strcmp(prev,"unread"));
+    write_file(d+"/"+G3_LAST_START_NAME,std::string("mx5g3start 2 ")+BOOT_A+"\n");
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_A,prev) && !strcmp(prev,"unread"));
+    write_file(d+"/"+G3_LAST_START_NAME,std::string("mx5g3start 1 ")+BOOT_A+"\nextra\n");
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_A,prev) && !strcmp(prev,"unread"));
+    write_file(d+"/"+G3_LAST_START_NAME,std::string(100,'x'));
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_A,prev) && !strcmp(prev,"unread"));
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_B,prev) && !strcmp(prev,BOOT_A));
+    // A leftover temporary file is replaced; a symlink is never followed.
+    write_file(d+"/"+G3_LAST_START_TEMP,"junk");
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_A,prev) && !strcmp(prev,BOOT_B) && access((d+"/"+G3_LAST_START_TEMP).c_str(),F_OK)!=0);
+    unlink((d+"/"+G3_LAST_START_NAME).c_str());
+    write_file(d+"/target",std::string("mx5g3start 1 ")+BOOT_B+"\n");
+    CHECK(!symlink((d+"/target").c_str(),(d+"/"+G3_LAST_START_NAME).c_str()));
+    CHECK(g3_last_start_swap(d.c_str(),BOOT_A,prev) && !strcmp(prev,"unread"));
+    CHECK(read_file(d+"/target")==std::string("mx5g3start 1 ")+BOOT_B+"\n");   // rename replaced the link
+    // No directory: nothing written, prev "unread" (not ENOENT on the file).
+    CHECK(!g3_last_start_swap((d+"/missing").c_str(),BOOT_A,prev));
+    CHECK(!g3_last_start_swap(0,BOOT_A,prev) && !strcmp(prev,"unread"));
 }
 
 int main(int argc,char** argv) {
@@ -1628,8 +1893,11 @@ int main(int argc,char** argv) {
     rule_f_discard_in_flight();
     g3_send_rules();
     garage_codec_restore();
+    garage_stored_uncertainty();
     garage_store();
     garage_send();
+    garage_latch_pipeline();
+    last_start_token();
     g3_send_adapter();   // configures the process-global adapter: last
     std::printf("test_g3: %u checks passed\n",checks);
     return 0;

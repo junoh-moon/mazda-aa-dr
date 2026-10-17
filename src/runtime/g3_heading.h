@@ -13,11 +13,14 @@
 //    row that does not fit is dropped and counted.
 //  * The store file is written only by a dedicated detached store thread
 //    (one-slot mailbox below), never by the worker, the journal writer, an
-//    OEM thread or a tap; only for a park of >= 15 s with all four wheels
-//    exactly zero, under the idle rule, and every I/O step is re-checked
-//    against a cancel generation and a stop flag. Every failure degrades to
-//    "no store" and is journaled.
-//  * Restore reads one small file once at worker start (startup slow path).
+//    OEM thread or a tap; for a park of >= 15 s (garage carry: 5 s) with all
+//    four wheels exactly zero and, with the garage carry, for the departure
+//    mark after such a park (see G3_GARAGE_*), under the idle rule, and every
+//    I/O step is re-checked against a cancel generation and a stop flag.
+//    Every failure degrades to "no store" and is journaled.
+//  * Restore reads one small file once at worker start (startup slow path);
+//    the worker also swaps the previous-product-boot token there
+//    (g3_last_start_swap, one small write without fsync).
 // MODEL evidence only: no qualified claim, no Domain::QUALIFIED.
 #include "adapter/adapter.h"
 #include "navigation/pipeline.h"
@@ -55,12 +58,15 @@ static const uint64_t G3_AGE_MAX_S=7ULL*24*3600;
 // Position continuity at the first GPS fix: farther than this plus the
 // stored position budget plus the wheel distance driven since boot = moved.
 static const double G3_MOVED_MIN_M=50.0;
-// I/O discipline (review 2026-10-11, H1): the ONLY store write is the
-// PARKED write: all four wheels EXACTLY zero (the beta.8 stop-latch
-// definition) for at least G3_PARKED_NS with fresh wheel samples throughout
-// (navigation::G3_WHEEL_GAP_NS), at most once per stop, and only while the
-// store I/O is idle-safe (g3_io_block_reason). No record is written while
-// moving or creeping.
+// I/O discipline (review 2026-10-11, H1): with the g3-garage-off marker the
+// ONLY store write is the PARKED write: all four wheels EXACTLY zero (the
+// beta.8 stop-latch definition) for at least G3_PARKED_NS with fresh wheel
+// samples throughout (navigation::G3_WHEEL_GAP_NS), at most once per stop,
+// and only while the store I/O is idle-safe (g3_io_block_reason); no record
+// is written while moving or creeping. The garage carry (default, below)
+// RELAXES this invariant: the parked write needs only 5 s and may run while
+// BETA replaces (no fsync), and the departure mark is written WHILE THE CAR
+// MOVES (no fsync, also while BETA replaces). Bounds: G3_GARAGE_REPLACING_*.
 static const uint64_t G3_PARKED_NS=15000000000ULL;
 // A parked stop is written when the car moved at least this far since the
 // last record, or (M1) when the valid heading differs from the last record
@@ -115,16 +121,43 @@ static const uint64_t G3_PLAUSIBLE_UTC_S=1600000000ULL;
 //    CARRIED with reason chain_depart when no wall clock proves its age (the
 //    CMU clock is 1970 until GPS; never in a garage). A known age > 7 days
 //    still rejects; the first-fix position and GPS age checks still apply.
-//  * Uncertainty: the rule-5 time term and the rail allowance unchanged, the
-//    rotation term G3_GARAGE_ROTATION_PER_RAD (2 %) instead of BETA's 10 %;
-//    limit G3_GARAGE_UNC_MAX_DEG for these records (2026-10-17: 1,392 deg of
-//    |rotation| through a garage descent and climb left about 3 deg of error).
+//    Only when the record's boot is the PREVIOUS PRODUCT BOOT (review P1):
+//    every BETA worker start swaps <root>/logs/g3-last-start (the boot id of
+//    the previous worker start, then this one), so an S record written
+//    before a product boot that did not mark (journal failure, no G3 tick,
+//    a g3-off or g3-garage-off marker) is not carried.
+//  * Uncertainty of the GARAGE CHAIN (review C2/P4): the stored uncertainty
+//    of every record a garage-on boot writes (they all carry flag 4) and the
+//    propagation of a carried flag-4 record grow with the rotation term
+//    G3_GARAGE_ROTATION_PER_RAD (2 % instead of BETA's 10 %) and the time
+//    term max(BETA, G3_GARAGE_YAW_ERROR_RAD_S); the rail allowance is
+//    unchanged; limit G3_GARAGE_UNC_MAX_DEG for flag-4 records. A carried
+//    record WITHOUT flag 4 (written by beta.16 or with the marker) keeps the
+//    BETA terms and the 30 deg limit. With the marker a flag-4 record is
+//    rejected as a format error, exactly as beta.16 decodes it, so no build
+//    applies the 30 deg rules to a 2 % record. 2 %: the 2026-10-17 E-Mart
+//    chain (1,392 deg of |rotation|) left about 15-20 deg of error in the
+//    digest model (one sample). 0.0023 rad/s: the RMS of the 93 parked yaw
+//    zeros (stops >= 5 s, 2026-10-10/11/17) around the integration zero 2048
+//    is 3.40 counts = 0.00224 rad/s, above BETA's 0.002 (pre-registered,
+//    validation/G3_GARAGE_EXIT_FIX_2026-10-17.md "P4").
+//  * I/O while BETA replaces (review P3, the G1 tunnel path): a parked S
+//    request needs G3_GARAGE_REPLACING_S_GAP_NS since the previous S request
+//    (at most one S and its mark per 30 s in a tunnel jam); the departure
+//    mark is never spaced (it is what keeps an S record meaning "parked
+//    since") but needs a journal writer lag <= G3_GARAGE_REPLACING_MARK_LAG_NS.
 static const char G3_GARAGE_OFF_NAME[]="g3-garage-off";
 static const uint64_t G3_GARAGE_PARKED_NS=5000000000ULL;
 static const double G3_GARAGE_DEPART_M=0.5;
 static const double G3_GARAGE_DEPART_DEG=2.0;
 static const double G3_GARAGE_ROTATION_PER_RAD=0.02;
+static const double G3_GARAGE_YAW_ERROR_RAD_S=0.0023;
 static const double G3_GARAGE_UNC_MAX_DEG=60.0;
+static const uint64_t G3_GARAGE_REPLACING_S_GAP_NS=30000000000ULL;
+static const uint64_t G3_GARAGE_REPLACING_MARK_LAG_NS=100000000ULL;
+// Previous-product-boot token (review P1): <root>/logs/g3-last-start.
+static const char G3_LAST_START_NAME[]="g3-last-start";
+static const char G3_LAST_START_TEMP[]=".g3-last-start.tmp";
 
 // ---- CRC32 (IEEE 802.3, reflected 0xEDB88320) --------------------------------
 inline uint32_t g3_crc32(const void* data,size_t n) {
@@ -450,6 +483,55 @@ inline bool g3_garage_on(const char* root) {
     if(!lstat(path,&st))return false;
     return errno==ENOENT;
 }
+// Previous-product-boot token (review P1). Reads <dir>/g3-last-start (the
+// boot id written at the previous BETA worker start) into prev ("none":
+// missing, "unread": unreadable or malformed), then writes this boot's id
+// there (temporary O_EXCL file, write, close, rename; NO fsync: a lost write
+// leaves the older id, so the next boot refuses chain_depart for this boot's
+// record: the safe side). A boot_id that is not a boot id ("unknown") writes
+// nothing. Startup slow path only: the worker calls it once at start, before
+// the store record is read, with any marker (g3-off, g3-garage-off), so a
+// boot that did not mark departures still advances the token. Returns true
+// when the new token was renamed into place.
+inline bool g3_last_start_swap(const char* dir,const char* boot_id,char prev[37]) {
+    strcpy(prev,"unread");
+    char path[512],temp[512];
+    const int a=dir?snprintf(path,sizeof path,"%s/%s",dir,G3_LAST_START_NAME):-1;
+    const int b=dir?snprintf(temp,sizeof temp,"%s/%s",dir,G3_LAST_START_TEMP):-1;
+    if(a<=0 || size_t(a)>=sizeof path || b<=0 || size_t(b)>=sizeof temp)return false;
+    static const char head[]="mx5g3start 1 ";
+    const size_t h=sizeof head-1;
+    const int fd=open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+    if(fd<0) { if(errno==ENOENT)strcpy(prev,"none"); }
+    else {
+        struct stat st;char buf[80];ssize_t n=-1;
+        if(!fstat(fd,&st) && S_ISREG(st.st_mode) && st.st_size>=0 && st.st_size<=64) {
+            do n=read(fd,buf,sizeof buf); while(n<0 && errno==EINTR);
+        }
+        close(fd);
+        if(n==ssize_t(h+37) && !memcmp(buf,head,h) && buf[h+36]=='\n' && g3_detail::boot_token(buf+h,36)) {
+            memcpy(prev,buf+h,36);prev[36]=0;
+        }
+    }
+    if(!boot_id || strlen(boot_id)!=36 || !g3_detail::boot_token(boot_id,36))return false;
+    char line[64];
+    const int m=snprintf(line,sizeof line,"%s%s\n",head,boot_id);
+    if(m!=int(h+37))return false;
+    unlink(temp);   // a cut write may leave it; unlink never follows a link
+    const int w=open(temp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+    if(w<0)return false;
+    bool ok=true;
+    for(int done=0;done<m;) {
+        const ssize_t k=write(w,line+done,size_t(m-done));
+        if(k<0 && errno==EINTR)continue;
+        if(k<=0) { ok=false;break; }
+        done+=int(k);
+    }
+    if(close(w))ok=false;
+    if(ok && rename(temp,path))ok=false;
+    if(!ok)unlink(temp);
+    return ok;
+}
 
 // ---- store I/O idle rule and the dedicated store thread -----------------------
 // Why the parked write must wait now (0: it may be handed to the store thread).
@@ -574,6 +656,7 @@ struct G3Sample {
     int reverse;                 // reverse latch now: -1 unknown, 0, 1
     double yaw_error_rad_s, rotation_per_rad; // heading budget growth (BETA rule 5)
     bool beta_replacing;         // BETA replaces or overlays sends now (garage carry: no fsync write)
+    uint64_t writer_lag_ns;      // journal writer's oldest unwritten row (garage carry: the mark while replacing)
 };
 inline G3Sample g3_sample(const navigation::Pipeline& nav,uint64_t now,uint64_t rt_s) {
     G3Sample s;
@@ -659,15 +742,21 @@ public:
     bool garage_carry() const { return garage_carry_; }
     double unc_max() const { return garage_carry_?G3_GARAGE_UNC_MAX_DEG:G3_UNC_MAX_DEG; }
 
-    // Worker start. stored is read only when load == G3_LOAD_OK.
+    // Worker start. stored is read only when load == G3_LOAD_OK. prev_boot:
+    // the previous product boot (g3_last_start_swap; garage carry only).
     void start(uint64_t now,bool enabled,const char* off_reason,const char* boot_id,const char* chain_now,
-               uint64_t rt_now_s,G3Load load,const G3Record& stored,bool garage=false) {
+               uint64_t rt_now_s,G3Load load,const G3Record& stored,bool garage=false,const char* prev_boot=0) {
         clear();
         start_ns_=now;garage_=enabled && garage;
         if(!enabled) { state_=G3_OFF;reason_=off_reason?off_reason:"off";return; }
         store_on_=true;
         copy(boot_id_,sizeof boot_id_,boot_id?boot_id:"unknown");
         copy(chain_now_,sizeof chain_now_,chain_now?chain_now:"unread");
+        copy(prev_boot_,sizeof prev_boot_,prev_boot?prev_boot:"unread");
+        // The g3-garage-off marker restores beta.16 exactly: beta.16 decodes
+        // a flag-4 record as a format error (flags > 3), so no build applies
+        // the 30 deg rules to a record grown with the garage terms.
+        if(!garage_ && load==G3_LOAD_OK && (stored.flags&G3_FLAG_DEPART))load=G3_LOAD_FORMAT;
         load_=load;have_stored_=load==G3_LOAD_OK;
         if(have_stored_) {
             stored_=stored;next_seq_=stored.seq+1;if(!next_seq_)next_seq_=1;disk_=stored.state;
@@ -690,9 +779,16 @@ public:
         }
         have_carried_=true;garage_carry_=depart;
         carried_deg_=stored.heading_cdeg/100.0;carried_unc_=stored.unc_cdeg/100.0;
-        if(!strcmp(chain_,"ok") && age_known_) { state_=G3_CARRIED;reason_="chain_ok"; }
+        // Garage carry (review P1): a departure-marked record is carried only
+        // when its boot is the previous product boot; otherwise a product boot
+        // in between may have moved the car without marking it.
+        const bool prev_ok=strcmp(stored.boot_id,"unknown") && strlen(prev_boot_)==36 &&
+            !strcmp(stored.boot_id,prev_boot_);
+        if(depart && !strcmp(chain_,"ok") && !prev_ok) { state_=G3_CARRIED_UNVERIFIED;reason_="not_prev_boot"; }
+        else if(!strcmp(chain_,"ok") && age_known_) { state_=G3_CARRIED;reason_="chain_ok"; }
         // Garage carry: the departure-marked S record says the car stood
-        // since the write; no wall clock is needed (a known age still counts).
+        // since the write, as far as the previous product boot observed it;
+        // no wall clock is needed (a known age still counts).
         else if(depart && !strcmp(chain_,"ok")) { state_=G3_CARRIED;reason_="chain_depart"; }
         else {
             state_=G3_CARRIED_UNVERIFIED;
@@ -709,12 +805,15 @@ public:
                                  lround(stored_.unc_cdeg/10.0));
         else st[0]=0;
         if(age_known_)snprintf(age,sizeof age,"%llu",(unsigned long long)age_s_);else strcpy(age,"null");
-        char boot[9];
+        char boot[9],prev[24];
         copy(boot,sizeof boot,have_stored_?stored_.boot_id:"none");
+        // Garage carry: the previous product boot (8 hex, "none" or "unread").
+        if(garage_) { char p[9];copy(p,sizeof p,prev_boot_);snprintf(prev,sizeof prev,",\"prev\":\"%s\"",p); }
+        else prev[0]=0;
         row(j,",\"mono_ns\":%llu,\"event\":\"%s\",\"reason\":\"%s\",\"g3\":\"%s\"%s,\"age_s\":%s,"
-              "\"age_src\":\"%s\",\"boot\":\"%s\",\"chain\":\"%s\",\"seq\":%lu}",
+              "\"age_src\":\"%s\",\"boot\":\"%s\",\"chain\":\"%s\",\"seq\":%lu%s}",
             "g3_store",(unsigned long long)now,event,reason_,g3_state_name(state_),st,age,age_src_,boot,chain_,
-            (unsigned long)(have_stored_?stored_.seq:0));
+            (unsigned long)(have_stored_?stored_.seq:0),prev);
     }
     // shadow_boot fields (",\"g3\":{...}").
     size_t boot_fields(char* out,size_t cap) const {
@@ -917,7 +1016,7 @@ private:
     const char* chain_;
     const char* age_src_;
     const char* pos_check_;
-    char boot_id_[37], chain_now_[9];
+    char boot_id_[37], chain_now_[9], prev_boot_[37];
     G3Load load_;
     bool have_stored_, have_carried_, age_known_, first_fix_, have_utc_;
     G3Record stored_;
@@ -950,7 +1049,7 @@ private:
     unsigned disk_flags_;
     int32_t disk_cdeg_;
     double m_ref_, pending_m_;
-    uint64_t last_request_ns_;
+    uint64_t last_request_ns_, last_s_request_ns_;
     uint32_t next_seq_;
     unsigned failures_;
     uint64_t writes_, dropped_;
@@ -975,7 +1074,7 @@ private:
     void clear() {
         state_=G3_OFF;reason_="not_started";chain_="none";age_src_="none";pos_check_="none";
         garage_=garage_carry_=pending_mark_=false;
-        strcpy(boot_id_,"unknown");strcpy(chain_now_,"unread");
+        strcpy(boot_id_,"unknown");strcpy(chain_now_,"unread");strcpy(prev_boot_,"unread");
         load_=G3_LOAD_MISSING;have_stored_=have_carried_=age_known_=first_fix_=have_utc_=false;
         stored_=g3_record();
         start_ns_=age_s_=last_utc_s_=last_utc_mono_=0;
@@ -986,7 +1085,7 @@ private:
         episode_id_=0;episode_needed_=episode_done_=episode_parked_=episode_stored_=false;episode_block_="none";
         pending_sync_=episode_synced_=disk_synced_=false;cancel_why_=0;
         pending_wait_s_=0;turn_ref_=aturn_ref_=pending_turn_=pending_aturn_=0;written_ns_=0;
-        m_ref_=pending_m_=0;last_request_ns_=0;next_seq_=1;failures_=0;writes_=dropped_=0;
+        m_ref_=pending_m_=0;last_request_ns_=last_s_request_ns_=0;next_seq_=1;failures_=0;writes_=dropped_=0;
         pending_rec_=g3_record();pending_line_[0]=0;pending_len_=0;
         ref_valid_=head_valid_=pending_beta_valid_=false;
         ref_deg_=ref_unc_=ref_turn_=ref_aturn_=ref_moving_s_=ref_rail_=0;ref_breaks_=0;ref_ns_=pending_ref_ns_=0;
@@ -1017,8 +1116,9 @@ private:
         const navigation::G3Motion& m=s.motion;
         const double turn=std::isfinite(m.turn_rad)?m.turn_rad:0;
         prop_body_=g3_wrap360(carried_deg_+turn*180.0/G3_PI);
-        const double grow=s.yaw_error_rad_s*(std::isfinite(m.moving_s)?m.moving_s:0)+
-            rotation_coef(s)*(std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0)+
+        // Garage chain terms only for a carried flag-4 record (review C2).
+        const double grow=time_coef(s,garage_carry_)*(std::isfinite(m.moving_s)?m.moving_s:0)+
+            rotation_coef(s,garage_carry_)*(std::isfinite(m.abs_turn_rad)?m.abs_turn_rad:0)+
             (std::isfinite(m.rail_excess_rad)?m.rail_excess_rad:0);   // yaw rail allowance
         prop_unc_=carried_unc_+grow*180.0/G3_PI;
     }
@@ -1040,7 +1140,9 @@ private:
         head_valid_=false;
         if(ref_valid_) {
             head_deg_=g3_wrap360(ref_deg_+(turn-ref_turn_)*180.0/G3_PI);
-            const double grow=s.yaw_error_rad_s*(moving-ref_moving_s_)+rotation_coef(s)*(aturn-ref_aturn_)+
+            // The stored uncertainty of a garage-on boot (its records carry
+            // flag 4) grows with the garage chain terms (review C2).
+            const double grow=time_coef(s,garage_)*(moving-ref_moving_s_)+rotation_coef(s,garage_)*(aturn-ref_aturn_)+
                 (rail-ref_rail_);
             head_unc_=ref_unc_+(grow>0?grow:0)*180.0/G3_PI;
             head_valid_=std::isfinite(head_deg_) && std::isfinite(head_unc_);
@@ -1052,8 +1154,15 @@ private:
             head_valid_=true;head_deg_=ref_deg_;head_unc_=ref_unc_;
         }
     }
-    // Rotation term of the G3 heading uncertainty (garage carry: 2 %).
-    double rotation_coef(const G3Sample& s) const { return garage_?G3_GARAGE_ROTATION_PER_RAD:s.rotation_per_rad; }
+    // Heading uncertainty growth terms. chain: the garage chain (the stored
+    // value of a garage-on boot, or a carried flag-4 record): rotation 2 %,
+    // time term never below BETA's; otherwise the BETA rule-5 terms.
+    static double rotation_coef(const G3Sample& s,bool chain) {
+        return chain?G3_GARAGE_ROTATION_PER_RAD:s.rotation_per_rad;
+    }
+    static double time_coef(const G3Sample& s,bool chain) {
+        return chain && s.yaw_error_rad_s<G3_GARAGE_YAW_ERROR_RAD_S?G3_GARAGE_YAW_ERROR_RAD_S:s.yaw_error_rad_s;
+    }
     // Travel direction of the carried heading: body + 180 deg while the
     // reverse latch says reverse; an unknown latch is journaled as forward.
     double travel(const G3Sample& s) const { return g3_wrap360(prop_body_+(s.reverse==1?180.0:0.0)); }
@@ -1121,8 +1230,9 @@ private:
             lround((std::isfinite(m.abs_turn_rad)?m.abs_turn_rad-aturn_ref_:0.0)*1800.0/G3_PI),age,
             std::isfinite(m.distance_m)?m.distance_m:0.0);
     }
-    // Store policy (see the constants): the PARKED write only. Builds at most
-    // one request per stop; the runtime hands it to the store thread.
+    // Store policy (see the constants): the PARKED write (garage carry: and
+    // the departure mark, depart()). Builds at most one request per stop; the
+    // runtime hands it to the store thread.
     template<class J> void store(J& j,const G3Sample& s,const char* io_block) {
         const navigation::G3Motion& m=s.motion;
         // A stop: a run of exactly-zero wheel samples without a gap above
@@ -1144,8 +1254,9 @@ private:
         }
         // Parked: >= 15 s (garage carry: 5 s) of exactly-zero samples and the
         // stream still fresh.
+        const uint64_t parked_ns=garage_?G3_GARAGE_PARKED_NS:G3_PARKED_NS;
         const bool parked=stop_id && s.wheels_fresh && !s.wheels_moving && m.last_speed_ns>stop_id &&
-            m.last_speed_ns-stop_id>=(garage_?G3_GARAGE_PARKED_NS:G3_PARKED_NS);
+            m.last_speed_ns-stop_id>=parked_ns;
         if(parked)episode_parked_=true;
         if(!parked) { if(garage_)depart(s,io_block);return; }
         const bool long_stop=m.last_speed_ns-stop_id>=G3_FSYNC_MIN_STOP_NS;
@@ -1175,6 +1286,14 @@ private:
             episode_block_="rate";return;
         }
         if(io_block) { episode_block_=io_block;return; }
+        // Garage carry while BETA replaces (review P3, tunnel jams): at most
+        // one S request per G3_GARAGE_REPLACING_S_GAP_NS (its departure mark
+        // is not spaced, nor the rule F rewrite of a tainted heading). A
+        // blocked final park leaves the mark on disk: no carry.
+        if(garage_ && s.beta_replacing && !stale && last_s_request_ns_ && s.now>=last_s_request_ns_ &&
+           s.now-last_s_request_ns_<G3_GARAGE_REPLACING_S_GAP_NS) {
+            episode_block_="replacing_rate";return;
+        }
         const char state='S';
         G3Record r=g3_record();
         r.seq=next_seq_++;if(!next_seq_)next_seq_=1;
@@ -1202,8 +1321,8 @@ private:
         if(!n)return;
         pending_len_=n;pending_rec_=r;pending_=true;pending_mark_=false;pending_m_=m.distance_m;
         pending_turn_=m.turn_rad;pending_aturn_=m.abs_turn_rad;
-        pending_wait_s_=(m.last_speed_ns>stop_id+G3_PARKED_NS?m.last_speed_ns-stop_id-G3_PARKED_NS:0)/1e9;
-        last_request_ns_=s.now?s.now:1;episode_done_=true;
+        pending_wait_s_=(m.last_speed_ns>stop_id+parked_ns?m.last_speed_ns-stop_id-parked_ns:0)/1e9;
+        last_request_ns_=s.now?s.now:1;episode_done_=true;last_s_request_ns_=last_request_ns_;
         pending_sync_=sync;if(sync)episode_synced_=true;
     }
     // Garage carry departure mark: the car moved (G3_GARAGE_DEPART_M) or
@@ -1219,6 +1338,8 @@ private:
         if(!moved && !turned)return;
         if(last_request_ns_ && s.now>=last_request_ns_ && s.now-last_request_ns_<G3_WRITE_MIN_NS)return;
         if(io_block)return;
+        // While BETA replaces (review P3): only with an idle journal writer.
+        if(s.beta_replacing && s.writer_lag_ns>G3_GARAGE_REPLACING_MARK_LAG_NS)return;
         G3Record r=g3_record();
         r.seq=next_seq_++;if(!next_seq_)next_seq_=1;
         copy(r.boot_id,sizeof r.boot_id,boot_id_);r.state='M';r.flags=G3_FLAG_DEPART;

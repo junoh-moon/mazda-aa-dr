@@ -297,7 +297,8 @@ int main(int argc,char** argv) {
         r.heading_cdeg=int32_t(lround(g3_heading_deg*100))%36000;r.unc_cdeg=450;
         r.lat_e7=350000000;r.lon_e7=1350000000;r.pos_err_dm=50;r.rt_s=g3_rt;strcpy(r.chain,"none");
         if(g3_garage)r.flags|=mx5::runtime::G3_FLAG_DEPART;
-        g3.start(clock_ns(0),true,"marker",boot_id,"none",g3_rt+3600,mx5::runtime::G3_LOAD_OK,r,g3_garage);
+        // The record's boot is the previous product boot (review P1 token).
+        g3.start(clock_ns(0),true,"marker",boot_id,"none",g3_rt+3600,mx5::runtime::G3_LOAD_OK,r,g3_garage,r.boot_id);
         g3.journal_start(j,clock_ns(0));
     }
     g3_send.start(g3_send_on && g3.active(),g3.garage());
