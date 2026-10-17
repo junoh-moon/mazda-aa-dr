@@ -256,7 +256,8 @@ public final class SenderService extends Service implements SensorEventListener,
                 Status.obdFps = o.fps();
                 Status.obdLossPct = o.lossPercent();
             }
-            ab.poll(CLOCK.nanos());
+            // a window added after disconnected() (an event that read the session before it ended) opens no row
+            ab.poll(CLOCK.nanos(), s != null);
             for (String row = ab.take(); row != null; row = ab.take()) abLog.event(row);
             if (ticks % 60 == 59 && o != null) {
                 log.event("obd_stats source=" + Status.source + " switches=" + sel.switches + " phone_sent=" + sel.phoneWindowsSent

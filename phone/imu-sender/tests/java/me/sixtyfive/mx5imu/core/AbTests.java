@@ -9,9 +9,11 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
@@ -47,6 +49,8 @@ public final class AbTests {
         noAddressNoLocation();
         ring(tmp);
         budget(tmp);
+        lateWindowAfterDisconnect();
+        exportRace(tmp);
         System.out.println("ab tests: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }
@@ -446,6 +450,100 @@ public final class AbTests {
         File only = new File(d, "export1.txt");
         main.exportTo(only);
         check(!new String(Files.readAllBytes(only.toPath()), StandardCharsets.UTF_8).contains("ab iv_ms"), "exportTo without extra rings: main only");
+    }
+
+    /**
+     * Review 2026-10-17 finding 7: disconnected() resets the accumulator, then one sensor event that had read the
+     * session as active adds a window. The service's tick polls with live = (session != null): no junk row.
+     */
+    static void lateWindowAfterDisconnect() {
+        AbCompare a = on();
+        a.add(PHONE, gyro(10, 20_000, true, false), true, 0);
+        a.add(OBD, obd(10, 0), true, 0);
+        a.poll(10 * S, true);
+        String done = a.take();
+        check(done != null, "row of the live session");
+        a.reset();                                                    // disconnected()
+        a.add(PHONE, gyro(77, 20_000, true, false), true, 10 * S + 5 * MS);   // the late event
+        a.poll(11 * S, false);                                        // tick: session gone
+        eq(a.idleDrops, 1, "late window dropped by the idle tick");
+        for (long t = 12 * S; t <= 40 * S; t += S) a.poll(t, false);
+        check(a.take() == null, "no junk one-window row after a disconnect");
+        eq(a.rows, 1, "only the live row counted");
+        eq(a.idleDrops, 1, "an empty interval is not counted again");
+        check(a.summary().contains("ab_idle_drops=1"), "summary shows idle drops: " + a.summary());
+        // a row completed while live stays queued through an idle poll
+        AbCompare b = on();
+        b.add(PHONE, gyro(3, 20_000, true, false), true, 0);
+        b.poll(10 * S, true);
+        b.poll(11 * S, false);
+        check(b.take() != null && b.idleDrops == 0, "completed row survives the idle poll");
+        // the next session (connected(): reset, then windows) produces rows again
+        a.reset();
+        a.add(PHONE, gyro(4, 20_000, true, false), true, 50 * S);
+        a.add(OBD, obd(4, 0), true, 50 * S);
+        a.poll(60 * S, true);
+        Map<String, String> m = parse(a.take());
+        eqs(m.get("g_dth_urad"), "4", "next session's row holds only its own windows");
+        eqs(m.get("iv_ms"), "10000", "next session's interval opened at its first window");
+        // poll(now) is poll(now, true)
+        AbCompare c = on();
+        c.add(PHONE, gyro(1, 20_000, true, false), true, 0);
+        c.poll(10 * S);
+        check(c.take() != null, "poll(now) keeps the live behaviour");
+    }
+
+    /**
+     * Review 2026-10-17 finding 6: the export (MainActivity: its own RollingLog instances) and the writer
+     * (SenderService) are different objects. A rotation between the copy of ab.1.txt and ab.txt must not leave out
+     * a half: the test hook makes a writer thread try to rotate exactly there.
+     */
+    static void exportRace(File tmp) throws Exception {
+        File d = freshDir(tmp, "abrace");
+        CoreTests.FakeClock clock = new CoreTests.FakeClock();
+        final RollingLog writer = RollingLog.ab(d, clock);
+        RollingLog exporter = RollingLog.ab(d, clock);
+        File cur = new File(d, "ab.txt");
+        int i = 0;
+        String fmt = "ab iv_ms=10000 sel=OBD g_n=500 g_dur_us=10000000 g_dth_urad=-1234567 g_grav=1 g_st=0 o_n=500 #%06d";
+        long line = -1;
+        boolean rotated = false;
+        while (true) {
+            long before = cur.length();
+            writer.event(String.format(Locale.ROOT, fmt, i++));
+            if (line < 0) line = cur.length();
+            if (cur.length() < before) rotated = true;
+            if (rotated && cur.length() + line > RollingLog.AB_HALF) break;   // the next row rotates
+        }
+        final int next = i;
+        final AtomicBoolean once = new AtomicBoolean();
+        final Thread[] w = new Thread[1];
+        RollingLog.betweenFilesForTest = () -> {
+            if (!once.compareAndSet(false, true)) return;
+            w[0] = new Thread(() -> writer.event(String.format(Locale.ROOT, fmt, next)));
+            w[0].start();
+            try { w[0].join(300); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        };
+        File exp = new File(d, "export.txt");
+        try {
+            exporter.exportTo(exp);
+        } finally {
+            RollingLog.betweenFilesForTest = null;
+        }
+        if (w[0] != null) w[0].join();
+        check(once.get(), "hook ran between the two files");
+        List<Integer> nums = new ArrayList<>();
+        for (String l : new String(Files.readAllBytes(exp.toPath()), StandardCharsets.UTF_8).split("\n")) {
+            int k = l.lastIndexOf('#');
+            if (k >= 0) nums.add(Integer.parseInt(l.substring(k + 1)));
+        }
+        boolean contiguous = !nums.isEmpty();
+        for (int k = 1; k < nums.size(); k++) if (nums.get(k) != nums.get(k - 1) + 1) contiguous = false;
+        check(contiguous, "export holds both halves without a gap (" + nums.size() + " rows)");
+        check(!nums.isEmpty() && nums.get(nums.size() - 1) == next - 1, "export ends at the last row before the blocked rotation");
+        check(nums.size() > RollingLog.AB_HALF / line, "export holds more than one half: " + nums.size());
+        check(new String(Files.readAllBytes(cur.toPath()), StandardCharsets.UTF_8).contains(String.format(Locale.ROOT, "#%06d", next)),
+                "the blocked writer wrote its row after the export");
     }
 
     static void budget(File tmp) throws IOException {

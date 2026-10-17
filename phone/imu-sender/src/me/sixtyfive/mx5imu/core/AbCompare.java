@@ -43,7 +43,7 @@ public final class AbCompare {
     private boolean oGap;
     private long phoneSent, obdSent;
     private final ArrayDeque<String> pending = new ArrayDeque<>();
-    public long rows, oneSided, emptyIntervals, resets, dropped;
+    public long rows, oneSided, emptyIntervals, resets, dropped, idleDrops;
 
     /**
      * The selector's decision for one window, plus the record-only accumulation (ab may be null = off). The
@@ -88,8 +88,23 @@ public final class AbCompare {
     }
 
     /** Closes the interval when at least INTERVAL_NS have passed since it opened; queues its row. */
-    public synchronized void poll(long now) {
-        if (!enabled || !open || now - startNs < INTERVAL_NS) return;
+    public synchronized void poll(long now) { poll(now, true); }
+
+    /**
+     * As poll(now), for a caller that also knows whether its CMU session is still active. live = false drops the
+     * open interval without a row (counted in idleDrops): after disconnected() has reset the accumulator, a sensor
+     * event that had already read the session as active can still add one window, which would otherwise open a
+     * one-window interval and give one junk row 10 s later (review 2026-10-17, finding 7). Rows completed while the
+     * session was live stay queued.
+     */
+    public synchronized void poll(long now, boolean live) {
+        if (!enabled || !open) return;
+        if (!live) {
+            if (gN != 0 || oN != 0) idleDrops++;
+            clearInterval();
+            return;
+        }
+        if (now - startNs < INTERVAL_NS) return;
         if (lastRowNs != Long.MIN_VALUE && now - lastRowNs < INTERVAL_NS) return;  // defensive: never above the rate
         if (gN == 0 && oN == 0) {
             emptyIntervals++;
@@ -144,6 +159,7 @@ public final class AbCompare {
 
     /** Counters for the periodic obd_stats line. */
     public synchronized String summary() {
-        return "ab_rows=" + rows + " ab_one_sided=" + oneSided + " ab_dropped=" + dropped + " ab_resets=" + resets;
+        return "ab_rows=" + rows + " ab_one_sided=" + oneSided + " ab_dropped=" + dropped + " ab_resets=" + resets
+                + " ab_idle_drops=" + idleDrops;
     }
 }

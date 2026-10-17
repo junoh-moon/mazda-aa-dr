@@ -32,27 +32,59 @@ sign has been checked on the owner's car with both sources at once: the tool
 ESTIMATES the sign by correlation and reports it next to the expected +1.
 
 Per row: rate = sum dtheta / sum window (rad/s, shown in deg/s) for each side,
-so lost frames shorten the covered time but do not bias the rate. The per-row
-comparison is lag-free (the same 10 s of phone receipt time for both sides; a
-Bluetooth delay of ~0.1 s moves at most that much rotation across a row edge).
+so lost frames shorten the covered time but do not bias the rate. Both sides
+are binned by the same 10 s of phone RECEIPT time, so the per-row comparison is
+NOT lag-free: an OBD receipt lag L (Bluetooth, ELM327 buffering; 0.3-1 s is
+plausible for a clone in monitor mode) moves L / iv of each row's OBD rotation
+into the next row. On a plain regression OBD on gyro this attenuates the slope
+by about L / iv x (1 - row autocorrelation of the rate), i.e. the size of the
+3 % agree tolerance (independent review 2026-10-17, finding 5B). The decision
+reports a TWO-TAP regression on rows whose predecessor is the directly
+preceding interval:
+  OBD_i = a + c0 x gyro_i + c1 x gyro_(i-1)
+(scale c0 + c1, lag c1 / (c0 + c1) x iv; exact when the rate is constant
+within each row) and DECIDES on a THREE-TAP regression that adds gyro_(i+1):
+when the rate changes smoothly across a row edge, the rotation a lag moves is
+L x the edge rate (about the mean of the two rows), which the two-tap model
+cannot represent; leaving out gyro_(i+1) biased its sum HIGH by +2.6 % at
+500 ms and +5 % at 1 s in a continuous-time simulation (lag_fit() docstring).
+The three-tap scale is the sum of the three coefficients, the lag
+(c(-1) - c(+1)) / scale x iv; both regimes give the same answer. The one-tap
+regression is still reported (biased low by the lag fraction for rates that
+change every row, nearly unbiased for smooth rates).
 Usable: gyro rows need g_grav=1, OBD rows o_gap=0, both need iv_ms <= 15000 and
 covered time >= 50 % of iv_ms.
 
 Report (text, or --json):
   * coverage of each side (rows present, covered time / interval time), rows
     excluded by reason;
-  * parked intervals: runs of >= 3 consecutive usable pair rows with both rates
-    within 0.3 deg/s and >= 90 % stationary-hint gyro windows; per interval the
+  * parked intervals: runs of >= 3 consecutive usable pair rows whose GYRO rate
+    is within 0.3 deg/s and >= 90 % of whose gyro windows carry the phone's
+    stationary hint. The OBD rate is NOT a gate: it is relative to the nominal
+    2047, so its parked value is the unknown zero offset being measured and is
+    reported whatever it is (an offset above 0.30 deg/s = 8 counts used to hide
+    every parked interval and the zero-range check; review finding 5A); per interval the
     zero of each source in deg/s (sum dtheta / sum window), the per-row sd and
     the drift (mean of the last third - mean of the first third, and the least
     squares slope per minute); across intervals the range and sd of each zero;
+  * duplicate rows: exact duplicates (same wall-clock stamp, t and row text)
+    are dropped in load() and counted; the app's A/B ring is never cleared on
+    export, so successive exports overlap and the same row must count once
+    (review finding 5C);
   * moving rows (mean |rate| of the two >= 2 deg/s): Pearson correlation
     (without outlier rows, |Huber residual| > max(5 robust sd, 0.5 deg/s,
     10 % of |gyro rate|)),
     Huber regression OBD = a + b * gyro and gyro = a' + b' * OBD, the scale
     (geometric mean of b and 1/b', OBD per gyro), the sign estimate, the scale
     in a low (2..8 deg/s) and a high (>= 8 deg/s) rate bin (median of
-    (OBD - a) / gyro over the bin's rows);
+    (OBD - a) / gyro over the bin's rows) - all one-tap, for comparison;
+  * two_tap and three_tap (three_tap is what the decision uses): moving pair
+    rows whose neighbours are consecutive intervals with a usable gyro side;
+    Huber fit of the model above, lag-free scale, lag in ms, outlier rows by
+    the same limit on the fit's residual, the correlation of OBD with the
+    lag-aligned gyro (the fitted neighbour combination, weights summing to 1,
+    each neighbour weight clamped to [-0.5, 0.5]) without outlier rows, and the
+    low/high bin scales of (OBD - a) / aligned gyro;
   * per-row differences (OBD - gyro) in deg/s and in degrees per row;
   * ab_decision: the pre-registered rule of the design note, section 16.2.
 Nothing here is ground truth: the two sensors are compared with each other.
@@ -130,12 +162,27 @@ def parse_lines(lines):
 
 
 def load(paths):
-    rows, malformed = [], 0
+    """A/B rows of every file in argument order without exact duplicates. Returns (rows, malformed, duplicates).
+
+    The app's A/B ring is cumulative (never cleared on export), so two exports overlap by up to the ring's ~8 h and
+    the same file may be passed twice. A row is a duplicate when its whole line (wall-clock stamp, t=...ms and the
+    row text) was already seen; such rows are dropped and counted. Distinct rows cannot collide: t is monotonic within
+    a phone boot and the wall-clock stamp differs across boots."""
+    rows, malformed, duplicates, seen = [], 0, 0, set()
     for p in paths:
-        r, m = parse_lines(Path(p).read_text(errors="replace").splitlines())
+        lines = []
+        for line in Path(p).read_text(errors="replace").splitlines():
+            key = line.rstrip("\n").rstrip()
+            if LINE.match(key):
+                if key in seen:
+                    duplicates += 1
+                    continue
+                seen.add(key)
+            lines.append(line)
+        r, m = parse_lines(lines)
         rows += r
         malformed += m
-    return rows, malformed
+    return rows, malformed, duplicates
 
 
 def deg(rad):
@@ -183,6 +230,56 @@ def wls(x, y, w):
         return None
     b = sum(wi * (a - mx) * (c - my) for wi, a, c in zip(w, x, y)) / sxx
     return my - b * mx, b
+
+
+def solve(a, b):
+    """Solves the small linear system a x = b (Gaussian elimination, partial pivoting); None when singular."""
+    n = len(b)
+    m = [list(a[i]) + [b[i]] for i in range(n)]
+    scale = max(abs(m[i][i]) for i in range(n)) or 1.0
+    for c in range(n):
+        piv = max(range(c, n), key=lambda r: abs(m[r][c]))
+        if abs(m[piv][c]) <= 1e-12 * scale:
+            return None
+        m[c], m[piv] = m[piv], m[c]
+        for r in range(n):
+            if r != c:
+                f = m[r][c] / m[c][c]
+                for k in range(c, n + 1):
+                    m[r][k] -= f * m[c][k]
+    return [m[i][n] / m[i][i] for i in range(n)]
+
+
+def wls_multi(xs, y, w):
+    """Weighted least squares of y = c[0] + c[1] x1 + c[2] x2 + ... (xs: rows of predictors); None if degenerate."""
+    rows = [[1.0] + list(r) for r in xs]
+    p = len(rows[0])
+    a = [[sum(wi * r[i] * r[j] for wi, r in zip(w, rows)) for j in range(p)] for i in range(p)]
+    b = [sum(wi * r[i] * c for wi, r, c in zip(w, rows, y)) for i in range(p)]
+    return solve(a, b)
+
+
+def huber_multi(xs, y, k=1.345, iters=50):
+    """Huber M-estimate of y = c0 + c1 x1 + c2 x2 by IRLS (MAD scale), like huber(). None if degenerate."""
+    if not xs or len(y) < len(xs[0]) + 2:
+        return None
+    fit = wls_multi(xs, y, [1.0] * len(y))
+    if fit is None:
+        return None
+    for _ in range(iters):
+        res = [c - fit[0] - sum(fi * v for fi, v in zip(fit[1:], r)) for r, c in zip(xs, y)]
+        s = 1.4826 * statistics.median(abs(e) for e in res)
+        if s <= 1e-12:
+            break
+        w = [1.0 if abs(e) <= k * s else k * s / abs(e) for e in res]
+        new = wls_multi(xs, y, w)
+        if new is None:
+            break
+        done = all(abs(n - o) < 1e-9 for n, o in zip(new, fit))
+        fit = new
+        if done:
+            break
+    return fit
 
 
 def huber(x, y, k=1.345, iters=50):
@@ -240,7 +337,7 @@ def consecutive(prev, row):
     return 0 < dt <= row["iv_ms"] + 2000
 
 
-def analyse(rows, malformed=0):
+def analyse(rows, malformed=0, duplicates=0):
     rule = RULE
     per = []
     excluded = dict(g_grav0=0, o_gap=0, long_interval=0, low_coverage_g=0, low_coverage_o=0)
@@ -280,9 +377,11 @@ def analyse(rows, malformed=0):
                         stationary_share=(st / row["g_n"]) if (gp and st is not None) else None))
     coverage = {p: (r4(cov[p][0] / cov[p][1]) if cov[p][1] else None) for p in ("g", "o")}
 
-    # parked intervals: runs of consecutive pair rows that are both quiet and stationary by the phone's hint
+    # parked intervals: runs of consecutive pair rows that are quiet and stationary by the PHONE (gyro rate and the
+    # stationary hint). The OBD rate is not a gate: relative to the nominal 2047 its parked value is the zero offset
+    # this section measures, so it is reported whatever it is (review finding 5A).
     def parked(e):
-        if not e["pair"] or abs(e["g"]) > rule["park_dps"] or abs(e["o"]) > rule["park_dps"]:
+        if not e["pair"] or abs(e["g"]) > rule["park_dps"]:
             return False
         s = e["stationary_share"]
         return s is None or s >= rule["park_stationary_share"]
@@ -353,6 +452,9 @@ def analyse(rows, malformed=0):
         if (lo["rows"] >= rule["bin_min_rows"] and hi["rows"] >= rule["bin_min_rows"] and lo["slope"] and hi["slope"]):
             reg["rate_dependence"] = r4(hi["slope"] / lo["slope"] - 1.0)
 
+    reg["two_tap"] = lag_fit(per, rule, (0, -1))
+    reg["three_tap"] = lag_fit(per, rule, (-1, 0, 1))
+
     def diffs(es):
         d = [e["o"] - e["g"] for e in es]
         rot = [(e["o"] - e["g"]) * e["row"]["iv_ms"] / 1000.0 for e in es]
@@ -361,7 +463,7 @@ def analyse(rows, malformed=0):
                     abs_p90_deg_per_row=r4(pct([abs(x) for x in rot], 0.9)), sum_deg=r4(sum(rot)))
 
     report = dict(
-        rows=len(rows), malformed=malformed, present=present, coverage=coverage, excluded=excluded,
+        rows=len(rows), malformed=malformed, duplicates=duplicates, present=present, coverage=coverage, excluded=excluded,
         flag_share=dict(g_grav0=r4(flagged["g"] / present["g"]) if present["g"] else None,
                         o_gap=r4(flagged["o"] / present["o"]) if present["o"] else None),
         pair_rows=len(pairs), parked=intervals, parked_across=across, moving=reg,
@@ -373,6 +475,92 @@ def analyse(rows, malformed=0):
         rule=RULE)
     report["ab_decision"] = decide(report)
     return report
+
+
+def lag_fit(per, rule, taps):
+    """A lag-aware comparison over moving pair rows (review finding 5B; design note 16.6).
+
+    taps: row offsets of the gyro predictors, 0 = the same row: (0, -1) is the two-tap model
+    OBD_i = a + c0 gyro_i + c1 gyro_(i-1); (-1, 0, 1) adds the next row. Rows: moving pair rows whose neighbours at
+    every offset are directly consecutive intervals (consecutive()) with a usable gyro side. The scale s is the sum of
+    the coefficients (a receipt lag only moves rotation between neighbouring rows, so the sum is lag-free as long as
+    the moved rotation is a combination of the modelled neighbours), and the lag is
+    (c(-1) - c(+1)) / s x the median interval:
+      * rates constant within a row (the review's reproduction): OBD_i = s((1 - f) g_i + f g_(i-1)), f = L / iv, so
+        c(-1) = s f, c(+1) = 0;
+      * rates that change smoothly across a row edge: the rotation moved at an edge is L x the EDGE rate, about the
+        mean of the two rows, so OBD_i = s(g_i + f/2 (g_(i-1) - g_(i+1))): c(-1) = s f/2, c(+1) = -s f/2. The two-tap
+        model cannot represent this; leaving out g_(i+1), which is correlated with g_i and g_(i-1), biases its sum
+        HIGH (continuous-time simulation: +2.6 % at 500 ms, +5 % at 1 s).
+    Both cases give c(-1) - c(+1) = s f. The decision uses the three-tap fit; the two-tap fit is reported."""
+    out = dict(taps=list(taps), rows=0, corr=None, outliers=0, outlier_share=None, scale=None, lag_ms=None,
+               sign_estimate="undetermined", no_variance=[])
+    sel = []
+    for i, e in enumerate(per):
+        if not e["pair"] or (abs(e["g"]) + abs(e["o"])) / 2.0 < rule["move_dps"]:
+            continue
+        xs = []
+        for k in taps:
+            j = i + k
+            if j < 0 or j >= len(per) or per[j]["g"] is None:
+                break
+            if k != 0 and not all(consecutive(per[m - 1]["row"], per[m]["row"])
+                                  for m in range(min(i, j) + 1, max(i, j) + 1)):
+                break
+            xs.append(per[j]["g"])
+        else:
+            sel.append((e, xs))
+    out["rows"] = len(sel)
+    if len(sel) < 3:
+        return out
+    g = [e["g"] for e, _ in sel]
+    o = [e["o"] for e, _ in sel]
+    for name, vals in (("gyro", g), ("obd", o)):
+        if max(vals) - min(vals) <= 0:
+            out["no_variance"].append(name)
+    if out["no_variance"]:
+        return out
+    xs = [x for _, x in sel]
+    fit = huber_multi(xs, o)
+    if fit is None:
+        out["degenerate"] = True
+        return out
+    a, c = fit[0], fit[1:]
+    s = sum(c)
+    iv = statistics.median(e["row"]["iv_ms"] for e, _ in sel)
+    coef = {k: ci for k, ci in zip(taps, c)}
+    out.update(intercept_dps=r4(a), coef={str(k): r4(v) for k, v in coef.items()}, scale=r4(s), iv_ms_median=iv)
+    w = {k: (1.0 if k == 0 else 0.0) for k in taps}
+    if abs(s) > 1e-9:
+        out["lag_ms"] = round((coef.get(-1, 0.0) - coef.get(1, 0.0)) / s * iv, 1)
+        # the lag-aligned gyro: the fitted combination of the neighbours with weights summing to 1, each
+        # neighbour's weight clamped to [-0.5, 0.5]
+        for k in taps:
+            if k != 0:
+                w[k] = min(0.5, max(-0.5, coef[k] / s))
+        w[0] = 1.0 - sum(v for k, v in w.items() if k != 0)
+    out["aligned_weights"] = {str(k): r4(v) for k, v in w.items()}
+    ga = [sum(w[k] * x for k, x in zip(taps, row)) for row in xs]
+    res = [oi - a - sum(ci * x for ci, x in zip(c, row)) for oi, row in zip(o, xs)]
+    lim = max(rule["outlier_k"] * 1.4826 * statistics.median(abs(x) for x in res), rule["outlier_floor_dps"])
+    keep = [k for k, (x, gi) in enumerate(zip(res, g)) if abs(x) <= max(lim, rule["outlier_rel"] * abs(gi))]
+    out["outliers"] = len(sel) - len(keep)
+    out["outlier_share"] = r4(out["outliers"] / len(sel))
+    out["outlier_limit_dps"] = r4(lim)
+    r = pearson([ga[k] for k in keep], [o[k] for k in keep])
+    if r is not None:
+        out["corr"] = r4(r)
+        out["sign_estimate"] = +1 if r >= 0.5 else (-1 if r <= -0.5 else "undetermined")
+    bins = {}
+    for name, lo, hi in (("low", rule["move_dps"], rule["bin_split_dps"]), ("high", rule["bin_split_dps"], float("inf"))):
+        vals = [(o[k] - a) / ga[k] for k in range(len(sel))
+                if lo <= (abs(g[k]) + abs(o[k])) / 2.0 < hi and ga[k] != 0]
+        bins[name] = dict(rows=len(vals), slope=r4(statistics.median(vals)) if vals else None)
+    out["bins"] = bins
+    lo, hi = bins["low"], bins["high"]
+    if lo["rows"] >= rule["bin_min_rows"] and hi["rows"] >= rule["bin_min_rows"] and lo["slope"] and hi["slope"]:
+        out["rate_dependence"] = r4(hi["slope"] / lo["slope"] - 1.0)
+    return out
 
 
 def decide(rep):
@@ -393,36 +581,49 @@ def decide(rep):
         unusable[name] = why
     checks["unusable"] = unusable
     m = rep["moving"]
+    t = m["three_tap"]
     gshare = rep["flag_share"]["g_grav0"]
     proj = []
     if gshare is not None and rep["present"]["g"] >= rule["min_side_rows"] and gshare > rule["projection_grav_share"]:
         proj.append("g_grav0 share %s > %.2f" % (gshare, rule["projection_grav_share"]))
-    if (m.get("rate_dependence") is not None and m["corr"] is not None and m["corr"] >= rule["projection_min_corr"]
-            and abs(m["rate_dependence"]) > rule["projection_rate_dependence"]):
-        proj.append("scale high/low bin - 1 = %s, |.| > %.2f" % (m["rate_dependence"], rule["projection_rate_dependence"]))
+    if (t.get("rate_dependence") is not None and t["corr"] is not None and t["corr"] >= rule["projection_min_corr"]
+            and abs(t["rate_dependence"]) > rule["projection_rate_dependence"]):
+        proj.append("scale high/low bin - 1 = %s, |.| > %.2f" % (t["rate_dependence"], rule["projection_rate_dependence"]))
     checks["projection"] = proj
-    scale = m.get("scale_obd_per_gyro")
-    checks["agreement"] = dict(corr=m["corr"], scale=scale, sign_estimate=m["sign_estimate"], moving_rows=m["rows"])
+    # 2026-10-17 (review 5B): the decision uses the three-tap rows, their correlation with the lag-aligned gyro and the
+    # lag-free scale; the thresholds are unchanged. The two-tap and one-tap scales are shown next to it.
+    scale = t.get("scale")
+    checks["agreement"] = dict(corr=t["corr"], scale=scale, lag_ms=t.get("lag_ms"), sign_estimate=t["sign_estimate"],
+                               moving_rows=m["rows"], lag_rows=t["rows"], two_tap_scale=m["two_tap"]["scale"],
+                               two_tap_lag_ms=m["two_tap"]["lag_ms"], one_tap_scale=m.get("scale_obd_per_gyro"),
+                               one_tap_corr=m["corr"])
     if unusable["gyro"] and unusable["obd"]:
         outcome, reasons = "both_unusable", unusable["gyro"] + unusable["obd"]
     elif unusable["gyro"]:
         outcome, reasons = "gyro_unusable", unusable["gyro"]
     elif unusable["obd"]:
         outcome, reasons = "obd_unusable", unusable["obd"]
-    elif m["rows"] < rule["min_moving_rows"] or m["corr"] is None:
-        outcome, reasons = "not_decidable", ["moving pair rows %d < %d" % (m["rows"], rule["min_moving_rows"])]
-    elif m["corr"] <= -rule["sign_corr"]:
-        outcome, reasons = "sign_mismatch", ["corr %s <= -%.2f (expected sign %+d)" % (m["corr"], rule["sign_corr"], EXPECTED_SIGN)]
+    elif t["rows"] < rule["min_moving_rows"]:
+        outcome, reasons = "not_decidable", ["moving pair rows with consecutive neighbours %d < %d (moving pair rows %d)"
+                                             % (t["rows"], rule["min_moving_rows"], m["rows"])]
+    elif t["no_variance"]:
+        outcome, reasons = "not_decidable", ["no variance on the %s side over %d moving rows (constant rate; a stuck or dead "
+                                             "source)" % (" and ".join(t["no_variance"]), t["rows"])]
+    elif t["corr"] is None or scale is None:
+        outcome, reasons = "not_decidable", ["three-tap fit degenerate over %d moving rows" % t["rows"]]
+    elif t["corr"] <= -rule["sign_corr"]:
+        outcome, reasons = "sign_mismatch", ["corr %s <= -%.2f (expected sign %+d)" % (t["corr"], rule["sign_corr"], EXPECTED_SIGN)]
     elif proj:
         outcome, reasons = "phone_projection_unreliable", proj
-    elif m["outlier_share"] is not None and m["outlier_share"] > rule["max_outlier_share"]:
-        outcome, reasons = "poor_correlation", ["outlier rows %s > %.2f" % (m["outlier_share"], rule["max_outlier_share"])]
-    elif m["corr"] > rule["agree_corr"] and scale is not None and abs(scale - 1.0) <= rule["agree_scale_tol"]:
+    elif t["outlier_share"] is not None and t["outlier_share"] > rule["max_outlier_share"]:
+        outcome, reasons = "poor_correlation", ["outlier rows %s > %.2f" % (t["outlier_share"], rule["max_outlier_share"])]
+    elif t["corr"] > rule["agree_corr"] and abs(scale - 1.0) <= rule["agree_scale_tol"]:
         outcome = "agree"
-    elif m["corr"] > rule["agree_corr"]:
-        outcome, reasons = "scale_disagree", ["scale %s outside 1 +- %.2f" % (scale, rule["agree_scale_tol"])]
+    elif t["corr"] > rule["agree_corr"]:
+        outcome, reasons = "scale_disagree", ["lag-free scale %s outside 1 +- %.2f (receipt lag %s ms)" %
+                                              (scale, rule["agree_scale_tol"], t.get("lag_ms"))]
     else:
-        outcome, reasons = "poor_correlation", ["corr %s <= %.2f" % (m["corr"], rule["agree_corr"])]
+        outcome, reasons = "poor_correlation", ["corr %s <= %.2f" % (t["corr"], rule["agree_corr"])]
     return dict(outcome=outcome, reasons=reasons, checks=checks,
                 note="sensor-versus-sensor only; agree does not make either source a product input")
 
@@ -432,13 +633,13 @@ def main(argv=None):
     parser.add_argument("inputs", nargs="+", help="exported phone app logs (mx5imu-log-*.txt)")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    rows, malformed = load(args.inputs)
-    rep = analyse(rows, malformed)
+    rows, malformed, duplicates = load(args.inputs)
+    rep = analyse(rows, malformed, duplicates)
     if args.json:
         print(json.dumps(rep, indent=1, sort_keys=True))
         return 0 if rows else 2
-    print("A/B rows: %d (malformed %d); both sides %d, gyro only %d, OBD only %d" %
-          (rep["rows"], malformed, rep["present"]["both"], rep["present"]["only_g"], rep["present"]["only_o"]))
+    print("A/B rows: %d (malformed %d, exact duplicates dropped %d); both sides %d, gyro only %d, OBD only %d" %
+          (rep["rows"], malformed, duplicates, rep["present"]["both"], rep["present"]["only_g"], rep["present"]["only_o"]))
     if not rows:
         print("no ab rows: the app writes them only while an OBD adapter is chosen and the CMU is connected")
         return 2
@@ -453,10 +654,18 @@ def main(argv=None):
     a = rep["parked_across"]
     print("parked zeros across %d intervals: gyro %s; OBD %s" % (a["intervals"], a["gyro"], a["obd"]))
     m = rep["moving"]
-    print("moving rows %d: corr %s (all rows %s, outliers %s), sign estimate %s (expected %+d), OBD = %s + %s x gyro, scale OBD/gyro %s, "
-          "bins %s, rate dependence %s" %
+    print("moving rows %d (one-tap, biased low by the receipt lag): corr %s (all rows %s, outliers %s), sign estimate %s (expected %+d), "
+          "OBD = %s + %s x gyro, scale OBD/gyro %s, bins %s, rate dependence %s" %
           (m["rows"], m["corr"], m["corr_all"], m["outliers"], m["sign_estimate"], EXPECTED_SIGN, m.get("obd_on_gyro", {}).get("intercept_dps"),
            m.get("obd_on_gyro", {}).get("slope"), m.get("scale_obd_per_gyro"), m.get("bins"), m.get("rate_dependence")))
+    t2 = m["two_tap"]
+    print("two-tap rows %d: OBD = %s + %s x (gyro this row, previous row); scale %s, lag %s ms" %
+          (t2["rows"], t2.get("intercept_dps"), t2.get("coef"), t2.get("scale"), t2.get("lag_ms")))
+    t = m["three_tap"]
+    print("three-tap (decision) rows %d: OBD = %s + %s x (gyro previous, this, next row); lag-free scale %s, OBD receipt "
+          "lag %s ms, corr with lag-aligned gyro %s (outliers %s), bins %s, rate dependence %s" %
+          (t["rows"], t.get("intercept_dps"), t.get("coef"), t.get("scale"), t.get("lag_ms"), t["corr"],
+           t["outliers"], t.get("bins"), t.get("rate_dependence")))
     print("per-row OBD - gyro: all %s; moving %s" % (rep["diff_all"], rep["diff_moving"]))
     d = rep["ab_decision"]
     print("A/B decision (pre-registered): %s %s" % (d["outcome"], d["reasons"]))
