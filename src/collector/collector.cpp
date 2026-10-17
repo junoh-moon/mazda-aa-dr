@@ -31,6 +31,10 @@
 namespace {
 const char *const ROOT = "/data_persist/mx5-aa-dr";
 const char *bus_address = "unix:path=/tmp/dbus_service_socket";
+// The phone IMU receiver's BCA queries and signals: the stock BCA registers
+// /com/jci/bca and sends ConnectionStatusResp only on the HMI bus
+// (validation/BCA_QUERY_CONNECT_STATUS_RE_2026-10-17.md).
+const char *bca_bus_address = "unix:path=/tmp/dbus_hmi_socket";
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false, mx5::runtime::LOG_PROFILE_FULL};
 volatile sig_atomic_t stop_requested = 0;
 void stop_signal(int) { stop_requested = 1; }
@@ -352,6 +356,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--root") && i + 1 < argc) root = argv[++i];
     else if (!strcmp(argv[i], "--bus-address") && i + 1 < argc) bus_address = argv[++i];
     else if (!strcmp(argv[i], "--samples") && i + 1 < argc) max_samples = unsigned(atoi(argv[++i]));
+    else if (!strcmp(argv[i], "--bca-bus-address") && i + 1 < argc) bca_bus_address = argv[++i];
     else if (!strcmp(argv[i], "--pimu-proc-root") && i + 1 < argc) pimu_proc = argv[++i];
     else if (!strcmp(argv[i], "--pimu-ready-flag") && i + 1 < argc) pimu_ready = argv[++i];
     else if (!strcmp(argv[i], "--pimu-ready-timeout-ms") && i + 1 < argc) pimu_ready_ms = strtoul(argv[++i], 0, 10);
@@ -428,7 +433,7 @@ int main(int argc, char **argv) {
   mx5::runtime::read_boot_id(boot_id);
   if (config.mode != 4 && config.mode != 5) pimu = false;
   mx5::pimu::PimuJournal pimu_journal(root);
-  mx5::pimu::RxOptions pimu_options = {root, bus_address, pimu_proc, pimu_ready, mx5::pimu::BT_XML, boot_id,
+  mx5::pimu::RxOptions pimu_options = {root, bca_bus_address, pimu_proc, pimu_ready, mx5::pimu::BT_XML, boot_id,
                                        uint64_t(pimu_ready_ms) * 1000000ULL, pimu_cap, geteuid(), pimu_pts,
                                        uint64_t(pimu_vanish_ms) * 1000000ULL};
 #ifndef MX5_COLLECTOR_TESTING

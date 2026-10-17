@@ -1,5 +1,12 @@
 """Phone IMU receiver in the real (testing-build) collector against a host PTY
-pair, a private dbus-daemon and a fake BCA (tests/collector/fake_bca.c).
+pair, two private dbus-daemons and fake BCAs (tests/collector/fake_bca.c).
+
+Two buses like the CMU (validation/BCA_QUERY_CONNECT_STATUS_RE_2026-10-17.md):
+the SERVICE bus (--bus-address, the collector's position polling) has a fake
+that owns com.jci.bca but has no /com/jci/bca object, so every call gets
+libdbus's UnknownMethod and no signal is ever sent there (the stock BCA's
+service-bus connection); the HMI bus (--bca-bus-address) has the fake that
+answers QueryConnectStatus and emits ConnectionStatusResp.
 
 The Python side plays the phone and bds: it owns the PTY master, writes v1
 frames (tests/phone_imu/make_golden.py encoder), answers PINGs and checks the
@@ -62,21 +69,27 @@ class PhoneImuReceiverTests(unittest.TestCase):
         self.set_bds(4242, ['-interface', 'dbus', '-configFilePath', XML])
         self.ready = self.root / 'bds_ready_flag'
         self.ready.write_text('')
-        bus = self.root / 'bus'
-        conf = self.root / 'bus.conf'
-        conf.write_text(BUS_CONF.format(path=bus))
-        self.daemon = subprocess.Popen(['dbus-daemon', '--nofork', '--config-file', str(conf)],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(self.stop, self.daemon)
-        self.address = 'unix:path=' + str(bus)
-        deadline = time.monotonic() + 5
-        while not bus.exists():
-            self.assertLess(time.monotonic(), deadline, 'dbus-daemon did not start')
-            time.sleep(.02)
+        self.address = self.start_daemon('bus')          # service bus
+        self.hmi_address = self.start_daemon('hmibus')   # HMI bus
+        self.service_bca = self.spawn_bca('--no-object', address=self.address)
+        self.service_lines = self.bca_lines
         self.bca = self.spawn_bca()
         self.collector = None
         self.masters = []
         self.addCleanup(self.close_masters)
+
+    def start_daemon(self, name):
+        bus = self.root / name
+        conf = self.root / (name + '.conf')
+        conf.write_text(BUS_CONF.format(path=bus))
+        daemon = subprocess.Popen(['dbus-daemon', '--nofork', '--config-file', str(conf)],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(self.stop, daemon)
+        deadline = time.monotonic() + 5
+        while not bus.exists():
+            self.assertLess(time.monotonic(), deadline, 'dbus-daemon did not start')
+            time.sleep(.02)
+        return 'unix:path=' + str(bus)
 
     def stop(self, process):
         if process.poll() is None:
@@ -90,8 +103,8 @@ class PhoneImuReceiverTests(unittest.TestCase):
             except OSError:
                 pass
 
-    def spawn_bca(self, *extra):
-        bca = subprocess.Popen([str(FAKE_BCA), self.address, *extra], stdin=subprocess.PIPE,
+    def spawn_bca(self, *extra, address=None):
+        bca = subprocess.Popen([str(FAKE_BCA), address or self.hmi_address, *extra], stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, text=True, bufsize=1)
         self.addCleanup(self.stop, bca)
         line = bca.stdout.readline()
@@ -117,8 +130,9 @@ class PhoneImuReceiverTests(unittest.TestCase):
             (self.proc / str(pid) / 'stat').write_text('%d (bds) %s\n' % (pid, ' '.join(fields)))
         (self.proc / 'self').mkdir(exist_ok=True)
 
-    def start(self, *extra):
+    def start(self, *extra, bca_bus=None):
         cmd = [str(COLLECTOR), '--root', str(self.root), '--bus-address', self.address,
+               '--bca-bus-address', bca_bus or self.hmi_address,
                '--pimu-proc-root', str(self.proc), '--pimu-ready-flag', str(self.ready), *extra]
         self.collector = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=getattr(self, 'env', None))
         self.addCleanup(self.finish)
@@ -385,6 +399,7 @@ class PhoneImuReceiverTests(unittest.TestCase):
                 else:
                     (self.root / 'mx5dr.conf').write_text('mode=OBSERVE\nsample_ms=500\n')
                 result = subprocess.run([str(COLLECTOR), '--root', str(self.root), '--bus-address', self.address,
+                                         '--bca-bus-address', self.hmi_address,
                                          '--pimu-proc-root', str(self.proc), '--pimu-ready-flag', str(self.ready),
                                          '--samples', '3'], capture_output=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -454,7 +469,7 @@ class PhoneImuReceiverTests(unittest.TestCase):
         self.assertIn(b'MP', self.read_master(master, 6))     # still reading and PINGing
 
     def bus_clients(self):
-        out = subprocess.run(['dbus-send', '--bus=' + self.address, '--print-reply', '--dest=org.freedesktop.DBus',
+        out = subprocess.run(['dbus-send', '--bus=' + self.hmi_address, '--print-reply', '--dest=org.freedesktop.DBus',
                               '/org/freedesktop/DBus', 'org.freedesktop.DBus.ListNames'], capture_output=True, text=True).stdout
         return out.count('":1.')
 
@@ -699,6 +714,108 @@ class PhoneImuReceiverTests(unittest.TestCase):
         self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
         time.sleep(2)
         self.assertFalse([r for r in self.rows('bt_watch') if r['ev'] in ('fail', 'quiesce')])
+
+    # ---- the BCA lives on the HMI bus (validation/BCA_HMI_BUS_FIX_2026-10-17.md) ----
+
+    def ping_seen(self, master, seconds):
+        return b'MP' in self.read_master(master, seconds)
+
+    def test_pty_and_ping_only_via_the_hmi_bus(self):
+        # Like the car: com.jci.bca owned on both buses, the object and the signal only on HMI.
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        master, path = self.new_pty(raw=True)
+        self.connect(master, path, via='poll')
+        self.assertTrue(self.ping_seen(master, 6), 'PING over the PTY found via the HMI bus')
+        self.assertIn('query 15\n', self.bca_lines)
+        self.assertNotIn('query 15\n', self.service_lines, 'no BCA call on the service bus')
+        self.assertFalse([r for r in self.rows('pimu_link') if r['ev'] in ('poll_error', 'bus')])
+        # The collector's own position polling stays on the service bus and keeps running.
+        self.finish()
+        kinds = [json.loads(l)['kind'] for l in (self.root / 'logs/collector.0.jsonl').read_text().splitlines()]
+        self.assertTrue([k for k in kinds if k.startswith('position_poll')], kinds[-10:])
+
+    def test_signal_via_the_hmi_bus_opens_and_pings(self):
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        master, path = self.new_pty(raw=True)
+        self.connect(master, path, via='signal')
+        self.assertTrue(self.ping_seen(master, 6))
+
+    def test_service_bus_bca_gives_unknown_method_and_never_opens(self):
+        # The pre-fix receiver (BCA asked on the service bus): the car's failure, now with the
+        # error name in the row. Even a CONNECTED state on the HMI fake is never seen.
+        self.start(bca_bus=self.address)
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        master, path = self.new_pty(raw=True)
+        self.bca_cmd(self.bca, f'state 15 3 0 {path}')
+        self.bca_cmd(self.bca, f'signal 15 3 3 0 {path}')
+        row = self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['ev'] == 'poll_error', what='poll_error')[0]
+        self.assertEqual(row['why'], 'error')
+        self.assertEqual(row['name'], 'org.freedesktop.DBus.Error.UnknownMethod')
+        self.assertTrue(row['msg'].startswith("Method 'QueryConnectStatus' with signature 'u'"), row)
+        self.assertLessEqual(len(row['msg']), 80)
+        self.assertEqual(row['n'], 1)
+        self.assertIn('query 15\n', self.service_lines)
+        self.assertFalse(self.ping_seen(master, 6))
+        self.assertFalse([r for r in self.rows('pimu_link') if r['ev'] in ('connect', 'replace')])
+        # Same error name again: no further row until the 10th failure.
+        self.assertEqual(len([r for r in self.rows('pimu_link') if r['ev'] == 'poll_error']), 1)
+
+    def test_poll_error_rows_carry_a_sanitised_capped_name_and_message(self):
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        long_msg = 'quote" back\\slash ' + 'x' * 120
+        self.bca_cmd(self.bca, 'error com.jci.bca.Error.Test ' + long_msg)
+        row = self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['ev'] == 'poll_error', what='poll_error')[0]
+        self.assertEqual(row['name'], 'com.jci.bca.Error.Test')
+        self.assertEqual(len(row['msg']), 80)
+        self.assertTrue(row['msg'].startswith("quote' back/slash xxx"), row)
+        self.bca_cmd(self.bca, 'error org.freedesktop.DBus.Error.Failed Error: unpredictable error')
+        row2 = self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['ev'] == 'poll_error'
+                             and r['name'] == 'org.freedesktop.DBus.Error.Failed', what='second distinct name')[0]
+        self.assertEqual(row2['msg'], 'Error: unpredictable error')
+        self.assertGreaterEqual(row2['n'], 2)
+        for line in (self.root / 'logs/pimu.0.jsonl').read_text().splitlines():
+            self.assertLessEqual(len(line) + 1, 384)
+
+    def test_reply_for_another_service_is_logged_once_and_never_opened(self):
+        # The stock BCA answers serviceId 0, connStatus 6 when its table lacks service 15.
+        master, path = self.new_pty(raw=True)
+        self.start()
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        self.bca_cmd(self.bca, 'raw 0 6 0 -')
+        row = self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['ev'] == 'poll' and r['why'] == 'other',
+                            what='other svc')[0]
+        self.assertEqual((row['svc'], row['cs']), (0, 6))
+        self.bca_cmd(self.bca, f'raw 14 3 0 {path}')       # another service CONNECTED: never opened
+        self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['why'] == 'other' and r['svc'] == 14, what='svc 14')
+        time.sleep(11)                                      # two more polls of each answer
+        others = [r for r in self.rows('pimu_link') if r['why'] == 'other']
+        self.assertEqual([(r['svc'], r['cs']) for r in others], [(0, 6), (14, 3)])
+        self.assertFalse([r for r in self.rows('pimu_link') if r['ev'] in ('connect', 'replace')])
+        self.assertFalse(self.ping_seen(master, 1))
+
+    def test_hmi_socket_missing_fails_closed_and_retries(self):
+        absent = self.root / 'hmi-late'
+        self.start(bca_bus='unix:path=' + str(absent))
+        self.wait_row(lambda r: r['kind'] == 'bt_watch' and r['ev'] == 'ready', what='ready')
+        row = self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['ev'] == 'bus', what='bus row')[0]
+        self.assertEqual(row['why'], 'unavailable')
+        self.assertTrue(row['name'].startswith('org.freedesktop.DBus.Error.'), row)
+        self.assertLessEqual(len(row['msg']), 80)
+        self.assertNotIn('query 15\n', self.service_lines + self.bca_lines)
+        # The HMI daemon appears later: the 10 s retry connects and the PTY opens.
+        late = self.start_daemon('hmi-late')
+        bca = self.spawn_bca(address=late)
+        master, path = self.new_pty(raw=True)
+        self.bca_cmd(bca, f'state 15 3 0 {path}')
+        self.wait_row(lambda r: r['kind'] == 'pimu_link' and r['ev'] == 'connect', what='connect after retry', timeout=25)
+        self.assertTrue(self.ping_seen(master, 6))
+        self.assertEqual(len([r for r in self.rows('pimu_link') if r['ev'] == 'bus']), 1, 'one bus row')
+        self.finish()
+        kinds = [json.loads(l)['kind'] for l in (self.root / 'logs/collector.0.jsonl').read_text().splitlines()]
+        self.assertGreaterEqual(len([k for k in kinds if k.startswith('position_poll')]), 10, 'position polling unaffected')
 
 
 ARGS = ['-interface', 'dbus', '-configFilePath', XML]

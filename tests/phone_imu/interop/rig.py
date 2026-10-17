@@ -7,7 +7,8 @@ receiver (src/collector/phone_imu_rx.h in build/test_collector) through a fake b
 
   PhoneSim --TCP ("RFCOMM")--> FakeBds relay --host PTY master--> PTY slave <-- collector receiver
                                      |                                               |
-                                     +-- fake BCA (build/fake_bca) on a private dbus-daemon -+
+                                     +-- fake BCA (build/fake_bca) on a private HMI dbus-daemon -+
+                                     +-- object-less fake BCA on a private SERVICE dbus-daemon
                                      +-- authored fake /proc entry of the bds process
 
 The relay copies bds statePassThru as described in the feasibility records (one PTY per RFCOMM
@@ -140,19 +141,16 @@ class Env:
         self.procs = []
         self.bds_pid, self.bds_start = 4242, 1000
         self.set_bds(self.bds_pid)
-        # unix socket paths are limited to 107 bytes: the bus socket lives in a short temporary directory
+        # unix socket paths are limited to 107 bytes: the bus sockets live in a short temporary directory
         self.busdir = Path(tempfile.mkdtemp(prefix='pimu-bus-'))
-        bus = self.busdir / 'bus'
-        conf = self.dir / 'bus.conf'
-        conf.write_text(BUS_CONF.format(path=bus))
-        self.daemon = self.spawn(['dbus-daemon', '--nofork', '--config-file', str(conf)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.address = 'unix:path=' + str(bus)
-        deadline = time.monotonic() + 5
-        while not bus.exists():
-            if time.monotonic() > deadline:
-                raise RuntimeError('dbus-daemon did not start')
-            time.sleep(.02)
-        self.bca = self.spawn([str(build / 'fake_bca'), self.address], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+        # Two buses like the CMU (validation/BCA_QUERY_CONNECT_STATUS_RE_2026-10-17.md): the stock BCA
+        # owns com.jci.bca on the SERVICE bus without the /com/jci/bca object (every call gets
+        # UnknownMethod, no signal) and answers and signals only on the HMI bus.
+        self.address = self._daemon('bus')
+        self.hmi_address = self._daemon('hmibus')
+        self.service_bca = self.spawn([str(build / 'fake_bca'), self.address, '--no-object'], stdin=subprocess.PIPE,
+                                      stdout=subprocess.DEVNULL, text=True)
+        self.bca = self.spawn([str(build / 'fake_bca'), self.hmi_address], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         line = self.bca.stdout.readline()
         if not line.startswith('ready '):
             raise RuntimeError('fake_bca: ' + line)
@@ -160,6 +158,18 @@ class Env:
         self.bca_lock = threading.Lock()
         threading.Thread(target=self._bca_reader, daemon=True).start()
         self.collector = None
+
+    def _daemon(self, name):
+        bus = self.busdir / name
+        conf = self.dir / (name + '.conf')
+        conf.write_text(BUS_CONF.format(path=bus))
+        self.spawn(['dbus-daemon', '--nofork', '--config-file', str(conf)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 5
+        while not bus.exists():
+            if time.monotonic() > deadline:
+                raise RuntimeError('dbus-daemon did not start')
+            time.sleep(.02)
+        return 'unix:path=' + str(bus)
 
     def spawn(self, cmd, **kw):
         p = subprocess.Popen(cmd, **kw)
@@ -204,6 +214,7 @@ class Env:
 
     def start_collector(self, *extra):
         cmd = [str(self.build / 'test_collector'), '--root', str(self.root), '--bus-address', self.address,
+               '--bca-bus-address', self.hmi_address,
                '--pimu-proc-root', str(self.proc), '--pimu-ready-flag', str(self.ready), *extra]
         self.collector = self.spawn(['nice', '-n', '19', *cmd], stdout=subprocess.DEVNULL, stderr=open(self.dir / 'collector.err', 'w'))
 

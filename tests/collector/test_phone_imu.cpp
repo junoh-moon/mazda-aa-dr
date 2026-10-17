@@ -147,10 +147,18 @@ static void unit() {
     snprintf(big, sizeof big, "{\"kind\":\"pimu_sync\",\"m\":%llu,\"q\":%u,\"rtt_us\":%lld,\"off_us\":%lld}",
              18446744073709551615ULL / MS_NS, 4294967295u, -9223372036854775807LL / 1000, -9223372036854775807LL / 1000);
     assert(strlen(big) + 1 <= MAX_SYNC_ROW);
-    snprintf(big, sizeof big, "{\"kind\":\"pimu_link\",\"m\":%llu,\"ev\":\"%s\",\"why\":\"%s\",\"path\":\"%s\",\"svc\":%u,\"cs\":%lld,\"st\":%lld,\"err\":%d}",
-             18446744073709551615ULL / MS_NS, "silence_reopen_xx", "12345678901234567890123", "1234567890123456789012", SERVICE_ID,
+    // pimu_link at its longest (signed svc of a reply for another service).
+    snprintf(big, sizeof big, "{\"kind\":\"pimu_link\",\"m\":%llu,\"ev\":\"%s\",\"why\":\"%s\",\"path\":\"%s\",\"svc\":%lld,\"cs\":%lld,\"st\":%lld,\"err\":%d}",
+             18446744073709551615ULL / MS_NS, "silence_reopen_xx", "12345678901234567890123", "1234567890123456789012", -2147483647LL - 1,
              4294967294LL, 4294967294LL, -2147483647 - 1);
     assert(strlen(big) + 1 <= MAX_LINK_ROW);
+    // ... and with a D-Bus error name (64), message (80) and count (own bucket).
+    std::string name(ERR_NAME, 'N'), msg(ERR_MSG, 'M');
+    snprintf(big, sizeof big, "{\"kind\":\"pimu_link\",\"m\":%llu,\"ev\":\"%s\",\"why\":\"%s\",\"path\":\"%s\",\"svc\":%lld,\"cs\":%lld,\"st\":%lld,\"err\":%d"
+             ",\"name\":\"%s\",\"msg\":\"%s\",\"n\":%u}",
+             18446744073709551615ULL / MS_NS, "silence_reopen_xx", "12345678901234567890123", "1234567890123456789012", -2147483647LL - 1,
+             4294967294LL, 4294967294LL, -2147483647 - 1, name.c_str(), msg.c_str(), 9999u);
+    assert(strlen(big) + 1 <= MAX_LINK_ERR_ROW);
     snprintf(big, sizeof big, "{\"kind\":\"bt_watch\",\"m\":%llu,\"ev\":\"%s\",\"why\":\"%s\",\"pid\":%ld,\"after_ms\":%llu}",
              18446744073709551615ULL / MS_NS, "config", "args_changed", 2147483647L, 9999999999ULL);
     assert(strlen(big) + 1 <= MAX_BT_ROW);
@@ -161,6 +169,20 @@ static void unit() {
     snprintf(big, sizeof big, "{\"kind\":\"pimu_boot\",\"schema\":1,\"m\":%llu,\"boot_id\":\"%s\",\"svc\":%u,\"budget_bph\":%llu,\"cap\":%d}",
              18446744073709551615ULL / MS_NS, "12345678-1234-1234-1234-123456789abc", SERVICE_ID, 9999999ULL, 1);
     assert(strlen(big) + 1 <= MAX_BOOT_ROW);
+    // D-Bus failure rows: one per distinct error name, then every 10th failure.
+    {
+        char last[ERR_NAME + 1] = ""; unsigned n = 0; std::vector<unsigned> due;
+        const char* um = "org.freedesktop.DBus.Error.UnknownMethod";
+        for (unsigned i = 1; i <= 25; ++i) if (err_row_due(i == 12 ? "org.freedesktop.DBus.Error.NoReply" : um, last, &n)) due.push_back(n);
+        std::vector<unsigned> want = {1, 10, 12, 13, 20};   // 12 NoReply, 13 UnknownMethod again
+        assert(due == want);
+        std::string longname(200, 'L');                       // compared on its first 64 bytes only
+        assert(err_row_due(longname.c_str(), last, &n) && strlen(last) == ERR_NAME && !err_row_due(longname.c_str(), last, &n));
+        n = 999990; last[0] = 0;
+        unsigned rows = 0;
+        for (unsigned i = 0; i < 100; ++i) rows += err_row_due(um, last, &n);
+        assert(n == 999999 && rows == 1);                    // the first (distinct) only: saturated, no storm
+    }
     printf("pimu_budget max_pimu_row=%zu budget_bph=%.0f\n", agg, budget_bph());
     assert(budget_bph() < 400000.0);
     printf("PASS test_phone_imu\n");

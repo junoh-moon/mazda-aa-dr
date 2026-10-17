@@ -10,6 +10,12 @@
 //  * PTY path: the BCA signal com.jci.bca.ConnectionStatusResp(serviceId 15,
 //    ..., (ay) terminalPath) from the bus owner of com.jci.bca, and
 //    QueryConnectStatus(15) every 5 s while not connected as the fallback.
+//    Both live on the HMI bus (unix:path=/tmp/dbus_hmi_socket): the stock BCA
+//    owns com.jci.bca on the service bus too, but registers /com/jci/bca and
+//    sends ConnectionStatusResp only on its HMI connection, so a call on the
+//    service bus gets UnknownMethod and no signal ever arrives there
+//    (validation/BCA_QUERY_CONNECT_STATUS_RE_2026-10-17.md). The receiver's
+//    one private D-Bus connection is used for nothing but BCA.
 //  * reader: opens the slave, sets it raw, ALWAYS reads (bds blocks when its
 //    PTY is not drained), parses frames, sends PING every 5 s, aggregates 1 Hz
 //    bins and queues compact rows. Rows are written by the collector main loop
@@ -72,13 +78,31 @@ inline void init_buckets(Bucket b[R_KINDS]) {
     b[R_LINK].init(10 * SEC_NS, 6);   // connect/disconnect/signal/poll changes
     b[R_BT].init(60 * SEC_NS, 4);     // bds watch events
 }
+// pimu_link rows with a D-Bus error name/message have their own bucket (the
+// drops are counted with R_LINK so the pimu_drop schema is unchanged).
+inline void init_err_bucket(Bucket& b) { b.init(300 * SEC_NS, 4); }
 static const uint64_t DROP_PERIOD_NS = 60 * SEC_NS;
 // Longest row of each kind, by construction (numbers are clamped, strings are
 // bounded); tests/collector/test_phone_imu.cpp formats the extremes.
+// A pimu_link row with a D-Bus error carries the error name (<= 64) and the
+// start of its message (<= 80), both sanitised.
+static const size_t ERR_NAME = 64, ERR_MSG = 80;
+static const size_t MAX_LINK_ERR_ROW = 384;
 static const size_t MAX_SYNC_ROW = 128, MAX_LINK_ROW = 200, MAX_BT_ROW = 128, MAX_DROP_ROW = 220, MAX_BOOT_ROW = 160;
+// Repeated D-Bus failures: one row per distinct error name, then every 10th
+// failure (the count goes into "n", shown up to 9999). *count saturates at
+// 999999, which is not a multiple of 10: no row storm there. last holds
+// ERR_NAME + 1 bytes.
+inline bool err_row_due(const char* name, char* last, unsigned* count) {
+    if (*count < 999999) ++*count;
+    bool distinct = strncmp(name, last, ERR_NAME) != 0;
+    if (distinct) { strncpy(last, name, ERR_NAME); last[ERR_NAME] = 0; }
+    return distinct || *count % 10 == 0;
+}
 inline double budget_bph() {
     Bucket b[R_KINDS]; init_buckets(b);
-    return b[R_PIMU].max_rows_per_hour() * double(Aggregator::max_row_bytes()) +
+    Bucket e; init_err_bucket(e);
+    return e.max_rows_per_hour() * MAX_LINK_ERR_ROW + b[R_PIMU].max_rows_per_hour() * double(Aggregator::max_row_bytes()) +
            b[R_SYNC].max_rows_per_hour() * MAX_SYNC_ROW + b[R_LINK].max_rows_per_hour() * MAX_LINK_ROW +
            b[R_BT].max_rows_per_hour() * MAX_BT_ROW + (3600.0e9 / double(DROP_PERIOD_NS) + 1) * MAX_DROP_ROW + MAX_BOOT_ROW;
 }
@@ -128,7 +152,7 @@ private:
 
 struct RxOptions {
     const char* root;          // package directory (logs/, bt/)
-    const char* bus_address;
+    const char* bca_bus_address;  // the stock BCA's D-Bus (HMI bus "unix:path=/tmp/dbus_hmi_socket")
     const char* proc_root;     // "/proc"
     const char* ready_flag;    // "/tmp/bds_ready_flag"
     const char* xml_path;      // the -configFilePath value bds must carry
@@ -145,7 +169,7 @@ public:
     explicit Receiver(const RxOptions& o) : o_(o), stop_(false), started_(false), fd_(-1), conn_(0) {
         pthread_mutex_init(&mu_, 0);
         head_ = tail_ = 0; ring_drop_ = 0;
-        init_buckets(buckets_);
+        init_buckets(buckets_); init_err_bucket(err_bucket_);
         memset(rate_drop_, 0, sizeof rate_drop_);
         memset(path_, 0, sizeof path_); memset(owner_, 0, sizeof owner_);
         sig_other_ = unexpected_ = ping_drop_ = unmatched_ = 0; last_drop_row_ = 0; drop_sig_ = 0;
@@ -154,6 +178,7 @@ public:
         next_query_ = 0; next_bus_ = 0; query_fail_ = 0; last_frame_ = 0; sec_start_ = 0; sec_bytes_ = 0; pending_out_ = 0;
         memset(&noted_, 0, sizeof noted_);
         last_cs_ = last_st_ = 0xFFFFFFFFu; last_poll_path_[0] = 0;
+        bus_fail_ = 0; last_bus_err_[0] = last_query_err_[0] = 0; other_rows_ = 0; other_svc_ = other_cs_ = -1;
     }
     ~Receiver() { stop(); pthread_mutex_destroy(&mu_); }
     bool start() {
@@ -222,13 +247,31 @@ private:
         for (size_t i = 0; in[i] && j + 1 < cap; ++i) { char ch = in[i]; out[j++] = (ch >= 32 && ch < 127 && ch != '"' && ch != '\\') ? ch : '_'; }
         out[j] = 0;
     }
-    void link_row(uint64_t now, const char* ev, const char* why, int err, unsigned cs, unsigned st) {
-        char p[24], w[24], row[ROW];
+    // Message text: readable (a double quote becomes ', a backslash /), JSON-safe, bounded.
+    static void clean_msg(const char* in, char* out, size_t cap) {
+        size_t j = 0;
+        for (size_t i = 0; in[i] && j + 1 < cap; ++i) {
+            char ch = in[i];
+            out[j++] = ch == '"' ? '\'' : ch == '\\' ? '/' : (ch >= 32 && ch < 127) ? ch : '_';
+        }
+        out[j] = 0;
+    }
+    // svc/cs/st: -1 = not applicable. name/msg (D-Bus error) only when name is set.
+    void link_row(uint64_t now, const char* ev, const char* why, int err, unsigned cs, unsigned st,
+                  long long svc = SERVICE_ID, const char* name = 0, const char* msg = 0, unsigned n = 0) {
+        char p[24], w[24], nm[ERR_NAME + 1], ms[ERR_MSG + 1], extra[ERR_NAME + ERR_MSG + 48], row[ROW];
         clean(path_, p, sizeof p); clean(why ? why : "", w, sizeof w);
-        snprintf(row, sizeof row, "{\"kind\":\"pimu_link\",\"m\":%llu,\"ev\":\"%s\",\"why\":\"%s\",\"path\":\"%s\",\"svc\":%u,\"cs\":%lld,\"st\":%lld,\"err\":%d}",
-                 (unsigned long long)(now / MS_NS), ev, w, p, SERVICE_ID, cs == 0xFFFFFFFFu ? -1LL : (long long)cs,
-                 st == 0xFFFFFFFFu ? -1LL : (long long)st, err);
-        emit(R_LINK, now, row);
+        extra[0] = 0;
+        if (name) {
+            clean(name, nm, sizeof nm); clean_msg(msg ? msg : "", ms, sizeof ms);
+            snprintf(extra, sizeof extra, ",\"name\":\"%s\",\"msg\":\"%s\",\"n\":%u", nm, ms, n > 9999 ? 9999u : n);
+        }
+        snprintf(row, sizeof row, "{\"kind\":\"pimu_link\",\"m\":%llu,\"ev\":\"%s\",\"why\":\"%s\",\"path\":\"%s\",\"svc\":%lld,\"cs\":%lld,\"st\":%lld,\"err\":%d%s}",
+                 (unsigned long long)(now / MS_NS), ev, w, p, svc, cs == 0xFFFFFFFFu ? -1LL : (long long)cs,
+                 st == 0xFFFFFFFFu ? -1LL : (long long)st, err, extra);
+        if (!name) emit(R_LINK, now, row);
+        else if (err_bucket_.take(now)) push(row);
+        else ++rate_drop_[R_LINK];
     }
     void bt_row(uint64_t now, const char* ev, const char* why, unsigned long long after_ms) {
         char row[ROW];
@@ -401,6 +444,12 @@ private:
     bool bt_active() const { return !quiesced_ && bds_state_ == BDS_CONFIG; }
 
     // ---- D-Bus -------------------------------------------------------------------
+    // conn_: the receiver's private connection to the BCA's bus (HMI). It
+    // carries only BCA traffic (GetNameOwner/NameOwnerChanged for com.jci.bca,
+    // ConnectionStatusResp, QueryConnectStatus); the collector's position
+    // polling keeps its own service-bus connection in the main thread. An
+    // absent or refusing socket fails closed: no PTY, a retry every 10 s, a
+    // pimu_link bus row per distinct error name (then every 10th attempt).
     void bus_close() { if (conn_) { dbus_connection_close(conn_); dbus_connection_unref(conn_); conn_ = 0; } owner_[0] = 0; }
     void bus_open(uint64_t now) {
         if (conn_ && dbus_connection_get_is_connected(conn_)) return;
@@ -408,9 +457,15 @@ private:
         if (now < next_bus_) return;
         next_bus_ = now + 10 * SEC_NS;
         DBusError e; dbus_error_init(&e);
-        conn_ = dbus_connection_open_private(o_.bus_address, &e);
+        conn_ = dbus_connection_open_private(o_.bca_bus_address, &e);
         if (conn_ && !dbus_bus_register(conn_, &e)) { dbus_connection_close(conn_); dbus_connection_unref(conn_); conn_ = 0; }
+        if (!conn_) {
+            const char* name = dbus_error_is_set(&e) && e.name ? e.name : "unknown";
+            if (err_row_due(name, last_bus_err_, &bus_fail_))
+                link_row(now, "bus", "unavailable", 0, 0xFFFFFFFFu, 0xFFFFFFFFu, SERVICE_ID, name, dbus_error_is_set(&e) ? e.message : "", bus_fail_);
+        }
         if (conn_) {
+            bus_fail_ = 0; last_bus_err_[0] = 0;
             dbus_connection_set_exit_on_disconnect(conn_, 0);
             dbus_bus_add_match(conn_, "type='signal',interface='com.jci.bca',member='ConnectionStatusResp'", &e);
             if (dbus_error_is_set(&e)) { dbus_error_free(&e); dbus_error_init(&e); }
@@ -418,7 +473,6 @@ private:
             refresh_owner();
         }
         if (dbus_error_is_set(&e)) dbus_error_free(&e);
-        if (!conn_) link_row(now, "bus", "unavailable", 0, 0xFFFFFFFFu, 0xFFFFFFFFu);
     }
     void refresh_owner() {
         owner_[0] = 0;
@@ -457,9 +511,25 @@ private:
     // PTY; CONNECTING keeps the state; anything else closes our reader. A
     // wrong guess fails safe: the service is never opened, and every status
     // value is journaled for the parked check.
+    // FACT (BCA_getServiceConnectStatus, validation/BCA_QUERY_CONNECT_STATUS_RE_2026-10-17.md):
+    // a QueryConnectStatus reply only ever carries 3 (CONNECTED) or 6
+    // (DISCONNECTED); CONNECTING (2) can come only from a signal. A reply for a
+    // service missing from the BCA table is serviceId 0, connStatus 6.
     static const unsigned CS_CONNECTING = 2, CS_CONNECTED = 3;
     void handle_status(uint64_t now, const char* via, unsigned svc, unsigned cs, unsigned st, const char* path) {
-        if (svc != SERVICE_ID) { ++sig_other_; return; }
+        if (svc != SERVICE_ID) {
+            ++sig_other_;
+            // A poll reply for another service (0 = the BCA table lacks 15): one
+            // row per distinct (svc, cs), at most 4 per boot; never opened.
+            long long s = (long long)dbus_int32_t(svc), c = (long long)dbus_int32_t(cs);
+            if (!strcmp(via, "poll") && other_rows_ < 4 && (s != other_svc_ || c != other_cs_)) {
+                ++other_rows_; other_svc_ = s; other_cs_ = c;
+                char saved[32]; memcpy(saved, path_, sizeof saved); path_[0] = 0;
+                link_row(now, "poll", "other", 0, unsigned(c), st, s);
+                memcpy(path_, saved, sizeof saved);
+            }
+            return;
+        }
         bool valid = pts_path(path);
         if (cs != last_cs_ || st != last_st_ || strcmp(path, last_poll_path_)) {
             last_cs_ = cs; last_st_ = st; copy(last_poll_path_, sizeof last_poll_path_, path);
@@ -524,7 +594,7 @@ private:
         DBusError e; dbus_error_init(&e);
         DBusMessage* r = 0;
         if (dbus_message_append_args(m, DBUS_TYPE_UINT32, &svc, DBUS_TYPE_INVALID))
-            r = dbus_connection_send_with_reply_and_block(conn_, m, 350, &e);
+            r = dbus_connection_send_with_reply_and_block(conn_, m, 350, &e);  // the stock handler is synchronous (52 ms offline); keep <= 1 s
         dbus_message_unref(m);
         bool ok = false;
         if (r) {
@@ -536,13 +606,20 @@ private:
                     if (ok) { dbus_message_iter_get_basic(&st, &v[i]); ok = dbus_message_iter_next(&st); }
                 }
                 if (ok) ok = read_path(&st, path, sizeof path);
-                if (ok) { query_fail_ = 0; handle_status(now, "poll", unsigned(v[0]), unsigned(v[1]), unsigned(v[3]), path); }
+                if (ok) { query_fail_ = 0; last_query_err_[0] = 0; handle_status(now, "poll", unsigned(v[0]), unsigned(v[1]), unsigned(v[3]), path); }
             }
             dbus_message_unref(r);
         }
         if (!ok) {
-            if (query_fail_ < 1000) ++query_fail_;
-            if (query_fail_ == 1 || query_fail_ == 3) link_row(now, "poll_error", dbus_error_is_set(&e) ? "error" : "signature", 0, 0xFFFFFFFFu, 0xFFFFFFFFu);
+            // The D-Bus error name tells the cause apart (UnknownMethod with
+            // signature "u" = wrong bus/no object, NoReply = timeout,
+            // ServiceUnknown/NameHasNoOwner = no BCA on this bus, Failed = BCA
+            // internal); a reply of the wrong shape is "signature".
+            bool is_err = dbus_error_is_set(&e);
+            const char* name = is_err && e.name ? e.name : "signature";
+            if (err_row_due(name, last_query_err_, &query_fail_))
+                link_row(now, "poll_error", is_err ? "error" : "signature", 0, 0xFFFFFFFFu, 0xFFFFFFFFu, SERVICE_ID,
+                         name, is_err && e.message ? e.message : "", query_fail_);
         }
         dbus_error_free(&e);
     }
@@ -734,7 +811,7 @@ private:
     pthread_mutex_t mu_;
     char ring_[RING][ROW];
     unsigned long long head_, tail_, ring_drop_;
-    Bucket buckets_[R_KINDS];
+    Bucket buckets_[R_KINDS], err_bucket_;
     unsigned long long rate_drop_[R_KINDS], sig_other_, unexpected_, ping_drop_, unmatched_, drop_sig_;
     uint64_t last_drop_row_;
     BdsState bds_state_; long bds_pid_; uint64_t bds_seen_, bds_missing_, next_scan_; bool ready_, quiesced_, failed_, opened_once_;
@@ -744,6 +821,8 @@ private:
     uint8_t out_[SYNC_LEN]; size_t pending_out_;
     DBusConnection* conn_; char owner_[256]; uint64_t next_query_, next_bus_; unsigned query_fail_;
     unsigned last_cs_, last_st_; char last_poll_path_[32];
+    unsigned bus_fail_; char last_bus_err_[ERR_NAME + 1], last_query_err_[ERR_NAME + 1];
+    unsigned other_rows_; long long other_svc_, other_cs_;
 };
 
 }}  // namespace mx5::pimu

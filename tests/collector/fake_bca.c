@@ -2,10 +2,17 @@
  * receiver (validation/PHONE_IMU_CHANNEL_2026-10-14.md). Not OEM code: the
  * signatures come from the public com.jci.bca introspection
  * (ConnectionStatusResp(u,u,u,u,(ay)), QueryConnectStatus(u) -> (iiii(ay))).
- * Usage: fake_bca <bus-address> [--no-name]
+ * Usage: fake_bca <bus-address> [--no-name | --no-object]
+ *   --no-object: owns com.jci.bca but registers no /com/jci/bca object, like
+ *   the stock BCA's SERVICE-bus connection (the object and the signal exist
+ *   only on its HMI-bus connection, validation/BCA_QUERY_CONNECT_STATUS_RE_2026-10-17.md):
+ *   libdbus itself answers every method call with UnknownMethod; stdin
+ *   commands other than quit are ignored.
  * stdin commands, one per line:
  *   state <svc> <connStatus> <status> <path|->   reply of QueryConnectStatus(svc)
- *   error                                         QueryConnectStatus replies an error
+ *   raw <svc> <connStatus> <status> <path|->     reply exactly these values whatever svc is asked
+ *                                                 (the stock BCA answers 0,6,... for a service missing from its table)
+ *   error [<name> [<message...>]]                 QueryConnectStatus replies an error (default com.jci.bca.Error "test")
  *   signal <svc> <connStatus> <btDeviceId> <status> <path|->
  *   quit
  * stdout: "ready <unique-name>", "query <svc>" per method call, "sent" per signal. */
@@ -16,8 +23,20 @@
 #include <string.h>
 #include <unistd.h>
 
-static int st_svc = -1, st_cs, st_st, reply_error;
-static char st_path[64];
+static int st_svc = -1, st_cs, st_st, reply_error, raw_reply, no_object;
+static char st_path[64], err_name[128] = "com.jci.bca.Error", err_msg[200] = "test";
+
+/* --no-object: print the call, then leave it unhandled so libdbus's default
+ * handling replies UnknownMethod exactly as for a connection without the object. */
+static DBusHandlerResult note_call(DBusConnection *c, DBusMessage *m, void *data) {
+    (void)c; (void)data;
+    if (dbus_message_is_method_call(m, "com.jci.bca", "QueryConnectStatus")) {
+        dbus_uint32_t svc = 0;
+        dbus_message_get_args(m, 0, DBUS_TYPE_UINT32, &svc, DBUS_TYPE_INVALID);
+        printf("query %u\n", svc); fflush(stdout);
+    }
+    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
 
 static void append_path(DBusMessageIter *it, const char *path) {
     DBusMessageIter inner, arr;
@@ -47,21 +66,33 @@ static void append_status(DBusMessageIter *it, int a, int b, int c, int d, const
 int main(int argc, char **argv) {
     if (argc < 2) return 64;
     int named = !(argc > 2 && !strcmp(argv[2], "--no-name"));
+    no_object = argc > 2 && !strcmp(argv[2], "--no-object");
     DBusError e; dbus_error_init(&e);
     DBusConnection *c = dbus_connection_open_private(argv[1], &e);
     if (!c || !dbus_bus_register(c, &e)) { fprintf(stderr, "bus: %s\n", e.message ? e.message : "?"); return 1; }
     if (named && dbus_bus_request_name(c, "com.jci.bca", DBUS_NAME_FLAG_DO_NOT_QUEUE, &e) != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) return 2;
     setvbuf(stdin, 0, _IONBF, 0); /* poll() must see every pending command line */
+    if (no_object) dbus_connection_add_filter(c, note_call, 0, 0);
     printf("ready %s\n", dbus_bus_get_unique_name(c)); fflush(stdout);
     char line[256];
     for (;;) {
         struct pollfd p = {0, POLLIN, 0};
         if (poll(&p, 1, 20) > 0) {
             if (!fgets(line, sizeof line, stdin) || !strncmp(line, "quit", 4)) break;
-            char path[64]; int a, b, cc, d;
-            if (sscanf(line, "state %d %d %d %63s", &a, &b, &cc, path) == 4) {
-                st_svc = a; st_cs = b; st_st = cc; strcpy(st_path, strcmp(path, "-") ? path : ""); reply_error = 0;
-            } else if (!strncmp(line, "error", 5)) reply_error = 1;
+            char path[64], name[128]; int a, b, cc, d, used = 0;
+            if (no_object) { /* the service-bus connection has no object and sends no signal */ }
+            else if (sscanf(line, "state %d %d %d %63s", &a, &b, &cc, path) == 4) {
+                st_svc = a; st_cs = b; st_st = cc; strcpy(st_path, strcmp(path, "-") ? path : ""); reply_error = 0; raw_reply = 0;
+            } else if (sscanf(line, "raw %d %d %d %63s", &a, &b, &cc, path) == 4) {
+                st_svc = a; st_cs = b; st_st = cc; strcpy(st_path, strcmp(path, "-") ? path : ""); reply_error = 0; raw_reply = 1;
+            } else if (!strncmp(line, "error", 5)) {
+                reply_error = 1;
+                if (sscanf(line, "error %127s %n", name, &used) == 1) {
+                    strcpy(err_name, name);
+                    snprintf(err_msg, sizeof err_msg, "%s", used ? line + used : "");
+                    err_msg[strcspn(err_msg, "\n")] = 0;
+                }
+            }
             else if (sscanf(line, "signal %d %d %d %d %63s", &a, &b, &cc, &d, path) == 5) {
                 DBusMessage *m = dbus_message_new_signal("/com/jci/bca", "com.jci.bca", "ConnectionStatusResp");
                 DBusMessageIter it; dbus_message_iter_init_append(m, &it);
@@ -69,6 +100,11 @@ int main(int argc, char **argv) {
                 dbus_connection_send(c, m, 0); dbus_connection_flush(c); dbus_message_unref(m);
                 printf("sent\n"); fflush(stdout);
             }
+        }
+        if (no_object) { /* libdbus dispatch: filter, then the default UnknownMethod reply */
+            dbus_connection_read_write(c, 0);
+            while (dbus_connection_dispatch(c) == DBUS_DISPATCH_DATA_REMAINS) {}
+            continue;
         }
         dbus_connection_read_write(c, 0);
         DBusMessage *m;
@@ -78,8 +114,12 @@ int main(int argc, char **argv) {
                 dbus_message_get_args(m, 0, DBUS_TYPE_UINT32, &svc, DBUS_TYPE_INVALID);
                 printf("query %u\n", svc); fflush(stdout);
                 DBusMessage *r;
-                if (reply_error) r = dbus_message_new_error(m, "com.jci.bca.Error", "test");
-                else {
+                if (reply_error) r = dbus_message_new_error(m, err_name, err_msg);
+                else if (raw_reply) {
+                    r = dbus_message_new_method_return(m);
+                    DBusMessageIter it; dbus_message_iter_init_append(r, &it);
+                    append_status(&it, st_svc, st_cs, 0, st_st, st_path, 1);
+                } else {
                     r = dbus_message_new_method_return(m);
                     DBusMessageIter it; dbus_message_iter_init_append(r, &it);
                     int match = (int)svc == st_svc;
