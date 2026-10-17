@@ -316,7 +316,7 @@ public final class MainActivity extends Activity {
         new Thread(() -> {
             String error = null;
             String saved = null;
-            try { new RollingLog(getFilesDir(), SenderService.CLOCK).exportTo(out); }
+            try { new RollingLog(getFilesDir(), SenderService.CLOCK).exportTo(out, RollingLog.ab(getFilesDir(), SenderService.CLOCK)); }
             catch (Exception e) { error = e.toString(); }
             if (error == null) {
                 try { saved = saveToDownloads(out); }

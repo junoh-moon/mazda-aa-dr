@@ -32,6 +32,7 @@ import java.io.OutputStream;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import me.sixtyfive.mx5imu.core.AbCompare;
 import me.sixtyfive.mx5imu.core.Clock;
 import me.sixtyfive.mx5imu.core.ElmController;
 import me.sixtyfive.mx5imu.core.Integrator;
@@ -51,6 +52,8 @@ import me.sixtyfive.mx5imu.core.Window;
  * Stage 2 (validation/OBD_YAW_CHANNEL_DESIGN_2026-10-15.md): when an OBD-II adapter is chosen, the
  * OBD link (CAN 0x079 monitor) also runs while connected, and SourceSelector sends either the gyro
  * windows or the OBD windows (FLAG_SOURCE_OBD) on the same stream. The CMU only records them.
+ * While an OBD adapter is configured, AbCompare also sums the windows of BOTH sources per 10 s into the app's
+ * separate A/B ring (record-only, phone side only; nothing sent changes; design note section 16).
  */
 public final class SenderService extends Service implements SensorEventListener, Link.Listener {
     static final String ACTION_STOP = "me.sixtyfive.mx5imu.STOP";
@@ -65,6 +68,9 @@ public final class SenderService extends Service implements SensorEventListener,
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private RollingLog log;
+    /** The A/B comparison rows (separate ring; written on the main thread by tick). */
+    private RollingLog abLog;
+    private final AbCompare ab = new AbCompare();
     private Link link;
     private BluetoothAdapter adapter;
     private String address;
@@ -100,6 +106,7 @@ public final class SenderService extends Service implements SensorEventListener,
     @Override public void onCreate() {
         super.onCreate();
         log = new RollingLog(getFilesDir(), CLOCK);
+        abLog = RollingLog.ab(getFilesDir(), CLOCK);
         NotificationChannel ch = new NotificationChannel(CHANNEL, "IMU 송신 상태", NotificationManager.IMPORTANCE_LOW);
         ch.setShowBadge(false);
         getSystemService(NotificationManager.class).createNotificationChannel(ch);
@@ -249,9 +256,11 @@ public final class SenderService extends Service implements SensorEventListener,
                 Status.obdFps = o.fps();
                 Status.obdLossPct = o.lossPercent();
             }
+            ab.poll(CLOCK.nanos());
+            for (String row = ab.take(); row != null; row = ab.take()) abLog.event(row);
             if (ticks % 60 == 59 && o != null) {
                 log.event("obd_stats source=" + Status.source + " switches=" + sel.switches + " phone_sent=" + sel.phoneWindowsSent
-                        + " obd_sent=" + sel.obdWindowsSent + " obd_held=" + sel.obdWindowsHeld + " | " + o.summary());
+                        + " obd_sent=" + sel.obdWindowsSent + " obd_held=" + sel.obdWindowsHeld + " " + ab.summary() + " | " + o.summary());
             }
             if (++ticks % 60 == 0 && s != null) {
                 log.event(String.format(Locale.ROOT, "stats frames=%d pongs=%d crc_errors=%d unknown_version=%d unexpected=%d gyro_hz=%d",
@@ -264,6 +273,8 @@ public final class SenderService extends Service implements SensorEventListener,
     // ---- Link.Listener (called on the link thread) ----
 
     @Override public void connected(Session s) {
+        ab.reset();
+        ab.setEnabled(Prefs.obdAddress(this) != null);
         active = s;
         Status.connected = true;
         Status.connections++;
@@ -280,6 +291,7 @@ public final class SenderService extends Service implements SensorEventListener,
 
     @Override public void disconnected(Session s, String reason) {
         if (active == s) active = null;
+        ab.reset();
         sessionFramesBase += s.framesSent.get();
         Status.connected = false;
         Status.state = "연결 대기 중";
@@ -377,7 +389,7 @@ public final class SenderService extends Service implements SensorEventListener,
     private void send(Session s, SourceSelector.Source from, Window w) {
         SourceSelector sel = selector;
         synchronized (sel) {
-            Window x = sel.admit(from, w, CLOCK.nanos());
+            Window x = AbCompare.admit(sel, ab, from, w, CLOCK.nanos());
             if (x != null) s.offer(x);
         }
     }
