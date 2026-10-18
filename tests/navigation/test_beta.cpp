@@ -650,6 +650,42 @@ static void tunnel_report_cap_lowers_only() {
     CHECK(adapter::encode_beta_location(s,original,out) && out[16]==1);
     CHECK((uint32_t(out[20])|(uint32_t(out[21])<<8)|(uint32_t(out[22])<<16)|(uint32_t(out[23])<<24))==25000u);
 }
+// The tunnel replacement bearing uses the G3 overlay range (0.01, 359.99] deg:
+// never exactly 0 or 360, never rounding to 0 in float32
+// (validation/V1_A_PRODUCT_HARDENING_2026-10-18.md). A stopped replacement
+// keeps "no bearing" (byte 40 = 0, value 0).
+static uint32_t le32(const uint8_t* p) { return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24); }
+static void beta_location_bearing_normalised() {
+    adapter::DrSnapshot s=adapter::DrSnapshot();
+    s.latitude_deg=37.5;s.longitude_deg=127.0;s.accuracy_m=25.0;s.speed_mps=10.0;
+    struct Case { double in; uint32_t want; };
+    const Case cases[]={
+        {0.0,359990000u},{1e-9,359990000u},{0.005,359990000u},{0.0099994,359990000u},
+        {0.01,359990000u},{0.0100004,359990000u},{0.0100005,10001u},{0.010001,10001u},
+        {1.0,1000000u},{180.0,180000000u},{359.98,359980000u},{359.99,359990000u},
+        {359.9900004,359990000u},{359.9900005,359990000u},{359.995,359990000u},
+        {359.9999996,359990000u},{359.99999999,359990000u}};
+    uint8_t original[48],out[48];
+    for(unsigned i=0;i<48;++i)original[i]=uint8_t(0xa0+i);
+    for(unsigned i=0;i<sizeof cases/sizeof cases[0];++i) {
+        s.travel_bearing_deg=cases[i].in;s.stopped=false;
+        CHECK(adapter::encode_beta_location(s,original,out));
+        const uint32_t e6=le32(out+44);
+        if(e6!=cases[i].want)std::fprintf(stderr,"bearing %.10f -> %u (want %u)\n",cases[i].in,e6,cases[i].want);
+        CHECK(out[40]==1 && e6==cases[i].want);
+        CHECK(e6>10000u && e6<=359990000u);
+        const float f=float(double(e6)/1e6);
+        CHECK(f!=0.0f && f<360.0f && float(e6)!=0.0f);
+        // Only the replacement fields change; bytes 0..7 and 24..31 stay original.
+        CHECK(!std::memcmp(out,original,8) && !std::memcmp(out+24,original+24,8));
+    }
+    // Outside [0, 360) and non-finite: still refused (unchanged contract).
+    const double refused[]={-0.0000001,360.0,720.0,::nan(""),HUGE_VAL};
+    for(unsigned i=0;i<5;++i) { s.travel_bearing_deg=refused[i];CHECK(!adapter::encode_beta_location(s,original,out)); }
+    // Stopped: no bearing claim; the value bytes are 0 as before.
+    s.stopped=true;s.travel_bearing_deg=::nan("");
+    CHECK(adapter::encode_beta_location(s,original,out) && out[40]==0 && le32(out+44)==0u && le32(out+36)==0u);
+}
 // The continuous policy replaces the b1ec29a stale-anchor entry veto with an
 // entry decision at the GPS loss (review M3, 2026-10-09): FRESH when the last
 // accepted position is at most BETA_POSITION_MAX_AGE_NS old; otherwise FALLBACK
@@ -2364,6 +2400,7 @@ static void g3_taint_ends_on_every_unconfirmed_origin_loss() {
     }
 }
 int main() {
+    beta_location_bearing_normalised();
     tunnel_zero_wheel_yaw_holds_heading();
     tunnel_restart_with_yaw_leading_the_wheels_stays_engaged();
     tunnel_standstill_yaw_bias_holds_heading();

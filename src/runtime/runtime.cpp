@@ -24,7 +24,7 @@
 #include "beta_controller.h"
 #include "g3_heading.h"
 #include "g3_send.h"
-#include "diag_arms.h"
+#include "acc_cap.h"
 #include "motion_gap.h"
 #include "model_bus.h"
 #include "lds_sideband.h"
@@ -294,28 +294,14 @@ bool format_observation(char* line,size_t capacity,const A::Observation& o) {
       hex[2*o.small_length]=0;
       snprintf(small,sizeof small,",\"payload_hex\":\"%s\"",hex);
     }
-    // Diagnostic BETA build only (adapter::set_diag(true)); otherwise empty
-    // and the row is byte-identical to v1.0.0-beta.11.
-    char diag[200]="";
-    if(o.diag_sat) {
-      char before[16]="null",after[16]="null",presence[16]="null";
-      if(!o.diag_sat_short) {
-        snprintf(before,sizeof before,"%u",o.diag_sat_before);snprintf(after,sizeof after,"%u",o.diag_sat_after);
-        snprintf(presence,sizeof presence,"%u",o.diag_sat_presence);
-      }
-      snprintf(diag,sizeof diag,",\"diag\":{\"arm\":\"%s\",\"sat\":\"%s\",\"in_use\":[%s,%s],\"presence\":%s}",
-          A::diag_arm_name(A::DiagArm(o.diag_arm)),A::diag_sat_outcome_name(A::DiagSatOutcome(o.diag_sat_outcome)),
-          before,after,presence);
-    } else if(o.diag_arm)
-      snprintf(diag,sizeof diag,",\"diag\":{\"arm\":\"%s\"}",A::diag_arm_name(A::DiagArm(o.diag_arm)));
     n=snprintf(line,capacity,
       "{\"kind\":\"send\",\"call\":%u,\"generation\":%u,\"mono_ns\":%llu,\"mode\":%d,"
       "\"type\":%u,\"length\":%u,\"choice\":%u,\"reason\":%u,\"result\":%d,"
       "\"original_hex\":\"%s\",\"outgoing_hex\":\"%s\",\"request\":%s,\"send_session\":%s,\"lds_association\":%s,"
-      "\"class\":%u%s%s}",
+      "\"class\":%u%s}",
       o.call_sequence,o.prediction_generation,(unsigned long long)o.mono_ns,o.original_mode,
       o.type,o.length,unsigned(o.choice),unsigned(o.reason),o.result,a,b,request,session,association,
-      unsigned(o.position_class),small,diag);
+      unsigned(o.position_class),small);
   }
   return n>0 && size_t(n)<capacity;
 }
@@ -1679,7 +1665,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       holdout.init_model(model,mx5_dr_default_config(),nav_context);
   const bool beta_core=shadow && beta_requested && navigation.enable_beta(mx5::runtime::beta_profile_tunnel());
   mx5::runtime::BetaController beta(beta_shared);
-  // Tunnel reporting ceiling off switch (owner menu 10, runtime/diag_arms.h):
+  // Tunnel reporting ceiling off switch (owner menu 10, runtime/acc_cap.h):
   // read once; present = the beta.12 numbers (40 m ceiling, stopped rule).
   const bool acc_cap_off=beta_requested && mx5::runtime::acc_cap_off_marker(root);
   if(acc_cap_off) {
@@ -1687,13 +1673,6 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     uncapped.tunnel_report_cap_m=0.0;
     beta.set_profile(uncapped);
   }
-  // Diagnostic BETA build (runtime/diag_arms.h, owner menu 9): read once.
-  // Absent or invalid: no arm and no diagnostic row. A blind comparison
-  // against the ceiling needs the ceiling: off with acc-cap-off.
-  const mx5::runtime::DiagMarker diag_marker=
-      beta_requested?mx5::runtime::diag_marker(root):mx5::runtime::DIAG_MARKER_ABSENT;
-  const bool diag_active=diag_marker==mx5::runtime::DIAG_MARKER_ON && beta_core && !acc_cap_off;
-  if(diag_active) { beta.set_diag(true,boot_id);A::set_diag(true); }
   // G3 record-only heading carry-over (BETA only). One small file read here,
   // at startup; the parked store write runs on the dedicated store thread.
   mx5::runtime::G3Tracker g3;
@@ -1770,19 +1749,6 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         model.wheel_kmh_per_count,model.wheel_zero_kmh,
         model.reverse_forward_value,model.reverse_reverse_value,
         (unsigned long long)model.reorder_ns,g3_fields,side_state);
-    j.line(line);j.flush();
-  }
-  if(diag_marker==mx5::runtime::DIAG_MARKER_ON) {
-    snprintf(line,sizeof line,
-        "{\"kind\":\"diag_boot\",\"mono_ns\":%llu,\"domain\":\"beta\",\"assist_ready\":false,"
-        "\"active\":%s,\"reason\":\"%s\",\"boot_id\":\"%s\",\"version\":%u,\"arms\":[\"CONTROL\",\"CAP\"],"
-        "\"block\":%u,\"rejoin_ms\":%llu,\"cap_m\":%.4g,\"control_ceiling_m\":%.4g,"
-        "\"sat_type\":%d,\"sat_length\":%d}",
-        (unsigned long long)clock_ns(0),diag_active?"true":"false",
-        diag_active?"marker":acc_cap_off?"acc_cap_off":"beta_core_unavailable",
-        boot_id,mx5::runtime::DIAG_VERSION,mx5::runtime::DIAG_BLOCK,
-        (unsigned long long)(mx5::runtime::DIAG_REJOIN_NS/1000000ULL),
-        beta.profile().tunnel_report_cap_m,beta.profile().accuracy_max_m,int(A::DIAG_SAT_TYPE),int(A::DIAG_SAT_LENGTH));
     j.line(line);j.flush();
   }
   if(beta_requested) {

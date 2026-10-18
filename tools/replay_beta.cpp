@@ -466,15 +466,6 @@ struct Options {
     // Stopped accuracy (validation/STOPPED_ACCURACY_2026-10-10.md); NAN keeps
     // the product default of beta_profile_tunnel().
     double stopped_accuracy_m, stopped_honest_max_m, crawl_speed_mps;
-    // Diagnostic BETA build, version 2 (validation/TUNNEL_REPORT_CAP_2026-10-12.md):
-    // --diag SEED turns the diagnostic on with SEED as the boot id of the arm
-    // randomization (CONTROL episodes publish without the tunnel reporting
-    // ceiling), and every OEM call then also sends a GPS_SATELLITE (type 21,
-    // 864 bytes, number_in_use 5/3/0 for mode 1/2/other, the rest 0) after its
-    // LOCATION, like RequestSendPosition (observed only, never rewritten).
-    // --diag-out FILE: one JSON line per type-21 send. Without --diag nothing
-    // changes. --acc-cap off turns --diag off (product: reason acc_cap_off).
-    std::string diag, diag_out;
     // --acc-cap off: the owner marker acc-cap-off (beta.12 numbers: no tunnel
     // reporting ceiling). Default on: the product profile.
     bool acc_cap_off;
@@ -516,8 +507,6 @@ int manager_object, storage_object;
 uint32_t fake_calls;
 uint8_t fake_sent[48];
 bool fake_sent_valid;
-uint8_t fake_sat[A::DIAG_SAT_LENGTH];
-bool fake_sat_valid;
 
 uint64_t clock_fn(void*) { return g_now; }
 void sink_fn(const A::Observation* o, void*) { pending.push_back(*o); }
@@ -536,8 +525,6 @@ int32_t fake_send(void*, A::VehicleData* d) {
     ++fake_calls;
     fake_sent_valid = d && d->type == 1 && d->length == 48 && d->payload;
     if (fake_sent_valid) memcpy(fake_sent, d->payload, 48);
-    fake_sat_valid = d && d->type == A::DIAG_SAT_TYPE && d->length == A::DIAG_SAT_LENGTH && d->payload;
-    if (fake_sat_valid) memcpy(fake_sat, d->payload, A::DIAG_SAT_LENGTH);
     return 0;
 }
 
@@ -559,7 +546,6 @@ struct SendRecord {
     uint8_t original[48], outgoing[48];
 };
 std::vector<SendRecord> sends;
-std::vector<std::string> diag_lines;   // --diag-out
 
 void g3_send_record(const Fix& f, uint64_t t, const SendRecord& r);
 // One OEM POSITION callback with at most one LOCATION send.
@@ -598,33 +584,6 @@ void oem_call(const Fix& f, bool synthetic, uint64_t t, const uint8_t* original_
             }
         sends.push_back(r);
         if (!opt.g3_send_out.empty()) g3_send_record(f, t, r);
-    }
-    if (!opt.diag.empty()) {
-        // RequestSendPosition: MakeGpsSatellite + SendGpsSatellite after the
-        // (optional) LOCATION of the same call.
-        static uint8_t sat[A::DIAG_SAT_LENGTH];
-        memset(sat, 0, sizeof sat);
-        put32(sat, f.mode == 1 ? 5u : f.mode == 2 ? 3u : 0u);
-        uint8_t before[A::DIAG_SAT_LENGTH];
-        memcpy(before, sat, sizeof sat);
-        A::VehicleData data = {uint32_t(A::DIAG_SAT_TYPE), sat, uint32_t(A::DIAG_SAT_LENGTH)};
-        fake_calls = 0; fake_sat_valid = false;
-        const size_t first = pending.size();
-        const int32_t result = A::send_vehicle_data(&storage_object, &data);
-        const A::Observation* o = 0;
-        for (size_t i = first; i < pending.size(); ++i)
-            if (pending[i].kind == A::Observation::SEND) o = &pending[i];
-        const bool untouched = !memcmp(sat, before, sizeof sat);
-        const bool rest_equal = fake_sat_valid && !memcmp(fake_sat + 4, before + 4, sizeof sat - 4);
-        char line[400];
-        snprintf(line, sizeof line,
-            "{\"t_ns\":%llu,\"mode\":%d,\"calls\":%u,\"result\":%d,\"choice\":%d,\"outcome\":\"%s\","
-            "\"arm\":\"%s\",\"before\":%u,\"sent\":%u,\"rest_equal\":%s,\"caller_untouched\":%s}",
-            (unsigned long long)t, f.mode, fake_calls, result, o ? int(o->choice) : -1,
-            o ? A::diag_sat_outcome_name(A::DiagSatOutcome(o->diag_sat_outcome)) : "none",
-            o ? A::diag_arm_name(A::DiagArm(o->diag_arm)) : "NONE", get32(before),
-            fake_sat_valid ? get32(fake_sat) : 0u, rest_equal ? "true" : "false", untouched ? "true" : "false");
-        diag_lines.push_back(line);
     }
     A::position_leave();
 }
@@ -880,10 +839,6 @@ bool start_product(uint64_t t) {
     // Replay-only: the controller/bridge use the tunnel profile with the
     // given stopped-accuracy constants (the pipeline does not read them).
     if ((opt.stopped_rule_set() || opt.acc_cap_off) && !controller.set_profile(bridge_profile())) return false;
-    if (!opt.diag.empty()) {
-        if (!controller.set_diag(true, opt.diag.c_str())) return false;
-        A::set_diag(true);
-    }
     g_now = t;
     if (!beta->enable(journal, t, 0) || A::mode() != A::BETA) return false;
     if (opt.g3 == "on" || opt.g3 == "slow") {
@@ -1349,7 +1304,7 @@ void usage() {
         "                   [--writer-lag-ms N]\n"
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "                   [--assume-forward on|off] [--seed-report] [--reverse-fence feed|runtime]\n"
-        "                   [--diag SEED] [--diag-out FILE] [--acc-cap on|off]\n"
+        "                   [--acc-cap on|off]\n"
         "                   [--yaw-rail on|off] [--heading-trace FROM:TO:FILE] [--record-out FILE]\n"
         "Times are journal monotonic seconds. Without --t0/--sweep only recorded\n"
         "(real) outages are replayed.\n");
@@ -1447,28 +1402,17 @@ int main(int argc, char** argv) {
             if (v != "feed" && v != "runtime") usage();
             opt.reverse_fence = v == "runtime";
         }
-        else if (a == "--diag" && more) opt.diag = argv[++i];
         else if (a == "--acc-cap" && more) {
             const std::string v = argv[++i];
             if (v != "on" && v != "off") { usage(); return 2; }
             opt.acc_cap_off = v == "off";
         }
-        else if (a == "--diag-out" && more) opt.diag_out = argv[++i];
         else if (a == "--record-out" && more) opt.record_out = argv[++i];
         else if (a == "--check") opt.check = true;
         else if (a == "--real-only") opt.real_only = true;
         else usage();
     }
     if (opt.trip.empty() || !opt.cadence_ns) usage();
-    // Like the product (runtime.cpp: diag_active needs !acc_cap_off, diag_boot
-    // reason acc_cap_off): the blind comparison needs the ceiling, so --acc-cap
-    // off turns --diag off for the whole replay (no arm, no diagnostic row, no
-    // GPS_SATELLITE send).
-    if (opt.acc_cap_off && !opt.diag.empty()) {
-        fprintf(stderr, "replay_beta: --diag %s ignored with --acc-cap off (diag_boot reason acc_cap_off)\n",
-                opt.diag.c_str());
-        opt.diag.clear();
-    }
     for (size_t i = 0; i < opt.durations.size(); ++i)
         if (!(opt.durations[i] > 0)) usage();
     std::string error;
@@ -1768,12 +1712,6 @@ int main(int argc, char** argv) {
                     w?num(w->entry_kmh).c_str():"");
         }
         if (fclose(f)) { perror(opt.csv.c_str()); return 2; }
-    }
-    if (!opt.diag_out.empty()) {
-        FILE* f = fopen(opt.diag_out.c_str(), "w");
-        if (!f) { perror(opt.diag_out.c_str()); return 2; }
-        for (size_t i = 0; i < diag_lines.size(); ++i) fprintf(f, "%s\n", diag_lines[i].c_str());
-        if (fclose(f)) { perror(opt.diag_out.c_str()); return 2; }
     }
     if (!opt.journal.empty()) {
         // Baseline BetaController rows (beta_state/beta_hold/beta_summary).

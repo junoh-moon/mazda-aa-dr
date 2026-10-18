@@ -415,17 +415,15 @@ class ReplayBetaStoppedAccuracy(unittest.TestCase):
 
 
 @unittest.skipUnless(os.access(TOOL, os.X_OK), "build/replay_beta not built (make test-replay-beta)")
-class ReplayBetaDiagnosticArms(unittest.TestCase):
-    """Diagnostic version 2 (validation/TUNNEL_REPORT_CAP_2026-10-12.md) through
-    the real publication path: a CONTROL episode publishes without the 25 m
-    tunnel reporting ceiling (beta.12: 40 m), a CAP episode with it; the honest
-    budget and the positions are the same in both arms. The arm of the single
-    tunnel episode is the seed's (diag-0 CONTROL, diag-1 CAP); each run checks
-    the assigned row, so a changed randomization fails loudly here."""
+class ReplayBetaTunnelCeiling(unittest.TestCase):
+    """The menu 9 diagnostic arms (CONTROL 40 m / CAP) are removed for v1.0.0
+    (validation/V1_A_PRODUCT_HARDENING_2026-10-18.md): --diag is no longer an
+    option. The production 25 m tunnel reporting ceiling and its owner off
+    switch acc-cap-off (--acc-cap off, the beta.12 40 m numbers) stay."""
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.TemporaryDirectory(prefix="mx5dr-replay-diag-")
+        cls.tmp = tempfile.TemporaryDirectory(prefix="mx5dr-replay-cap-")
         cls.trip = os.path.join(cls.tmp.name, "logs")
         os.mkdir(cls.trip)
         write_fixture(cls.trip, speed=stop_speed_kmh, window=STOP_TUNNEL, end=STOP_END)
@@ -447,65 +445,36 @@ class ReplayBetaDiagnosticArms(unittest.TestCase):
         with open(rows) as f:
             replaced = [r for r in csv.DictReader(f) if r["choice"] == "3"]
         with open(journal) as f:
-            lines = list(map(json.loads, f))
+            text = f.read()
         self.assertTrue(len(replaced) > 40, len(replaced))
-        return replaced, [b for b in lines if b.get("kind") == "beta_summary"], \
-            [b for b in lines if b.get("kind") == "diag_episode"]
+        self.assertNotIn("diag_episode", text)
+        self.assertNotIn("diag_boot", text)
+        return replaced, [json.loads(line) for line in text.splitlines() if '"beta_summary"' in line]
 
-    def arm(self, episodes):
-        assigned = [e for e in episodes if e["event"] == "assigned"]
-        self.assertEqual(len(assigned), 1, episodes)
-        return assigned[0]
-
-    def test_control_publishes_without_the_ceiling_and_cap_with_it(self):
-        control, control_beta, control_ep = self.run_tool("--diag", "diag-0")
-        cap, cap_beta, cap_ep = self.run_tool("--diag", "diag-1")
-        product, product_beta, product_ep = self.run_tool()
-        self.assertEqual(product_ep, [])
-        self.assertEqual(self.arm(control_ep)["arm"], "CONTROL")
-        self.assertEqual(self.arm(control_ep)["ceiling_m"], 40)
-        self.assertEqual(self.arm(cap_ep)["arm"], "CAP")
-        self.assertEqual(self.arm(cap_ep)["ceiling_m"], 25)
+    def test_product_ceiling_binds_and_acc_cap_off_restores_40_m(self):
+        product, product_beta = self.run_tool()
+        off, off_beta = self.run_tool("--acc-cap", "off")
         acc = lambda rows: [float(r["accuracy_m"]) for r in rows]
-        # CONTROL: the beta.12 numbers, the 40 m ceiling is reached while moving
-        # (the stopped rule still reports 25 m during the stop).
-        self.assertEqual(max(acc(control)), 40.0)
-        moving = [r for r in control if float(r["speed_mps"]) > 0.0]
+        self.assertTrue(all(0 < a <= 25.0 for a in acc(product)))
+        self.assertEqual(max(acc(product)), 25.0)
+        self.assertEqual(max(acc(off)), 40.0)
+        moving = [r for r in off if float(r["speed_mps"]) > 0.0]
         self.assertTrue(len(moving) > 20 and sum(a > 25.0 for a in acc(moving)) > 20, acc(moving))
-        self.assertTrue(all(0 < a <= 40.0 for a in acc(control)))
-        # CAP: never above the 25 m ceiling, and it binds.
-        self.assertTrue(all(0 < a <= 25.0 for a in acc(cap)))
-        self.assertEqual(max(acc(cap)), 25.0)
-        self.assertEqual(acc(cap), acc(product))
-        # Same honest budget, positions, speeds and bearings in every arm.
+        # Same honest budget, positions, speeds and bearings with and without the ceiling.
         same = ("t_s", "error_m", "speed_mps", "bearing_deg", "result")
         key = lambda rows: [tuple(r[k] for k in same) for r in rows]
-        self.assertEqual(key(control), key(product))
-        self.assertEqual(key(cap), key(product))
+        self.assertEqual(key(off), key(product))
         honest = lambda beta: [b.get("accuracy_honest_m") for b in beta]
-        self.assertEqual(honest(control_beta), honest(product_beta))
-        self.assertEqual(honest(cap_beta), honest(product_beta))
+        self.assertEqual(honest(off_beta), honest(product_beta))
         self.assertTrue(any(h is not None and h > 40 for h in honest(product_beta)))
-        # The journaled reported accuracy follows the arm.
-        engaged = lambda beta: [b["accuracy_m"] for b in beta if b["state"] == "ENGAGED"]
-        self.assertIn(40, engaged(control_beta))
-        self.assertTrue(engaged(cap_beta) and max(engaged(cap_beta)) == 25)
-        # The ended rows carry the reported range of the episode.
-        ended = lambda ep: [e for e in ep if e["event"] == "ended"][0]
-        self.assertEqual(ended(control_ep)["reported_max_m"], 40)
-        self.assertEqual(ended(cap_ep)["reported_max_m"], 25)
 
-    def test_acc_cap_off_disables_the_diagnostic_like_the_product(self):
-        # runtime.cpp: the blind comparison needs the ceiling; acc-cap-off
-        # turns the diagnostic off for the boot (diag_boot reason acc_cap_off).
-        for seed in ("diag-0", "diag-1"):
-            off, off_beta, off_ep = self.run_tool("--diag", seed, "--acc-cap", "off")
-            plain, plain_beta, plain_ep = self.run_tool("--acc-cap", "off")
-            self.assertEqual(off_ep, [])
-            self.assertEqual(plain_ep, [])
-            self.assertEqual(off, plain)
-            self.assertEqual(off_beta, plain_beta)
-            self.assertEqual(max(float(r["accuracy_m"]) for r in off), 40.0)
+    def test_diag_option_is_gone(self):
+        for args in (["--diag", "diag-0"], ["--diag-out", os.path.join(self.tmp.name, "d.jsonl")]):
+            p = subprocess.run([TOOL, "--trip", self.trip] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               universal_newlines=True, timeout=60)
+            self.assertNotEqual(p.returncode, 0, args)
+            self.assertNotIn("--diag", p.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

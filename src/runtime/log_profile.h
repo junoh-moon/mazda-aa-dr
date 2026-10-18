@@ -57,6 +57,9 @@
 //    with the owner marker, GPS_SATELLITE (type 21) SEND rows of LOST calls
 //    are kept instead of folded (every arm), and diag_boot/diag_episode rows
 //    are kept like every other unknown kind. Without the marker nothing changes.
+//    v1.0.0 removed the diagnostic arms (validation/V1_A_PRODUCT_HARDENING_2026-10-18.md):
+//    the runtime never calls adapter::set_diag(true), so these rows no longer
+//    occur; the branch below stays for the frozen adapter's observation field.
 //  * VIM side-channel rows (2026-10-10, chan_digest_log.h and
 //    validation/VIM_CHANNEL_CAPTURE_2026-10-10.md): one chan_digest row per
 //    20 s with raw statistics of the longitudinal/lateral acceleration,
@@ -241,8 +244,8 @@ public:
             ++sends_;if(o.result)++send_nonzero_;
             ++send_types_[o.type<TYPE_SLOTS-1?o.type:TYPE_SLOTS-1];
             if(o.choice!=adapter::ORIGINAL) { ++send_changed_;keep(s,emit,context);return; }
-            // Diagnostic BETA build only (adapter::set_diag(true); diag_sat is
-            // never set otherwise): every GPS_SATELLITE send of a LOST call is
+            // Diagnostic BETA build only (adapter::set_diag(true), which no
+            // v1.0.0 caller makes; diag_sat is never set otherwise): every GPS_SATELLITE send of a LOST call is
             // kept in every arm, so CONTROL/CAP episodes (version 2; beta.12:
             // CONTROL/A20/S5) carry the same rows
             // (validation/TUNNEL_REPORT_CAP_2026-10-12.md).

@@ -157,21 +157,53 @@ bool stock_table(const VimCallbacks* table) {
         stock_function(reinterpret_cast<void*>(table->app_event),
             "bc478f2409e473ef3da8084ebce3b699643b5ee355485122521099d47c78ef22",0xa8b0);
 }
-VimAddClient resolve_original() {
+// Resolution of the stock VIMC_AddClient. Each step returns 0 for "not
+// found" and never returns this tap's own export. The steps are tried in
+// order; the first non-zero result is the original. Loader calls are
+// deliberately outside every tap mutex.
+VimAddClient not_self(void* fn) {
+    VimAddClient result=reinterpret_cast<VimAddClient>(fn);
+    return result==VIMC_AddClient?0:result;
+}
 #ifdef MX5_VIM_TAP_TESTING
-    return real_add;
+VimAddClient (*test_lookup_next)()=0;
+VimAddClient (*test_lookup_loaded)()=0;
+VimAddClient (*test_lookup_caller)(const void*)=0;
+const void* test_last_caller=0;
+VimAddClient lookup_next() { return test_lookup_next?test_lookup_next():real_add; }
+VimAddClient lookup_loaded() { return test_lookup_loaded?test_lookup_loaded():0; }
+VimAddClient lookup_caller(const void* caller) {
+    test_last_caller=caller;
+    return test_lookup_caller?test_lookup_caller(caller):0;
+}
 #else
-    // Loader calls are deliberately outside every tap mutex.
-    VimAddClient result=reinterpret_cast<VimAddClient>(dlsym(RTLD_NEXT,"VIMC_AddClient"));
-    if(result==VIMC_AddClient)result=0;
-    if(!result) {
-        void* h=dlopen("/jci/lib/libjcivim_api.so",RTLD_LAZY|RTLD_NOLOAD|RTLD_LOCAL);
-        if(h)result=reinterpret_cast<VimAddClient>(dlsym(h,"VIMC_AddClient"));
-        // Keep the owner mapped: callbacks can outlive initialization scope.
-        if(result==VIMC_AddClient)result=0;
-    }
-    return result;
+VimAddClient lookup_next() { return not_self(dlsym(RTLD_NEXT,"VIMC_AddClient")); }
+VimAddClient lookup_loaded() {
+    void* h=dlopen("/jci/lib/libjcivim_api.so",RTLD_LAZY|RTLD_NOLOAD|RTLD_LOCAL);
+    // Keep the owner mapped: callbacks can outlive initialization scope.
+    return h?not_self(dlsym(h,"VIMC_AddClient")):0;
+}
+// The caller's own link scope: dlsym on the calling object's handle searches
+// that object and its DT_NEEDED dependencies (the stock VBS module that calls
+// VIMC_AddClient links libjcivim_api.so), not the global preload scope.
+// RTLD_NOLOAD: never maps anything new.
+VimAddClient lookup_caller(const void* caller) {
+    Dl_info info;
+    if(!caller || !dladdr(caller,&info) || !info.dli_fname || !info.dli_fname[0])return 0;
+    void* h=dlopen(info.dli_fname,RTLD_LAZY|RTLD_NOLOAD|RTLD_LOCAL);
+    return h?not_self(dlsym(h,"VIMC_AddClient")):0;
+}
 #endif
+// The first original any call resolved (kept, never cleared): the fallback
+// when every lookup of a later call fails.
+VimAddClient resolved_original=0;
+VimAddClient resolve_original(const void* caller) {
+    VimAddClient result=lookup_next();
+    if(!result)result=lookup_loaded();
+    if(!result)result=lookup_caller(caller);
+    if(result)__sync_bool_compare_and_swap(&resolved_original,(VimAddClient)0,result);
+    else result=__sync_val_compare_and_swap(&resolved_original,(VimAddClient)0,(VimAddClient)0);
+    return result;
 }
 void initialize(VimAddClient forward) {
     real_add=forward;
@@ -194,7 +226,7 @@ void initialize(VimAddClient forward) {
 extern "C" __attribute__((visibility("default"))) int VIMC_AddClient(
     uint64_t client,uint64_t server,const mx5::sensors::VimCallbacks* callbacks) {
     const int incoming_errno=errno;
-    mx5::sensors::VimAddClient forward=resolve_original();
+    mx5::sensors::VimAddClient forward=resolve_original(__builtin_return_address(0));
     if(__sync_bool_compare_and_swap(&init_phase,0,1)) {
         initialize(forward);
         __sync_synchronize();
@@ -224,8 +256,11 @@ extern "C" __attribute__((visibility("default"))) int VIMC_AddClient(
         pthread_mutex_unlock(&registry_lock);
     }
     errno=incoming_errno;
-    // 102 is VIM's existing generic API failure status (Open/AddClient map
-    // IPC errors to it). Missing resolver is our failure, not an OEM call result.
+    // Pass-through: the stock registration result is returned unchanged.
+    // forward is 0 only when no step above finds a VIMC_AddClient other than
+    // this tap anywhere in the process (the caller's own link scope included),
+    // so there is no original to call; 102 is then VIM's existing generic API
+    // failure status (validation/V1_A_PRODUCT_HARDENING_2026-10-18.md).
     if(!forward)return 102;
     return forward(client,server,chosen);
 }

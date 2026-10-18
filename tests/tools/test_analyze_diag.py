@@ -145,22 +145,34 @@ def consume(rows, module=audit):
     return a.report()
 
 
+# diag_episode rows exactly as the removed C++ controller wrote them (the
+# deleted tests/runtime/test_diag_episode.cpp "rows" output at 6bbac15;
+# synthetic, no vehicle data). The diagnostic arms were removed for v1.0.0
+# (validation/V1_A_PRODUCT_HARDENING_2026-10-18.md); old logs stay readable.
+CPP_EPISODE_ROWS = [
+    '{"kind":"diag_episode","mono_ns":1000000000,"domain":"beta","assist_ready":false,"event":"assigned","boot_id":"episode-boot","episode":0,"arm":"CAP","reason":"gps_lost","state":"GPS_LOST","session_epoch":0,"generation":2,"block":0,"perm":2,"ceiling_m":25}',
+    '{"kind":"diag_episode","mono_ns":3000000000,"domain":"beta","assist_ready":false,"event":"ended","boot_id":"episode-boot","episode":0,"arm":"CAP","reason":"gps_returned","state":"ARMED","session_epoch":0,"generation":2,"open_ms":2000,"pubs":0,"capped":0,"honest_max_m":null,"reported_min_m":null,"reported_max_m":null,"loc_replaced":0,"loc_nonzero":0,"loc_original_mode0":0,"sat":0,"sat_applied":0,"sat_nonzero":0,"sat_outcomes":{},"first_sat":null}',
+    '{"kind":"diag_episode","mono_ns":12999999999,"domain":"beta","assist_ready":false,"event":"continued","boot_id":"episode-boot","episode":0,"arm":"CAP","reason":"gps_lost","state":"GPS_LOST","session_epoch":0,"generation":2,"gap_ms":9999}',
+    '{"kind":"diag_episode","mono_ns":14000000000,"domain":"beta","assist_ready":false,"event":"ended","boot_id":"episode-boot","episode":0,"arm":"CAP","reason":"gps_returned","state":"ARMED","session_epoch":0,"generation":2,"open_ms":3000,"pubs":0,"capped":0,"honest_max_m":null,"reported_min_m":null,"reported_max_m":null,"loc_replaced":0,"loc_nonzero":0,"loc_original_mode0":0,"sat":0,"sat_applied":0,"sat_nonzero":0,"sat_outcomes":{},"first_sat":null}',
+    '{"kind":"diag_episode","mono_ns":24000000000,"domain":"beta","assist_ready":false,"event":"assigned","boot_id":"episode-boot","episode":1,"arm":"CAP","reason":"gps_lost","state":"GPS_LOST","session_epoch":0,"generation":2,"block":0,"perm":2,"ceiling_m":25}',
+    '{"kind":"diag_episode","mono_ns":25000000000,"domain":"beta","assist_ready":false,"event":"ended","boot_id":"episode-boot","episode":1,"arm":"CAP","reason":"gps_returned","state":"ARMED","session_epoch":0,"generation":2,"open_ms":1000,"pubs":0,"capped":0,"honest_max_m":null,"reported_min_m":null,"reported_max_m":null,"loc_replaced":0,"loc_nonzero":0,"loc_original_mode0":0,"sat":0,"sat_applied":0,"sat_nonzero":0,"sat_outcomes":{},"first_sat":null}',
+    '{"kind":"diag_episode","mono_ns":35000000000,"domain":"beta","assist_ready":false,"event":"assigned","boot_id":"episode-boot","episode":2,"arm":"CONTROL","reason":"gps_lost","state":"GPS_LOST","session_epoch":0,"generation":2,"block":0,"perm":2,"ceiling_m":40}',
+    '{"kind":"diag_episode","mono_ns":36000000000,"domain":"beta","assist_ready":false,"event":"ended","boot_id":"episode-boot","episode":2,"arm":"CONTROL","reason":"gps_returned","state":"ARMED","session_epoch":0,"generation":2,"open_ms":1000,"pubs":0,"capped":0,"honest_max_m":null,"reported_min_m":null,"reported_max_m":null,"loc_replaced":0,"loc_nonzero":0,"loc_original_mode0":0,"sat":0,"sat_applied":0,"sat_nonzero":0,"sat_outcomes":{},"first_sat":null}',
+]
+
+
 class ControllerRowsAcceptedTests(unittest.TestCase):
-    """The rows the C++ controller really writes pass the analyzer's schema check."""
+    """The rows the C++ controller really wrote pass the analyzer's schema check."""
 
     def test_cpp_episode_rows_are_valid_analyzer_rows(self):
-        fixture = os.environ.get("MX5DR_DIAG_EPISODE_FIXTURE")
-        if not fixture:
-            self.skipTest("MX5DR_DIAG_EPISODE_FIXTURE is not set (make test-tools sets it)")
-        out = subprocess.run([fixture, "rows"], check=True, capture_output=True, text=True).stdout
-        rows = [json.loads(line) for line in out.splitlines() if line.strip()]
+        rows = [json.loads(line) for line in CPP_EPISODE_ROWS]
         kinds = {(r["kind"], r.get("event")) for r in rows}
         self.assertIn(("diag_episode", "assigned"), kinds)
         self.assertIn(("diag_episode", "continued"), kinds)
         self.assertIn(("diag_episode", "ended"), kinds)
         for row in rows:
-            if row["kind"] == "diag_episode":
-                self.assertTrue(audit.diag_row_valid(row), row)
+            self.assertEqual(row["kind"], "diag_episode")
+            self.assertTrue(audit.diag_row_valid(row), row)
 
 
 class DiagnosticAnalyzeTests(unittest.TestCase):

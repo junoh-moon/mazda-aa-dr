@@ -276,7 +276,13 @@ int main(int argc,char** argv) {
     // budget_cap_off (validation/TUNNEL_REPORT_CAP_2026-10-12.md): the budget
     // scenario with the owner marker acc-cap-off (beta.12 numbers, 40 m).
     const bool cap_off=std::string(argv[1])=="budget_cap_off";
-    const std::string scenario=no_reverse?std::string("main"):cap_off?std::string("budget"):std::string(argv[1]);
+    // budget_stale_diag (validation/V1_A_PRODUCT_HARDENING_2026-10-18.md): the
+    // budget scenario with a stale menu 9 marker 'diag' holding exactly "on\n"
+    // (the old ON value). The diagnostic arms are removed: the runtime ignores
+    // the file silently (no diag_boot/diag_episode row, no "diag" send field,
+    // the product 25 m ceiling on every replaced send).
+    const bool stale_diag=std::string(argv[1])=="budget_stale_diag";
+    const std::string scenario=no_reverse?std::string("main"):(cap_off||stale_diag)?std::string("budget"):std::string(argv[1]);
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
            scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed"||
@@ -298,6 +304,10 @@ int main(int argc,char** argv) {
     const std::string logs=std::string(root)+"/logs";
     assert(!mkdir(logs.c_str(),0700));
     if(cap_off) { const int fd=open((std::string(root)+"/acc-cap-off").c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);assert(fd>=0);close(fd); }
+    if(stale_diag) {
+        const int fd=open((std::string(root)+"/diag").c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+        assert(fd>=0 && write(fd,"on\n",3)==3);close(fd);
+    }
     // The beta.16 store scenarios run with the garage carry switched off
     // (g3-garage-off); g3_garage runs the product default (garage on).
     const bool garage_off=g3_scenario(scenario) && scenario!="g3_garage";
@@ -1126,6 +1136,15 @@ int main(int argc,char** argv) {
             previous=calls[i].accuracy_e3;
         }
         assert(previous==ceiling);
+        if(stale_diag) {
+            for(unsigned k=0;k<3;++k) {
+                std::ifstream tf((logs+"/trace."+char('0'+k)+".jsonl").c_str());std::string line;
+                while(std::getline(tf,line))
+                    assert(line.find("diag_boot")==std::string::npos && line.find("diag_episode")==std::string::npos &&
+                           line.find("\"diag\":")==std::string::npos);
+            }
+            printf("budget_stale_diag: stale diag marker ignored, %u replaced sends at <= 25 m\n",unsigned(replaced_total));
+        }
     }
     {
         // G3 record-only (validation/G3_RECORD_ONLY_2026-10-11.md). Every
@@ -1340,6 +1359,7 @@ int main(int argc,char** argv) {
     // Lazy token (garage carry on): every garage-on worker start marks its boot.
     unlink((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str());
     if(cap_off)unlink((std::string(root)+"/acc-cap-off").c_str());
+    if(stale_diag)unlink((std::string(root)+"/diag").c_str());
     if(garage_off)unlink((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str());
     assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);
     if(timing_inconclusive) {

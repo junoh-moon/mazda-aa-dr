@@ -54,7 +54,7 @@ class DriveRowsReplay(unittest.TestCase):
         return (result.stdout, result.stderr) + tuple(read(out + ext) for ext in (".json", ".csv", ".jsonl"))
 
     def test_product_outputs_identical_with_and_without_rows(self):
-        for extra in ((), ("--diag", base.BOOT)):
+        for extra in ((), ("--acc-cap", "off")):
             off = os.path.join(self.tmp.name, "off")
             on = os.path.join(self.tmp.name, "on")
             a, b = run(self.trip, off, False, *extra), run(self.trip, on, True, *extra)
@@ -115,15 +115,6 @@ class DriveRowsReplay(unittest.TestCase):
         periodic = [r["at_ms"] for r in learn if r["ev"] == "periodic"]
         self.assertGreaterEqual(len(periodic), 3)
         self.assertTrue(all(b - a >= 60000 for a, b in zip(periodic, periodic[1:])))
-
-    def test_satellites_from_the_diagnostic_type21_sends(self):
-        out = os.path.join(self.tmp.name, "diag")
-        result = run(self.trip, out, True, "--diag", base.BOOT)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        fix1 = [r for r in rows(out + ".rec.jsonl") if r["kind"] == "fix1"]
-        # replay_beta's GPS_SATELLITE: number_in_use 5 for mode 1, sent after
-        # the LOCATION of the same call.
-        self.assertTrue(fix1 and all(r["d"][7] == 5 for r in fix1), fix1[:3])
 
 
 if __name__ == "__main__":

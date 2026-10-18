@@ -548,7 +548,10 @@ bool encode_beta_location(const DrSnapshot& in, const uint8_t original[48], uint
         const double b = in.travel_bearing_deg;
         if (!std::isfinite(b) || b < 0 || b >= 360) return false;
         if (!scaled(b, 1e6, &bearing_e6)) return false;
-        if (bearing_e6 == 360000000) bearing_e6 = 0;
+        // Same range as encode_bearing_overlay, (0.01, 359.99] deg: never
+        // exactly 0 or 360 (validation/V1_A_PRODUCT_HARDENING_2026-10-18.md).
+        if (bearing_e6 <= BEARING_OVERLAY_MIN_E6 || bearing_e6 > BEARING_OVERLAY_MAX_E6)
+            bearing_e6 = BEARING_OVERLAY_MAX_E6;
     }
     if (lon_e7 == 1800000000) lon_e7 = -1800000000;
     // ceil keeps the reported radius at or above the calibrated budget.

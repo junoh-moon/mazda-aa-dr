@@ -17,6 +17,22 @@ int main(int argc,char** argv) {
     config.max_log_bytes=65536;config.max_log_files=2;
     check_storage<Journal>("collector",argv[2]);return 0;
   }
+  // Collector coordinates: 3 decimals (validation/V1_STABLE_PRIVACY_2026-10-18.md).
+  {
+    struct { double in; const char *want; } cases[] = {
+        {12.3456789, "12.346"}, {-45.6784999, "-45.678"}, {0.0, "0.000"}, {90.0, "90.000"},
+        {-180.0, "-180.000"}, {179.99951, "180.000"}, {0.00049, "0.000"}, {0.00051, "0.001"},
+        {360.0, "360.000"}, {360.0001, "null"}, {-1e300, "null"}, {NAN, "null"}, {INFINITY, "null"}};
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+      char out[48];
+      json_coordinate(cases[i].in, out);
+      if (strcmp(out, cases[i].want)) fprintf(stderr, "coordinate %.10g -> %s (want %s)\n", cases[i].in, out, cases[i].want);
+      assert(!strcmp(out, cases[i].want));
+    }
+    char full[48];
+    json_number(12.3456789, full);
+    assert(!strcmp(full, "12.345678899999999"));   // other numbers keep full precision
+  }
   char tmp[] = "/tmp/mx5dr-collector-journal-XXXXXX";
   assert(mkdtemp(tmp));
   std::string identity_path = std::string(tmp) + "/boot-id";

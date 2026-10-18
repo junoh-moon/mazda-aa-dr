@@ -26,6 +26,7 @@
 #ifndef MX5_COLLECTOR_PHONE_IMU_RX_H
 #define MX5_COLLECTOR_PHONE_IMU_RX_H
 #include "phone_imu.h"
+#include "bus_register.h"
 #include "../runtime/storage.h"
 #include "../runtime/worker_thread.h"
 #include <dbus/dbus.h>
@@ -482,47 +483,17 @@ private:
         }
         if (dbus_error_is_set(&e)) dbus_error_free(&e);
     }
-    // Bounded replacement of dbus_bus_register(). libdbus waits without any
-    // limit in the SASL handshake when the socket accepts but never answers
-    // (a stuck daemon; measured > 140 s, validation/BCA_HMI_BUS_FIX_REVIEW_FABLE_2026-10-17.md
-    // 1-A); its 25 s default covers only the Hello call. Here the handshake
-    // gets AUTH_NS in 50 ms steps with the PTY drained and PINGed between the
-    // steps, and Hello gets HELLO_MS; then the unique name is stored exactly
-    // like dbus_bus_register does. On false the caller closes the connection
-    // (never half-registered) and e carries the error name for the bus row.
-    // All calls exist in the CMU's libdbus 1.7.2 (dynamic symbols checked) and
-    // in the toolchain's 1.6.30 headers.
-    static const uint64_t AUTH_NS = 2 * SEC_NS;
-    static const int HELLO_MS = 1000;
+    // Bounded replacement of dbus_bus_register() (bus_register.h, shared with
+    // the collector's main thread): the handshake gets 2 s in 50 ms steps with
+    // the PTY drained and PINGed between the steps, Hello gets 1 s.
+    struct RegisterPolicy {
+        Receiver& rx;
+        bool stopping() const { return rx.stop_; }
+        void idle(uint64_t t) { rx.service_link(t); }
+    };
     bool bus_register(DBusError* e) {
-        const uint64_t deadline = mono_ns() + AUTH_NS;
-        while (!dbus_connection_get_is_authenticated(conn_)) {
-            if (!dbus_connection_read_write(conn_, 50)) {
-                dbus_set_error_const(e, "mx5dr.AuthFailed", "disconnected during authentication");
-                return false;
-            }
-            if (dbus_connection_get_is_authenticated(conn_)) break;
-            const uint64_t t = mono_ns();
-            if (stop_ || t >= deadline) {
-                dbus_set_error_const(e, "mx5dr.AuthTimeout", stop_ ? "receiver stopping" : "no SASL answer within 2000 ms");
-                return false;
-            }
-            service_link(t);
-        }
-        DBusMessage* m = dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "Hello");
-        if (!m) { dbus_set_error_const(e, DBUS_ERROR_NO_MEMORY, "Hello"); return false; }
-        DBusMessage* r = dbus_connection_send_with_reply_and_block(conn_, m, HELLO_MS, e);  // NoReply on timeout
-        dbus_message_unref(m);
-        if (!r) {
-            if (!dbus_error_is_set(e)) dbus_set_error_const(e, "mx5dr.HelloFailed", "no reply to Hello");
-            return false;
-        }
-        const char* name = 0;
-        bool ok = dbus_message_get_args(r, e, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID) && name && name[0];
-        if (ok) ok = dbus_bus_set_unique_name(conn_, name);  // copies the name before r is freed
-        if (!ok && !dbus_error_is_set(e)) dbus_set_error_const(e, "mx5dr.HelloFailed", "no unique name");
-        dbus_message_unref(r);
-        return ok;
+        RegisterPolicy policy = {*this};
+        return mx5::collector::bounded_bus_register(conn_, e, policy, "receiver stopping");
     }
     // The PTY keeps its reader while bus_register waits (bds blocks when its
     // PTY is not drained): a non-blocking read and the PING/silence tick.

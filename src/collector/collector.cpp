@@ -5,6 +5,7 @@
 #include "../runtime/boot_id.h"
 #include "../runtime/storage.h"
 #include "phone_imu_rx.h"
+#include "bus_register.h"
 #include <dbus/dbus.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -62,6 +63,16 @@ void json_text(const char *in, char *out, size_t n) {
 void json_number(double x, char out[48]) {
   if (isfinite(x))
     snprintf(out, 48, "%.17g", x);
+  else
+    strcpy(out, "null");
+}
+// Privacy (validation/V1_STABLE_PRIVACY_2026-10-18.md): collector rows carry
+// latitude/longitude rounded to 3 decimal places (about 100 m north-south).
+// The product trace (trace.*.jsonl) keeps full precision for the replay.
+const double COLLECTOR_COORD_SCALE = 1000.0;
+void json_coordinate(double x, char out[48]) {
+  if (isfinite(x) && fabs(x) <= 360.0)
+    snprintf(out, 48, "%.3f", round(x * COLLECTOR_COORD_SCALE) / COLLECTOR_COORD_SCALE);
   else
     strcpy(out, "null");
 }
@@ -169,12 +180,21 @@ struct Journal {
 // the watchdog). The same wheel/yaw/gear values reach the AA runtime trace
 // through the VBS tap. This collector never forks, execs, signals or waits on
 // another process. See validation/COLLECTOR_SMDB_RESET_2026-10-04.md.
+// The service-bus registration is bounded like the receiver's
+// (bus_register.h: 2 s SASL handshake, 1 s Hello): a daemon that accepts the
+// socket but never answers cannot freeze position polling or row writing; the
+// sample then records position_poll_error and the next sample retries.
+struct MainRegisterPolicy {
+  bool stopping() const { return stop_requested != 0; }
+  void idle(uint64_t) {}
+};
 DBusConnection *connect_bus() {
   DBusError e;
   dbus_error_init(&e);
   DBusConnection *c =
       dbus_connection_open_private(bus_address, &e);
-  if (c && !dbus_bus_register(c, &e)) {
+  MainRegisterPolicy policy;
+  if (c && !mx5::collector::bounded_bus_register(c, &e, policy, "collector stopping")) {
     dbus_connection_close(c);
     dbus_connection_unref(c);
     c = 0;
@@ -268,8 +288,8 @@ void sensor_log(Journal &j, DBusConnection *c, uint64_t serial) {
                               &head, DBUS_TYPE_DOUBLE, &vel, DBUS_TYPE_DOUBLE,
                               &h, DBUS_TYPE_DOUBLE, &v, DBUS_TYPE_INVALID)) {
       char slat[48], slon[48], sh[48], sv[48];
-      json_number(lat, slat);
-      json_number(lon, slon);
+      json_coordinate(lat, slat);
+      json_coordinate(lon, slon);
       json_number(head, sh);
       json_number(vel, sv);
       snprintf(line, sizeof line,

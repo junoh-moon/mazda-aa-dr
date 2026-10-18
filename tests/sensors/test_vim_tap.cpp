@@ -20,6 +20,8 @@ void fake_callback(uint64_t c,uint64_t s,const VimMessage* m) {
     ++called;payload[1]=0xff;errno=ERANGE;
 }
 template<unsigned N> void other_callback(uint64_t c,uint64_t s,const VimMessage* m) { fake_callback(c,s,m); }
+VimAddClient lookup_fake() { return fake_add; }
+VimAddClient lookup_fake_caller(const void* caller) { return caller?fake_add:0; }
 bool fake_send(const RawEvent& e) { last=e;++sent;errno=EIO;return false; }
 // ---- VIM side channel (validation/VIM_CHANNEL_CAPTURE_2026-10-10.md) ----
 RawEvent stream[64];unsigned streamed=0;
@@ -191,6 +193,26 @@ int main() {
         chan_tests(registered);
     }
     test_accept_tables=false;errno=EDOM;VIMC_AddClient(CLIENT,SERVER,&cb);assert(registered==&cb);
-    real_add=0;errno=EDOM;assert(VIMC_AddClient(CLIENT,SERVER,0)==102 && errno==EDOM);
+    // Resolver failure (validation/V1_A_PRODUCT_HARDENING_2026-10-18.md): the
+    // call still reaches the original and its result/errno come back unchanged.
+    // (1) The first lookup fails, the loaded-library lookup finds the original.
+    // The cache is cleared so each step is checked on its own.
+    real_add=0;resolved_original=0;test_lookup_loaded=lookup_fake;forwarded=0;errno=EDOM;
+    assert(VIMC_AddClient(CLIENT,SERVER,&cb)==137 && errno==ERANGE && forwarded==1 && registered==&cb);
+    // (2) Both fail, the caller's own link scope finds it; the caller passed
+    // in is this call's return address (non-null).
+    test_lookup_loaded=0;test_lookup_caller=lookup_fake_caller;test_last_caller=0;resolved_original=0;errno=EDOM;
+    assert(VIMC_AddClient(CLIENT,SERVER,0)==137 && errno==ERANGE && forwarded==2 && registered==0);
+    assert(test_last_caller!=0);
+    // (3) Every lookup fails: the original resolved by an earlier call is used.
+    test_lookup_caller=0;assert(resolved_original==fake_add);errno=EDOM;
+    assert(VIMC_AddClient(CLIENT,SERVER,&cb)==137 && errno==ERANGE && forwarded==3 && registered==&cb);
+    // A lookup returning this tap's own export counts as not found.
+    assert(not_self(reinterpret_cast<void*>(VIMC_AddClient))==0);
+    assert(not_self(reinterpret_cast<void*>(fake_add))==fake_add);
+    // (4) Nothing anywhere and nothing resolved before: no original exists to
+    // call; the generic VIM failure status, caller errno kept.
+    resolved_original=0;errno=EDOM;
+    assert(VIMC_AddClient(CLIENT,SERVER,0)==102 && errno==EDOM && forwarded==3);
     puts("VIM tap registration routing, forwarding, pre-mutation copy, errno and loss checks passed");
 }

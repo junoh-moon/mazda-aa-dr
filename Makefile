@@ -98,7 +98,7 @@ $(BUILD)/test_model_session_reset: $(ASSIST_WORKER) src/runtime/assist_worker.h 
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_input: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_input.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
-COLLECTOR_HEADERS = src/collector/phone_imu.h src/collector/phone_imu_rx.h src/runtime/worker_thread.h
+COLLECTOR_HEADERS = src/collector/phone_imu.h src/collector/phone_imu_rx.h src/collector/bus_register.h src/runtime/worker_thread.h
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp $(COLLECTOR_HEADERS) | $(BUILD)
 	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
 $(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp $(COLLECTOR_HEADERS) | $(BUILD)
@@ -161,17 +161,14 @@ test-adapter: $(BUILD)/test_context_pool_atfork_failure $(BUILD)/test_context_po
 # G3 record-only heading carry-over (validation/G3_RECORD_ONLY_2026-10-11.md).
 $(BUILD)/test_g3: tests/runtime/test_g3.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
-$(BUILD)/test_diag: tests/runtime/test_diag.cpp src/runtime/diag_arms.h src/adapter/adapter.h $(ADAPTER) | $(BUILD)
-	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_diag.cpp $(ADAPTER) -ldl -pthread -o $@
-$(BUILD)/test_diag_episode: tests/runtime/test_diag_episode.cpp $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(ADAPTER) $(BUILD)/core_host.o src/runtime/beta_controller.h src/runtime/diag_arms.h
-	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
+$(BUILD)/test_acc_cap: tests/runtime/test_acc_cap.cpp src/runtime/acc_cap.h | $(BUILD)
+	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_acc_cap.cpp -o $@
 $(BUILD)/test_worker_thread: tests/runtime/test_worker_thread.cpp src/runtime/worker_thread.h | $(BUILD)
 	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_worker_thread.cpp -pthread -o $@
-test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_drive_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 $(BUILD)/test_diag $(BUILD)/test_diag_episode test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_drive_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 $(BUILD)/test_acc_cap test-request-publication test-journal-boundaries
 	$(BUILD)/test_worker_thread
 	$(BUILD)/test_g3
-	$(BUILD)/test_diag
-	$(BUILD)/test_diag_episode
+	$(BUILD)/test_acc_cap
 	@set -e; for scenario in adopted freeze audit journal_failure pre_stopped fork journal bounds drain_bus drain_session; do $(BUILD)/test_runtime_lds_association $$scenario; done
 	$(BUILD)/test_assist_worker
 	@set -e; for scenario in publication source_fault unqualified recovery audit journal_failure pre_stopped unhooked shadow; do $(BUILD)/test_runtime_assist $$scenario; done
@@ -197,7 +194,7 @@ test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association 
 	$(BUILD)/test_model_session_input
 	@set -e; for case in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session $$case; done
 	MX5DR_TEST_STALE_RAW=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session bus_reuse
-	@set -e; for case in main main_no_reverse contradict silence disable budget budget_cap_off fault no_anchor nofix withdrawn_class nofix_rearm cadence_gap cadence_gap_speed g3_park g3_move g3_stop g3_fault g3_send_conflict g3_send_abort g3_send_fence g3_idle g3_restart g3_blind g3_unadmitted g3_token_dir; do $(BUILD)/test_worker_beta $$case; done
+	@set -e; for case in main main_no_reverse contradict silence disable budget budget_cap_off budget_stale_diag fault no_anchor nofix withdrawn_class nofix_rearm cadence_gap cadence_gap_speed g3_park g3_move g3_stop g3_fault g3_send_conflict g3_send_abort g3_send_fence g3_idle g3_restart g3_blind g3_unadmitted g3_token_dir; do $(BUILD)/test_worker_beta $$case; done
 	@set -e; for case in g3_garage g3_cancel; do sh tests/runtime/run_worker_beta_timing.sh $(BUILD)/test_worker_beta $$case; done
 	@MX5DR_G3_SENT_DUMP=$(BUILD)/g3_send_on.txt $(BUILD)/test_worker_beta g3_send && MX5DR_G3_SENT_DUMP=$(BUILD)/g3_send_off.txt $(BUILD)/test_worker_beta g3_send_off && python3 tests/runtime/g3_send_identity.py $(BUILD)/g3_send_on.txt $(BUILD)/g3_send_off.txt
 	MX5DR_TEST_SLOW_YAW=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session bus_reuse
@@ -208,8 +205,8 @@ test-request-publication:
 	@CXX="$(CXX)" MX5DR_PUBLICATION_BUILD="$(abspath $(BUILD))/request-publication" sh tests/runtime/run_request_publication.sh; result=$$?; test $$result -eq 0 -o $$result -eq 77
 test-packaging: $(BUILD)/test_collector
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) -m unittest discover -s tests/packaging -v
-test-tools: $(BUILD)/yaw_replay $(BUILD)/test_g3 $(BUILD)/test_diag_episode
-	MX5DR_YAW_REPLAY=$(abspath $(BUILD)/yaw_replay) MX5DR_G3_FIXTURE=$(abspath $(BUILD)/test_g3) MX5DR_DIAG_EPISODE_FIXTURE=$(abspath $(BUILD)/test_diag_episode) $(PYTHON) -m unittest discover -s tests/tools -v
+test-tools: $(BUILD)/yaw_replay $(BUILD)/test_g3
+	MX5DR_YAW_REPLAY=$(abspath $(BUILD)/yaw_replay) MX5DR_G3_FIXTURE=$(abspath $(BUILD)/test_g3) $(PYTHON) -m unittest discover -s tests/tools -v
 test-build-deps:
 	$(PYTHON) -m unittest discover -s tests/build -v
 test-integration: $(BUILD)/test_pipeline $(BUILD)/test_assist_publication
