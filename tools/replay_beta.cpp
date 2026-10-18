@@ -430,6 +430,13 @@ struct Options {
     // G3_GARAGE_EXIT_FIX_2026-10-17.md). Default off here so that existing
     // replays stay byte-identical; the product default is on (marker absent).
     bool g3_garage;
+    // --writer-lag-ms N: the journal writer lag (oldest unwritten row) the
+    // G3 tracker sees at every turn, constant over the run (default 0: the
+    // replay's journal is always current, unchanged output). It feeds the
+    // garage departure-mark rule while BETA replaces (> 100 ms holds the
+    // mark) and the runtime idle rule (> 300 ms: "writer_busy" for every
+    // store request), so the third-review C1 case can be replayed.
+    uint64_t writer_lag_ns;
     std::string g3_send_out;
     // --g3-rt S: the CLOCK_REALTIME seconds the tracker sees at worker start
     // (the product reads it; default 0 = unknown, the record-only replays).
@@ -677,10 +684,14 @@ void g3_turn(uint64_t now) {
     // --g3-rt: the wall clock advances with the replay (stored records carry it).
     R::G3Sample sample = R::g3_sample(nav, now, opt.g3_rt ? opt.g3_rt + now / 1000000000ULL : 0);
     sample.beta_replacing = g3_replacing(beta->state());
+    sample.writer_lag_ns = opt.writer_lag_ns;
     // --g3-garage on: the runtime's garage idle rule (a write without fsync
     // may run while BETA replaces; the tracker requests no fsync then).
+    // The runtime's g3_io_block with a store thread, a current journal, a
+    // writer and no drain; only the replacing state and the lag vary.
     g3.tick(g3_journal, sample, found ? &course : 0,
-            sample.beta_replacing && !opt.g3_garage ? "beta_replacing" : 0);
+            R::g3_io_block_reason(true, sample.beta_replacing && !opt.g3_garage, true, true, false,
+                                  opt.writer_lag_ns));
     // runtime.cpp g3_pump: a rule F taint end cancels the in-flight write.
     if (g3_job.active) {
         const char* why = g3.discard_cancel(sample);
@@ -1304,6 +1315,7 @@ void usage() {
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
         "                   [--g3 off|on|slow] [--g3-store DIR] [--g3-out FILE]\n"
         "                   [--g3-send off|on] [--g3-send-out FILE] [--g3-rt S] [--g3-garage off|on]\n"
+        "                   [--writer-lag-ms N]\n"
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "                   [--assume-forward on|off] [--seed-report] [--reverse-fence feed|runtime]\n"
         "                   [--diag SEED] [--diag-out FILE] [--acc-cap on|off]\n"
@@ -1321,7 +1333,7 @@ int main(int argc, char** argv) {
     opt.truth_gap_ns = 3000000000ULL; opt.course_min_kmh = 15; opt.coverage_min = 0.95;
     opt.poll_hdop = 1.0; opt.position_source = "auto";
     opt.engagement = "continuous";
-    opt.g3 = "off"; opt.g3_send = false; opt.g3_rt = 0; opt.g3_garage = false;
+    opt.g3 = "off"; opt.g3_send = false; opt.g3_rt = 0; opt.g3_garage = false; opt.writer_lag_ns = 0;
     opt.assume_forward = true; opt.seed_report = false; opt.reverse_fence = false;
     opt.acc_cap_off = false;
     opt.yaw_rail = true; opt.trace_from = opt.trace_to = 0;
@@ -1377,6 +1389,11 @@ int main(int argc, char** argv) {
             opt.g3_garage = v == "on";
         }
         else if (a == "--g3-rt" && more) opt.g3_rt = strtoull(argv[++i], 0, 10);
+        else if (a == "--writer-lag-ms" && more) {
+            const double v = atof(argv[++i]);
+            if (!(v >= 0 && v <= 60000)) { usage(); return 2; }
+            opt.writer_lag_ns = uint64_t(llround(v * 1e6));
+        }
         else if (a == "--stopped-accuracy-m" && more) opt.stopped_accuracy_m = atof(argv[++i]);
         else if (a == "--stopped-honest-max-m" && more) opt.stopped_honest_max_m = atof(argv[++i]);
         else if (a == "--crawl-speed-mps" && more) opt.crawl_speed_mps = atof(argv[++i]);

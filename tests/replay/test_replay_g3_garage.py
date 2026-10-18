@@ -170,7 +170,10 @@ class G3GarageChainReplay(unittest.TestCase):
         cls.runs = {}
         # gap: garage on, but another product boot (BOOT_X) started between A
         # and B and wrote no record (review P1: its token replaces A's).
-        for mode in ("on", "off", "gap"):
+        # lag: garage on with a journal writer lag of 150 ms at every turn
+        # (--writer-lag-ms; third review C3): the departure mark while BETA
+        # replaces waits (> 100 ms), the parked S is not held (idle rule 300 ms).
+        for mode in ("on", "off", "gap", "lag"):
             store = os.path.join(root, "store-" + mode)
             os.mkdir(store)
             out = {}
@@ -183,7 +186,8 @@ class G3GarageChainReplay(unittest.TestCase):
                     [base.TOOL, "--trip", trip, "--real-only", "--report", prefix + ".json", "--csv", prefix + ".csv",
                      "--journal", prefix + ".jsonl", "--g3", "on", "--g3-store", store,
                      "--g3-garage", "off" if mode == "off" else "on",
-                     "--g3-send", "on", "--g3-out", prefix + ".g3.jsonl", "--g3-send-out", prefix + ".sends.jsonl"],
+                     "--g3-send", "on", "--g3-out", prefix + ".g3.jsonl", "--g3-send-out", prefix + ".sends.jsonl"] +
+                    (["--writer-lag-ms", "150"] if mode == "lag" else []),
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=600)
                 assert p.returncode == 0, p.stderr
                 with open(prefix + ".jsonl", "rb") as f:
@@ -264,6 +268,21 @@ class G3GarageChainReplay(unittest.TestCase):
         self.assertFalse([s for s in b["sends"] if s["choice"] == 6])
         self.assertFalse([r for r in b["g3"] if r["kind"] == "g3_send" and r["event"] == "start"])
         self.assertEqual(self.runs["gap"]["a"]["store"], self.runs["on"]["a"]["store"])
+
+    def test_writer_lag_holds_the_mark_while_replacing(self):
+        # --writer-lag-ms 150: boot A still stores its final garage park (the
+        # idle rule allows up to 300 ms); boot B's departure mark waits while
+        # BETA replaces (NO_FIX/SPEED_ENGAGED in the garage) and lands only
+        # once BETA stops replacing at the exit; the sends are those of "on".
+        on, lag = self.runs["on"], self.runs["lag"]
+        self.assertEqual(lag["a"]["store"], on["a"]["store"])
+        marks = [r for r in lag["b"]["g3"] if r["kind"] == "g3_store" and r["event"] == "written" and r["st"] == "M"]
+        on_marks = [r for r in on["b"]["g3"] if r["kind"] == "g3_store" and r["event"] == "written" and r["st"] == "M"]
+        self.assertEqual((len(marks), len(on_marks)), (1, 1))
+        self.assertLess(on_marks[0]["mono_ns"], int(45e9))
+        self.assertGreaterEqual(marks[0]["mono_ns"], int(B_EXIT * 1e9))
+        self.assertEqual(lag["b"]["store"].split()[4], "M")
+        self.assertEqual(lag["b"]["sends"], on["b"]["sends"])
 
     def test_sends_differ_only_in_the_bearing_of_overlaid_fixes(self):
         # Bytes 40 and 44..47 only (the record holds no other payload byte).

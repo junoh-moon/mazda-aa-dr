@@ -1405,6 +1405,14 @@ static void garage_codec_restore() {
     { G3Tracker t=started_garage(r,"none",100,BOOT_B,true,G3_LOAD_OK,BOOT_B);
       CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot") && t.have_carried());
       Rows j;t.journal_start(j,1);CHECK(has(j.last("g3_store"),"\"prev\":\"bbbbbbbb\"")); }
+    // The whole boot id is compared (third review, mutant M2 compared 8
+    // characters): a token differing only after the 8th character, and one
+    // differing within the first 8, are both another boot.
+    { G3Tracker t=started_garage(r,"none",100,BOOT_B,true,G3_LOAD_OK,"aaaaaaaa-1111-2222-3333-444444444445");
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot"));
+      Rows j;t.journal_start(j,1);CHECK(has(j.last("g3_store"),"\"prev\":\"aaaaaaaa\"")); }
+    { G3Tracker t=started_garage(r,"none",100,BOOT_B,true,G3_LOAD_OK,"aaaaaaab-1111-2222-3333-444444444444");
+      CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot")); }
     { G3Tracker t=started_garage(r,"none",100,BOOT_B,true,G3_LOAD_OK,"none");
       CHECK(t.state()==G3_CARRIED_UNVERIFIED && !strcmp(t.reason(),"not_prev_boot"));
       Rows j;t.journal_start(j,1);CHECK(has(j.last("g3_store"),"\"prev\":\"none\"")); }
@@ -1562,6 +1570,64 @@ static void garage_store() {
       st.tick(drive(1*S,50));for(unsigned k=2;k<=6;++k)st.tick(park(k*S,50,1*S));
       G3Sample a=drive(12*S,60);a.writer_lag_ns=250000000ULL;st.tick(a);
       CHECK(st.written.size()==2 && st.t.disk_state()=='M'); }
+    // Third review C1 (the probe of validation/G3_GARAGE_EXIT_FIX_2026-10-17.md
+    // "third fix round"): while BETA replaces, the departure mark could not
+    // land (7..13 s the idle rule, 14..22 s a writer lag of 150 ms), so the
+    // disk keeps S1 (heading) although the car left. The final park's S2 is
+    // not held by the 30 s spacing (disk S with heading) and replaces S1 at
+    // 23 s; on the c75053c code S1 survived to the ignition off at 30 s.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(replacing(drive(1*S,50)));
+      for(unsigned k=2;k<=6;++k)st.tick(replacing(park(k*S,50,1*S)));
+      CHECK(st.written.size()==1 && st.t.disk_state()=='S');                     // S1 requested at 6 s
+      for(unsigned k=7;k<=13;++k)st.tick(replacing(drive(k*S,50+2.0*(k-6))),"journal_draining");
+      for(unsigned k=14;k<=17;++k) {
+          G3Sample a=replacing(drive(k*S,50+2.0*(k-6)));a.writer_lag_ns=150000000ULL;st.tick(a);
+      }
+      CHECK(st.written.size()==1 && st.t.disk_state()=='S');                     // no mark landed
+      for(unsigned k=18;k<=22;++k) {
+          G3Sample a=replacing(park(k*S,72,18*S));a.writer_lag_ns=150000000ULL;st.tick(a);
+      }
+      CHECK(st.written.size()==1);
+      st.tick(replacing(park(23*S,72,18*S)));
+      CHECK(st.written.size()==2 && st.t.disk_state()=='S' && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK &&
+            d.state=='S' && d.seq==2 && d.mono_ms==23000 && d.flags==7);
+      for(unsigned k=24;k<=30;++k)st.tick(replacing(park(k*S,72,18*S)));
+      CHECK(st.written.size()==2 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.seq==2); }
+    // The same exception after the 60 s fsync rewrite (not replacing): it is
+    // an S request too; GPS lost right after, the mark blocked by the idle
+    // rule, the next garage park within 30 s still replaces the stale S.
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(drive(1*S,50));
+      for(unsigned k=2;k<=61;++k)st.tick(park(k*S,50,1*S));
+      CHECK(st.written.size()==2 && has(st.j.last("\"event\":\"written\""),"\"sync\":1"));   // 6 s, 61 s
+      for(unsigned k=62;k<=70;++k)st.tick(replacing(drive(k*S,50+3.0*(k-61))),"journal_draining");
+      CHECK(st.written.size()==2 && st.t.disk_state()=='S');
+      for(unsigned k=71;k<=75;++k)st.tick(replacing(park(k*S,77,71*S)),"journal_draining");
+      st.tick(replacing(park(76*S,77,71*S)));                                     // 15 s after 61 s
+      CHECK(st.written.size()==3 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.state=='S' && d.mono_ms==76000); }
+    // An S WITHOUT heading on disk keeps the 30 s spacing (it is never
+    // carried: no_heading; no mark is requested for it).
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(replacing(moved(1*S,50,0,0,10,true,false)));
+      for(unsigned k=2;k<=6;++k)st.tick(replacing(parked(moved(k*S,50,0,0,10,false,false),1*S)));
+      CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.flags==(G3_FLAG_POSITION|G3_FLAG_DEPART));
+      for(unsigned k=7;k<=10;++k)st.tick(replacing(moved(k*S,50+3.0*(k-6),0,0,12,true,false)));
+      CHECK(st.written.size()==1);                                                // no mark for hv 0
+      for(unsigned k=11;k<=35;++k)st.tick(replacing(parked(moved(k*S,62,0,0,12,false,false),11*S)));
+      CHECK(st.written.size()==1);                                                // 35 s < 6 + 30
+      st.tick(replacing(parked(moved(36*S,62,0,0,12,false,false),11*S)));
+      CHECK(st.written.size()==2); }
+    // The rule F taint rewrite while BETA replaces is not spaced either
+    // (review M3: with the disk-S exception this path is covered twice).
+    { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);
+      st.tick(replacing(moved(1*S,50,0,0,10,true,true,100,4)));
+      for(unsigned k=2;k<=6;++k)st.tick(replacing(parked(moved(k*S,60,0,0,12,false,true,100,4),1*S)));
+      CHECK(st.written.size()==1 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK && d.flags==7 && d.heading_cdeg==10000);
+      st.tick(replacing(discarded(parked(moved(8*S,60,0,0,12,false,false),1*S),1)));
+      st.tick(replacing(discarded(parked(moved(11*S,60,0,0,12,false,false),1*S),1)));
+      CHECK(st.written.size()==2 && g3_load(st.dir.c_str(),&d)==G3_LOAD_OK &&
+            d.flags==(G3_FLAG_POSITION|G3_FLAG_DEPART) && d.mono_ms==11000); }
     // Departure mark: after the S record, 0.4 m does not mark, 0.6 m does;
     // the mark has no heading and decodes as moving_at_end.
     { Store st;st.dir=temp_dir();st.t.start(0,true,"m",BOOT_B,"none",RT,G3_LOAD_MISSING,g3_record(),true);

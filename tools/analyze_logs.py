@@ -3977,6 +3977,33 @@ def g3_unmarked_departures(rows):
     return count, details[:10]
 
 
+def g3_replacing_rate_unmarked(rows):
+    """Third review C1: a garage park whose S request the 30 s spacing while
+    BETA replaces held back ("replacing_rate", reported by the g3_since
+    "unstored" row when the car leaves that park) while the record on disk
+    was a garage S with heading whose departure mark had not landed (no M
+    written since it was written or restored). The product exempts that case
+    since the third fix round, so every count is a defect; on the c75053c
+    build such an S survived and could be carried stale. A final park that
+    ends with the ignition off writes no g3_since row and is not visible."""
+    count, details, open_ = 0, [], {}
+    for session, row in rows:
+        kind, event = row["kind"], row.get("event")
+        if kind == "g3_store" and event in ("loaded", "rejected") and row.get("st") == "S" and \
+                row.get("hv") == 1 and "prev" in row:
+            open_[session] = row.get("seq")
+        elif kind == "g3_store" and event == "written" and row.get("garage") == 1:
+            if row["st"] == "S" and row["hv"] == 1:
+                open_[session] = row.get("seq")
+            else:
+                open_.pop(session, None)
+        elif kind == "g3_since" and event == "unstored" and row.get("reason") == "replacing_rate" and \
+                session in open_:
+            count += 1
+            details.append(dict(session=session, seq=open_[session], mono_ns=row.get("mono_ns")))
+    return count, details[:10]
+
+
 def g3_send_report(rows, boots, overlays=0):
     """G3 bearing send windows (src/runtime/g3_send.h), one per boot: start
     (carried travel heading, uncertainty), end reason, overlaid and stock FIX
@@ -4082,7 +4109,9 @@ def g3_report(rows, boots, events=(), overlays=0, states=()):
     extra = {}
     if garage:   # only with garage rows: earlier reports stay byte-identical
         unmarked, unmarked_rows = g3_unmarked_departures(rows)
-        extra = dict(garage_s_left_unmarked=unmarked, garage_s_left_unmarked_rows=unmarked_rows)
+        spaced, spaced_rows = g3_replacing_rate_unmarked(rows)
+        extra = dict(garage_s_left_unmarked=unmarked, garage_s_left_unmarked_rows=unmarked_rows,
+                     garage_s_unmarked_replacing_rate=spaced, garage_s_unmarked_replacing_rate_rows=spaced_rows)
     return dict(boots=boots_out,
                 restore_events=dict(Counter(b["restore"]["event"] for b in boots_out if b["restore"])),
                 restore_reasons=dict(Counter(b["restore"]["reason"] for b in boots_out if b["restore"])),
@@ -4129,6 +4158,11 @@ def print_g3_data(g3):
             for k, v in sorted(o.get("garage_by_beta_state", {}).items())))
     if "garage_s_left_unmarked" in g3:
         print("G3 garage S records left without a departure mark: %d" % g3["garage_s_left_unmarked"])
+    if "garage_s_unmarked_replacing_rate" in g3:
+        print("G3 garage S left unmarked after replacing_rate held the next park: %d%s" %
+              (g3["garage_s_unmarked_replacing_rate"],
+               " -> defect: the third-round exemption should have written that park"
+               if g3["garage_s_unmarked_replacing_rate"] else ""))
     send = g3.get("send")
     if send:
         print("G3 bearing send: %d windows, ends %s, overlaid FIX sends %d" %

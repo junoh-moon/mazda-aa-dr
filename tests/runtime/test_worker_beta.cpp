@@ -225,6 +225,27 @@ static bool wait_rows(const std::string& logs,const char* const* needles,unsigne
     return false;
 }
 
+// g3_cancel / g3_garage (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md, third
+// fix round): the journal writer kept up (no beta_journal_lag "lagging" row)
+// and the worker's beta_summary rows came at most 1.6 s apart. This is a
+// wall-clock assertion about the journal writer and worker threads getting
+// CPU; each scenario failed it once in a heavily loaded host run (5 of 5
+// passed on a quiet host). The threshold is unchanged; a failure here alone
+// is reported with the host load and the run exits 77 at the end (after
+// every logic assertion of the scenario passed), and
+// tests/runtime/run_worker_beta_timing.sh retries it at most 2 more times
+// and logs each retry (as tests/run_arm_timing.sh does on ARM).
+static bool lag_check(const std::string& scenario,bool lagging,uint64_t max_summary_gap) {
+    if(!lagging && max_summary_gap<1600000000ULL)return false;
+    char load[64]="-";
+    FILE* f=fopen("/proc/loadavg","r");
+    if(f) { if(!fgets(load,sizeof load,f))strcpy(load,"-");fclose(f); }
+    load[strcspn(load,"\n")]=0;
+    printf("%s: timing check failed: lagging=%d max_summary_gap_ms=%llu (limit 1600) loadavg=%s\n",scenario.c_str(),
+           int(lagging),(unsigned long long)(max_summary_gap/1000000ULL),load);
+    return true;
+}
+static bool timing_inconclusive=false;
 int main(int argc,char** argv) {
     setvbuf(stdout,0,_IOLBF,0);   // a failing assert must not lose the scenario's result line
     assert(argc==2);
@@ -1092,7 +1113,7 @@ int main(int argc,char** argv) {
                                   g3_mailbox.done_stage.load()==mx5::runtime::G3_IO_CANCELLED) &&
                                  g3_mailbox.done_step.load()==mx5::runtime::G3_STEP_RENAME)));
             assert(now_load==mx5::runtime::G3_LOAD_OK && now_stored.seq==1 && temp_absent);
-            assert(!lagging && max_summary_gap<1600000000ULL);
+            timing_inconclusive=lag_check(scenario,lagging,max_summary_gap);
         } else if(scenario=="g3_move") {
             // The car drove off (a wheel above zero) during the blocked fsync
             // step: cancelled before the rename, nothing stored.
@@ -1132,7 +1153,6 @@ int main(int argc,char** argv) {
             assert(has_text(garage_rows[2],"\"st\":\"M\",\"hv\":0") && has_text(garage_rows[2],"\"sync\":0"));
             assert(load==mx5::runtime::G3_LOAD_OK && stored.state=='M' && stored.flags==mx5::runtime::G3_FLAG_DEPART &&
                    stored.seq==3);
-            assert(!lagging && max_summary_gap<1600000000ULL);
             // Review P1: the token read at start is the earlier boot's, the
             // token left on disk is this boot's.
             char boot[37];mx5::runtime::read_boot_id(boot);
@@ -1143,6 +1163,7 @@ int main(int argc,char** argv) {
             assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_ENGAGED,clock_ns(0),true,true),"no_writer"));
             assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_SPEED_ENGAGED,clock_ns(0),false,true),"no_writer"));
             assert(!strcmp(g3_io_block(plain,mx5::runtime::BETA_ENGAGED,clock_ns(0),true,false),"beta_replacing"));
+            timing_inconclusive=lag_check(scenario,lagging,max_summary_gap);   // last: every logic check above ran
         } else if(scenario=="g3_park") {
             printf("g3_park: written=%u with_fsync=%u hook_calls=%d last_latency_ms=%.0f max_summary_gap_ms=%llu lagging=%d\n",
                    written,written_sync,hook_calls.load(),latency_ms,(unsigned long long)(max_summary_gap/1000000ULL),
@@ -1178,6 +1199,13 @@ int main(int argc,char** argv) {
     if(cap_off)unlink((std::string(root)+"/acc-cap-off").c_str());
     if(garage_off)unlink((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str());
     assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);
+    if(timing_inconclusive) {
+        // Every logic check passed; only the journal-writer/worker timing
+        // check failed (see lag_check): exit 77 for the bounded, logged retry
+        // of tests/runtime/run_worker_beta_timing.sh.
+        printf("inconclusive host timing: %s (exit 77 for a bounded retry)\n",scenario.c_str());
+        return 77;
+    }
     puts("BETA runtime wiring checks passed");
     return 0;
 }

@@ -1,6 +1,6 @@
 # G3 지하주차장 출구 방위 수정 (garage carry, 2026-10-17)
 
-상태: 원인 분석, 구현, 호스트 시험, 정확한 ARM 빌드·시험, 비공개 주행 기록의 오프라인 재생과 디지스트 수준 재구성만 했습니다. 차량·폰·DHU에서는 실행하지 않았습니다. 이 기록은 릴리즈 승인이나 차량 방문 요청이 아닙니다. 좌표는 적지 않았습니다. 표시: **FACT**(로그·코드에서 직접 확인), **INFERENCE**(해석·모델). 2026-10-18 독립 검토(`G3_GARAGE_EXIT_FIX_REVIEW_FABLE_2026-10-18.md`)의 지적을 고쳤습니다(아래 "독립 검토 반영" 절이 위의 표·문구보다 우선합니다).
+상태: 원인 분석, 구현, 호스트 시험, 정확한 ARM 빌드·시험, 비공개 주행 기록의 오프라인 재생과 디지스트 수준 재구성만 했습니다. 차량·폰·DHU에서는 실행하지 않았습니다. 이 기록은 릴리즈 승인이나 차량 방문 요청이 아닙니다. 좌표는 적지 않았습니다. 표시: **FACT**(로그·코드에서 직접 확인), **INFERENCE**(해석·모델). 2026-10-18 독립 검토(`G3_GARAGE_EXIT_FIX_REVIEW_FABLE_2026-10-18.md`)의 지적을 고쳤습니다(아래 "독립 검토 반영" 절이 위의 표·문구보다 우선합니다). 2026-10-18 2차 검토(`G3_GARAGE_EXIT_FIX_REVIEW2_FABLE_2026-10-18.md`)의 지적은 "세 번째 수정" 절에서 고쳤고, 그 절이 다시 앞의 절들보다 우선합니다.
 
 ## 문제 (소유자)
 
@@ -141,12 +141,12 @@
 
 규칙(가장 작은 안전한 규칙으로 고름): 파이프라인이 G3 관측값 `G3Motion::reverse_unsure`(부팅 수명 계수, 어떤 파이프라인 결정도 읽지 않음)를 셉니다. 늘어나는 경우: 유효한 래치가 지워짐(사유 무관), REVERSE 메시지가 `enqueue_raw`에서 거부되거나 재설정으로 대기열에서 버려짐, 배제된 REVERSE 메시지의 값이 전진 값이 아님(`Pipeline::exclude_reverse_event`, 런타임·재생기의 두 배제 지점), 래치를 지우는 움직임 입력 공백. garage 창은
 - 유효한 래치가 전진(0)이면 엽니다(beta.15와 같음).
-- 래치가 유효하지 않고 `reverse_unsure`가 0이면, 시동 뒤 바퀴 거리 20 m 이상일 때만 전진으로 보고 엽니다(그 전에는 `wait/latch_unknown`).
+- 래치가 유효하지 않고 `reverse_unsure`가 0이면, 승인 뒤 첫 바퀴 움직임부터 센 바퀴 거리(`G3Motion::distance_m`) 20 m 이상일 때만 전진으로 보고 엽니다(그 전에는 `wait/latch_unknown`).
 - 래치가 후진(1)이거나, 유효하지 않으면서 `reverse_unsure`가 0보다 크면 열지 않고 기다립니다(`wait/reverse`, `wait/latch_unsure`; 나중에 유효한 전진 래치가 오면 엽니다). 열린 창은 같은 조건에서 `end latch/reverse` 또는 `latch/unknown`으로 끝납니다(P6 포함).
 
 근거: 0x118은 변화 때만 오므로 R로 넣거나 R에서 빼는 순간마다 메시지가 하나 생깁니다. 제품이 그 메시지를 받았다면 래치가 유효해지거나(그대로 씀), 잃었다면 계수가 늘어납니다(열지 않음). 배제된 전진 값(시동 순간의 0x118 묶음: 2026-10-17 내보내기에서 시동 묶음은 모두 값 0이었고 절반가량의 부팅에서 세션 승인 전이라 배제됨, FACT)은 "그때 R이 아니었음"이므로 막지 않습니다. 정보가 전혀 없는 경우(제품이 돌기 전에 R로 넣은 경우)는 남으므로, 그런 경우의 주된 위험인 "주차칸에서 바로 후진으로 빠져나감"을 20 m 문턱으로 막습니다(후진으로 빠져나가는 거리는 몇 m, 지하 출구는 수백 m: #14는 첫 FIX까지 원시 바퀴 자료가 덮는 구간만으로 약 227 m). 바퀴 속도는 부호가 없어 방향을 주지 않습니다(FACT: #14의 929.5~942.5 s 후진 래치 동안 바퀴 카운트 10118~10206 = +1.2~2.1 km/h). 그 밖의 선택지를 버린 이유: "유효하지 않으면 무조건 대기"(beta.15)는 이 차의 지하 출구에서 창을 없앱니다(#14는 929 s까지 0x118 메시지가 하나도 없었음, FACT). "배제된 메시지가 하나라도 있으면 대기"는 시동 묶음이 승인 전에 온 부팅(절반가량)에서 효과를 없앱니다. 틀린 180° 방위 몇 초의 비용(순정이 맞았을 지상 출발에서도 생길 수 있음)이 효과보다 크다고 보고, 정보를 잃은 경우는 전부 막았습니다.
 
-남는 경우: 제품이 돌기 전부터 R이었고(그 0x118 변화가 제품 시작 전) 그대로 20 m 넘게 후진하면, 첫 0x118 변화나 끝 조건까지 방위가 180° 반대입니다. 수동변속기를 R에 두고 주차한 뒤 R로 시동하고 20 m 넘게 후진하는 경우입니다(드묾).
+남는 경우: 워커가 첫 움직임 메시지를 받기 전부터 R이었고(그 0x118 변화가 그 전) 그대로 20 m 넘게 후진하면, 첫 0x118 변화나 끝 조건까지 방위가 180° 반대입니다. 수동변속기를 R에 두고 주차한 뒤 R로 시동하고 20 m 넘게 후진하는 경우입니다(드묾).
 
 ### C2 결정
 
@@ -174,7 +174,7 @@
 
 - 교체 중(BETA GPS_LOST/ENGAGED/NO_FIX/SPEED_ENGAGED) S 요청은 직전 S 요청에서 30 s 뒤에만(`G3_GARAGE_REPLACING_S_GAP_NS`, `episode_block` "replacing_rate"). 규칙 F 오염 기록의 재기록은 예외(안전 쓰기).
 - 교체 중 출발 표시는 저널 기록 스레드의 가장 오래된 미기록 행 지연이 100 ms 이하일 때만(`G3_GARAGE_REPLACING_MARK_LAG_NS`; 저널 지연 < 500 ms를 포함). 평소 idle 규칙(300 ms, 드레인, 지연 가드)은 그대로.
-- 출발 표시에는 30 s 간격을 두지 않았습니다. 리드의 문구("교체 중 garage 쓰기 30 s에 1회")를 그대로 적용하면, 차단기 S 뒤 30 s 안에 출발해 5 s 미만 정차 뒤 시동을 끄는 경우 차단기의 S가 남아 다음 시동이 낡은 방위를 이월합니다. 표시는 S를 무효로 만드는 안전 쓰기이므로 S 하나에 표시 하나만 허용하고(S 요청 간격 30 s가 둘 다를 묶음) 교체 중 최대 30 s에 S 하나와 표시 하나입니다. 마지막 주차의 S는 직전 S 요청에서 30 s가 지나지 않았으면 기다리고, 그 사이 시동을 끄면 디스크에는 표시(M)가 남아 이월하지 않습니다(안전 쪽, 효과 없음).
+- 출발 표시에는 30 s 간격을 두지 않았습니다. 리드의 문구("교체 중 garage 쓰기 30 s에 1회")를 그대로 적용하면, 차단기 S 뒤 30 s 안에 출발해 5 s 미만 정차 뒤 시동을 끄는 경우 차단기의 S가 남아 다음 시동이 낡은 방위를 이월합니다. 표시는 S를 무효로 만드는 안전 쓰기이므로 S 하나에 표시 하나만 허용하고(S 요청 간격 30 s가 둘 다를 묶음) 교체 중 최대 30 s에 S 하나와 표시 하나입니다. 마지막 주차의 S는 직전 S 요청에서 30 s가 지나지 않았으면 기다리고, 그 사이 시동을 끄면 디스크에는 표시(M)가 남아 이월하지 않습니다(안전 쪽, 효과 없음). **정정(세 번째 수정, 아래)**: 이 문장은 표시가 실제로 기록된 경우에만 맞습니다. 표시가 들어가지 못했으면 디스크에는 앞의 S가 남아 있었고 30 s 간격이 새 S를 막아 그 S가 이월되었습니다. 이제 디스크가 방위 있는 S이면 30 s 간격을 적용하지 않습니다.
 - 노출(2026-10-17 내보내기 14개 부팅, `yaw_stop` 정차 ≥ 5 s와 BETA 상태 시간표, 마지막 주차 중 `yaw_stop` 행이 없는 #13 끝은 따로 더함): 교체 중 시간 1,095 s 동안 교체 중 S 쓰기 후보 6, 교체 중 표시 3, 30 s 간격에 걸린 S 0. 이번 자료에는 터널 정체가 없어 경계가 실제로 걸린 적은 없습니다. 쓰기 지연: 이번 내보내기의 fsync 없는 쓰기 3.5~67.7 ms(기존 기록).
 - 분석기: `G3 garage writes by BETA state: <상태> n (max lat_ms, > 100 ms k)`와 garage 줄의 자체 `max lat_ms`.
 - 사전 등록 규칙(lat_ms > 500 또는 저널 지연 겹침 → 다음 빌드 기본 끔)은 사후 검출입니다. 첫 발견은 소유자가 터널에서 겪은 뒤일 수 있습니다.
@@ -247,7 +247,7 @@
 
 - 실차·폰·DHU 미검증. 네이버가 출구의 정지·저속 방위를 어떻게 쓰는지 모릅니다.
 - 2 %와 0.0023 rad/s는 각각 표본 1개(이마트 사슬)와 정차 영점 93개에 근거합니다. 이동 중 영점이 정차 영점과 같은 분포인지 모릅니다. "60° 안"이라고 보낸 방위가 실제로는 더 틀릴 수 있습니다(끝 조건이 손해를 묶음).
-- 후진: 제품 시작 전부터 R이었고 20 m 넘게 후진하는 경우(위).
+- 후진: 워커가 첫 움직임 메시지를 받기 전부터 R이었고 20 m 넘게 후진하는 경우(위).
 - 낡은 S: 제품이 시작하지 않은 주행, 턴테이블, 출발 표시 직후 전원 차단(fsync 없음). 그 경우 출구에서 그 주행의 회전만큼 틀린 방위가 신뢰 4회·충돌 8회(게이트를 지난 FIX 기준 약 8 s)·첫 정책 M 진행방향·60 s/900 s까지 나갑니다. 순정이 맞았을 지상 출발에서도 생길 수 있습니다.
 - 교체 중 저장 I/O(G1 터널 경로): 경계를 두었지만 쓰기가 기록 스레드를 막는지는 측정되지 않았고, 사전 등록 규칙은 사후 검출입니다.
 - 이 수정 자체의 독립 재검토는 하지 않았습니다.
@@ -259,8 +259,77 @@
 3. 분석기 `G3 garage writes without fsync` 줄(lat_ms > 500 0, journal lag 겹침 0; 아니면 다음 빌드 garage 기본 끔)과 `G3 garage writes by BETA state` 줄(교체 중 > 100 ms 개수).
 4. 소유자 관찰: 지하 출구에서 화살표가 차와 맞는지, 몇 초 안에 도로와 맞는지. 집 출구는 이 빌드로도 바뀌지 않을 수 있습니다(`rejected/unc_grew`가 예상).
 
+## 세 번째 수정 (2026-10-18, 2차 검토 반영)
+
+검토: `validation/G3_GARAGE_EXIT_FIX_REVIEW2_FABLE_2026-10-18.md`(C1~C4 CONFIRMED). 이 절이 위의 "독립 검토 반영" 절과 그 위의 표·문구보다 우선합니다. 차량·폰·DHU에서는 실행하지 않았습니다. 바뀐 제품 동작은 아래 C1 하나뿐이며 `g3-garage-off` 표식 뒤에 있습니다(표식이 있으면 `garage_`가 거짓이라 이 조건은 평가되지 않음).
+
+### C1. 교체 중 30 s S 간격의 예외: 디스크가 방위 있는 S일 때 (고침)
+
+- 결함(FACT, 2차 검토의 탐침을 그대로 시험으로 옮겨 재현): 교체 중 1 s 출발, 2~6 s 정차 → S1(6 s 요청). 7~13 s 이동은 idle 규칙(`journal_draining`), 14~22 s는 기록 스레드 지연 150 ms로 출발 표시가 막힘. 18 s부터 마지막 정차, 30 s에 시동 끔. `c75053c`: 디스크 = S1(플래그 4, S, 방위 있음) → 다음 시동이 `chain_depart`로 차단기 등 앞 정차의 방위를 이월. 원인: 마지막 주차의 S2가 직전 S 요청(6 s)에서 30 s가 지나지 않아 `replacing_rate`로 막혔고, 표시는 정차 5 s가 지나면 더 요청되지 않습니다.
+- 고침(검토의 완화안 (i), 가장 작은 변경): 교체 중 S 요청의 30 s 간격은 **디스크 기록이 방위 있는 S이면 적용하지 않습니다**(`disk_=='S' && (disk_flags_&G3_FLAG_HEADING)`). 그 상태에서 새 정차의 S 요청이 생겼다는 것은 차가 그 S를 떠났는데 표시가 들어가지 못했다는 뜻이고, 새 S는 이월될 낡은 S를 바로잡는 안전 쓰기입니다. 교체 중 쓰기 수는 "표시가 들어가지 못한 출발마다 1회 더"로 묶입니다(5 s 비율 제한과 idle 규칙은 그대로). 그 밖의 경우(디스크가 M, 방위 없는 S, 없음)는 30 s 간격 그대로이고, 규칙 F 오염 재기록의 예외도 그대로 둡니다. 같은 예외가 2차 검토 P3의 변형(교체 중이 아닐 때의 60 s fsync 재기록이 `last_s_request_ns_`를 갱신하고 곧 GPS를 잃는 경우)도 덮습니다.
+- 30 s 간격은 직전 S 요청(취소·실패한 요청과 60 s fsync 재기록 포함)부터 셉니다. 출발 표시는 이동 중과 정차 첫 5 s 안(정차가 "주차"가 되기 전)에만 요청되고, 그 뒤에는 주차 S만 요청됩니다.
+- 위 P3 절의 "그 사이 시동을 끄면 디스크에는 표시(M)가 남아"와 `g3_heading.h`의 옛 주석 "A blocked final park leaves the mark on disk"는 **표시가 들어간 경우에만** 맞았습니다. 주석과 위 문장을 고쳤습니다.
+- 시험(`test_g3 garage_store`, 모두 `c75053c` 제품 코드에서 실패하는 것을 확인): (1) 탐침 시나리오 — 23 s에 S2(seq 2, `mono_ms` 23000)가 써지고 30 s까지 그대로; (2) 60 s fsync 재기록 뒤 교체 중 표시가 막히고 15 s 뒤 마지막 주차 → 76 s에 S; (3) 표시가 들어간 경우(디스크 M)는 30 s 간격이 그대로 적용됨(기존 사례, 35 s까지 대기 → 36 s); (4) 방위 없는 S가 디스크에 있으면 30 s 간격 그대로(표시도 요청되지 않음); (5) 교체 중 규칙 F 오염 재기록이 30 s 안에도 나감(M3).
+- 분석기: `G3 garage S left unmarked after replacing_rate held the next park: n` — 세션 안에서 garage S(방위 있음, 이번 부팅에 쓴 것 또는 시작 때 복원한 것) 뒤 M 없이 `g3_since unstored`의 사유가 `replacing_rate`이면 셉니다. 이 빌드에서는 그런 경우가 생길 수 없으므로 0이 아니면 결함입니다(`c75053c` 로그에서는 낡은 S의 신호). 시동을 꺼서 끝난 마지막 주차는 `g3_since` 행이 없어 보이지 않습니다.
+
+### C2. 시간 항 0.0023 rad/s의 도출 (기록 보충, 값은 바꾸지 않음)
+
+규칙(사전 등록 그대로): `yaw_stop` 행 중 `dur_ms ≥ 5000`, `yn > 0`, 4095 표지 제외(`|ys/yn| < 50` 카운트; 해당 행은 평균 약 1535 카운트 1개), 값 = `ys/yn`(정차 평균 − 2048, G3 적분 영점), RMS × 658.615 µrad/s, 0.0001 rad/s 단위 올림.
+
+| 자료와 행 선택 | n | 평균 | sd | RMS(카운트) | rad/s | 올림 |
+|---|---|---|---|---|---|---|
+| **저자(사전 등록 때 쓴 것): 2026-10-17 USB 내보내기 하나**(`trace.2/1/0.jsonl`; 링이 2026-10-11 주행 부팅들까지 보존, 2026-10-10 부팅은 이미 밀려남; 9개 부팅) | 93 | −1.28 | 3.15 | 3.396 | 0.002237 | **0.0023** |
+| 2차 검토: 비공개 내보내기 8개 전체(2026-10-10 2개, 2026-10-11 4개, 2026-10-17 2개 사본)의 합집합, 같은 부팅의 **같은 행 텍스트**는 한 번만(2026-10-17 내보내기에 없는 2026-10-10 부팅 하나의 17행과 beta.7 부팅의 1행이 더해짐) | 111 | −1.31 | 3.02 | 3.287 | 0.002165 | 0.0022 |
+| 같은 합집합, `pre`가 있는 행만 | 90 | −1.16 | 2.95 | 3.171 | 0.002089 | 0.0021 |
+| 같은 합집합, `first`·`last`가 있는 행만 | 109 | −1.31 | 3.04 | 3.315 | 0.002183 | 0.0022 |
+
+- 주의: (부팅, `mono_ns`)로 중복을 지우면 108개가 됩니다. 서로 다른 정차 세 쌍이 같은 시각에 함께 기록되기 때문이며(한 번의 flush에 닫힌 정차와 열린 정차), 행 텍스트 기준이 맞습니다.
+- 사전 등록 문구는 "비공개 trace"라고만 적어 어느 내보내기인지 정하지 않았습니다. 저자가 쓴 것은 2026-10-17 내보내기 하나였고, 검토의 합집합 규칙이면 0.0022가 나옵니다. **0.0023을 유지합니다**: 네 변형 가운데 가장 큰(보수적인) 값이며, 효과를 위해 줄이지 않습니다.
+- 이마트 출구(혼합 재구성 모델, 영점 2048, INFERENCE)를 0.0022로 다시 계산했습니다: 저장 불확실도 35.9°(0.0023: 36.5°), 출구의 바꾼 송신 시각 불확실도 58.7/59.0/59.2/59.4°(0.0023: 59.7/60.0/60.2/60.4°). **2차 검토의 "0.0022에서도 결론이 같다"는 세부에서 맞지 않습니다**: 0.0022에서는 이 네 송신 동안 60°를 넘지 않아 창이 `unc_grew`로 닫히지 않고, 모델상 네 송신(오차 +14.3/+19.1/+19.3/+16.1°) 뒤 신뢰 조건에서 끝납니다. 차이는 약 1°이지만 60° 경계 바로 위·아래라 창의 끝 사유가 바뀝니다. 그 네 송신은 모두 정확도 198 m의 mode 2 위치라 네이버가 무시했을 것이라는 앞의 추론은 같으므로 "유일한 실제 출구에서 측정할 수 있는 효과는 없음"이라는 결론은 두 값에서 같습니다. 0.0023에서는 창이 첫 송신 뒤 닫히므로 더 보수적입니다.
+
+### C3. 시험
+
+- `test_beta reverse_unsure_is_observation_only`: 규칙 F 시나리오(`assume_forward_seeds_without_reverse_message`와 같은 흐름) 앞에 배제된 REVERSE 40개를 넣어, 전진 값(계수 0)과 후진 값(계수 40)의 두 실행에서 100 ms마다 `status()`, BETA 게이트·시드·규칙 F 횟수·래치, 대조 횟수, BETA 게시(위치·속도·방위·정확도), MODEL 진단과 앵커 기록 전부가 같음을 단언합니다(규칙 F가 실제로 가정했고 게시가 있었음도 단언). 변이 M4(규칙 F 조건에 `g3_.reverse_unsure||`)는 이 시험 단독으로도 잡힙니다(실행 2600 ms에서 게이트 6 대 9). 참고: 기존 `test_beta`의 `reverse_latch_cleared_in_reverse_blocks_rule_f`도 M4를 잡습니다(2040행); 2차 검토는 `test_beta`를 돌리지 않았습니다(test_g3·test_navigation·test_model_session_input·재생만).
+- `test_g3 garage_store`의 규칙 F 오염 재기록 사례(M3): 교체 중 S(방위 100°) 뒤 같은 정차에서 discard → 5 s 뒤(30 s 안) 방위 없는 S로 재기록. **세 번째 수정 뒤 M3(`!stale` 제거)는 동치 변이입니다**: 오염 재기록 대상은 언제나 이번 부팅에 쓴 방위 있는 S이므로(`stale`은 `disk_flags_`의 방위 비트를 요구하고, 그 비트는 S 기록에서만 섭니다) 새 디스크-S 예외가 같은 경우를 덮습니다. `!stale`은 명시적 방어로 남겼고, 시험은 두 예외를 함께 지우는 변이를 잡습니다(아래 변이 표).
+- `test_g3 garage_codec_restore`: 직전 부팅 토큰이 8번째 글자 뒤에서만 다른 경우와 앞 8자 안에서 다른 경우 모두 `not_prev_boot`(M2: 앞 8자만 비교하는 변이를 test_g3가 잡음; 2차 검토에서는 재생 시험만 잡았음).
+- `tools/replay_beta.cpp --writer-lag-ms N`(기본 0 = 이전과 같은 출력): G3 표본의 `writer_lag_ns`와 런타임 idle 규칙(`g3_io_block_reason`, 300 ms 넘으면 `writer_busy`)에 상수 지연을 넣습니다. `test_replay_g3_garage.py`의 lag 실행(150 ms): 부팅 A의 마지막 garage 주차 S는 그대로 저장되고, 부팅 B의 출발 표시는 BETA가 교체하는 동안(지하 NO_FIX/SPEED_ENGAGED) 기다렸다가 출구에서 교체가 끝난 뒤(130 s 이후) 들어가며(지연 0이면 40 s), 송신은 지연 0 실행과 같습니다.
+- `test_worker_beta g3_cancel`·`g3_garage`의 시간 단언(`!lagging && max_summary_gap < 1.6 s`, 문턱 그대로): 두 시나리오에서 이 단언만 실패하면 부하(`/proc/loadavg`)와 값을 출력하고, 시나리오의 다른 모든 단언과 정리가 끝난 뒤 종료 코드 77로 끝냅니다. `tests/runtime/run_worker_beta_timing.sh`(Makefile의 host 실행)가 77일 때만 최대 2회 더(5 s 간격) 돌리고 매 재시도를 부하와 함께 `WORKER_BETA_TIMING_RETRY`로 남기며, 세 번 모두 77이면 `WORKER_BETA_TIMING_FAILED`로 실패합니다. 다른 실패(논리 단언, 134)는 재시도하지 않습니다. ARM 스위트는 이미 `tests/run_arm_timing.sh`로 이 시나리오들을 돌리며 77을 실패한 시도로 셉니다(그대로).
+
+### C4. 문구
+
+위 본문과 AGENTS 문안을 고쳤습니다: 후진 잔여는 "제품 시작 전"이 아니라 "워커가 첫 움직임 메시지를 받기 전"부터 R인 경우; 20 m는 "시동 뒤"가 아니라 승인 뒤 첫 바퀴 움직임부터 센 바퀴 거리(`G3Motion::distance_m`); 출발 표시는 이동 중과 정차 첫 5 s 안에만; 30 s 간격의 기준(직전 S 요청: 취소·실패·60 s fsync 재기록 포함)과 두 예외(규칙 F 오염 재기록, 디스크가 방위 있는 S); 낡은 S 목록에 "같은 부팅의 두 번째 워커 시작은 직전 부팅의 기록을 거부함(`not_prev_boot`, 효과 손실)"과 "워커가 토큰 교체에 이르기 전에 끝난 부팅(stop 요청, locale 실패, 워커 스레드 없음)은 못 잡음"; 세지 않는 후진 정보 손실 두 경로(거부가 선행하지 않은 원천 epoch 변경, 워커가 붙기 전의 메시지); 0.0023의 도출(C2); 토큰 쓰기(`logs/g3-last-start`, temp+rename, fsync 없음)도 2026-10-11 "주차 쓰기만" 불변식의 예외이며 모든 BETA 워커 시작(표식 유무 무관, 같은 부팅 안의 주행 중 재시작 포함)에서 돕니다.
+
+### 시험 결과 (2026-10-18, 스크래치 사본)
+
+- 호스트 `make test`(D-Bus 헤더·라이브러리를 스크래치 경로로, `MX5DR_STOCK_ROOT` 읽기 전용, 1분 부하 0.3~1.3): **종료 0**. unittest 합계 1,144건(건너뜀 17: 고정 ARM 컴파일러·릴리즈 묶음·비공개 자료·선택 도구가 없어서, 이전과 같은 부류), `test_g3` 1,344 검사, `test_beta` 77,768 검사, navigation 3,977, core 1,872, `test_worker_beta` 시나리오 전부(g3_garage·g3_cancel은 새 감싸개로 실행, 재시도 0회), G3 송신 시나리오 5개와 `g3_send_identity.py`, 분석기·재생 시험(새 `test_garage_unmarked_after_replacing_rate`, `test_writer_lag_holds_the_mark_while_replacing` 포함).
+- 비공개 재생(20개 부팅, 하나의 G3 저장 디렉터리로 연쇄, `--real-only --g3 on --g3-send on`, 저장 스레드 시각 필드만 정규화, 110개 파일): 새 코드 표식(`--g3-garage off`, `--writer-lag-ms` 기본 0) 대 beta.16 **110/110 동일**, 대 `c75053c` 표식 **110/110 동일**. 표식 없음(`--g3-garage on`)도 새 코드 대 `c75053c` 110/110 동일(persistent 재생은 원시 창 밖에서 `wheel_stale`이라 C1 경로에 닿지 않음; 효과의 근거가 아님).
+- 손 변이(각각 단독, 별도 바이너리, 패턴이 정확히 한 번 있는지 확인; 빌드 실패는 잡힘으로 세지 않고 패턴을 고쳐 다시 돌림):
+
+| id | 변이 | 결과 |
+|---|---|---|
+| C1a | 디스크-S 예외 제거(`c75053c` 동작) | 잡힘(test_g3 탐침 사례); 탐침을 뺀 사본에서는 fsync 재기록 변형 사례가 잡음 |
+| C1b | 예외 조건에서 방위 비트 제거(방위 없는 S에도 예외) | 잡힘(방위 없는 S 사례) |
+| C1c | 60 s fsync 재기록 뒤에는 예외 없음(`disk_synced_` 조건 추가) | 잡힘(fsync 재기록 변형 사례) |
+| M3 | 규칙 F 오염 재기록 예외(`!stale`) 제거 | **생존: 동치 변이**(위 C3 설명). M3+C1a를 함께 적용하면 오염 재기록 사례가 잡음(그 사례만 남긴 사본에서 확인; 원 코드는 그 사본에서 통과) |
+| M2 | 직전 부팅 비교를 앞 8자만 | 잡힘(test_g3, 8번째 뒤만 다른 토큰) |
+| M4 | 규칙 F 조건이 `reverse_unsure`를 읽음 | 잡힘(test_beta; 새 시험 단독으로도 잡음, 기존 2040행도 잡음); test_g3는 통과 |
+| A1 | 분석기: M 기록이 열린 S를 닫지 않음 | 잡힘(test_analyze_g3) |
+| A2 | 분석기: 사유와 무관하게 셈 | 잡힘(test_analyze_g3) |
+| R1 | 재생기가 `--writer-lag-ms`를 표본에 넣지 않음 | 잡힘(test_replay_g3_garage) |
+| T1 | 시간 단언이 늘 실패(문턱 1 ns) | 감싸개가 77을 두 번 재시도하고 부하를 남긴 뒤 `WORKER_BETA_TIMING_FAILED`로 실패(종료 1); 결정적 실패는 여전히 실패 |
+
+  감싸개 자체: 77 한 번 뒤 통과 → 재시도 1회 기록 후 종료 0; 77 세 번 → 실패; 다른 실패 코드(134) → 재시도 없이 그대로 종료.
+- 실행하지 않음(지시대로): 정확한 ARM 스위트, 순정 BusyBox 포장 하네스, 차량·폰·DHU, 이 수정의 독립 재검토.
+
+### 남은 위험 (바뀐 것만)
+
+- 디스크-S 예외로 교체 중 쓰기가 "표시가 들어가지 못한 출발마다 1회" 늘 수 있습니다(터널 정체에서 표시가 계속 막히면 정차마다 S 한 번; 5 s 비율 제한과 idle 규칙 300 ms는 그대로). 쓰기가 저널 기록 스레드를 막는지는 여전히 측정되지 않았습니다.
+- 표시도 S도 들어가지 못하는 경우(idle 규칙이 마지막 주차 내내 막음, 전원 차단)는 여전히 앞의 S가 남습니다(이전 기록과 같음).
+- 0.0023은 정차 영점 자료로 정한 값이며 이동 중 영점의 분포는 모릅니다. 0.0022와의 차이로 이마트 모델의 창 끝 사유가 바뀌는 것처럼, 결과는 60° 경계에 민감합니다.
+- 이 세 번째 수정은 독립 재검토를 받지 않았습니다.
+
 ## AGENTS.md-Text
 
-리드가 AGENTS.md에 넣을 문단(이 작업에서는 AGENTS.md를 편집하지 않음, 검토 (F) 1~7 반영):
+리드가 AGENTS.md에 넣을 문단(이 작업에서는 AGENTS.md를 편집하지 않음, 1차 검토 (F) 1~7과 2차 검토 C4·(6) 1~6 반영):
 
-"Explicit BETA exception extension (garage carry, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md with the fixes for validation/G3_GARAGE_EXIT_FIX_REVIEW_FABLE_2026-10-18.md; default on; off with the g3-garage-off marker (menu 12), which restores the beta.16 rules, or with the g3-off marker (menu 8); menu 1 reinstall and menu 4 removal clear the marker): the BETA_BEARING_OVERLAY (choice 6) window of v1.0.0-beta.15 also opens for a heading restored CARRIED with reason chain_depart: a store record written by a garage-on build (flag 4), state S, heading present, stored uncertainty <= 60 deg, boot chain ok, written by another boot that is the previous product boot (logs/g3-last-start, swapped at every BETA worker start before the record is read, also with either marker; otherwise CARRIED_UNVERIFIED not_prev_boot, no window), no wall-clock age needed (the CMU realtime clock stays near 1970). State S means the car stood since the write only as far as the product observed it and only if the departure mark landed (a 110-byte write without fsync under the idle rule and the 5 s rate): a drive without any product start, a non-BETA mode, a turntable or mechanical parking system, or a power cut soon after the mark leaves a stale S, and the next boot then sends a heading wrong by that drive's rotation (up to 180 deg) until an end condition, also where the stock bearing would have been right. The window may open after the car moved since boot (a garage exit) unless a yaw-chain break happened after the first wheel motion while not standing. Reverse latch: a valid latch saying forward is used; a latch that is not valid (no 0x118 change since the session/bus admission, a message before the admission excluded, or any pipeline reset or latch clear) counts as forward only while no 0x118 information was lost (G3Motion::reverse_unsure zero: no excluded value other than forward, no cleared valid latch, no rejected or reset-discarded REVERSE message, no motion input gap that clears the latch) and only after 20 m of wheel distance since boot; otherwise the window waits, and an open window ends on a reverse latch or on a latch that became not valid after lost information. Residual: a car in reverse since before the product started that reverses more than 20 m gets a bearing 180 deg wrong until the first 0x118 change or an end condition. The overlaid send, its bytes (40, 44..47 only), wrapper, return value, errno and every other end condition are those of beta.15. Uncertainty of the garage chain: the stored uncertainty of every record a garage-on boot writes and the propagation of a carried flag-4 record use a 2 % rotation term and a 0.0023 rad/s time term (BETA: 10 %, 0.002 rad/s; 0.0023 is the RMS of 93 parked yaw zeros around the integration zero, pre-registered); the 60 deg limit applies only to flag-4 records; a carried record without flag 4 keeps the BETA terms and the 30 deg limit; with the marker a flag-4 record is rejected as a format error, as beta.16 decodes it. Store I/O: the parked S record needs 5 s of exact standstill and may be written without fsync while BETA replaces, at most one S request per 30 s while BETA replaces; the departure mark is written while the car moves, also while BETA replaces (then only with a journal writer lag <= 100 ms). These are the first store writes that run while BETA replaces and while the car moves: the 2026-10-11 H1 'parked write only' invariant no longer holds with the garage carry. No fsync is requested while BETA replaces and an in-flight fsync write is cancelled before its fsync/rename gate; an fsync already executing cannot be interrupted (unchanged residual). The pre-registered rule (a garage write without fsync with lat_ms > 500 or a journal-lag overlap makes the next build default the garage carry off) detects a problem only after a drive. Not vehicle-validated; with the 0.0023 rad/s term the digest model of the only real garage exit (E-Mart, 2026-10-17) closes the window at the exit (unc_grew), and the home spiral garage is expected not to benefit."
+"Explicit BETA exception extension (garage carry, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md with the fixes for validation/G3_GARAGE_EXIT_FIX_REVIEW_FABLE_2026-10-18.md; default on; off with the g3-garage-off marker (menu 12), which restores the beta.16 rules, or with the g3-off marker (menu 8); menu 1 reinstall and menu 4 removal clear the marker): the BETA_BEARING_OVERLAY (choice 6) window of v1.0.0-beta.15 also opens for a heading restored CARRIED with reason chain_depart: a store record written by a garage-on build (flag 4), state S, heading present, stored uncertainty <= 60 deg, boot chain ok, written by another boot that is the previous product boot (logs/g3-last-start, swapped at every BETA worker start before the record is read, also with either marker; otherwise CARRIED_UNVERIFIED not_prev_boot, no window), no wall-clock age needed (the CMU realtime clock stays near 1970). State S means the car stood since the write only as far as the product observed it and only if the departure mark landed (a 110-byte write without fsync under the idle rule and the 5 s rate): a drive without any product start, a non-BETA mode, a boot whose worker did not reach the token swap (stop requested, locale failure, no worker thread), a turntable or mechanical parking system, or a power cut soon after the mark leaves a stale S (a second worker start in the same boot refuses the previous boot's record: not_prev_boot), and the next boot then sends a heading wrong by that drive's rotation (up to 180 deg) until an end condition, also where the stock bearing would have been right. The window may open after the car moved since boot (a garage exit) unless a yaw-chain break happened after the first wheel motion while not standing. Reverse latch: a valid latch saying forward is used; a latch that is not valid (no 0x118 change since the session/bus admission, a message before the admission excluded, or any pipeline reset or latch clear) counts as forward only while no 0x118 information was lost (G3Motion::reverse_unsure zero: no excluded value other than forward, no cleared valid latch, no rejected or reset-discarded REVERSE message, no motion input gap that clears the latch) and only after 20 m of wheel distance since the first wheel motion after the session/bus admission; otherwise the window waits, and an open window ends on a reverse latch or on a latch that became not valid after lost information. Uncounted reverse-information losses: a source-epoch change without a preceding rejection and 0x118 messages before the worker attached. Residual: a car in reverse since before the worker received its first motion message that reverses more than 20 m gets a bearing 180 deg wrong until the first 0x118 change or an end condition. The overlaid send, its bytes (40, 44..47 only), wrapper, return value, errno and every other end condition are those of beta.15. Uncertainty of the garage chain: the stored uncertainty of every record a garage-on boot writes and the propagation of a carried flag-4 record use a 2 % rotation term and a 0.0023 rad/s time term (BETA: 10 %, 0.002 rad/s; 0.0023 is the RMS of the 93 parked yaw zeros of the 2026-10-17 export around the integration zero, pre-registered; the union of all eight private exports gives 111 stops and 0.0022, and 0.0023 is kept as the larger value); the 60 deg limit applies only to flag-4 records; a carried record without flag 4 keeps the BETA terms and the 30 deg limit; with the marker a flag-4 record is rejected as a format error, as beta.16 decodes it. Store I/O: the parked S record needs 5 s of exact standstill and may be written without fsync while BETA replaces; while BETA replaces an S request needs 30 s since the previous S request (any S request, also a cancelled or failed one and the 60 s fsync rewrite), except the rule F taint rewrite and any S request while the record on disk is an S with heading (its departure mark did not land, so the new S replaces a record that would otherwise be carried stale; at most one extra write per such departure); the departure mark is written while the car moves or within the first 5 s of a stop (afterwards only the parked S record is requested), also while BETA replaces (then only with a journal writer lag <= 100 ms). These are the first store writes that run while BETA replaces and while the car moves: the 2026-10-11 H1 'parked write only' invariant no longer holds with the garage carry. The previous-product-boot token write (logs/g3-last-start, temp+rename without fsync) is a further exception to that invariant: it runs at every BETA worker start, with or without the markers, including a mid-drive worker restart in the same boot. No fsync is requested while BETA replaces and an in-flight fsync write is cancelled before its fsync/rename gate; an fsync already executing cannot be interrupted (unchanged residual). The pre-registered rule (a garage write without fsync with lat_ms > 500 or a journal-lag overlap makes the next build default the garage carry off) detects a problem only after a drive. Not vehicle-validated; with the 0.0023 rad/s term the digest model of the only real garage exit (E-Mart, 2026-10-17) closes the window at the exit (unc_grew; at 0.0022 rad/s it would stay below 60 deg for four overlaid sends of 198 m mode-2 fixes and end on trust), and the home spiral garage is expected not to benefit."

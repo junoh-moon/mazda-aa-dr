@@ -2117,6 +2117,63 @@ static void excluded_message_then_reverse_at_the_frontier_discards() {
     CHECK(opposite==0 && published==0);
     CHECK(p.g3_motion().discards==1);
 }
+// G3Motion::reverse_unsure is an observation for the G3 garage window only
+// (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md); no pipeline decision reads
+// it (third review C3, mutant M4: the rule F condition reading it passed
+// every test). The rule F stream of assume_forward_seeds_without_reverse_
+// message, preceded by 40 excluded REVERSE messages: forward values (count
+// 0) against reverse values (count 40). Everything the pipeline decides or
+// publishes is identical: status, BETA gate, rule F, seed, anchor records,
+// BETA publications and the MODEL diagnostic.
+static void reverse_unsure_is_observation_only() {
+    std::vector<std::string> out[2];
+    uint32_t unsure[2]={0,0};
+    uint64_t assumed[2]={0,0};
+    unsigned published[2]={0,0};
+    for(unsigned c=0;c<2;++c) {
+        Pipeline p; tunnel(p);
+        Plan plan=fast_plan(16000,36,36);
+        plan.fixes.push_back(fix(14620,0,36));
+        Rows rows;
+        plan.each=[&](Pipeline& q,unsigned ms){
+            if(ms==0)
+                for(unsigned k=0;k<40;++k) {
+                    RawEvent r=raw(REVERSE,0,900000+k,1); r.reverse=c?1:0; q.exclude_reverse_event(r);
+                }
+            collect(q,&rows);
+            const Status st=q.status();
+            const Diagnostic dg=q.diagnostic(T(ms));
+            adapter::DrSnapshot s=adapter::DrSnapshot();
+            const runtime::CoreBridgeResult res=
+                runtime::map_model_publication(q.model_publication(T(ms)),runtime::beta_profile_tunnel(),&s);
+            if(res==runtime::CORE_BRIDGE_OK) ++published[c];
+            char line[320];
+            std::snprintf(line,sizeof line,"%u st %d %d %llu %llu %llu %llu %d%d%d gate %d seeded %d af %llu %d "
+                          "latch %d %d contra %llu pub %d %.9f %.9f %.6f %.6f %.3f %d %d diag %d %d",
+                          ms,int(st.result),int(st.core_result),(unsigned long long)st.events,
+                          (unsigned long long)st.resets,(unsigned long long)st.rejected,
+                          (unsigned long long)st.last_received_ns,int(st.have_speed),int(st.have_yaw),
+                          int(st.have_reverse),int(q.beta_gate()),int(q.beta_seeded()),
+                          (unsigned long long)q.reverse_assumptions(),int(q.reverse_assumed()),
+                          int(q.reverse_latched()),q.reverse_latched()?int(q.latch_value()):-1,
+                          (unsigned long long)q.reverse_contradictions(),int(res),s.latitude_deg,s.longitude_deg,
+                          s.speed_mps,s.travel_bearing_deg,s.accuracy_m,int(s.stopped),int(s.speed_only),
+                          int(dg.result),int(dg.snapshot.model_valid));
+            out[c].push_back(line);
+        };
+        run(p,plan);
+        out[c].insert(out[c].end(),rows.rows.begin(),rows.rows.end());
+        unsure[c]=p.g3_motion().reverse_unsure;
+        assumed[c]=p.reverse_assumptions();
+    }
+    CHECK(unsure[0]==0 && unsure[1]==40);
+    CHECK(assumed[0]==1 && published[0]>0);          // rule F engaged: the comparison is not vacuous
+    CHECK(out[0].size()==out[1].size());
+    for(size_t i=0;i<out[0].size() && i<out[1].size();++i) {
+        if(out[0][i]!=out[1][i]) std::printf("reverse_unsure differs:\n  %s\n  %s\n",out[0][i].c_str(),out[1][i].c_str());
+        CHECK(out[0][i]==out[1][i]);
+    }
+}
 // The early return at end <= frontier (v3 order): a BETA-only core whose
 // reverse state became unknown (a seed confirmed by a real 0, then an
 // excluded message: no discard, the seed is not assumption-derived) is
@@ -2359,6 +2416,7 @@ int main() {
     raw_epoch_change_clears_the_assumption();
     excluded_message_then_reverse_at_the_frontier_discards();
     unknown_latch_disables_beta_even_at_the_frontier();
+    reverse_unsure_is_observation_only();
     g3_taint_ends_on_every_unconfirmed_origin_loss();
     yaw_rail_saturation_while_driving_keeps_the_chain();
     yaw_rail_parked_window_is_a_hold();

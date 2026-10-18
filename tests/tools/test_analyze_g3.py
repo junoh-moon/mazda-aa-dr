@@ -243,7 +243,47 @@ class G3Rows(unittest.TestCase):
         old.pop("prev")
         _, report = consume([rows[0], old, dict(write(1, 10 * S, 20.0), garage=None)])
         self.assertNotIn("garage_s_left_unmarked", report["g3"])
+        self.assertNotIn("garage_s_unmarked_replacing_rate", report["g3"])
         self.assertNotIn("garage_max_lat_ms", report["g3"]["write_overlap"])
+
+    def test_garage_unmarked_after_replacing_rate(self):
+        # Third review C1: a park held by the 30 s spacing while BETA replaced
+        # ("replacing_rate") while the disk held a garage S with heading
+        # whose mark had not landed is a defect of the c75053c build.
+        def write(seq, mono, st="S", hv=1):
+            return dict(kind="g3_store", mono_ns=mono, event="written", seq=seq, st=st, hv=hv, h=100 * hv,
+                        unc=40 * hv, sync=0, m_b=10.0, wait_s=0.0, lat_ms=5.0, start_ns=mono - 5 * 10**6,
+                        end_ns=mono, ref_s=None, beta=None, garage=1)
+        def unstored(mono, reason="replacing_rate"):
+            return dict(kind="g3_since", mono_ns=mono, event="unstored", reason=reason, g3="UNKNOWN", m=20.0,
+                        rot=0, arot=0, age_s=None, m_b=72.0)
+        missing = dict(kind="g3_store", mono_ns=1, event="missing", reason="missing", g3="UNKNOWN", age_s=None,
+                       age_src="none", boot="none", chain="none", seq=0, prev="none")
+        rows = [boot(BOOT_A), missing, write(1, 6 * S), unstored(30 * S)]
+        _, report = consume(rows)
+        self.assertEqual(report["g3"]["garage_s_unmarked_replacing_rate"], 1)
+        self.assertEqual(report["g3"]["garage_s_unmarked_replacing_rate_rows"], [dict(session=1, seq=1, mono_ns=30 * S)])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_g3_data(report["g3"])
+        self.assertIn("G3 garage S left unmarked after replacing_rate held the next park: 1 -> defect", out.getvalue())
+        # A landed mark (M), an S without heading, or another block reason: not counted.
+        for tail in ([write(2, 11 * S, st="M", hv=0), unstored(30 * S)],
+                     [write(2, 11 * S, hv=0), unstored(30 * S)],
+                     [unstored(30 * S, "journal_draining")]):
+            _, report = consume(rows[:3] + tail)
+            self.assertEqual(report["g3"]["garage_s_unmarked_replacing_rate"], 0, tail)
+        # A restored garage S counts as open.
+        restored = dict(kind="g3_store", mono_ns=1, event="loaded", reason="chain_depart", g3="CARRIED", st="S",
+                        hv=1, h=1636, unc=79, age_s=None, age_src="none", boot="aaaaaaaa", chain="none", seq=38,
+                        prev="aaaaaaaa")
+        _, report = consume([boot(BOOT_B), restored, unstored(20 * S)])
+        self.assertEqual(report["g3"]["garage_s_unmarked_replacing_rate"], 1)
+        out = io.StringIO()
+        _, report = consume([boot(BOOT_B), restored])
+        with contextlib.redirect_stdout(out):
+            audit.print_g3_data(report["g3"])
+        self.assertIn("G3 garage S left unmarked after replacing_rate held the next park: 0\n", out.getvalue())
 
     def test_malformed_rows(self):
         bad = [dict(kind="g3_store", mono_ns=1, event="exploded", reason="x"),

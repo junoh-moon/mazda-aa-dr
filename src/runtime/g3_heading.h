@@ -143,9 +143,15 @@ static const uint64_t G3_PLAUSIBLE_UTC_S=1600000000ULL;
 //    validation/G3_GARAGE_EXIT_FIX_2026-10-17.md "P4").
 //  * I/O while BETA replaces (review P3, the G1 tunnel path): a parked S
 //    request needs G3_GARAGE_REPLACING_S_GAP_NS since the previous S request
-//    (at most one S and its mark per 30 s in a tunnel jam); the departure
-//    mark is never spaced (it is what keeps an S record meaning "parked
-//    since") but needs a journal writer lag <= G3_GARAGE_REPLACING_MARK_LAG_NS.
+//    (any S request: also a cancelled or failed one and the 60 s fsync
+//    rewrite), except the rule F rewrite of a tainted heading and (third
+//    review C1) while the record on disk is an S with heading, i.e. the car
+//    left it without a landed departure mark: the new S then replaces a
+//    record that would otherwise be carried stale (one extra write per such
+//    departure). The departure mark is never spaced (it is what keeps an S
+//    record meaning "parked since"); it is requested while the car moves or
+//    within the first 5 s of a stop (before the stop counts as parked) and
+//    needs a journal writer lag <= G3_GARAGE_REPLACING_MARK_LAG_NS.
 static const char G3_GARAGE_OFF_NAME[]="g3-garage-off";
 static const uint64_t G3_GARAGE_PARKED_NS=5000000000ULL;
 static const double G3_GARAGE_DEPART_M=0.5;
@@ -1287,11 +1293,19 @@ private:
         }
         if(io_block) { episode_block_=io_block;return; }
         // Garage carry while BETA replaces (review P3, tunnel jams): at most
-        // one S request per G3_GARAGE_REPLACING_S_GAP_NS (its departure mark
-        // is not spaced, nor the rule F rewrite of a tainted heading). A
-        // blocked final park leaves the mark on disk: no carry.
-        if(garage_ && s.beta_replacing && !stale && last_s_request_ns_ && s.now>=last_s_request_ns_ &&
-           s.now-last_s_request_ns_<G3_GARAGE_REPLACING_S_GAP_NS) {
+        // one S request per G3_GARAGE_REPLACING_S_GAP_NS since the previous
+        // S request (also a cancelled or failed one and the 60 s fsync
+        // rewrite); the departure mark is not spaced. Exempt: the rule F
+        // rewrite of a tainted heading, and (third review C1) any S request
+        // while the record on disk is an S WITH heading: the car left that
+        // stop without a landed departure mark (idle rule, 5 s spacing,
+        // writer lag), so the old S would be carried by the next boot; the
+        // new S corrects it (at most one extra write per departure whose
+        // mark did not land). A spaced final park therefore leaves the mark
+        // on disk only if the mark landed (then no carry).
+        const bool disk_heading_s=disk_=='S' && (disk_flags_&G3_FLAG_HEADING);
+        if(garage_ && s.beta_replacing && !stale && !disk_heading_s && last_s_request_ns_ &&
+           s.now>=last_s_request_ns_ && s.now-last_s_request_ns_<G3_GARAGE_REPLACING_S_GAP_NS) {
             episode_block_="replacing_rate";return;
         }
         const char state='S';
