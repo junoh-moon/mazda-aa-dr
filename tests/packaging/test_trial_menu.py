@@ -197,95 +197,39 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('Cleared g3-off', result.stdout)
         self.assertFalse(marker.exists())
 
-    def test_menu_nine_toggles_the_diag_marker(self):
-        # Diagnostic tunnel test (2026-10-12, validation/DIAG_BUILD_A20_S5_2026-10-12.md):
-        # the menu 7/8 pattern with the opposite polarity (present "on" =
-        # test on), 40-column text, mx5dr.conf untouched, no arm shown.
+    def test_menu_nine_is_removed_and_its_marker_is_cleared(self):
+        # v1.0 stable (validation/V1_STABLE_DECISIONS_2026-10-18.md): the
+        # diagnostic tunnel test is removed. The other numbers keep their
+        # meaning; 9 is not listed and does nothing; the short prompt after
+        # menu 2 lists the real numbers; a diag marker left by an earlier
+        # build is cleared by menu 1 and menu 4 and no longer reported.
         marker = self.base / 'diag'
         result = self.menu('9\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('9 Tunnel test on/off (BETA diagnostic)', result.stdout)
-        self.assertIn('Tunnel test: package not installed;', result.stdout)
+        self.assertNotIn('\n9 ', result.stdout)
+        self.assertNotIn('Tunnel test', result.stdout)
+        self.assertIn('Enter one of the listed numbers; no action taken.', result.stdout)
         self.assertFalse(self.base.exists())
         self.fixture.run_script('install.sh')
-        config = (self.base / 'mx5dr.conf').read_bytes()
-        for keys in ('9\n0\n', '9\n\n0\n', '9\n99\n0\n', '9\n8\n0\n'):
-            with self.subTest(keys=keys):
-                result = self.menu(keys)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn('Tunnel test now: OFF', result.stdout)
-                self.assertIn('Enter 9 again to switch it ON,', result.stdout)
-                self.assertIn('Cancelled; nothing changed.', result.stdout)
-                self.assertFalse(marker.exists())
-        eof = self.menu('9\n')
-        self.assertIn('Cancelled; nothing changed.', eof.stdout)
+        before = sorted(p.name for p in self.base.iterdir())
+        result = self.menu('9\n9\n0\n')
+        self.assertEqual(result.stdout.count('Enter one of the listed numbers; no action taken.'), 2)
+        self.assertEqual(sorted(p.name for p in self.base.iterdir()), before)
         self.assertFalse(marker.exists())
-        result = self.menu('9\n9\n0\n')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('Tunnel test set to ON.', result.stdout)
-        self.assertEqual(marker.read_bytes(), b'on\n')
-        self.assertFalse(list(self.base.glob('diag.new.*')))
-        self.assertFalse((self.base / 'g3-off').exists())
-        self.assertFalse((self.base / 'vimchan-off').exists())
-        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
-        out = result.stdout
-        start = out.index('Tunnel test now:')
-        for line in out[start:out.index('(parked reboot) for it to take effect.') + 40].splitlines():
-            self.assertLessEqual(len(line.replace('Number, then Enter: ', '')), 40, line)
-        for word in ('CONTROL', 'A20', 'S5'):
-            self.assertNotIn(word, out)
+        listed = [line.split(' ', 1)[0] for line in result.stdout.splitlines()
+                  if line[:1].isdigit() and ' ' in line and line.split(' ', 1)[0].isdigit()]
+        self.assertEqual(listed[:12], ['1', '2', '3', '4', '5', '6', '7', '8', '10', '11', '12', '0'])
         status = self.menu('2\n0\n')
-        self.assertIn('diag_marker=on', status.stdout)
-        self.assertIn('TEST tunnel test on (menu 9)', status.stdout)
-        result = self.menu('9\n9\n0\n')
-        self.assertIn('Tunnel test now: ON', result.stdout)
-        self.assertIn('Tunnel test set to OFF.', result.stdout)
-        self.assertFalse(marker.exists())
-        self.assertIn('diag_marker=absent', self.menu('2\n0\n').stdout)
-        # Any other content is not a marker: shown as invalid (test off);
-        # menu 9 then writes a valid one.
-        marker.write_text('off\n')
-        status = self.menu('2\n0\n')
-        self.assertIn('diag_marker=invalid', status.stdout)
-        self.assertIn('TEST marker invalid: test off', status.stdout)
-        result = self.menu('9\n9\n0\n')
-        self.assertIn('Tunnel test now: OFF (invalid marker)', result.stdout)
-        self.assertEqual(marker.read_bytes(), b'on\n')
-        marker.unlink()
-        marker.mkdir()
-        result = self.menu('9\n9\n0\n')
-        self.assertIn('Tunnel test: OFF (diag is a dir).', result.stdout)
-        self.assertTrue(marker.is_dir())
-        marker.rmdir()
-        # Independent review (2026-10-12): a marker that is a symlink to a
-        # directory must be replaced by the link's removal, never written
-        # INTO the directory it points to (mv -f would do that).
-        outside = self.base.parent / 'diag-outside-dir'
-        outside.mkdir()
-        marker.symlink_to(outside, target_is_directory=True)
-        result = self.menu('9\n9\n0\n')
-        self.assertIn('Tunnel test now: OFF (invalid marker)', result.stdout)
-        self.assertFalse(marker.is_symlink())
-        self.assertEqual(marker.read_bytes(), b'on\n')
-        self.assertEqual(list(outside.iterdir()), [])
-        marker.unlink()
-        outside.rmdir()
-        # A three-byte marker that only looks like 'on' after NUL stripping is
-        # invalid in menu and status alike (the runtime needs exact bytes).
-        marker.write_bytes(b'on\x00')
-        status = self.menu('2\n0\n')
-        self.assertIn('diag_marker=invalid', status.stdout)
-        result = self.menu('9\n9\n0\n')
-        self.assertIn('Tunnel test now: OFF (invalid marker)', result.stdout)
-        self.assertEqual(marker.read_bytes(), b'on\n')
-        marker.unlink()
-        # Menu 1 (reinstall) clears the marker: the default is off.
+        self.assertIn('0 Exit (1-8, 10-12 as listed before)', status.stdout)
+        self.assertNotIn('1-11', status.stdout)
+        self.assertNotIn('diag_marker', status.stdout)
+        self.assertNotIn('TEST ', status.stdout)
         marker.write_text('on\n')
+        self.assertNotIn('TEST ', self.menu('2\n0\n').stdout)
         result = self.menu('1\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Cleared diag', result.stdout)
         self.assertFalse(marker.exists())
-        # Menu 4 (uninstall) removes it too.
         marker.write_text('on\n')
         result = self.menu('4\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -372,74 +316,140 @@ class TrialMenuTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(marker.exists())
 
-    def test_menu_twelve_toggles_the_g3_garage_off_marker(self):
-        # G3 garage heading (2026-10-17, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md):
-        # the menu 10 pattern (present = off), 40-column text, mx5dr.conf
-        # untouched, cleared by menu 1 and menu 4.
+    def test_menu_twelve_turns_the_experimental_garage_heading_on_and_off(self):
+        # v1.0 stable: the garage heading carry is experimental, default OFF.
+        # Menu 1 writes g3-garage-off on every installation; menu 12 turns it
+        # ON by removing the marker and OFF by writing it again, each after
+        # the same number twice; 40-column text, mx5dr.conf untouched; menu 2
+        # names it on the EXP line only while ON; menu 4 removes the marker.
         marker = self.base / 'g3-garage-off'
         result = self.menu('12\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('12 Garage heading on/off (BETA)', result.stdout)
+        self.assertIn('12 Garage heading: turn on/off (experimental, default OFF)', result.stdout)
         self.assertIn('Garage heading: package not installed;', result.stdout)
-        self.fixture.run_script('install.sh')
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(marker.read_bytes(), b'off\n')
+        self.assertIn('Experimental features are OFF:', result.stdout)
+        self.assertIn('11 phone Bluetooth, 12 garage heading.', result.stdout)
+        self.assertIn('실험 기능 2개는 꺼짐입니다.', result.stdout)
         config = (self.base / 'mx5dr.conf').read_bytes()
-        for keys in ('12\n0\n', '12\n\n0\n', '12\n10\n0\n', '12\n1\n0\n'):
+        status = self.menu('2\n0\n')
+        self.assertIn('g3_garage_marker=present', status.stdout)
+        self.assertIn('experimental_on=none', status.stdout)
+        self.assertIn('EXP none (11, 12 off)', status.stdout)
+        for keys in ('12\n0\n', '12\n\n0\n', '12\n10\n0\n', '12\n1\n0\n', '12\n11\n0\n'):
             with self.subTest(keys=keys):
                 result = self.menu(keys)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn('Garage heading now: ON', result.stdout)
-                self.assertIn('Enter 12 again to switch it OFF,', result.stdout)
+                self.assertIn('Garage heading now:\n  OFF 꺼짐', result.stdout)
+                self.assertIn('Enter 12 again to turn it ON,', result.stdout)
                 self.assertIn('Cancelled; nothing changed.', result.stdout)
-                self.assertFalse(marker.exists())
+                self.assertTrue(marker.exists())
+        self.assertIn('Cancelled; nothing changed.', self.menu('12\n').stdout)
+        self.assertTrue(marker.exists())
         result = self.menu('12\n12\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('Garage heading set to OFF.', result.stdout)
-        self.assertEqual(marker.read_bytes(), b'off\n')
+        self.assertIn('Garage heading turned ON 켜짐(실험).', result.stdout)
+        self.assertFalse(marker.exists())
         self.assertFalse(list(self.base.glob('g3-garage-off.new.*')))
-        for other in ('diag', 'g3-off', 'vimchan-off', 'acc-cap-off'):
-            self.assertFalse((self.base / other).exists())
         self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
         out = result.stdout
         start = out.index('Garage heading now:')
         for line in out[start:out.index('(parked reboot) for it to take effect.') + 40].splitlines():
-            self.assertLessEqual(len(line.replace('Number, then Enter: ', '')), 40, line)
+            line = line.replace('Number, then Enter: ', '')
+            width = sum(2 if ord(c) > 0x1100 else 1 for c in line)
+            self.assertLessEqual(width, 40, line)
         status = self.menu('2\n0\n')
-        self.assertIn('g3_garage_marker=present', status.stdout)
-        self.assertIn('GAR garage heading OFF (menu 12)', status.stdout)
+        self.assertIn('g3_garage_marker=absent', status.stdout)
+        self.assertIn('experimental_on=garage', status.stdout)
+        self.assertIn('EXP ON: 12 garage', status.stdout)
+        # Menu 8 (whole heading off) makes the garage carry moot: not listed.
+        (self.base / 'g3-off').write_text('off\n')
+        self.assertIn('experimental_on=none', self.menu('2\n0\n').stdout)
+        (self.base / 'g3-off').unlink()
         result = self.menu('12\n12\n0\n')
-        self.assertIn('Garage heading now: OFF', result.stdout)
-        self.assertIn('Garage heading set to ON.', result.stdout)
-        self.assertFalse(marker.exists())
-        self.assertNotIn('GAR garage', self.menu('2\n0\n').stdout)
+        self.assertIn('Garage heading now:\n  ON (experimental) 켜짐(실험)', result.stdout)
+        self.assertIn('Enter 12 again to turn it OFF,', result.stdout)
+        self.assertIn('Garage heading turned OFF 꺼짐.', result.stdout)
+        self.assertEqual(marker.read_bytes(), b'off\n')
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        marker.unlink()
         marker.mkdir()
         result = self.menu('12\n12\n0\n')
         self.assertIn('Garage heading: OFF (marker is a dir).', result.stdout)
         self.assertTrue(marker.is_dir())
+        # Menu 1 leaves a directory (already OFF) for menu 6.
+        self.assertEqual(self.menu('1\n0\n').returncode, 0)
+        self.assertTrue(marker.is_dir())
         marker.rmdir()
-        marker.write_text('off\n')
+        # A symlink in its place: ON removes the link itself; menu 1 replaces
+        # it with a marker file, never writing into the linked directory.
+        outside = self.base.parent / 'garage-outside-dir'
+        outside.mkdir()
+        marker.symlink_to(outside, target_is_directory=True)
+        self.assertEqual(self.menu('1\n0\n').returncode, 0)
+        self.assertFalse(marker.is_symlink())
+        self.assertEqual(marker.read_bytes(), b'off\n')
+        self.assertEqual(list(outside.iterdir()), [])
+        marker.unlink()
+        marker.symlink_to(outside, target_is_directory=True)
+        result = self.menu('12\n12\n0\n')
+        self.assertIn('Garage heading turned ON 켜짐(실험).', result.stdout)
+        self.assertFalse(marker.is_symlink() or marker.exists())
+        self.assertTrue(outside.is_dir())
+        # Reinstall resets an ON choice to OFF; menu 4 removes the marker.
         result = self.menu('1\n0\n')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('Cleared g3-garage-off', result.stdout)
-        self.assertFalse(marker.exists())
-        marker.write_text('off\n')
+        self.assertEqual(marker.read_bytes(), b'off\n')
         result = self.menu('4\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(marker.exists())
+
+    def test_menu_four_removes_every_owner_marker_and_both_chain_files(self):
+        # v1.0 stable: menu 4 removes all six owner markers and both garage
+        # chain files uniformly (a directory of such a name is left for menu
+        # 6 with a warning); the stored heading record and the logs stay.
+        self.fixture.run_script('install.sh')
+        names = ('vimchan-off', 'g3-off', 'bt-off', 'g3-garage-off', 'acc-cap-off', 'diag')
+        for name in names:
+            (self.base / name).write_text('off\n')
+        for name in ('g3-last-start', 'g3-worker-boot'):
+            (self.logs / name).write_text('x\n')
+        (self.logs / 'g3-heading.v1').write_text('kept\n')
+        (self.logs / 'trace.0.jsonl').write_text('kept\n')
+        result = self.menu('4\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in names:
+            self.assertFalse((self.base / name).exists(), name)
+        for name in ('g3-last-start', 'g3-worker-boot'):
+            self.assertFalse((self.logs / name).exists(), name)
+        self.assertEqual((self.logs / 'g3-heading.v1').read_text(), 'kept\n')
+        self.assertEqual((self.logs / 'trace.0.jsonl').read_text(), 'kept\n')
+        self.assertEqual(self.fixture.autostart.read_bytes(), self.fixture.original_autostart)
+        (self.base / 'vimchan-off').mkdir()
+        result = self.menu('4\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Warning: cannot remove the vimchan-off marker; menu 6 removes it.', result.stdout)
+        self.assertTrue((self.base / 'vimchan-off').is_dir())
 
     def test_install_and_uninstall_clear_the_garage_chain_token(self):
         # Lazy previous-product-boot token (fourth fix): an idle boot no
         # longer swaps it, so an installation (possibly after days without
         # the package) removes it; the next boot refuses every older record.
-        # The stored record itself and the worker-boot file stay.
+        # The stored record itself stays; the worker-boot file stays on menu
+        # 1 (a running worker may use it) and is removed by menu 4.
         self.fixture.run_script('install.sh')
         token, record = self.logs / 'g3-last-start', self.logs / 'g3-heading.v1'
+        worker = self.logs / 'g3-worker-boot'
         record.write_text('kept\n')
         for keys in ('1\n0\n', '4\n'):
             with self.subTest(keys=keys):
                 token.write_text('mx5g3start 1 %s' % BOOT)
+                worker.write_text('mx5g3worker 1 %s' % BOOT)
                 result = self.menu(keys)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse(token.exists())
+                self.assertEqual(worker.exists(), keys == '1\n0\n')
                 self.assertEqual(record.read_text(), 'kept\n')
                 if keys == '4\n':
                     self.fixture.run_script('install.sh')
@@ -541,7 +551,7 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('2\n0\n')
         self.assertEqual(result.stdout.count('Parked USB trial menu'), 1)
         out = result.stdout
-        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-11 as listed before)'))
+        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-8, 10-12 as listed before)'))
         self.assertIn('Startup check saved', out[:out.index('---- GO / NO-GO ----')])
         for line in out[out.index('---- GO / NO-GO ----'):].splitlines():
             self.assertLessEqual(len(line), 40, line)

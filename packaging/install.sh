@@ -109,7 +109,10 @@ for name in libmx5dr.so libmx5dr-vimtap.so libmx5dr-ldstap.so mx5dr-collector mx
 done
 require_trial_space "$payload_bytes"
 prepare_collector_storage
-[ ! -e "$BASE/pending" ] || fail 'Incomplete transaction: run uninstall.sh before retrying'
+[ ! -e "$BASE/pending" ] || fail 'Incomplete transaction (an earlier install was interrupted): choose 4, then 1 again'
+# Rotated trace files of earlier builds above the persistent cap (counted as
+# free space by require_trial_space).
+prune_oversize_traces
 mount_rw "$ROOT/jci/sm"
 mount_rw "$ROOT/usr/bin"
 [ ! -L "$BASE/guard" ] || fail 'Symlink guard directory'
@@ -164,58 +167,35 @@ fi
 # No old arm or persistent enablement may survive a partial replacement.
 rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 clear_capture_markers
-# Menu 1 also returns the log-only VIM side channel to its default (on): a
-# vimchan-off marker from menu 7 is cleared, like disable-next-start.
-if [ -e "$BASE/vimchan-off" ] || [ -L "$BASE/vimchan-off" ]; then
-    if [ -d "$BASE/vimchan-off" ] && [ ! -L "$BASE/vimchan-off" ]; then fail 'Cannot clear vimchan-off: it is a directory'; fi
-    rm -f "$BASE/vimchan-off" || fail 'Cannot clear the vimchan-off marker'
-    echo 'Cleared vimchan-off: the VIM side-channel log is on again from the next start.'
-fi
-# Likewise the record-only heading log (G3) marker from menu 8.
-if [ -e "$BASE/g3-off" ] || [ -L "$BASE/g3-off" ]; then
-    if [ -d "$BASE/g3-off" ] && [ ! -L "$BASE/g3-off" ]; then fail 'Cannot clear g3-off: it is a directory'; fi
-    rm -f "$BASE/g3-off" || fail 'Cannot clear the g3-off marker'
-    echo 'Cleared g3-off: the heading log (G3) is on again from the next start.'
-fi
-# Likewise the diagnostic tunnel test marker from menu 9 (default off).
-if [ -e "$BASE/diag" ] || [ -L "$BASE/diag" ]; then
-    if [ -d "$BASE/diag" ] && [ ! -L "$BASE/diag" ]; then fail 'Cannot clear diag: it is a directory'; fi
-    rm -f "$BASE/diag" || fail 'Cannot clear the diag marker'
-    echo 'Cleared diag: the tunnel test is off from the next start; menu 9 turns it on again.'
-fi
-# Likewise the tunnel accuracy ceiling off switch from menu 10 (default on).
-if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then
-    if [ -d "$BASE/acc-cap-off" ] && [ ! -L "$BASE/acc-cap-off" ]; then fail 'Cannot clear acc-cap-off: it is a directory'; fi
-    rm -f "$BASE/acc-cap-off" || fail 'Cannot clear the acc-cap-off marker'
-    echo 'Cleared acc-cap-off: the 25 m tunnel cap is on again from the next start.'
-fi
-# Likewise the G3 garage heading switch from menu 12 (default on).
-if [ -e "$BASE/g3-garage-off" ] || [ -L "$BASE/g3-garage-off" ]; then
-    if [ -d "$BASE/g3-garage-off" ] && [ ! -L "$BASE/g3-garage-off" ]; then fail 'Cannot clear g3-garage-off: it is a directory'; fi
-    rm -f "$BASE/g3-garage-off" || fail 'Cannot clear the g3-garage-off marker'
-    echo 'Cleared g3-garage-off: the garage heading is on again from the next start.'
-fi
+# Menu 1 returns every owner switch to the v1.0 default: the stable features
+# on (vimchan-off, g3-off and acc-cap-off cleared; the removed diagnostic
+# marker diag cleared too) and both experimental features OFF (bt-off and
+# g3-garage-off written), whatever an earlier menu 7-12 set.
+for name in vimchan-off g3-off diag acc-cap-off; do
+    if [ -e "$BASE/$name" ] || [ -L "$BASE/$name" ]; then
+        if [ -d "$BASE/$name" ] && [ ! -L "$BASE/$name" ]; then fail "Cannot clear $name: it is a directory"; fi
+        rm -f "$BASE/$name" || fail "Cannot clear the $name marker"
+        echo "Cleared $name (default restored from the next start)."
+    fi
+done
+for name in $EXPERIMENTAL_MARKERS; do
+    write_off_marker "$name" || fail "Cannot write the $name marker"
+done
 # The garage heading chain (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md,
 # fourth fix): an installation may follow days in which this package did not
 # run, so a heading stored before it is never carried across it. Removing the
 # previous-product-boot token makes the next boot refuse every older record.
-# A directory of that name is never read as a token (no carry either).
-if [ -f "$BASE/logs/g3-last-start" ] || [ -L "$BASE/logs/g3-last-start" ]; then
-    rm -f "$BASE/logs/g3-last-start" || fail 'Cannot clear the garage heading chain token'
-fi
-# Likewise the phone IMU Bluetooth switch from menu 11 (default on) and both
-# automatic fallback records (collector logs/bt-fail, guard/bt-fail).
-if [ -e "$BASE/bt-off" ] || [ -L "$BASE/bt-off" ]; then
-    if [ -d "$BASE/bt-off" ] && [ ! -L "$BASE/bt-off" ]; then fail 'Cannot clear bt-off: it is a directory'; fi
-    rm -f "$BASE/bt-off" || fail 'Cannot clear the bt-off marker'
-    echo 'Cleared bt-off: the phone IMU Bluetooth service is on again from the next start.'
-fi
+# A directory of that name is never read as a token (no carry either) and is
+# left for menu 6. The worker-boot file stays (menu 4 removes it).
+remove_entry "$BASE/logs/g3-last-start" || fail 'Cannot clear the garage heading chain token'
+# The automatic phone channel fallback records (collector logs/bt-fail,
+# guard/bt-fail) are cleared as well; the channel itself stays OFF (bt-off).
 for item in "$BASE/logs/bt-fail" "$BASE/guard/bt-fail"; do
     if [ -e "$item" ] || [ -L "$item" ]; then
         regular "$item"
         cp -pP "$item" "$BASE/backups/" 2>/dev/null || :
         rm -f "$item" || fail 'Cannot clear a Bluetooth fallback record'
-        echo "Cleared ${item#"$BASE/"}: bds starts with the phone IMU service again from the next start."
+        echo "Cleared ${item#"$BASE/"} (automatic phone channel fallback record)."
     fi
 done
 if [ "$POLICY" = persistent ]; then
@@ -230,8 +210,19 @@ if [ "$POLICY" = persistent ]; then
     fi
 fi
 sync
+# Backup sets: date and PID name (the CMU clock restarts at 1970, so the name
+# order is nominal) plus tx-seq, an increasing number that orders the sets.
+# A name taken already (same second and PID after a restart) gets one digit.
+tx_seq=$(($(backup_set_seq_max) + 1))
 TX=$BASE/backups/$(date +%Y%m%dT%H%M%S)-$$
-mkdir "$TX"
+tx_try=0
+while ! mkdir "$TX" 2>/dev/null; do
+    tx_try=$((tx_try + 1))
+    [ "$tx_try" -le 9 ] || fail 'Cannot create the backup set directory'
+    TX=$BASE/backups/$(date +%Y%m%dT%H%M%S)-$$$tx_try
+done
+printf '%s\n' "$tx_seq" > "$TX/tx-seq"
+prune_backup_sets
 # Both persistent configs remain clean; the actual board-selected path is gated at boot.
 TARGETS='sm.conf sm_WCP.conf'
 for name in $TARGETS; do
@@ -315,8 +306,14 @@ if [ "$MODE" != OFF ] && [ "$POLICY" = one-boot ]; then
 fi
 ARM_PENDING=0
 if [ "$BT" = 1 ]; then
-    echo 'Phone IMU Bluetooth service MX5DR IMU prepared (record only; menu 11 turns it off).'
+    echo 'Phone Bluetooth channel prepared, OFF (experimental; menu 11 turns it on).'
 fi
+# Experimental features: OFF after every menu 1 (bt-off, g3-garage-off).
+printf '%s\n' 'Experimental features are OFF:' \
+    '11 phone Bluetooth, 12 garage heading.' \
+    'To turn one on: menu 11 or 12, then 5.' \
+    '실험 기능 2개는 꺼짐입니다.' \
+    '켜려면 메뉴 11 또는 12, 그다음 5.'
 if [ "$POLICY" = persistent ]; then
     echo "Installed $MODE persistent: the guard starts it on every CMU boot. Persistent service configs retain existing touch only. No processes restarted."
     echo 'Automatic fallback: after 2 boots in a row that end in a CMU reset, the guard starts stock only and keeps the logs. Menu 1 re-enables, menu 4 removes.'

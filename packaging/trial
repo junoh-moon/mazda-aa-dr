@@ -190,14 +190,15 @@ startup_verdict() {
             else if (v=="declined" || v=="observed") show("ok","FENCE",v)
             else show("NO","FENCE",v==""?"missing":v)
         }
-        # Menu 9 tunnel test: state only (never the arm); not a GO condition.
-        v=field("diag_marker=")
-        if (v=="on") print "TEST tunnel test on (menu 9)"
-        else if (v=="invalid") print "TEST marker invalid: test off"
         # Menu 10 tunnel ceiling: shown only when switched off (not a GO condition).
         if (field("acc_cap_marker=")=="present") print "CAP 25 m tunnel cap OFF (menu 10)"
-        if (field("bt_marker=")=="present") print "BT phone IMU OFF (menu 11)"
-        if (field("g3_garage_marker=")=="present") print "GAR garage heading OFF (menu 12)"
+        # Experimental features switched ON (menus 11 and 12); not a GO condition.
+        v=field("experimental_on=")
+        if (v=="none") print "EXP none (11, 12 off)"
+        else if (v!="") {
+            gsub(/phone_bt/,"11 phone bt",v); gsub(/garage/,"12 garage",v); gsub(/,/,", ",v)
+            print substr("EXP ON: " v,1,40)
+        }
         v=field("bt_fail=")
         if (v!="" && v!="absent") print substr("BT fallback " v ": menu 1",1,40)
         for (i=1;i<=NR;i++) if (index(line[i],"BETA NO_FIX: ")==1) print substr(line[i],1,40)
@@ -377,56 +378,6 @@ g3_toggle() {
     return 0
 }
 
-# Menu 9 (2026-10-12, validation/DIAG_BUILD_A20_S5_2026-10-12.md): the
-# owner switch of the diagnostic tunnel test. While BASE/diag holds exactly
-# "on" the BETA worker gives every GPS-lost episode one hidden test arm;
-# absent or anything else is the normal BETA. Read once at CMU start. Never
-# touches mx5dr.conf. Shows the state first, then one numeric confirmation
-# (9 again). The arm of a tunnel is never shown here (blind test).
-diag_toggle() {
-    marker=$BASE/diag
-    if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
-        echo 'Tunnel test: package not installed;'
-        echo 'nothing changed.'
-        return 0
-    fi
-    if [ -d "$marker" ] && [ ! -L "$marker" ]; then
-        echo 'Tunnel test: OFF (diag is a dir).'
-        echo 'Not changed here; menu 6 removes it.'
-        return 0
-    fi
-    state=OFF; next=ON
-    if [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(wc -c < "$marker")" -eq 3 ] &&
-       printf 'on\n' | cmp -s - "$marker"; then state=ON; next=OFF
-    elif [ -e "$marker" ] || [ -L "$marker" ]; then state='OFF (invalid marker)'; next=ON; fi
-    printf '%s\n' "Tunnel test now: $state" \
-        'BETA only: each tunnel gets a hidden' \
-        'setting. Note grey/frozen per tunnel.' \
-        "Enter 9 again to switch it $next," \
-        'anything else cancels.'
-    printf 'Number, then Enter: '
-    if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
-    if [ "$confirm" != 9 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
-    if [ "$next" = ON ]; then
-        marker_tmp=$BASE/diag.new.$$
-        rm -f "$marker_tmp" || fail 'Cannot stage the diag marker'
-        # An invalid marker (a symlink, even to a directory) is removed itself
-        # first: mv would otherwise move the file INTO a symlinked directory.
-        if [ -L "$marker" ]; then rm -f "$marker" || fail 'Cannot remove the invalid diag marker'; fi
-        if ! printf 'on\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
-            rm -f "$marker_tmp" || :
-            fail 'Cannot write the diag marker'
-        fi
-    else
-        rm -f "$marker" || fail 'Cannot remove the diag marker'
-    fi
-    sync
-    echo "Tunnel test set to $next."
-    echo 'Read once at CMU start: choose 5'
-    echo '(parked reboot) for it to take effect.'
-    return 0
-}
-
 # Menu 10 (2026-10-12, validation/TUNNEL_REPORT_CAP_2026-10-12.md): the
 # owner switch of the BETA tunnel accuracy ceiling (25 m, the product
 # default). While BASE/acc-cap-off exists (any type) the BETA worker reports
@@ -473,96 +424,78 @@ acc_cap_toggle() {
     return 0
 }
 
-# Menu 12 (2026-10-17, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md): the
-# owner switch of the G3 garage heading carry (departure marks, the 5 s park
-# record also in a garage, the restore without a wall clock and the bearing
-# at the garage exit; default on). While BASE/g3-garage-off exists (any type)
-# the BETA worker uses the beta.16 G3 rules; read once at CMU start. Menu 8
-# (g3-off) turns the whole G3 heading off. Never touches mx5dr.conf.
-garage_toggle() {
-    marker=$BASE/g3-garage-off
+# Experimental owner switch (v1.0: default OFF, validation/V1_STABLE_DECISIONS_2026-10-18.md).
+# The feature is OFF while BASE/<marker> exists (any type); menu 1 writes the
+# marker again on every installation. Turning it ON removes the marker (the
+# marker itself, also a symlink; nothing is written through it); turning it
+# OFF writes it. Read once at CMU start. Never touches mx5dr.conf. Shows the
+# state first, then one numeric confirmation (the same number again).
+# $1 number, $2 marker, $3 feature name (<= 22 columns).
+experimental_toggle() {
+    marker=$BASE/$2
     if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
-        echo 'Garage heading: package not installed;'
+        echo "$3: package not installed;"
         echo 'nothing changed.'
         return 0
     fi
     if [ -d "$marker" ] && [ ! -L "$marker" ]; then
-        echo 'Garage heading: OFF (marker is a dir).'
+        echo "$3: OFF (marker is a dir)."
         echo 'Not changed here; menu 6 removes it.'
         return 0
     fi
-    if [ -e "$marker" ] || [ -L "$marker" ]; then state=OFF; next=ON
-    else state=ON; next=OFF; fi
-    printf '%s\n' "Garage heading now: $state" \
-        'BETA only. OFF = beta.16 heading rules.' \
-        "Enter 12 again to switch it $next," \
+    if [ -e "$marker" ] || [ -L "$marker" ]; then
+        state='  OFF 꺼짐'; next=ON; verb='turn it ON'
+    else
+        state='  ON (experimental) 켜짐(실험)'; next=OFF; verb='turn it OFF'
+    fi
+    printf '%s\n' "$3 now:" "$state" \
+        'Experimental, default OFF after menu 1.' \
+        "Enter $1 again to $verb," \
         'anything else cancels.'
     printf 'Number, then Enter: '
     if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
-    if [ "$confirm" != 12 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
+    if [ "$confirm" != "$1" ]; then echo 'Cancelled; nothing changed.'; return 0; fi
     if [ "$next" = OFF ]; then
-        marker_tmp=$BASE/g3-garage-off.new.$$
-        rm -f "$marker_tmp" || fail 'Cannot stage the g3-garage-off marker'
+        marker_tmp=$BASE/$2.new.$$
+        rm -f "$marker_tmp" || fail "Cannot stage the $2 marker"
         if ! printf 'off\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
             rm -f "$marker_tmp" || :
-            fail 'Cannot write the g3-garage-off marker'
+            fail "Cannot write the $2 marker"
         fi
+        echo "$3 turned OFF 꺼짐."
     else
-        # The marker itself (also a symlink, even to a directory) is removed;
-        # nothing is written through it.
-        rm -f "$marker" || fail 'Cannot remove the g3-garage-off marker'
+        rm -f "$marker" || fail "Cannot remove the $2 marker"
+        echo "$3 turned ON 켜짐(실험)."
     fi
     sync
-    echo "Garage heading set to $next."
     echo 'Read once at CMU start: choose 5'
     echo '(parked reboot) for it to take effect.'
     return 0
 }
 
-# Menu 11 (2026-10-14, validation/PHONE_IMU_CHANNEL_2026-10-14.md): the
-# owner switch of the phone IMU Bluetooth service (record only, default on).
-# While BASE/bt-off exists (any type) the guard starts bds with the stock
-# arguments and the collector starts no receiver; read at CMU start. Never
-# touches mx5dr.conf. Shows the state first, then one numeric confirmation
-# (11 again). Menu 1 clears it, like the automatic bt-fail records.
+# Menu 11 (validation/PHONE_IMU_CHANNEL_2026-10-14.md): the phone Bluetooth
+# channel (bds service 15, record only). OFF (bt-off present): the guard
+# starts bds with the stock arguments and the collector starts no receiver.
+# Turning it ON needs the configuration copy menu 1 prepared.
 bt_toggle() {
-    marker=$BASE/bt-off
-    if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
-        echo 'Phone IMU Bluetooth: package not'
-        echo 'installed; nothing changed.'
+    if [ -d "$BASE" ] && [ ! -L "$BASE" ] &&
+       { [ -e "$BASE/bt-off" ] || [ -L "$BASE/bt-off" ]; } &&
+       { [ ! -d "$BASE/bt-off" ] || [ -L "$BASE/bt-off" ]; } &&
+       { [ ! -f "$BASE/bt/BdsConfiguration.xml" ] || [ -L "$BASE/bt/BdsConfiguration.xml" ] || [ -L "$BASE/bt" ]; }; then
+        echo 'Phone Bluetooth now:'
+        echo '  OFF 꺼짐'
+        echo 'Not prepared on this CMU (stock'
+        echo 'Bluetooth files differ); stays OFF.'
         return 0
     fi
-    if [ -d "$marker" ] && [ ! -L "$marker" ]; then
-        echo 'Phone IMU Bluetooth: OFF (marker dir).'
-        echo 'Not changed here; menu 6 removes it.'
-        return 0
-    fi
-    if [ -e "$marker" ] || [ -L "$marker" ]; then state=OFF; next=ON
-    else state=ON; next=OFF; fi
-    printf '%s\n' "Phone IMU Bluetooth now: $state" \
-        'Record only; BETA and LOCATION same.' \
-        "Enter 11 again to switch it $next," \
-        'anything else cancels.'
-    printf 'Number, then Enter: '
-    if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
-    if [ "$confirm" != 11 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
-    if [ "$next" = OFF ]; then
-        marker_tmp=$BASE/bt-off.new.$$
-        rm -f "$marker_tmp" || fail 'Cannot stage the bt-off marker'
-        if ! printf 'off\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
-            rm -f "$marker_tmp" || :
-            fail 'Cannot write the bt-off marker'
-        fi
-    else
-        # The marker itself (also a symlink) is removed; nothing is written
-        # through it.
-        rm -f "$marker" || fail 'Cannot remove the bt-off marker'
-    fi
-    sync
-    echo "Phone IMU Bluetooth set to $next."
-    echo 'Read once at CMU start: choose 5'
-    echo '(parked reboot) for it to take effect.'
-    return 0
+    experimental_toggle 11 bt-off 'Phone Bluetooth'
+}
+
+# Menu 12 (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md): the G3 garage
+# heading carry. OFF (g3-garage-off present): the beta.16 G3 rules. Menu 8
+# (g3-off) turns the whole G3 heading off, including this.
+garage_toggle() {
+    experimental_toggle 12 g3-garage-off 'Garage heading'
 }
 
 # Display only: install.sh validates the same marker again before any write.
@@ -589,7 +522,7 @@ start_text='After install choose 5; keep this USB connected. After restart reope
 installed_text='Installation finished. Choose 5 to request a CMU reboot; ignition off/on is not a reboot check.'
 if [ "$BUNDLE_MODE" = BETA ]; then
     install_text='1 Install or re-enable BETA, every boot'
-    start_text='BETA runs on every boot once installed. After install choose 5 once, then 2 before switching to AA. 2 shows status, 3 saves logs, 4 removes BETA; after 4 and a reboot with 5, 6 deletes every file it left.'
+    start_text='BETA runs on every boot once installed. After install choose 5 once, then 2 before switching to AA. 2 shows status, 3 saves logs (then 5), 4 removes BETA (then 5); after 4 and a reboot with 5, 6 deletes every file it left. 11 and 12 are experimental and OFF after every 1.'
     installed_text='Installation finished. Choose 5 to start the first BETA boot; later boots start it by themselves.'
 fi
 last_rc=0
@@ -597,22 +530,21 @@ short_menu=0
 while :; do
     if [ "$short_menu" = 1 ]; then
         short_menu=0
-        printf '\n%s\n' '0 Exit (1-11 as listed before)'
+        printf '\n%s\n' '0 Exit (1-8, 10-12 as listed before)'
     else
         printf '\n%s\n' 'Parked USB trial menu' \
             "This USB installs mode $BUNDLE_MODE: $mode_text" \
             "$install_text" \
             '2 Check CMU reboot, current capture and retained records' \
             '3 Finish capture and save logs plus startup diagnostics to this USB' \
-            '4 Uninstall (keeps collected logs)' \
+            '4 Uninstall, also recovers an interrupted install (keeps collected logs)' \
             '5 Reboot CMU now through the original system reboot command' \
             '6 Delete everything this package left on the CMU (run 4, then 5, first)' \
             '7 VIM side-channel log on/off (log only)' \
             '8 Heading (G3) log and start bearing on/off' \
-            '9 Tunnel test on/off (BETA diagnostic)' \
             '10 Tunnel 25 m cap on/off (BETA)' \
-            '11 Phone IMU Bluetooth on/off (record only)' \
-            '12 Garage heading on/off (BETA)' \
+            '11 Phone Bluetooth: turn on/off (experimental, default OFF)' \
+            '12 Garage heading: turn on/off (experimental, default OFF)' \
             '0 Exit'
         echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
@@ -639,7 +571,6 @@ while :; do
            sh "$HERE/purge.sh" "$HERE"; exit 0;;
         7) if ! vim_side_toggle; then exit "$last_rc"; fi;;
         8) if ! g3_toggle; then exit "$last_rc"; fi;;
-        9) if ! diag_toggle; then exit "$last_rc"; fi;;
         10) if ! acc_cap_toggle; then exit "$last_rc"; fi;;
         11) if ! bt_toggle; then exit "$last_rc"; fi;;
         12) if ! garage_toggle; then exit "$last_rc"; fi;;

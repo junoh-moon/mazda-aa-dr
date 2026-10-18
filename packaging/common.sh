@@ -126,8 +126,30 @@ validate_persist() {
     LOCK=$persist/.mx5dr-install-lock
 }
 lock() {
-    mkdir "$LOCK" || fail 'Installer already active or stale lock; inspect recorded PID before recovery'
+    mkdir "$LOCK" || fail 'Install lock present: another menu is running, or an earlier run was interrupted. If nothing else runs, choose 4, then 1 again.'
     LOCKED=1; echo "$$" > "$LOCK/pid"
+}
+# Menu 4 recovery of an install lock left by an interrupted run (power loss,
+# killed shell). Every installer, rearm, uninstall and purge takes the kernel
+# mount lock (lock_mounts) before it creates the lock directory and keeps it
+# until the directory is removed, so holding that lock ourselves proves no
+# live run owns the directory. Without that proof nothing is removed. Only the
+# directory and its one pid file are removed; anything else refuses.
+reclaim_stale_lock() {
+    STALE_LOCK_RECLAIMED=no
+    [ -e "$LOCK" ] || [ -L "$LOCK" ] || return 0
+    [ -d "$LOCK" ] && [ ! -L "$LOCK" ] || fail 'Install lock is not a directory; nothing changed'
+    [ "$MOUNT_LOCKED" = 1 ] || fail 'Install lock present and its owner cannot be checked; another menu may be running. Nothing changed.'
+    for stale_entry in "$LOCK"/* "$LOCK"/.[!.]* "$LOCK"/..?*; do
+        [ -e "$stale_entry" ] || [ -L "$stale_entry" ] || continue
+        [ "$stale_entry" = "$LOCK/pid" ] && [ -f "$stale_entry" ] && [ ! -L "$stale_entry" ] ||
+            fail 'Install lock holds unexpected entries; nothing changed'
+    done
+    rm -f "$LOCK/pid" || fail 'Cannot remove the stale install lock'
+    rmdir "$LOCK" || fail 'Cannot remove the stale install lock'
+    sync
+    STALE_LOCK_RECLAIMED=yes
+    echo 'Removed an install lock left by an interrupted run.'
 }
 lock_mounts() {
     [ "$MOUNT_LOCKED" = 0 ] || return 0
@@ -142,7 +164,12 @@ lock_mounts() {
     MOUNT_LOCKED=1
 }
 mount_rw() {
-    [ -z "$ROOT" ] || return 0
+    if [ -n "$ROOT" ]; then
+        # Fixtures never remount. MX5DR_FIXTURE_MOUNT_LOCK=1 makes a fixture
+        # take the same kernel lock as the CMU (interrupted-install tests).
+        [ "${MX5DR_FIXTURE_MOUNT_LOCK:-}" != 1 ] || lock_mounts
+        return 0
+    fi
     # Stock BusyBox has flock. Serialize before inspecting the mount table,
     # including the gap after persistent lock removal and before remount,ro.
     lock_mounts
@@ -181,28 +208,152 @@ storage_free_kib() {
 require_trial_space() {
     # Count only the remaining log allocation, not another full copy of logs
     # already on the volume. Keep 8 MiB + 64 KiB as in runtime/storage.h, plus
-    # 1 MiB for helpers, configuration backups/staging and filesystem overhead.
-    # $1 is the new binary payload size; existing mapped binaries may persist.
+    # 1 MiB for helpers, guard files, configuration backups/staging and
+    # filesystem overhead. $1 is the new binary payload size; existing mapped
+    # binaries may persist. The caps are the ones this installation writes to
+    # mx5dr.conf (set_config) and the collector's own caps for that profile:
+    # persistent BETA 3 x 16 MiB trace, collector 2 x 1 MiB, phone channel
+    # 2 x 1 MiB (counted although it is off by default: menu 11 can turn it on
+    # without a new check); one-boot trials 3 x 40 MiB and collector 2 x 4 MiB.
     validate_persist
     space_free=$(storage_free_kib "$persist") || fail 'Cannot inspect persistent free space'
     space_missing=0
+    space_reclaim=0
+    if [ "${POLICY:-}" = persistent ]; then
+        space_trace=16777216; space_collector=1048576
+    else
+        space_trace=41943040; space_collector=4194304
+    fi
     if [ "$MODE" != OFF ]; then
         [ ! -L "$BASE" ] && [ ! -L "$BASE/logs" ] || fail 'Symlink log storage'
-        for entry in trace.0.jsonl:41943040 trace.1.jsonl:41943040 trace.2.jsonl:41943040 \
-                     collector.0.jsonl:4194304 collector.1.jsonl:4194304 \
+        for entry in trace.0.jsonl:$space_trace trace.1.jsonl:$space_trace trace.2.jsonl:$space_trace \
+                     collector.0.jsonl:$space_collector collector.1.jsonl:$space_collector \
                      pimu.0.jsonl:1048576 pimu.1.jsonl:1048576; do
             name=${entry%:*}; cap=${entry#*:}; bytes=0
             if [ -e "$BASE/logs/$name" ] || [ -L "$BASE/logs/$name" ]; then
                 regular "$BASE/logs/$name"
                 bytes=$(wc -c < "$BASE/logs/$name")
-                [ "$bytes" -le "$cap" ] || bytes=$cap
+                if [ "$bytes" -gt "$cap" ]; then
+                    case "${POLICY:-}:$name" in
+                        # prune_oversize_traces removes it after the lock.
+                        persistent:trace.1.jsonl|persistent:trace.2.jsonl)
+                            space_reclaim=$((space_reclaim + bytes)); bytes=0;;
+                        *) bytes=$cap;;
+                    esac
+                fi
             fi
             space_missing=$((space_missing + cap - bytes))
         done
     fi
+    space_free=$((space_free + space_reclaim / 1024))
     space_need=$((8192 + 64 + 1024 + (space_missing + $1 + 1023) / 1024))
-    echo "storage_available_kib=$space_free required_kib=$space_need remaining_log_kib=$(((space_missing + 1023) / 1024)) reserve_kib=8192"
+    echo "storage_available_kib=$space_free required_kib=$space_need remaining_log_kib=$(((space_missing + 1023) / 1024)) reserve_kib=8192 reclaimed_old_trace_kib=$((space_reclaim / 1024))"
     [ "$space_free" -ge "$space_need" ] || fail 'Insufficient persistent space; installation/rearm not started. Export existing logs and inspect storage while parked.'
+}
+# Persistent installs only: rotated trace files above the persistent cap (the
+# 40 MiB files of earlier builds) are removed. trace.0 is never touched: the
+# running product may still append to it; the runtime rotates it at its next
+# start and the next menu 1 removes it then. Regular files only.
+prune_oversize_traces() {
+    [ "${POLICY:-}" = persistent ] || return 0
+    for name in trace.1.jsonl trace.2.jsonl; do
+        old_trace=$BASE/logs/$name
+        [ -f "$old_trace" ] && [ ! -L "$old_trace" ] || continue
+        old_bytes=$(wc -c < "$old_trace") || continue
+        [ "$old_bytes" -gt 16777216 ] || continue
+        rm -f "$old_trace" || fail "Cannot remove the oversize old trace file $name"
+        echo "Removed old $name ($old_bytes bytes, above the 16 MiB cap of this version)."
+    done
+}
+# Installation backup sets (backups/YYYYMMDDTHHMMSS-<pid>). Prints one line
+# "<seq> <original> <name>" per set; seq is the set's tx-seq number, 0 when
+# absent or invalid (sets of earlier builds, which are therefore the oldest);
+# original is 1 when all three *.before copies exist and carry no package
+# block or token (a record of the vehicle before this package, the basis of
+# the menu 6 comparison), else 0.
+backup_set_list() {
+    for backup_set in "$BASE"/backups/*; do
+        backup_name=${backup_set##*/}
+        case "$backup_name" in
+            [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]-*) ;;
+            *) continue;;
+        esac
+        case "${backup_name#*-}" in ''|*[!0-9]*) continue;; esac
+        [ -d "$backup_set" ] && [ ! -L "$backup_set" ] || continue
+        backup_seq=0
+        if [ -f "$backup_set/tx-seq" ] && [ ! -L "$backup_set/tx-seq" ]; then
+            backup_seq=$(awk 'NR==1 && /^[0-9]+$/ && length($0)<=9 {v=$0} END {print v+0}' "$backup_set/tx-seq" 2>/dev/null) || backup_seq=0
+        fi
+        backup_original=1
+        for backup_file in autostart sm.conf sm_WCP.conf; do
+            backup_before=$backup_set/$backup_file.before
+            if [ -f "$backup_before" ] && [ ! -L "$backup_before" ]; then
+                ! grep -q -e 'MX5DR ONE-BOOT' -e '/mx5-aa-dr/' -e 'libmx5dr' "$backup_before" 2>/dev/null || backup_original=0
+            else
+                backup_original=0
+            fi
+        done
+        printf '%s %s %s\n' "$backup_seq" "$backup_original" "$backup_name"
+    done
+}
+backup_set_seq_max() {
+    backup_set_list | awk 'BEGIN {m=0} $1+0>m {m=$1+0} END {print m}'
+}
+# Keeps the 3 newest sets (highest seq; equal seq: highest name) and, when
+# none of them is an original pre-install record, also the newest original
+# one; removes the others. Only directories with a backup set name; never a
+# symlink.
+prune_backup_sets() {
+    backup_old=$(backup_set_list | awk '
+        {seq[NR]=$1+0; orig[NR]=$2+0; name[NR]=$3}
+        function newer(i, j) { return !j || seq[i]>seq[j] || (seq[i]==seq[j] && name[i]>name[j]) }
+        END {
+            for (round=1; round<=3; round++) {
+                best=0
+                for (i=1; i<=NR; i++) if (!kept[i] && newer(i, best)) best=i
+                if (best) { kept[best]=1; if (orig[best]) have=1 }
+            }
+            if (!have) {
+                best=0
+                for (i=1; i<=NR; i++) if (!kept[i] && orig[i] && newer(i, best)) best=i
+                if (best) kept[best]=1
+            }
+            for (i=1; i<=NR; i++) if (!kept[i]) print name[i]
+        }') || return 1
+    for backup_name in $backup_old; do
+        backup_set=$BASE/backups/$backup_name
+        [ -d "$backup_set" ] && [ ! -L "$backup_set" ] || continue
+        rm -rf "$backup_set" || fail "Cannot remove the old backup set $backup_name"
+    done
+}
+# Owner switches (markers in the package directory, read once at CMU start by
+# the guard, runtime and collector). Experimental features are OFF while their
+# marker exists: bt-off (phone Bluetooth channel; the guard then starts the
+# stock bds arguments) and g3-garage-off (garage heading carry).
+EXPERIMENTAL_MARKERS='bt-off g3-garage-off'
+OWNER_MARKERS='vimchan-off g3-off acc-cap-off diag bt-off g3-garage-off'
+# The garage heading chain files in logs/ (runtime g3_heading.h): the
+# previous-product-boot token and the worker-boot file. Menu 4 removes both;
+# menu 1 only the token (a running worker may still use its boot file).
+G3_TOKEN_FILES='g3-last-start g3-worker-boot'
+# Writes an OFF marker (file content "off"). A symlink of that name is
+# removed first (mv would move into a linked directory); a real directory of
+# that name already counts as present (OFF) and is left for menu 6.
+write_off_marker() {
+    off_marker=$BASE/$1
+    if [ -d "$off_marker" ] && [ ! -L "$off_marker" ]; then return 0; fi
+    if [ -L "$off_marker" ]; then rm -f "$off_marker" || return 1; fi
+    off_tmp=$BASE/$1.new.$$
+    rm -f "$off_tmp" || return 1
+    if ! printf 'off\n' > "$off_tmp" || ! mv -f "$off_tmp" "$off_marker"; then
+        rm -f "$off_tmp" || :
+        return 1
+    fi
+}
+# Removes one marker or token file (never a directory). Returns 1 on failure.
+remove_entry() {
+    if [ -f "$1" ] || [ -L "$1" ]; then rm -f "$1" || return 1; fi
+    return 0
 }
 prepare_collector_storage() {
     # Installation/arming need a runnable collector. Recovery must still work

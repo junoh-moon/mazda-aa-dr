@@ -5,20 +5,36 @@ ALLOW_REMOUNT=1
 [ -z "$ROOT" ] || ALLOW_REMOUNT=0
 for arg in "$@"; do case "$arg" in --remount) ALLOW_REMOUNT=1;; --no-remount) ALLOW_REMOUNT=0;; *) fail "Unknown option $arg";; esac; done
 [ -z "$ROOT" ] || [ "$ALLOW_REMOUNT" = 0 ] || fail 'No remounts permitted for fixtures'
+# Menu 4 also recovers an interrupted install or uninstall (power loss): an
+# install lock no live run owns is removed (reclaim_stale_lock proves that
+# with the kernel mount lock), and the pending transaction marker is removed
+# at the end like after every removal. Stock files are never restored or
+# deleted here; owned blocks and tokens are removed exactly as below.
+validate_persist
+mount_rw "$persist"
+reclaim_stale_lock
 prepare_storage
 mount_rw "$ROOT/jci/sm"
 mount_rw "$ROOT/usr/bin"
 rm -f "$BASE/guard/arm" "$BASE/guard/persist"
-# The diagnostic tunnel test (menu 9) never survives an uninstall; a
-# directory of that name is not a marker (off) and menu 6 removes it.
-if [ -f "$BASE/diag" ] || [ -L "$BASE/diag" ]; then rm -f "$BASE/diag" || echo 'Warning: cannot remove the diag marker; menu 6 removes it.'; fi
-# Likewise the tunnel accuracy ceiling off switch (menu 10).
-if [ -f "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then rm -f "$BASE/acc-cap-off" || echo 'Warning: cannot remove the acc-cap-off marker; menu 6 removes it.'; fi
-# Likewise the G3 garage heading switch (menu 12).
-if [ -f "$BASE/g3-garage-off" ] || [ -L "$BASE/g3-garage-off" ]; then rm -f "$BASE/g3-garage-off" || echo 'Warning: cannot remove the g3-garage-off marker; menu 6 removes it.'; fi
-# The garage heading chain token: no heading stored before the removal is
-# carried after a later installation (install.sh removes it again).
-if [ -f "$BASE/logs/g3-last-start" ] || [ -L "$BASE/logs/g3-last-start" ]; then rm -f "$BASE/logs/g3-last-start" || echo 'Warning: cannot remove the garage heading chain token; menu 1 removes it.'; fi
+# Every owner switch (menus 7-12, the removed diagnostic marker diag) and the
+# garage heading chain token files: a later menu 1 starts from the defaults
+# and no heading stored before the removal is carried after it. A directory
+# of such a name is not a marker file and is left for menu 6.
+for name in $OWNER_MARKERS; do
+    if [ -d "$BASE/$name" ] && [ ! -L "$BASE/$name" ]; then
+        echo "Warning: cannot remove the $name marker; menu 6 removes it."
+    else
+        remove_entry "$BASE/$name" || echo "Warning: cannot remove the $name marker; menu 6 removes it."
+    fi
+done
+for name in $G3_TOKEN_FILES; do
+    if [ -d "$BASE/logs/$name" ] && [ ! -L "$BASE/logs/$name" ]; then
+        echo "Warning: cannot remove logs/$name; menu 6 removes it."
+    else
+        remove_entry "$BASE/logs/$name" || echo "Warning: cannot remove logs/$name; menu 6 removes it."
+    fi
+done
 # The phone IMU Bluetooth configuration copy: bds copies it to /tmp only at
 # its start, so removing it now changes nothing in this boot; later boots
 # never select a trial (stock bds arguments).
@@ -65,4 +81,5 @@ else
 fi
 rm -f "$BASE/pending" "$BASE/installed.txt"
 sync
-echo 'Removed owned one-boot autostart blocks, the persistent enablement and mx5dr preload tokens; OFF config staged. No restart/kill. Library/logs/backups retained for mapped-code lifetime and diagnosis. After a CMU reboot (menu 5), menu 6 deletes them all.'
+[ "$STALE_LOCK_RECLAIMED" = no ] || echo 'Recovered an interrupted run: choose 5, or 1 to install again.'
+echo 'Removed owned one-boot autostart blocks, the persistent enablement, the owner switches and mx5dr preload tokens; OFF config staged. No restart/kill. Library/logs/backups retained for mapped-code lifetime and diagnosis. After a CMU reboot (menu 5), menu 6 deletes them all.'

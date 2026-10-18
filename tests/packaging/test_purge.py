@@ -181,6 +181,22 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.base.exists())
 
+    def test_menu_six_deletes_every_marker_and_chain_file_left_after_menu_four(self):
+        # v1.0 stable: after menu 4, owner markers can survive only as
+        # directories (menu 4 removes files and links); a running product
+        # can also rewrite the chain files before the reboot. Menu 6 removes
+        # all of them with the package directory, never OEM files.
+        self.install_and_uninstall('--mode=BETA')
+        for name in ('vimchan-off', 'g3-off', 'bt-off', 'g3-garage-off', 'acc-cap-off', 'diag'):
+            (self.base / name).mkdir()
+        for name in ('g3-last-start', 'g3-worker-boot', '.g3-last-start.tmp', '.g3-worker-boot.tmp'):
+            (self.base / 'logs' / name).write_text('x\n')
+        before = tree(self.root, self.skip | {'data_persist/mx5-aa-dr'})
+        result = self.menu('6\n6\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.base.exists())
+        self.assertEqual(tree(self.root, self.skip | {'data_persist/mx5-aa-dr'}), before)
+
     def test_unexpected_entry_in_the_lock_is_reported_not_aborted(self):
         # The final rmdir of the install lock fails when something else put a
         # file into it; set -e must not abort before the result (2026-10-08

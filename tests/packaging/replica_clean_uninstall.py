@@ -416,10 +416,14 @@ def lifecycle(run, reference, upgrade):
     run.check('report: stale install lock reclaimed', 'stale_install_lock_reclaimed=yes' in report)
     run.check('report: stale /tmp hash copy listed', 'dir 0 /tmp/mx5dr-hash.Zx9Qw1' in report)
     if upgrade:
-        run.check('report: all four complete vehicle records compared',
-                  'compare_records= 19700101T000140-5752 19700101T000230-11109 19700101T000238-11190 '
-                  '19700101T000247-13442\n' in report)
-        run.check('report: identical to all 4', 'verdict: identical to all 4 recorded pre-install states' in report)
+        # v1.0 (workstream B): the upgrade install keeps the 3 newest backup
+        # sets (its own set, then by name the interrupted 002334 and 000247)
+        # plus the newest original record when none of those is one; here
+        # 000247 is the newest original record, so the three older complete
+        # vehicle records were pruned and the comparison uses 000247.
+        run.check('report: the kept complete vehicle record compared',
+                  'compare_records= 19700101T000247-13442\n' in report)
+        run.check('report: identical to the kept record', 'verdict: identical to all 1 recorded pre-install states' in report)
         run.check('report: interrupted vehicle record not used',
                   '19700101T002334-12846' in report.split('compare_incomplete_or_not_original=')[1].splitlines()[0])
         run.check('report: records agree', 'compare_records_agree=yes' in report)

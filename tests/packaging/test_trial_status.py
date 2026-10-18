@@ -307,22 +307,43 @@ exec "$MX5DR_REAL_OD" "$@"
         (self.base / 'g3-off').write_text('off\n')
         self.assertIn('g3_marker=present', self.run_status().stdout)
 
-    def test_diag_marker(self):
-        # Menu 9 tunnel test: only a regular file holding exactly "on" is on.
-        self.assertIn('diag_marker=absent', self.run_status().stdout)
+    def test_diag_marker_is_no_longer_reported(self):
+        # v1.0 stable: the diagnostic tunnel test (menu 9) is removed; a left
+        # over marker is not reported (menus 1 and 4 remove it).
         marker = self.base / 'diag'
-        marker.write_text('on\n')
-        self.assertIn('diag_marker=on', self.run_status().stdout)
-        for data in ('on', 'off\n', 'on\n\n', 'ON\n'):
-            with self.subTest(data=data):
+        for data in (None, 'on\n'):
+            if data:
                 marker.write_text(data)
-                self.assertIn('diag_marker=invalid', self.run_status().stdout)
-        marker.unlink()
-        marker.symlink_to('elsewhere')
-        self.assertIn('diag_marker=invalid', self.run_status().stdout)
-        marker.unlink()
-        marker.mkdir()
-        self.assertIn('diag_marker=invalid', self.run_status().stdout)
+            self.assertNotIn('diag_marker', self.run_status().stdout)
+
+    def test_experimental_on_lists_only_switched_on_features_of_an_installation(self):
+        # menus 11/12: phone_bt needs the configuration copy, garage needs
+        # the heading (g3-off absent); nothing is listed without installed.txt.
+        installed = self.base / 'installed.txt'
+        existed = installed.exists()
+        if not existed:
+            installed.write_text('mode=BETA\n')
+        (self.base / 'bt').mkdir(exist_ok=True)
+        (self.base / 'bt/BdsConfiguration.xml').write_text('<x/>\n')
+        cases = ((('bt-off', 'g3-garage-off'), 'none'), (('bt-off',), 'garage'),
+                 (('g3-garage-off',), 'phone_bt'), ((), 'phone_bt,garage'),
+                 (('bt-off', 'g3-off'), 'none'))
+        for present, want in cases:
+            with self.subTest(present=present):
+                for name in ('bt-off', 'g3-garage-off', 'g3-off'):
+                    path = self.base / name
+                    if name in present:
+                        path.write_text('off\n')
+                    elif path.exists():
+                        path.unlink()
+                self.assertIn('experimental_on=%s (read at CMU start' % want, self.run_status().stdout)
+        (self.base / 'bt/BdsConfiguration.xml').unlink()
+        for name in ('bt-off', 'g3-garage-off', 'g3-off'):
+            if (self.base / name).exists():
+                (self.base / name).unlink()
+        self.assertIn('experimental_on=garage ', self.run_status().stdout)
+        installed.unlink()
+        self.assertIn('experimental_on=none ', self.run_status().stdout)
 
     def test_acc_cap_marker(self):
         # Menu 10 tunnel accuracy ceiling: any marker type is present (off).

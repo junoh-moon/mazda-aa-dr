@@ -271,25 +271,19 @@ echo "vim_side_channel_marker=$vim_side_channel_marker (read at CMU start; prese
 g3_marker=absent
 if [ -e "$BASE/g3-off" ] || [ -L "$BASE/g3-off" ]; then g3_marker=present; fi
 echo "g3_marker=$g3_marker (read at CMU start; present = heading log and start bearing off)"
-# Owner switch of the diagnostic tunnel test (menu 9); read once at start.
-# Only a regular file holding exactly "on" turns it on. The arm of each
-# tunnel is in the exported journal only, never in this status (blind test).
-diag_marker=absent
-if [ -f "$BASE/diag" ] && [ ! -L "$BASE/diag" ] && [ "$(wc -c < "$BASE/diag")" -eq 3 ] &&
-   printf 'on\n' | cmp -s - "$BASE/diag"; then diag_marker=on
-elif [ -e "$BASE/diag" ] || [ -L "$BASE/diag" ]; then diag_marker=invalid; fi
-echo "diag_marker=$diag_marker (read at CMU start; on = tunnel test, invalid = off)"
 # Owner switch of the BETA tunnel accuracy ceiling (menu 10); read once at
 # start. Any marker type counts as present (fail closed to the 40 m values).
 acc_cap_marker=absent
 if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then acc_cap_marker=present; fi
 echo "acc_cap_marker=$acc_cap_marker (read at CMU start; present = 25 m tunnel cap off)"
-# Owner switch of the G3 garage heading carry (menu 12); read once at start.
-# Any marker type counts as present (beta.16 G3 rules).
+# Experimental owner switch of the G3 garage heading carry (menu 12; v1.0
+# default OFF: menu 1 writes the marker); read once at start. Any marker type
+# counts as present (beta.16 G3 rules).
 g3_garage_marker=absent
 if [ -e "$BASE/g3-garage-off" ] || [ -L "$BASE/g3-garage-off" ]; then g3_garage_marker=present; fi
 echo "g3_garage_marker=$g3_garage_marker (read at CMU start; present = garage heading off)"
-# Phone IMU Bluetooth service (menu 11; validation/PHONE_IMU_CHANNEL_2026-10-14.md).
+# Experimental phone Bluetooth channel (menu 11; v1.0 default OFF: menu 1
+# writes bt-off; validation/PHONE_IMU_CHANNEL_2026-10-14.md).
 # bt_fail names the automatic fallback record (collector or guard); either
 # keeps bds on its stock arguments until menu 1. bds_args reads the kernel's
 # command line of the running stock bds (read-only).
@@ -326,6 +320,15 @@ for bt_proc in "$ROOT"/proc/[0-9]*; do
     esac
 done
 echo "bt_fail=$bt_fail bt_config=$bt_config bds_args=$bds_args"
+# Experimental features switched ON for the next CMU start (menus 11, 12):
+# only for a finished installation; the garage carry also needs the heading
+# (g3-off absent), the phone channel its configuration copy.
+experimental_on=''
+if [ -f "$BASE/installed.txt" ] && [ ! -L "$BASE/installed.txt" ]; then
+    if [ "$bt_marker" = absent ] && [ "$bt_config" = installed ]; then experimental_on=phone_bt; fi
+    if [ "$g3_garage_marker" = absent ] && [ "$g3_marker" = absent ]; then experimental_on=${experimental_on:+$experimental_on,}garage; fi
+fi
+echo "experimental_on=${experimental_on:-none} (read at CMU start; menus 11 and 12)"
 guard_config_binding=unconfirmed
 if [ "$startup_state" = guard_committed_after_new_boot ]; then
     # Row 3 of the validated v3 manifest is the configuration digest used by

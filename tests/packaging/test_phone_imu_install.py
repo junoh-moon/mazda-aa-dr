@@ -154,7 +154,10 @@ class Installer(unittest.TestCase):
 
     def test_beta_install_generates_config_and_template_argument(self):
         r = self.install()
-        self.assertIn('Phone IMU Bluetooth service MX5DR IMU prepared', r.stdout)
+        self.assertIn('Phone Bluetooth channel prepared, OFF (experimental; menu 11 turns it on).', r.stdout)
+        # v1.0 default: the copy and the template argument are staged, but
+        # the channel is OFF (bt-off) until menu 11 turns it on.
+        self.assertEqual((self.base / 'bt-off').read_bytes(), b'off\n')
         xml = (self.base / 'bt/BdsConfiguration.xml').read_bytes()
         expect = edit(['-v', 'what=xml'], XML).stdout.encode()
         self.assertEqual(xml, expect)
@@ -181,7 +184,7 @@ class Installer(unittest.TestCase):
         self.install('SHADOW')
         self.assertTrue((self.base / 'bt/BdsConfiguration.xml').exists())
         r = self.install('OBSERVE')
-        self.assertNotIn('MX5DR IMU prepared', r.stdout)
+        self.assertNotIn('Phone Bluetooth channel prepared', r.stdout)
         self.assertFalse((self.base / 'bt').exists())
         self.assertNotIn('-configFilePath', ''.join(self.templates()))
 
@@ -201,16 +204,19 @@ class Installer(unittest.TestCase):
         self.assertEqual(self.fx.autostart.read_bytes(), self.fx.original_autostart)
         self.assertFalse(list(self.base.glob('bt/*')))
 
-    def test_menu1_clears_bt_off_and_fail_records(self):
+    def test_menu1_resets_the_channel_to_off_and_clears_fail_records(self):
+        # v1.0: menu 1 returns the experimental channel to OFF (bt-off) even
+        # when menu 11 had turned it on, and clears both fallback records.
         self.install()
-        (self.base / 'bt-off').write_text('off\n')
+        (self.base / 'bt-off').unlink()                       # menu 11: ON
         (self.base / 'logs/bt-fail').write_text('mx5dr-bt-fail-v1\nboot_id=x\nreason=restart\n')
         (self.base / 'guard/bt-fail').write_text('mx5dr-bt-fail-v1\nboot_id=x\nreason=reset_after_bt\n')
         r = self.install()
-        self.assertIn('Cleared bt-off', r.stdout)
         self.assertIn('Cleared logs/bt-fail', r.stdout)
         self.assertIn('Cleared guard/bt-fail', r.stdout)
-        for p in ('bt-off', 'logs/bt-fail', 'guard/bt-fail'):
+        self.assertNotIn('Cleared bt-off', r.stdout)
+        self.assertEqual((self.base / 'bt-off').read_bytes(), b'off\n')
+        for p in ('logs/bt-fail', 'guard/bt-fail'):
             self.assertFalse((self.base / p).exists(), p)
         self.assertTrue(list((self.base / 'backups').glob('bt-fail')))
 
@@ -218,6 +224,7 @@ class Installer(unittest.TestCase):
         self.install()
         self.fx.run_script('uninstall.sh')
         self.assertFalse((self.base / 'bt').exists())
+        self.assertFalse((self.base / 'bt-off').exists())
         self.assertEqual((self.root / 'jci/bds/BdsConfiguration.xml').read_text(), XML)
         self.assertEqual(self.fx.sm.read_bytes(), self.fx.original)
 
@@ -277,6 +284,30 @@ class GuardFallback(unittest.TestCase):
         self.assertEqual(self.guard_call('confirm').returncode, 0)
         return Path(trial).read_text()
 
+    def test_default_install_passes_no_bds_configuration(self):
+        # v1.0 default (bt-off written by menu 1): the configuration the
+        # guard generates for SM has no -configFilePath and is byte for byte
+        # the trial configuration an installation without the phone channel
+        # derives from the same stock files (stock bds arguments).
+        self.i.install()
+        for d in ('tmp', 'data'):
+            (self.root / d).mkdir(exist_ok=True)
+        self.assertEqual(self.guard_call('enable').returncode, 0)
+        self.assertTrue((self.base / 'bt-off').exists())
+        selected = self.select(1)
+        self.assertNotIn('-configFilePath', selected)
+        self.assertIn('args="-interface dbus"', selected)
+        plain = Installer()
+        self.addCleanup(plain.doCleanups)
+        plain.setUp()
+        (plain.root / 'jci/bds/bds').write_bytes(b'SYNTHETIC, NOT OEM: other bds')   # no channel
+        self.assertIn('not prepared', plain.install().stdout)
+        self.assertEqual(selected, plain.templates()[0])
+        self.assertEqual(self.i.fx.sm.read_bytes(), self.i.fx.original)
+        self.assertEqual((self.root / 'jci/bds/BdsConfiguration.xml').read_text(), XML)
+        last = (self.base / 'guard/bt-last').read_text()
+        self.assertIn('use=no\nreason=off\n', last)
+
     def test_fallback_chain(self):
         self.i.install()
         for d in ('tmp', 'data'):
@@ -284,12 +315,14 @@ class GuardFallback(unittest.TestCase):
         self.assertEqual(self.guard_call('enable').returncode, 0)
         template = self.i.templates()[0]
         self.assertIn(ARG, template)
-        self.assertEqual(self.select(1), template)                            # on
-        (self.base / 'bt-off').write_text('off\n')
-        self.assertEqual(self.select(2), template.replace(ARG, ''))           # menu 11
+        self.assertEqual(self.select(1), template.replace(ARG, ''))           # default OFF
+        (self.base / 'bt-off').unlink()                                       # menu 11: ON
+        self.assertEqual(self.select(2), template)
+        (self.base / 'bt-off').write_text('off\n')                            # menu 11: OFF
+        self.assertEqual(self.select(3), template.replace(ARG, ''))
         (self.base / 'bt-off').unlink()
         (self.base / 'logs/bt-fail').write_text('mx5dr-bt-fail-v1\nboot_id=x\nreason=not_ready\n')
-        self.assertEqual(self.select(3), template.replace(ARG, ''))           # collector fallback
+        self.assertEqual(self.select(4), template.replace(ARG, ''))           # collector fallback
         (self.root / 'proc/uptime').write_text('100.00 1.00\n')
         env = dict(os.environ, MX5DR_FIXTURE_ROOT=str(self.root), MX5DR_FIXTURE_GUARD=str(self.guard))
         r = subprocess.run(['sh', str(self.i.bundle / 'trial_status.sh')], env=env, capture_output=True, text=True)
@@ -307,60 +340,103 @@ class GuardFallback(unittest.TestCase):
             self.assertIn('bds_args=' + want, r.stdout + r.stderr, argv)
             (proc / 'cmdline').unlink()
             proc.rmdir()
-        self.i.install()                                                      # menu 1 resets
+        self.i.install()                                                      # menu 1 resets to OFF
         self.assertFalse((self.base / 'logs/bt-fail').exists())
         self.assertEqual(self.guard_call('enable').returncode, 0)
-        self.assertEqual(self.select(5), self.i.templates()[0])
+        self.assertEqual(self.select(5), self.i.templates()[0].replace(ARG, ''))
+        (self.base / 'bt-off').unlink()
+        self.assertEqual(self.select(6), self.i.templates()[0])
 
 
 class MenuEleven(unittest.TestCase):
+    """Menu 11 turns the experimental phone channel on/off (v1.0 default OFF)."""
+
     def setUp(self):
         self.t = test_trial_menu.TrialMenuTests()
         self.addCleanup(self.t.doCleanups)
         self.t.setUp()
 
-    def test_menu_eleven_toggles_the_bt_off_marker(self):
+    def bluetooth_tree(self):
+        t = self.t
+        for name, args in (('sm.conf', '-interface dbus'), ('sm_WCP.conf', '-interface dbus -wcp')):
+            path = t.root / 'jci/sm' / name
+            path.write_text(path.read_text().replace('</services>', BDS_LINE % args + '</services>'))
+        (t.root / 'jci/bds').mkdir(parents=True)
+        (t.root / 'jci/bds/BdsConfiguration.xml').write_text(XML)
+        (t.root / 'jci/bds/bds').write_bytes(b'SYNTHETIC, NOT OEM: bds')
+        (t.usb / 'bt.sha256').write_text(''.join(
+            '%s  %s\n' % (hashlib.sha256((t.root / n).read_bytes()).hexdigest(), n)
+            for n in ('jci/bds/BdsConfiguration.xml', 'jci/bds/bds')))
+        (t.usb / 'bundle-default-mode').write_text('BETA\n')   # the channel is SHADOW/BETA only
+
+    def test_menu_eleven_turns_the_phone_channel_on_and_off(self):
         t = self.t
         marker = t.base / 'bt-off'
         result = t.menu('11\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('11 Phone IMU Bluetooth on/off (record only)', result.stdout)
-        self.assertIn('Phone IMU Bluetooth: package not', result.stdout)
-        t.fixture.run_script('install.sh')
-        config = (t.base / 'mx5dr.conf').read_bytes()
-        for keys in ('11\n0\n', '11\n\n0\n', '11\n1\n0\n', '11\n110\n0\n'):
-            result = t.menu(keys)
-            self.assertIn('Phone IMU Bluetooth now: ON', result.stdout)
-            self.assertIn('Cancelled; nothing changed.', result.stdout)
-            self.assertFalse(marker.exists())
-        result = t.menu('11\n11\n0\n')
-        self.assertIn('Phone IMU Bluetooth set to OFF.', result.stdout)
+        self.assertIn('11 Phone Bluetooth: turn on/off (experimental, default OFF)', result.stdout)
+        self.assertIn('Phone Bluetooth: package not installed;', result.stdout)
+        self.bluetooth_tree()
+        result = t.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(marker.read_bytes(), b'off\n')
-        self.assertEqual((t.base / 'mx5dr.conf').read_bytes(), config)
-        out = result.stdout
-        start = out.index('Phone IMU Bluetooth now:')
-        for line in out[start:out.index('(parked reboot) for it to take effect.') + 40].splitlines():
-            self.assertLessEqual(len(line.replace('Number, then Enter: ', '')), 40, line)
+        config = (t.base / 'mx5dr.conf').read_bytes()
         status = t.menu('2\n0\n')
         self.assertIn('bt_marker=present', status.stdout)
-        self.assertIn('BT phone IMU OFF (menu 11)', status.stdout)
+        self.assertIn('EXP none (11, 12 off)', status.stdout)
+        self.assertNotIn('BT phone IMU OFF', status.stdout)
+        for keys in ('11\n0\n', '11\n\n0\n', '11\n1\n0\n', '11\n110\n0\n', '11\n12\n0\n'):
+            result = t.menu(keys)
+            self.assertIn('Phone Bluetooth now:\n  OFF 꺼짐', result.stdout)
+            self.assertIn('Enter 11 again to turn it ON,', result.stdout)
+            self.assertIn('Cancelled; nothing changed.', result.stdout)
+            self.assertTrue(marker.exists())
         result = t.menu('11\n11\n0\n')
-        self.assertIn('Phone IMU Bluetooth set to ON.', result.stdout)
+        self.assertIn('Phone Bluetooth turned ON 켜짐(실험).', result.stdout)
         self.assertFalse(marker.exists())
-        self.assertIn('bt_marker=absent', t.menu('2\n0\n').stdout)
+        self.assertEqual((t.base / 'mx5dr.conf').read_bytes(), config)
+        out = result.stdout
+        start = out.index('Phone Bluetooth now:')
+        for line in out[start:out.index('(parked reboot) for it to take effect.') + 40].splitlines():
+            line = line.replace('Number, then Enter: ', '')
+            self.assertLessEqual(sum(2 if ord(c) > 0x1100 else 1 for c in line), 40, line)
+        status = t.menu('2\n0\n')
+        self.assertIn('bt_marker=absent', status.stdout)
+        self.assertIn('experimental_on=phone_bt,garage', t.menu('12\n12\n2\n0\n').stdout)
+        self.assertIn('EXP ON: 11 phone bt, 12 garage', t.menu('2\n0\n').stdout)
+        result = t.menu('11\n11\n0\n')
+        self.assertIn('Phone Bluetooth now:\n  ON (experimental) 켜짐(실험)', result.stdout)
+        self.assertIn('Phone Bluetooth turned OFF 꺼짐.', result.stdout)
+        self.assertEqual(marker.read_bytes(), b'off\n')
+        self.assertIn('EXP ON: 12 garage', t.menu('2\n0\n').stdout)
+        marker.unlink()
         marker.mkdir()
-        self.assertIn('Phone IMU Bluetooth: OFF (marker dir).', t.menu('11\n11\n0\n').stdout)
+        self.assertIn('Phone Bluetooth: OFF (marker is a dir).', t.menu('11\n11\n0\n').stdout)
         marker.rmdir()
         outside = t.base.parent / 'bt-outside'
         outside.mkdir()
         marker.symlink_to(outside, target_is_directory=True)
-        self.assertIn('Phone IMU Bluetooth set to ON.', t.menu('11\n11\n0\n').stdout)
+        self.assertIn('Phone Bluetooth turned ON 켜짐(실험).', t.menu('11\n11\n0\n').stdout)
         self.assertFalse(marker.is_symlink())
         self.assertTrue(outside.is_dir())
-        marker.write_text('off\n')
-        result = t.menu('1\n0\n')
-        self.assertIn('Cleared bt-off', result.stdout)
+        result = t.menu('1\n0\n')                       # reinstall: OFF again
+        self.assertEqual(marker.read_bytes(), b'off\n')
+        result = t.menu('4\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(marker.exists())
+
+    def test_menu_eleven_cannot_turn_on_a_channel_that_was_not_prepared(self):
+        # Stock Bluetooth files differ from the pins (here: none at all):
+        # menu 1 prepared no configuration copy, so ON would do nothing.
+        t = self.t
+        t.fixture.run_script('install.sh')
+        self.assertTrue((t.base / 'bt-off').exists())
+        result = t.menu('11\n11\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Not prepared on this CMU (stock', result.stdout)
+        self.assertNotIn('turned ON', result.stdout)
+        self.assertTrue((t.base / 'bt-off').exists())
+        self.assertIn('experimental_on=none', t.menu('2\n0\n').stdout)
 
 
 if __name__ == '__main__':
