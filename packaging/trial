@@ -452,6 +452,9 @@ experimental_toggle() {
         'Experimental, default OFF after menu 1.' \
         "Enter $1 again to $verb," \
         'anything else cancels.'
+    if [ "$2" = g3-garage-off ] && { [ -e "$BASE/g3-off" ] || [ -L "$BASE/g3-off" ]; }; then
+        echo 'Heading (menu 8) is OFF: garage stays off.'
+    fi
     printf 'Number, then Enter: '
     if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
     if [ "$confirm" != "$1" ]; then echo 'Cancelled; nothing changed.'; return 0; fi

@@ -292,6 +292,10 @@ backup_set_list() {
             else
                 backup_original=0
             fi
+            # A record without its digest file is incomplete for menu 6 as well.
+            if [ ! -f "$backup_before.sha256" ] || [ -L "$backup_before.sha256" ]; then
+                backup_original=0
+            fi
         done
         printf '%s %s %s\n' "$backup_seq" "$backup_original" "$backup_name"
     done
