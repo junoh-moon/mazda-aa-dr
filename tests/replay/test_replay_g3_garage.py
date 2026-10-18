@@ -198,6 +198,9 @@ class G3GarageChainReplay(unittest.TestCase):
                     out[name]["store"] = f.read()
                 with open(os.path.join(store, "g3-last-start")) as f:
                     out[name]["token"] = f.read()
+                worker = os.path.join(store, "g3-worker-boot")
+                with open(worker) if os.path.exists(worker) else open(os.devnull) as f:
+                    out[name]["worker"] = f.read()
             cls.runs[mode] = out
 
     @classmethod
@@ -219,6 +222,15 @@ class G3GarageChainReplay(unittest.TestCase):
         stored = int(fields[6]) / 100.0
         self.assertLess(abs(wrap180(stored - self.park_heading)), 3.0, (stored, self.park_heading))
         self.assertLessEqual(int(fields[7]), 6000)
+        # Lazy token (fourth fix): boot A drove, so its token write (store
+        # path, no fsync) landed before its first record; the worker-boot
+        # file names A.
+        tokens = [r for r in a["g3"] if r["kind"] == "g3_store" and r["event"] == "token"]
+        self.assertEqual([(r["result"], r["reason"], r["prev"]) for r in tokens], [("written", "moved", "none")])
+        self.assertLess(tokens[0]["mono_ns"], written[0]["mono_ns"])
+        self.assertEqual(a["worker"], "mx5g3worker 1 %s\n" % BOOT_A)
+        loaded = [r for r in a["g3"] if r["kind"] == "g3_store" and r["event"] == "missing"]
+        self.assertEqual([(r["prev"], r["swap"]) for r in loaded], [("none", "lazy")])
 
     def test_on_restores_chain_depart_and_overlays_the_exit_fixes(self):
         b = self.runs["on"]["b"]
@@ -252,6 +264,10 @@ class G3GarageChainReplay(unittest.TestCase):
 
     def test_off_is_beta16(self):
         a, b = self.runs["off"]["a"], self.runs["off"]["b"]
+        # The marker keeps the start-time swap (no token row, no worker-boot file).
+        self.assertEqual((a["token"], b["token"], a["worker"], b["worker"]),
+                         ("mx5g3start 1 %s\n" % BOOT_A, "mx5g3start 1 %s\n" % BOOT_B, "", ""))
+        self.assertFalse([r for r in a["g3"] + b["g3"] if r.get("event") == "token"])
         self.assertFalse([r for r in a["g3"] if r["kind"] == "g3_store" and r["event"] == "written"])
         self.assertEqual([(r["event"], r["reason"]) for r in b["g3"] if r["kind"] == "g3_store"][:1],
                          [("missing", "missing")])

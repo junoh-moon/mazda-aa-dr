@@ -648,7 +648,11 @@ bool count_latch = true;  // parent only; window children stop counting
 R::G3Tracker g3;
 Journal g3_journal;
 uint64_t g3_anchor_seen;
-struct G3Job { bool active, sync; uint32_t seq; uint64_t due; char line[R::G3_RECORD_MAX]; size_t n; } g3_job;
+struct G3Job { bool active, sync; unsigned target; uint32_t seq; uint64_t due; char line[R::G3_RECORD_MAX]; size_t n; } g3_job;
+// --g3-garage on: the runtime's lazy previous-product-boot token watch
+// (fed with every recorded wheel event; persistent recordings keep raw rows
+// only inside trigger windows, so the first window gap ends as blind_gap).
+R::G3TokenWatch g3_watch;
 // --g3-send on: the bearing send window (rows into g3_journal).
 R::G3Send g3send;
 std::vector<std::string> g3_send_lines;   // --g3-send-out
@@ -685,6 +689,7 @@ void g3_turn(uint64_t now) {
     R::G3Sample sample = R::g3_sample(nav, now, opt.g3_rt ? opt.g3_rt + now / 1000000000ULL : 0);
     sample.beta_replacing = g3_replacing(beta->state());
     sample.writer_lag_ns = opt.writer_lag_ns;
+    if (g3.token_wanted()) sample.token_why = g3_watch.check(now);
     // --g3-garage on: the runtime's garage idle rule (a write without fsync
     // may run while BETA replaces; the tracker requests no fsync then).
     // The runtime's g3_io_block with a store thread, a current journal, a
@@ -705,13 +710,17 @@ void g3_turn(uint64_t now) {
     if (g3_job.active && now >= g3_job.due) {
         const uint64_t began = g3_job.due - (opt.g3 == "slow" ? 3000000000ULL : 0);
         R::G3IoResult r = {R::G3_IO_OK, 0, now - began, R::G3_STEP_NONE, began, now};
-        // Only the parent run writes the real store file.
+        // Only the parent run writes the real store file (or the lazy token).
         if (count_latch && !opt.g3_store.empty())
-            r = R::g3_write_atomic(opt.g3_store.c_str(), g3_job.line, g3_job.n, 0, 0, 0, g3_job.sync);
+            r = g3_job.target == R::G3_TARGET_TOKEN ?
+                R::g3_write_atomic_at(opt.g3_store.c_str(), R::G3_LAST_START_NAME, R::G3_LAST_START_TEMP,
+                                      g3_job.line, g3_job.n, 0, 0, 0, false) :
+                R::g3_write_atomic(opt.g3_store.c_str(), g3_job.line, g3_job.n, 0, 0, 0, g3_job.sync);
         g3.store_result(g3_journal, now, g3_job.seq, r);
         g3_job.active = false;
     }
-    if (!g3_job.active && g3.take_request(g3_job.line, sizeof g3_job.line, &g3_job.n, &g3_job.seq, &g3_job.sync)) {
+    if (!g3_job.active && g3.take_request(g3_job.line, sizeof g3_job.line, &g3_job.n, &g3_job.seq, &g3_job.sync,
+                                          &g3_job.target)) {
         g3_job.active = true;
         g3_job.due = now + (opt.g3 == "slow" ? 3000000000ULL : 0);
     }
@@ -776,6 +785,7 @@ void worker_turn(uint64_t now) {
             if (motion_gap.accept(r.event, &missing, &span) == R::MotionGapTracker::TOO_LARGE)
                 nav.exclude_reverse(N::LATCH_CLEAR_INPUT_GAP);
             if (record_on) record.motion(r.event, N::research_model_profile());
+            if (g3_watch.active && r.event.kind == N::WHEELS) g3_watch.wheel(r.event.received_ns, r.event.raw);
             if (opt.reverse_fence && r.event.kind == N::REVERSE) {
                 const uint64_t since = fence.bus_since > fence.session_since ? fence.bus_since : fence.session_since;
                 const bool old_transport = r.event.source_mono_ms > 0 &&
@@ -872,12 +882,25 @@ bool start_product(uint64_t t) {
         R::G3Record stored = R::g3_record();
         R::G3Load load = R::G3_LOAD_MISSING;
         const std::string boot = in.boot_id.size() == 36 ? in.boot_id : std::string("unknown");
-        // runtime.cpp: the previous-product-boot token is swapped at every
-        // worker start, before the record is read (it lives next to it).
+        // runtime.cpp: the previous-product-boot token is read before the
+        // record (it lives next to it): swapped at this start with the
+        // marker (--g3-garage off), rewritten lazily with the garage carry
+        // (worker-boot file in the same directory).
         char prev_boot[37] = "unread";
-        if (!opt.g3_store.empty()) R::g3_last_start_swap(opt.g3_store.c_str(), boot.c_str(), prev_boot);
+        const char* swap = 0;
+        if (!opt.g3_store.empty() && opt.g3_garage) {
+            R::g3_last_start_read(opt.g3_store.c_str(), prev_boot);
+            const R::G3WorkerStart w = R::g3_worker_boot_mark(opt.g3_store.c_str(), boot.c_str());
+            swap = R::g3_worker_start_name(w);
+            if (w != R::G3_WORKER_FIRST) R::g3_last_start_write(opt.g3_store.c_str(), boot.c_str());
+            if (w == R::G3_WORKER_RESTART) snprintf(prev_boot, sizeof prev_boot, "%s", boot.c_str());
+        } else if (!opt.g3_store.empty()) R::g3_last_start_swap(opt.g3_store.c_str(), boot.c_str(), prev_boot);
         if (!opt.g3_store.empty()) load = R::g3_load(opt.g3_store.c_str(), &stored);
-        g3.start(t, true, "replay", boot.c_str(), "none", opt.g3_rt, load, stored, opt.g3_garage, prev_boot);
+        g3.start(t, true, "replay", boot.c_str(), "none", opt.g3_rt, load, stored, opt.g3_garage, prev_boot, swap);
+        if (g3.token_wanted()) {
+            const N::ModelProfile p = N::research_model_profile();
+            g3_watch.start(t, p.wheel_kmh_per_count, p.wheel_zero_kmh);
+        }
         g3.journal_start(g3_journal, t);
     }
     g3send.start(opt.g3_send && g3.active(), g3.garage());

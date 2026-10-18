@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <dirent.h>
 #include <fstream>
+#include <sstream>
 #include <map>
 #include <string>
 #include <vector>
@@ -99,6 +100,20 @@ static void slow_fsync() {
 }
 static bool g3_scenario(const std::string& s) {
     return s=="g3_park" || s=="g3_cancel" || s=="g3_move" || s=="g3_stop" || s=="g3_fault" || s=="g3_garage";
+}
+// Lazy previous-product-boot token (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md
+// "fourth fix"), garage carry on, no POSITION at all (no AA, no GPS):
+// g3_idle: wheels exactly zero for 8 s: the token of the earlier boot stays
+// (and its S record is carried) until the capture stop, which swaps it
+// synchronously; g3_restart: the worker-boot file already names this boot (a
+// second worker start): swapped at start, the earlier boot's record refused;
+// g3_blind: no motion event at all: swapped through the store thread after
+// G3_TOKEN_SILENT_NS; g3_unadmitted: the car rolls 2 m/s for 4 s but every
+// wheel event carries a transport time before the session (excluded from the
+// MODEL, so the pipeline and the departure mark see no motion): the raw watch
+// still swaps the token ("moved").
+static bool token_scenario(const std::string& s) {
+    return s=="g3_idle" || s=="g3_restart" || s=="g3_blind" || s=="g3_unadmitted";
 }
 static bool g3_send_scenario(const std::string& s) {
     return s=="g3_send" || s=="g3_send_conflict" || s=="g3_send_off" || s=="g3_send_abort" ||
@@ -260,7 +275,7 @@ int main(int argc,char** argv) {
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
            scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed"||
-           scenario=="contradict"||g3_scenario(scenario)||g3_send_scenario(scenario));
+           scenario=="contradict"||g3_scenario(scenario)||g3_send_scenario(scenario)||token_scenario(scenario));
     // contradict (rule F v3): no REVERSE message at boot (the BETA seed comes
     // from the assumed forward state), GPS lost from t 3.2 s (ENGAGED), then a
     // real reverse 1 at t 4.4 s: the episode is withdrawn for the contradiction
@@ -291,6 +306,28 @@ int main(int argc,char** argv) {
     if(scenario=="g3_garage") {
         const int fd=open((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
         assert(fd>=0 && write(fd,PREV_TOKEN,sizeof PREV_TOKEN-1)==ssize_t(sizeof PREV_TOKEN-1));close(fd);
+    }
+    const bool token_case=token_scenario(scenario);
+    char own_boot[37];mx5::runtime::read_boot_id(own_boot);
+    const bool real_boot=strlen(own_boot)==36;
+    static const char EARLIER[]="cccccccc-1111-2222-3333-444444444444";
+    if(token_case) {
+        // The earlier boot (cccc...) drove, parked and swapped the token: its
+        // garage S record (flag 7) and its token are on disk.
+        mx5::runtime::G3Record r=mx5::runtime::g3_record();
+        r.seq=9;strcpy(r.boot_id,EARLIER);r.state='S';
+        r.flags=mx5::runtime::G3_FLAG_HEADING|mx5::runtime::G3_FLAG_POSITION|mx5::runtime::G3_FLAG_DEPART;
+        r.heading_cdeg=16360;r.unc_cdeg=790;r.lat_e7=350000000;r.lon_e7=1350000000;r.pos_err_dm=50;strcpy(r.chain,"none");
+        char line[mx5::runtime::G3_RECORD_MAX];const size_t n=mx5::runtime::g3_encode(r,line,sizeof line);assert(n);
+        int fd=open((logs+"/"+mx5::runtime::G3_STORE_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+        assert(fd>=0 && write(fd,line,n)==ssize_t(n));close(fd);
+        fd=open((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+        assert(fd>=0 && write(fd,PREV_TOKEN,sizeof PREV_TOKEN-1)==ssize_t(sizeof PREV_TOKEN-1));close(fd);
+        if(scenario=="g3_restart" && real_boot) {
+            const std::string w=std::string("mx5g3worker 1 ")+own_boot+"\n";
+            fd=open((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+            assert(fd>=0 && write(fd,w.data(),w.size())==ssize_t(w.size()));close(fd);
+        }
     }
     const bool g3_send_case=g3_send_scenario(scenario);
     if(g3_send_case) {
@@ -367,6 +404,78 @@ int main(int argc,char** argv) {
     }
     assert(A::mode()==A::BETA);
     N::MotionSender sender;assert(sender.open_channel(motion_channel));uint64_t sequence=0;
+    if(token_case) {
+        const std::string token_file=logs+"/"+mx5::runtime::G3_LAST_START_NAME;
+        const std::string earlier_token(PREV_TOKEN),own_token=std::string("mx5g3start 1 ")+own_boot+"\n";
+        const unsigned end_ms=scenario=="g3_blind"?32000:8000;
+        const uint64_t start=clock_ns(0);
+        std::string token_mid;
+        for(unsigned ms=0;ms<=end_ms;ms+=20) {
+            until(start+uint64_t(ms)*1000000ULL);
+            for(unsigned kind=1;kind<=2 && scenario!="g3_blind";++kind) {
+                if(kind==N::YAW && ms%100)continue;
+                N::RawEvent r=N::RawEvent();r.kind=static_cast<N::SensorKind>(kind);
+                r.epoch=1;r.receive_seq=++sequence;r.received_ns=clock_ns(0);r.count=1;r.reverse=0;
+                for(unsigned i=0;i<4;++i)r.raw[i]=kind==N::WHEELS?uint16_t(10000):2048;   // exactly 0 km/h
+                if(scenario=="g3_unadmitted") {
+                    r.source_mono_ms=1;   // before the session: excluded from the MODEL
+                    if(kind==N::WHEELS && ms<4000)for(unsigned i=0;i<4;++i)r.raw[i]=uint16_t(10720);   // 7.2 km/h
+                }
+                assert(sender.send_event(r));
+            }
+        }
+        { std::ifstream tf(token_file.c_str());std::stringstream b;b<<tf.rdbuf();token_mid=b.str(); }
+        assert(!mkdir((logs+"/capture.stop").c_str(),0700));
+        assert(!pthread_join(worker_thread,0));
+        std::string token_end;
+        { std::ifstream tf(token_file.c_str());std::stringstream b;b<<tf.rdbuf();token_end=b.str(); }
+        std::string worker_file;
+        { std::ifstream wf((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str());std::stringstream b;b<<wf.rdbuf();worker_file=b.str(); }
+        std::string loaded,token_rows;unsigned tokens=0,written=0;
+        std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
+        while(std::getline(f,line)) {
+            if(line.find("{\"kind\":\"g3_store\"")!=0)continue;
+            if(line.find("\"event\":\"loaded\"")!=std::string::npos || line.find("\"event\":\"rejected\"")!=std::string::npos)loaded=line;
+            if(line.find("\"event\":\"token\"")!=std::string::npos) { ++tokens;token_rows+=line+"\n"; }
+            if(line.find("\"event\":\"written\"")!=std::string::npos)++written;
+        }
+        printf("%s: loaded=%s\n%s: token rows=%u\n%s%s: token_mid=%s%s: token_end=%s",scenario.c_str(),loaded.c_str(),
+               scenario.c_str(),tokens,token_rows.c_str(),scenario.c_str(),token_mid.c_str(),scenario.c_str(),token_end.c_str());
+        assert(!written && A::mode()==A::OBSERVE);
+        if(real_boot) {
+            if(scenario=="g3_idle") {
+                // The defect fix: an ignition-on boot without motion keeps the
+                // earlier boot's token (HEAD swapped it at start), so the next
+                // boot still carries the earlier drive's record ...
+                assert(has_text(loaded,"\"reason\":\"chain_depart\"") &&
+                       has_text(loaded,"\"prev\":\"cccccccc\",\"swap\":\"lazy\""));
+                assert(token_mid==earlier_token && worker_file==std::string("mx5g3worker 1 ")+own_boot+"\n");
+                // ... and the capture stop (the rest of the boot is not observed)
+                // swaps it synchronously.
+                assert(tokens==1 && has_text(token_rows,"\"reason\":\"capture_stop\",\"result\":\"sync\"") &&
+                       token_end==own_token);
+            } else if(scenario=="g3_restart") {
+                assert(has_text(loaded,"\"reason\":\"not_prev_boot\"") &&
+                       has_text(loaded,(std::string("\"prev\":\"")+std::string(own_boot,8)+"\",\"swap\":\"eager_restart\"").c_str()) &&
+                       !tokens && token_mid==own_token && token_end==own_token);
+            } else if(scenario=="g3_unadmitted") {
+                assert(has_text(loaded,"\"reason\":\"chain_depart\""));
+                assert(tokens==1 && has_text(token_rows,"\"reason\":\"moved\",\"result\":\"written\"") &&
+                       token_mid==own_token && token_end==own_token);
+            } else {
+                assert(has_text(loaded,"\"reason\":\"chain_depart\""));
+                assert(tokens==1 && has_text(token_rows,"\"reason\":\"blind_silent\",\"result\":\"written\"") &&
+                       token_mid==own_token && token_end==own_token);
+            }
+        }
+        unlink((logs+"/capture.done").c_str());rmdir((logs+"/capture.stop").c_str());
+        for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
+        unlink((logs+"/"+mx5::runtime::G3_STORE_NAME).c_str());unlink(token_file.c_str());
+        unlink((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str());
+        assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);
+        puts("BETA runtime wiring checks passed");
+        return 0;
+    }
     // BETA_DECISIONS 3.2: an anchor needs 10 s of consecutive increasing
     // fixes after the first fix and after every GPS return. The scenario
     // timelines below (t) are the former ones with a mode-1 prelude of
@@ -1037,8 +1146,12 @@ int main(int argc,char** argv) {
             }
             if(line.find("{\"kind\":\"g3_store\"")!=0)continue;
             if(line.find("\"event\":\"missing\"")!=std::string::npos &&
-               line.find(garage_off?"\"seq\":0}":"\"seq\":0,\"prev\":\"cccccccc\"}")!=std::string::npos)prev_row=true;
+               line.find(garage_off?"\"seq\":0}":"\"seq\":0,\"prev\":\"cccccccc\",\"swap\":\"lazy\"}")!=std::string::npos)prev_row=true;
             if(line.find("\"event\":\"missing\"")!=std::string::npos)missing=true;
+            if(line.find("\"event\":\"token\"")!=std::string::npos) {
+                if(scenario=="g3_garage")garage_rows.push_back(line+"|"+state);
+                continue;
+            }
             if(line.find("\"event\":\"failed\"")!=std::string::npos)failed=true;
             if(line.find("\"event\":\"cancelled\"")!=std::string::npos &&
                line.find("\"reason\":\"cancelled\",\"at\":\"rename\"")!=std::string::npos) {
@@ -1142,10 +1255,15 @@ int main(int argc,char** argv) {
                    access((logs+"/"+mx5::runtime::G3_STORE_TEMP).c_str(),F_OK)!=0);
         } else if(scenario=="g3_garage") {
             for(size_t i=0;i<garage_rows.size();++i)printf("g3_garage: %s\n",garage_rows[i].c_str());
+            // 0: the lazy token (this boot drove from the start: "moved"),
+            //    through the store thread, before any record of this boot;
             // 1: the parked record at >= 5 s, while BETA overlays NO_FIX, no fsync;
             // 2: the same stop at 60 s with the fsync (BETA ARMED again);
             // 3: the departure mark while driving off (not cancelled by the wheels).
-            assert(garage_rows.size()==3 && hook_calls.load()==1);
+            assert(garage_rows.size()==4 && hook_calls.load()==1);
+            assert(has_text(garage_rows[0],"\"event\":\"token\",\"reason\":\"moved\",\"result\":\"written\"") &&
+                   has_text(garage_rows[0],"\"prev\":\"cccccccc\""));
+            garage_rows.erase(garage_rows.begin());
             assert(has_text(garage_rows[0],"\"st\":\"S\",\"hv\":") && has_text(garage_rows[0],"\"sync\":0") &&
                    (has_text(garage_rows[0],"|SPEED_ENGAGED") || has_text(garage_rows[0],"|NO_FIX")));
             assert(has_text(garage_rows[1],"\"st\":\"S\"") && has_text(garage_rows[1],"\"sync\":1") &&
@@ -1196,6 +1314,8 @@ int main(int argc,char** argv) {
     // Review P1: every BETA worker start leaves its previous-boot token.
     unlink((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str());
     unlink((logs+"/"+mx5::runtime::G3_LAST_START_TEMP).c_str());
+    // Lazy token (garage carry on): every garage-on worker start marks its boot.
+    unlink((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str());
     if(cap_off)unlink((std::string(root)+"/acc-cap-off").c_str());
     if(garage_off)unlink((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str());
     assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);

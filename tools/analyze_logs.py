@@ -75,7 +75,11 @@ LOWER_BOUNDS = {
 # validation/G3_RECORD_ONLY_2026-10-11.md). Headings and errors are 0.1 deg.
 G3_STATES = ("OFF", "UNKNOWN", "CARRIED", "CARRIED_UNVERIFIED", "CONFIRMED", "REJECTED")
 G3_STORE_EVENTS = ("off", "missing", "rejected", "loaded", "checked", "written", "failed", "unavailable",
-                   "cancelled")
+                   "cancelled", "token")
+# "token": the lazy previous-product-boot token write of a garage-on boot
+# (g3_heading.h G3_TOKEN_*; store thread: written/cancelled/failed; the
+# worker at a terminal event: sync/sync_failed).
+G3_TOKEN_RESULTS = ("written", "cancelled", "failed", "sync", "sync_failed")
 G3_SINCE_EVENTS = ("unstored", "left")
 G3_FIRST_EVENTS = ("start", "t30", "course")
 # G3 bearing send (src/runtime/g3_send.h): one window per boot.
@@ -3847,6 +3851,8 @@ def g3_row_valid(row):
         if event in ("written", "failed", "cancelled"):
             return (bounded_int(row.get("seq"), 0, 2**32 - 1) and row.get("st") in ("S", "M") and
                     all(type(row.get(k)) is int for k in ("hv", "h", "unc")))
+        if event == "token":
+            return isinstance(row.get("reason"), str) and row.get("result") in G3_TOKEN_RESULTS
         return isinstance(row.get("reason"), str)
     if row["kind"] == "g3_since":
         return (event in G3_SINCE_EVENTS and isinstance(row.get("reason"), str) and
@@ -3910,7 +3916,8 @@ def g3_write_overlap(rows, events, states=()):
     # state at their start (lat_ms > 100 ms counted as slow).
     g_writes, g_slow, g_hits, g_max, by_state = 0, 0, [], None, {}
     for session, row in rows:
-        if row["kind"] != "g3_store" or row["event"] not in ("written", "failed", "cancelled"):
+        # The lazy token write is a garage write without fsync too.
+        if row["kind"] != "g3_store" or row["event"] not in ("written", "failed", "cancelled", "token"):
             continue
         start, end, lat = row.get("start_ns"), row.get("end_ns"), row.get("lat_ms")
         if not (integer(start) and integer(end)) or start <= 0 or end < start:
@@ -3962,9 +3969,9 @@ def g3_unmarked_departures(rows):
             open_[session] = (0.0, row.get("seq"))
             continue
         if kind == "g3_store" and event == "written" and row.get("garage") == 1:
-            if row["st"] == "M":
+            if row.get("st") == "M":
                 open_.pop(session, None)
-            elif row["hv"] == 1 and type(row.get("m_b")) in (int, float):
+            elif row.get("hv") == 1 and type(row.get("m_b")) in (int, float):
                 open_[session] = (row["m_b"], row.get("seq"))
             else:
                 open_.pop(session, None)
@@ -3993,7 +4000,7 @@ def g3_replacing_rate_unmarked(rows):
                 row.get("hv") == 1 and "prev" in row:
             open_[session] = row.get("seq")
         elif kind == "g3_store" and event == "written" and row.get("garage") == 1:
-            if row["st"] == "S" and row["hv"] == 1:
+            if row.get("st") == "S" and row.get("hv") == 1:
                 open_[session] = row.get("seq")
             else:
                 open_.pop(session, None)
@@ -4083,6 +4090,10 @@ def g3_report(rows, boots, events=(), overlays=0, states=()):
             elif event == "cancelled":
                 key = "%s@%s" % (row.get("reason"), row.get("at"))
                 b["cancelled"][key] = b["cancelled"].get(key, 0) + 1
+            elif event == "token":
+                # Lazy token (fourth fix): only boots with token rows get the key.
+                b.setdefault("token", []).append(dict(result=row.get("result"), reason=row.get("reason"),
+                                                      prev=row.get("prev")))
         else:
             if row["rev"][0] == 1:
                 b["reverse_start"] = True
@@ -4163,6 +4174,10 @@ def print_g3_data(g3):
               (g3["garage_s_unmarked_replacing_rate"],
                " -> defect: the third-round exemption should have written that park"
                if g3["garage_s_unmarked_replacing_rate"] else ""))
+    tokens = [(b["boot_id"], t) for b in g3["boots"] for t in b.get("token", [])]
+    if tokens:   # lazy previous-product-boot token (fourth fix); absent in earlier logs
+        print("G3 previous-product-boot token writes: %s" % ", ".join(
+            "%s %s/%s (prev %s)" % (bid or "?", t["result"], t["reason"], t["prev"]) for bid, t in tokens))
     send = g3.get("send")
     if send:
         print("G3 bearing send: %d windows, ends %s, overlaid FIX sends %d" %

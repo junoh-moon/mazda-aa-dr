@@ -285,6 +285,59 @@ class G3Rows(unittest.TestCase):
             audit.print_g3_data(report["g3"])
         self.assertIn("G3 garage S left unmarked after replacing_rate held the next park: 0\n", out.getvalue())
 
+    def test_lazy_token_rows(self):
+        # Fourth fix: the lazy previous-product-boot token row is valid, counts
+        # as a garage write without fsync (lat_ms / journal-lag rule) and is
+        # listed per boot; earlier logs (no token row) keep their report.
+        def token(mono, result="written", reason="moved", **extra):
+            row = dict(kind="g3_store", mono_ns=mono, event="token", reason=reason, result=result, g3="UNKNOWN",
+                       prev="cccccccc", garage=1, sync=0, lat_ms=2.0, start_ns=mono - 2 * 10**6, end_ns=mono)
+            row.update(extra)
+            return row
+        missing = dict(kind="g3_store", mono_ns=1, event="missing", reason="missing", g3="UNKNOWN", age_s=None,
+                       age_src="none", boot="none", chain="none", seq=0, prev="cccccccc", swap="lazy")
+        rows = [boot(BOOT_A), missing, token(5 * S, "cancelled", stage="cancelled", at="rename", errno=0,
+                                             why="journal_lagging"), token(11 * S, lat_ms=600.0)]
+        _, report = consume(rows)
+        self.assertNotIn("malformed_g3_row", codes(report))
+        o = report["g3"]["write_overlap"]
+        self.assertEqual((o["garage_writes"], o["garage_lat_over_500"], o["garage_off_next_build"]), (2, 1, True))
+        self.assertEqual(report["g3"]["boots"][0]["token"],
+                         [dict(result="cancelled", reason="moved", prev="cccccccc"),
+                          dict(result="written", reason="moved", prev="cccccccc")])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_g3_data(report["g3"])
+        self.assertIn("G3 previous-product-boot token writes: aaaaaaaa cancelled/moved (prev cccccccc), "
+                      "aaaaaaaa written/moved (prev cccccccc)", out.getvalue())
+        # The terminal synchronous write.
+        _, report = consume([boot(BOOT_A), missing, token(9 * S, "sync", "capture_stop")])
+        self.assertEqual(report["g3"]["boots"][0]["token"], [dict(result="sync", reason="capture_stop", prev="cccccccc")])
+        # Malformed token rows.
+        for row in (token(1, "exploded"), dict(token(1), reason=None), dict(token(1), result=None)):
+            _, report = consume([boot(BOOT_A), row])
+            self.assertIn("malformed_g3_row", codes(report), row)
+        # A boot without token rows has no "token" key, and no token line is printed.
+        _, report = consume([boot(BOOT_A), missing])
+        self.assertNotIn("token", report["g3"]["boots"][0])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_g3_data(report["g3"])
+        self.assertNotIn("token writes", out.getvalue())
+
+    def test_garage_counters_robust_to_rows_without_st_hv(self):
+        # Review leftover: the garage counters read st/hv with .get, so a row
+        # without them (passed directly, not through validation) is no KeyError.
+        rows = [(1, dict(kind="g3_store", event="loaded", st="S", hv=1, prev="aaaaaaaa", seq=3)),
+                (1, dict(kind="g3_store", event="written", garage=1, m_b=1.0)),
+                (1, dict(kind="g3_store", event="written", garage=1, st="S")),
+                (1, dict(kind="g3_since", event="unstored", reason="replacing_rate", m_b=9.0))]
+        self.assertEqual(audit.g3_unmarked_departures(rows), (0, []))
+        self.assertEqual(audit.g3_replacing_rate_unmarked(rows), (0, []))
+        rows2 = [rows[0], (1, dict(kind="g3_store", event="written", garage=1, hv=1, m_b=2.0)),
+                 (1, dict(kind="g3_since", event="left", m_b=5.0))]
+        self.assertEqual(audit.g3_unmarked_departures(rows2), (1, [dict(session=1, seq=None, m_b=5.0)]))
+
     def test_malformed_rows(self):
         bad = [dict(kind="g3_store", mono_ns=1, event="exploded", reason="x"),
                dict(kind="g3_store", mono_ns=1, event="written", seq=1, st="X", hv=1, h=1, unc=1),

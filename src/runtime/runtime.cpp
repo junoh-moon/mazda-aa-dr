@@ -964,9 +964,23 @@ void g3_pump(Journal& j,mx5::runtime::G3Tracker& g3,uint32_t epoch,const char* c
     if(mx5::runtime::g3_mailbox_result(g3_mailbox,seq,epoch,&r))g3.store_result(j,clock_ns(0),seq,r);
     return;
   }
-  char line[mx5::runtime::G3_RECORD_MAX];size_t n=0;bool sync=false;
-  if(!mx5::runtime::g3_mailbox_idle(g3_mailbox) || !g3.take_request(line,sizeof line,&n,&seq,&sync))return;
-  if(!mx5::runtime::g3_mailbox_post(g3_mailbox,line,n,seq,epoch,clock_ns(0),sync))g3.post_failed();
+  char line[mx5::runtime::G3_RECORD_MAX];size_t n=0;bool sync=false;unsigned target=mx5::runtime::G3_TARGET_STORE;
+  if(!mx5::runtime::g3_mailbox_idle(g3_mailbox) || !g3.take_request(line,sizeof line,&n,&seq,&sync,&target))return;
+  if(!mx5::runtime::g3_mailbox_post(g3_mailbox,line,n,seq,epoch,clock_ns(0),sync,target))g3.post_failed();
+}
+// Lazy previous-product-boot token (g3_heading.h G3_TOKEN_*): the boot stops
+// observing (no store thread, journal or audit fault, capture stop), so the
+// rest of it counts as blind: one synchronous token write on the worker if
+// the token does not name this boot yet. Its own temporary name, no fsync.
+void g3_token_terminal(Journal& j,mx5::runtime::G3Tracker& g3,const char* root,const char* boot_id,
+                       const char* why) {
+  if(!g3.token_wanted())return;
+  char dir[512];
+  const int n=snprintf(dir,sizeof dir,"%s/logs",root);
+  mx5::runtime::G3IoResult r={mx5::runtime::G3_IO_PATH,EINVAL,0,mx5::runtime::G3_STEP_NONE,0,0};
+  if(n>0 && size_t(n)<sizeof dir)
+    r=mx5::runtime::g3_last_start_write_io(dir,boot_id,mx5::runtime::G3_LAST_START_SYNC_TEMP);
+  g3.token_sync(j,clock_ns(0),why,r);
 }
 // Why BETA stays disabled at startup (0: it may arm). A boot row that did
 // not reach the file in time is "journal_not_durable", distinct from a
@@ -1147,7 +1161,7 @@ void drain_channels(Journal& j,Receiver& channels) {
 template<class Receiver>
 void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
                   N::Pipeline& navigation,N::GpsHoldout& holdout,bool compute,
-                  uint64_t model_since_ns=0,bool bus_boundary=false) {
+                  uint64_t model_since_ns=0,bool bus_boundary=false,mx5::runtime::G3TokenWatch* watch=0) {
   for(unsigned i=0;i<256 && !j.failed;++i) {
     N::RawEvent raw=N::RawEvent();
     N::ReceiveDiagnostic d=N::ReceiveDiagnostic();
@@ -1191,6 +1205,9 @@ void drain_motion(Journal& j,mx5::runtime::MotionBatch& batch,Receiver& motion,
           d.syscall_errno,enabled?"true":"false");
       j.line(line);
     } else {
+      // Lazy G3 token: every received wheel event, admitted or not (without
+      // an AA session no wheel event reaches the pipeline).
+      if(watch && raw.kind==N::WHEELS)watch->wheel(raw.received_ns,raw.raw);
       // The existing MODEL pipeline uses a positive transport timestamp as
       // event time. A later receipt cannot make a pre-boundary event new.
       // Leave negative/overflow/future timestamps on the Pipeline fault path.
@@ -1680,6 +1697,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   // G3 record-only heading carry-over (BETA only). One small file read here,
   // at startup; the parked store write runs on the dedicated store thread.
   mx5::runtime::G3Tracker g3;
+  mx5::runtime::G3TokenWatch g3_watch;
   uint64_t g3_anchor_seen=0;
   const uint32_t g3_worker_epoch=g3_epoch.fetch_add(1,std::memory_order_acq_rel)+1;
   // Capture stop and every worker exit stop the store thread: it never
@@ -1696,23 +1714,36 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     char dir[512];
     const int n=snprintf(dir,sizeof dir,"%s/logs",root);
     const bool dir_ok=n>0 && size_t(n)<sizeof dir;
-    // Previous-product-boot token (review P1): swapped at EVERY BETA worker
-    // start, before the record is read and whatever the g3-off or
-    // g3-garage-off marker says, so that a boot which did not mark
-    // departures still makes the next boot refuse an older S record. One
-    // small temp+rename write without fsync on this startup path; no row,
-    // send or store record depends on it except the garage carry restore.
+    // Garage carry (G3_GARAGE_*, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md):
+    // default on with the tracker; <root>/g3-garage-off restores beta.16.
+    const bool g3_garage=g3_on && mx5::runtime::g3_garage_on(root);
+    // Previous-product-boot token (review P1), read before the record. With
+    // either marker or without the BETA core: swapped at this start exactly
+    // as before (a boot that does not mark departures always makes the next
+    // boot refuse an older S record). With the garage carry it is rewritten
+    // LAZILY (G3_TOKEN_*, fourth fix): only once this boot moved, was blind,
+    // wants its first S record or stops observing, so an ignition-on boot
+    // that never moved keeps the previous drive's record carryable; a second
+    // worker start of this boot (worker-boot file) or a lost worker-boot
+    // write swaps here, and a restart also refuses every other boot's record
+    // (prev = this boot: the time between the workers was not observed).
+    // Small temp+rename writes without fsync on this startup path.
     char prev_boot[37]="unread";
-    if(dir_ok)mx5::runtime::g3_last_start_swap(dir,boot_id,prev_boot);
+    const char* swap=0;
+    if(dir_ok && g3_garage) {
+      mx5::runtime::g3_last_start_read(dir,prev_boot);
+      const mx5::runtime::G3WorkerStart w=mx5::runtime::g3_worker_boot_mark(dir,boot_id);
+      swap=mx5::runtime::g3_worker_start_name(w);
+      if(w!=mx5::runtime::G3_WORKER_FIRST)mx5::runtime::g3_last_start_write(dir,boot_id);
+      if(w==mx5::runtime::G3_WORKER_RESTART)snprintf(prev_boot,sizeof prev_boot,"%s",boot_id);
+    } else if(dir_ok)mx5::runtime::g3_last_start_swap(dir,boot_id,prev_boot);
     if(g3_on) {
       load=dir_ok?mx5::runtime::g3_load(dir,&stored):mx5::runtime::G3_LOAD_UNREADABLE;
       mx5::runtime::g3_chain_token(root,chain);
     }
-    // Garage carry (G3_GARAGE_*, validation/G3_GARAGE_EXIT_FIX_2026-10-17.md):
-    // default on with the tracker; <root>/g3-garage-off restores beta.16.
-    const bool g3_garage=g3_on && mx5::runtime::g3_garage_on(root);
     g3.start(clock_ns(0),g3_on,!beta_core?"beta_core_unavailable":"marker",boot_id,chain,
-             mx5::runtime::g3_realtime_s(),load,stored,g3_garage,prev_boot);
+             mx5::runtime::g3_realtime_s(),load,stored,g3_garage,prev_boot,swap);
+    if(g3.token_wanted())g3_watch.start(clock_ns(0),model.wheel_kmh_per_count,model.wheel_zero_kmh);
   }
   // G3 first-connection bearing send (g3_send.h): only with the tracker
   // (BETA, no g3-off marker); one window per worker, never re-armed.
@@ -1756,7 +1787,10 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   }
   if(beta_requested) {
     g3.journal_start(j,clock_ns(0));
-    if(g3.active() && !g3_store_thread(root))g3.store_unavailable(j,clock_ns(0),"no_store_thread");
+    if(g3.active() && !g3_store_thread(root)) {
+      g3.store_unavailable(j,clock_ns(0),"no_store_thread");
+      g3_token_terminal(j,g3,root,boot_id,"no_store_thread");
+    }
   }
   if (hook_installed && (config.mode == 2 || beta_requested) && !boot_durable && !j.failed) {
     // The boot row did not reach the file within the bound: SCRUB/BETA stay
@@ -1814,6 +1848,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
         source.reset(cutoff);source_disabled=true;
         freeze_capture();
         g3_mailbox.stop.store(1,std::memory_order_release);
+        g3_token_terminal(j,g3,root,boot_id,"capture_stop");
         // capture.stop takes precedence: OBSERVE is already set; drop any
         // stored BETA candidate and record why.
         beta.disable(j,cutoff,"capture_stop");
@@ -1903,6 +1938,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       // (fsync or rename), and no later write is accepted.
       g3_mailbox.cancel_gen.fetch_add(1,std::memory_order_acq_rel);
       g3_mailbox.stop.store(1,std::memory_order_release);
+      g3_token_terminal(j,g3,root,boot_id,j.failed?"journal_failed":"audit_fault");
     }
     if(shadow && (j.failed || __sync_fetch_and_add(&audit_fault,0))) {
           navigation.reset(navigation.context());
@@ -1916,7 +1952,8 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
     const bool bus_boundary=model_bus.since_ns()>model_session.since_ns();
     if(capture && !j.failed)drain_motion(j,motion_batch,motion,navigation,holdout,
         shadow && model_session.available() && model_bus.available(),
-        bus_boundary?model_bus.since_ns():model_session.since_ns(),bus_boundary);
+        bus_boundary?model_bus.since_ns():model_session.since_ns(),bus_boundary,
+        g3.token_wanted()?&g3_watch:0);
     if(side_capture && !j.failed)drain_channels(j,side_channels);
     if(stopping) {
       lds.close_channel();
@@ -1983,6 +2020,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
           mx5::runtime::g3_sample(navigation,g3_now,mx5::runtime::g3_realtime_s());
       g3_sample_now.beta_replacing=g3_beta_replacing(beta.state());
       g3_sample_now.writer_lag_ns=journal_writer_lag(j.writer,g3_now).oldest_ns;
+      if(g3.token_wanted())g3_sample_now.token_why=g3_watch.check(g3_now);
       const char* g3_block=g3_io_block(j,beta.state(),g3_now,true,g3.garage());
       g3.tick(j,g3_sample_now,found?&course:0,g3_block);
       // Cancel rule (g3_cancel_reason; garage carry exemptions there).

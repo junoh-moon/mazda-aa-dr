@@ -426,6 +426,35 @@ class TrialMenuTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(marker.exists())
 
+    def test_install_and_uninstall_clear_the_garage_chain_token(self):
+        # Lazy previous-product-boot token (fourth fix): an idle boot no
+        # longer swaps it, so an installation (possibly after days without
+        # the package) removes it; the next boot refuses every older record.
+        # The stored record itself and the worker-boot file stay.
+        self.fixture.run_script('install.sh')
+        token, record = self.logs / 'g3-last-start', self.logs / 'g3-heading.v1'
+        record.write_text('kept\n')
+        for keys in ('1\n0\n', '4\n'):
+            with self.subTest(keys=keys):
+                token.write_text('mx5g3start 1 %s' % BOOT)
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(token.exists())
+                self.assertEqual(record.read_text(), 'kept\n')
+                if keys == '4\n':
+                    self.fixture.run_script('install.sh')
+        # A symlink is removed, never followed; a directory is left alone.
+        target = self.root / 'outside'
+        target.write_text('x')
+        token.symlink_to(target)
+        self.assertEqual(self.menu('1\n0\n').returncode, 0)
+        self.assertFalse(token.is_symlink() or token.exists())
+        self.assertEqual(target.read_text(), 'x')
+        token.mkdir()
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(token.is_dir())
+
     def test_install_uses_bundle_mode_without_more_typed_commands(self):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         result = self.menu('1\n')

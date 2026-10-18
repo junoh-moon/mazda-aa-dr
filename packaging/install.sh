@@ -195,6 +195,14 @@ if [ -e "$BASE/g3-garage-off" ] || [ -L "$BASE/g3-garage-off" ]; then
     rm -f "$BASE/g3-garage-off" || fail 'Cannot clear the g3-garage-off marker'
     echo 'Cleared g3-garage-off: the garage heading is on again from the next start.'
 fi
+# The garage heading chain (validation/G3_GARAGE_EXIT_FIX_2026-10-17.md,
+# fourth fix): an installation may follow days in which this package did not
+# run, so a heading stored before it is never carried across it. Removing the
+# previous-product-boot token makes the next boot refuse every older record.
+# A directory of that name is never read as a token (no carry either).
+if [ -f "$BASE/logs/g3-last-start" ] || [ -L "$BASE/logs/g3-last-start" ]; then
+    rm -f "$BASE/logs/g3-last-start" || fail 'Cannot clear the garage heading chain token'
+fi
 # Likewise the phone IMU Bluetooth switch from menu 11 (default on) and both
 # automatic fallback records (collector logs/bt-fail, guard/bt-fail).
 if [ -e "$BASE/bt-off" ] || [ -L "$BASE/bt-off" ]; then

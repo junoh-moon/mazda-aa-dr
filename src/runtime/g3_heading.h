@@ -19,8 +19,13 @@
 //    I/O step is re-checked against a cancel generation and a stop flag.
 //    Every failure degrades to "no store" and is journaled.
 //  * Restore reads one small file once at worker start (startup slow path);
-//    the worker also swaps the previous-product-boot token there
-//    (g3_last_start_swap, one small write without fsync).
+//    the worker also reads the previous-product-boot token there. With the
+//    garage carry the token is rewritten LAZILY (G3_TOKEN_*: through the
+//    store thread once this boot moved, was blind or wants its first S
+//    record; synchronously only at a terminal fault or capture stop) and a
+//    small worker-boot file is written at start (g3_worker_boot_mark); with
+//    a marker the token is swapped at start as before (g3_last_start_swap,
+//    one small write without fsync).
 // MODEL evidence only: no qualified claim, no Domain::QUALIFIED.
 #include "adapter/adapter.h"
 #include "navigation/pipeline.h"
@@ -122,10 +127,24 @@ static const uint64_t G3_PLAUSIBLE_UTC_S=1600000000ULL;
 //    CMU clock is 1970 until GPS; never in a garage). A known age > 7 days
 //    still rejects; the first-fix position and GPS age checks still apply.
 //    Only when the record's boot is the PREVIOUS PRODUCT BOOT (review P1):
-//    every BETA worker start swaps <root>/logs/g3-last-start (the boot id of
-//    the previous worker start, then this one), so an S record written
-//    before a product boot that did not mark (journal failure, no G3 tick,
-//    a g3-off or g3-garage-off marker) is not carried.
+//    <root>/logs/g3-last-start names the newest product boot that could
+//    have moved the car without this boot seeing it, so an S record written
+//    before such a boot (journal failure, no G3 tick, a g3-off or
+//    g3-garage-off marker, a drive) is not carried. Lazy token (2026-10-18,
+//    validation/G3_GARAGE_EXIT_FIX_2026-10-17.md "fourth fix"): a garage-on
+//    boot reads it at start but rewrites it with its own id only when it
+//    observed >= G3_TOKEN_MOVED_M of raw wheel distance, was blind (a raw
+//    wheel gap > G3_TOKEN_GAP_NS that ended, or no raw wheel event for
+//    G3_TOKEN_SILENT_NS), wants its first S record (the token lands BEFORE
+//    any S record of this boot, so a record and the token name the same
+//    writer), or ends observation (journal/audit fault, capture stop, no
+//    store thread: synchronous). A boot that only stood (ignition on, no
+//    drive) leaves the token, so the next boot still carries the record of
+//    the drive before it. A second worker start in the same boot (worker-
+//    boot file names this boot) or a lost worker-boot write swaps at once.
+//    A boot with either marker or without the BETA core swaps at start (the
+//    beta.16/HEAD behaviour, also so a marker boot never lets a stale S
+//    through).
 //  * Uncertainty of the GARAGE CHAIN (review C2/P4): the stored uncertainty
 //    of every record a garage-on boot writes (they all carry flag 4) and the
 //    propagation of a carried flag-4 record grow with the rotation term
@@ -147,8 +166,10 @@ static const uint64_t G3_PLAUSIBLE_UTC_S=1600000000ULL;
 //    rewrite), except the rule F rewrite of a tainted heading and (third
 //    review C1) while the record on disk is an S with heading, i.e. the car
 //    left it without a landed departure mark: the new S then replaces a
-//    record that would otherwise be carried stale (one extra write per such
-//    departure). The departure mark is never spaced (it is what keeps an S
+//    record that would otherwise be carried stale. The exemption is bounded
+//    by the 5 s request spacing (G3_WRITE_MIN_NS), not by departures: one S
+//    per stop while the mark keeps failing, and a cancelled S request is
+//    retried after 5 s. The departure mark is never spaced (it is what keeps an S
 //    record meaning "parked since"); it is requested while the car moves or
 //    within the first 5 s of a stop (before the stop counts as parked) and
 //    needs a journal writer lag <= G3_GARAGE_REPLACING_MARK_LAG_NS.
@@ -158,12 +179,42 @@ static const double G3_GARAGE_DEPART_M=0.5;
 static const double G3_GARAGE_DEPART_DEG=2.0;
 static const double G3_GARAGE_ROTATION_PER_RAD=0.02;
 static const double G3_GARAGE_YAW_ERROR_RAD_S=0.0023;
+// The propagated value is an uncertainty BUDGET, not a guaranteed envelope
+// of the real error: in 3 of 9 private chains with a bound <= 60 deg the
+// real carried error was larger (validation/G3_UNC_LIMIT_2026-10-18.md); the
+// window's end conditions (trust, conflict, m_course, caps) bound the cost.
 static const double G3_GARAGE_UNC_MAX_DEG=60.0;
 static const uint64_t G3_GARAGE_REPLACING_S_GAP_NS=30000000000ULL;
 static const uint64_t G3_GARAGE_REPLACING_MARK_LAG_NS=100000000ULL;
 // Previous-product-boot token (review P1): <root>/logs/g3-last-start.
 static const char G3_LAST_START_NAME[]="g3-last-start";
 static const char G3_LAST_START_TEMP[]=".g3-last-start.tmp";
+// The synchronous (terminal) token write uses its own temporary name, so it
+// never races an in-flight store-thread token write on one temporary file.
+static const char G3_LAST_START_SYNC_TEMP[]=".g3-last-start.sync.tmp";
+// Lazy token (garage carry only). Worker-boot file: the boot id of the
+// newest garage-on worker start ("mx5g3worker 1 <boot_id>"); a start that
+// finds its own boot there is a second worker start in this boot (the time
+// between the two workers was not observed: swap at once).
+static const char G3_WORKER_BOOT_NAME[]="g3-worker-boot";
+static const char G3_WORKER_BOOT_TEMP[]=".g3-worker-boot.tmp";
+// Swap triggers from the RAW wheel stream (G3TokenWatch: every received
+// wheel event, admitted to the MODEL or not; without an AA session the
+// pipeline sees no wheel event at all, so the pipeline distance alone would
+// call every idle boot blind). Moved: G3_MOVING_MARK_M of mean wheel
+// distance (the G3Motion::distance_m rule). Gap: a raw receipt gap above
+// navigation::G3_BOOT_GAP_MAX_NS (2 s: too short to start, turn and stop
+// again; the largest receipt gap in the 14 boots of the 2026-10-17 export
+// was 1.03 s) that ENDED with a new event. Silent: no raw wheel event for
+// G3_TOKEN_SILENT_NS while the worker runs (the stream never started, or
+// stopped and stayed away): 30 s, three times the longest sensor-stop to
+// journal-end tail of those 14 boots (9.6 s at ignition off); an ignition
+// that stays in accessory mode longer swaps (cost only).
+static const double G3_TOKEN_MOVED_M=G3_MOVING_MARK_M;
+static const uint64_t G3_TOKEN_SILENT_NS=30000000000ULL;
+static const uint32_t G3_TOKEN_SEQ_BASE=0x80000000u;
+// Store thread mailbox targets.
+enum G3Target { G3_TARGET_STORE=0, G3_TARGET_TOKEN=1 };
 
 // ---- CRC32 (IEEE 802.3, reflected 0xEDB88320) --------------------------------
 inline uint32_t g3_crc32(const void* data,size_t n) {
@@ -377,13 +428,14 @@ typedef void (*G3FsyncHook)();
 // (the previous record, or none, is restored instead). The repository's relfs
 // notes (STARTUP_RECOVERY / EMPTY_CAPTURE 2026-10-02) only name the mount and
 // say nothing about rename durability. Runs only on the dedicated store thread.
-inline G3IoResult g3_write_atomic(const char* dir,const char* data,size_t n,G3StepGate gate=0,void* context=0,
-                                  G3FsyncHook hook=0,bool sync=true) {
+// name/temp_name: the published file and its temporary name in dir.
+inline G3IoResult g3_write_atomic_at(const char* dir,const char* name,const char* temp_name,const char* data,
+                                     size_t n,G3StepGate gate=0,void* context=0,G3FsyncHook hook=0,bool sync=true) {
     G3IoResult r={G3_IO_OK,0,0,G3_STEP_NONE,0,0};
     r.start_ns=g3_clock_ns(CLOCK_MONOTONIC);
     char temp[512],path[512];
-    const int a=dir?snprintf(temp,sizeof temp,"%s/%s",dir,G3_STORE_TEMP):-1;
-    const int b=dir?snprintf(path,sizeof path,"%s/%s",dir,G3_STORE_NAME):-1;
+    const int a=dir && temp_name?snprintf(temp,sizeof temp,"%s/%s",dir,temp_name):-1;
+    const int b=dir && name?snprintf(path,sizeof path,"%s/%s",dir,name):-1;
     int fd=-1;bool made=false;
     if(a<=0 || size_t(a)>=sizeof temp || b<=0 || size_t(b)>=sizeof path || !data || !n || n>G3_RECORD_MAX) {
         r.stage=G3_IO_PATH;r.error=EINVAL;
@@ -419,6 +471,10 @@ inline G3IoResult g3_write_atomic(const char* dir,const char* data,size_t n,G3St
     r.end_ns=g3_clock_ns(CLOCK_MONOTONIC);
     r.latency_ns=r.end_ns>r.start_ns?r.end_ns-r.start_ns:0;
     return r;
+}
+inline G3IoResult g3_write_atomic(const char* dir,const char* data,size_t n,G3StepGate gate=0,void* context=0,
+                                  G3FsyncHook hook=0,bool sync=true) {
+    return g3_write_atomic_at(dir,G3_STORE_NAME,G3_STORE_TEMP,data,n,gate,context,hook,sync);
 }
 inline G3Load g3_load(const char* dir,G3Record* out) {
     char path[512];
@@ -489,55 +545,131 @@ inline bool g3_garage_on(const char* root) {
     if(!lstat(path,&st))return false;
     return errno==ENOENT;
 }
-// Previous-product-boot token (review P1). Reads <dir>/g3-last-start (the
-// boot id written at the previous BETA worker start) into prev ("none":
-// missing, "unread": unreadable or malformed), then writes this boot's id
-// there (temporary O_EXCL file, write, close, rename; NO fsync: a lost write
-// leaves the older id, so the next boot refuses chain_depart for this boot's
-// record: the safe side). A boot_id that is not a boot id ("unknown") writes
-// nothing. Startup slow path only: the worker calls it once at start, before
-// the store record is read, with any marker (g3-off, g3-garage-off), so a
-// boot that did not mark departures still advances the token. Returns true
-// when the new token was renamed into place.
-inline bool g3_last_start_swap(const char* dir,const char* boot_id,char prev[37]) {
+// Previous-product-boot token (review P1): <dir>/g3-last-start holds one
+// line "mx5g3start 1 <boot_id>\n". g3_last_start_read: prev = that boot id
+// ("none": missing, "unread": unreadable or malformed).
+inline void g3_last_start_read(const char* dir,char prev[37]) {
     strcpy(prev,"unread");
-    char path[512],temp[512];
+    char path[512];
     const int a=dir?snprintf(path,sizeof path,"%s/%s",dir,G3_LAST_START_NAME):-1;
-    const int b=dir?snprintf(temp,sizeof temp,"%s/%s",dir,G3_LAST_START_TEMP):-1;
-    if(a<=0 || size_t(a)>=sizeof path || b<=0 || size_t(b)>=sizeof temp)return false;
+    if(a<=0 || size_t(a)>=sizeof path)return;
     static const char head[]="mx5g3start 1 ";
     const size_t h=sizeof head-1;
     const int fd=open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
-    if(fd<0) { if(errno==ENOENT)strcpy(prev,"none"); }
-    else {
+    if(fd<0) { if(errno==ENOENT)strcpy(prev,"none");return; }
+    struct stat st;char buf[80];ssize_t n=-1;
+    if(!fstat(fd,&st) && S_ISREG(st.st_mode) && st.st_size>=0 && st.st_size<=64) {
+        do n=read(fd,buf,sizeof buf); while(n<0 && errno==EINTR);
+    }
+    close(fd);
+    if(n==ssize_t(h+37) && !memcmp(buf,head,h) && buf[h+36]=='\n' && g3_detail::boot_token(buf+h,36)) {
+        memcpy(prev,buf+h,36);prev[36]=0;
+    }
+}
+// The token line for boot_id (0: not a boot id, e.g. "unknown").
+inline size_t g3_last_start_line(const char* boot_id,char* out,size_t cap) {
+    if(!boot_id || strlen(boot_id)!=36 || !g3_detail::boot_token(boot_id,36) || cap<64)return 0;
+    const int m=snprintf(out,cap,"mx5g3start 1 %s\n",boot_id);
+    return m==50?size_t(m):0;
+}
+// Writes this boot's token (temporary file O_EXCL, write, close, rename; NO
+// fsync: a lost write leaves the older id, so the next boot refuses
+// chain_depart for this boot's record: the safe side, and an older record
+// keeps its own older writer, see the lazy-token residual). A boot_id that is
+// not a boot id writes nothing. temp_name: G3_LAST_START_TEMP (start path,
+// store thread) or G3_LAST_START_SYNC_TEMP (terminal path).
+inline G3IoResult g3_last_start_write_io(const char* dir,const char* boot_id,
+                                         const char* temp_name=G3_LAST_START_TEMP) {
+    char line[64];
+    const size_t m=g3_last_start_line(boot_id,line,sizeof line);
+    if(!m) { G3IoResult r={G3_IO_PATH,EINVAL,0,G3_STEP_NONE,0,0};return r; }
+    return g3_write_atomic_at(dir,G3_LAST_START_NAME,temp_name,line,m,0,0,0,false);
+}
+inline bool g3_last_start_write(const char* dir,const char* boot_id,const char* temp_name=G3_LAST_START_TEMP) {
+    return g3_last_start_write_io(dir,boot_id,temp_name).stage==G3_IO_OK;
+}
+// The eager swap (beta.16/HEAD behaviour, used with either marker, without
+// the BETA core and for a second worker start of one boot): reads prev, then
+// writes this boot's id. Startup slow path only. Returns true when the new
+// token was renamed into place.
+inline bool g3_last_start_swap(const char* dir,const char* boot_id,char prev[37]) {
+    g3_last_start_read(dir,prev);
+    return g3_last_start_write(dir,boot_id);
+}
+// Worker-boot file (lazy token only, startup slow path): FIRST: the file
+// named another boot (or none) and now names this one; RESTART: it already
+// named this boot (a second worker start in this boot); UNMARKED: it could
+// not be written (or the boot id is unknown). RESTART and UNMARKED swap the
+// token at once (the conservative side).
+enum G3WorkerStart { G3_WORKER_FIRST=0, G3_WORKER_RESTART, G3_WORKER_UNMARKED };
+inline const char* g3_worker_start_name(G3WorkerStart w) {
+    return w==G3_WORKER_FIRST?"lazy":w==G3_WORKER_RESTART?"eager_restart":"eager_unmarked";
+}
+inline G3WorkerStart g3_worker_boot_mark(const char* dir,const char* boot_id) {
+    if(!boot_id || strlen(boot_id)!=36 || !g3_detail::boot_token(boot_id,36))return G3_WORKER_UNMARKED;
+    char path[512];
+    const int a=dir?snprintf(path,sizeof path,"%s/%s",dir,G3_WORKER_BOOT_NAME):-1;
+    if(a<=0 || size_t(a)>=sizeof path)return G3_WORKER_UNMARKED;
+    static const char head[]="mx5g3worker 1 ";
+    const size_t h=sizeof head-1;
+    const int fd=open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+    if(fd>=0) {
         struct stat st;char buf[80];ssize_t n=-1;
         if(!fstat(fd,&st) && S_ISREG(st.st_mode) && st.st_size>=0 && st.st_size<=64) {
             do n=read(fd,buf,sizeof buf); while(n<0 && errno==EINTR);
         }
         close(fd);
-        if(n==ssize_t(h+37) && !memcmp(buf,head,h) && buf[h+36]=='\n' && g3_detail::boot_token(buf+h,36)) {
-            memcpy(prev,buf+h,36);prev[36]=0;
-        }
+        if(n==ssize_t(h+37) && !memcmp(buf,head,h) && buf[h+36]=='\n' && !memcmp(buf+h,boot_id,36))
+            return G3_WORKER_RESTART;
     }
-    if(!boot_id || strlen(boot_id)!=36 || !g3_detail::boot_token(boot_id,36))return false;
     char line[64];
     const int m=snprintf(line,sizeof line,"%s%s\n",head,boot_id);
-    if(m!=int(h+37))return false;
-    unlink(temp);   // a cut write may leave it; unlink never follows a link
-    const int w=open(temp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
-    if(w<0)return false;
-    bool ok=true;
-    for(int done=0;done<m;) {
-        const ssize_t k=write(w,line+done,size_t(m-done));
-        if(k<0 && errno==EINTR)continue;
-        if(k<=0) { ok=false;break; }
-        done+=int(k);
-    }
-    if(close(w))ok=false;
-    if(ok && rename(temp,path))ok=false;
-    if(!ok)unlink(temp);
-    return ok;
+    if(m!=int(h+37))return G3_WORKER_UNMARKED;
+    return g3_write_atomic_at(dir,G3_WORKER_BOOT_NAME,G3_WORKER_BOOT_TEMP,line,size_t(m),0,0,0,false).stage==G3_IO_OK?
+        G3_WORKER_FIRST:G3_WORKER_UNMARKED;
 }
+// Lazy-token swap triggers from the raw wheel stream (see G3_TOKEN_*). Fed
+// by the worker with every received WHEELS event (admitted to the MODEL or
+// excluded before the session/bus admission), polled on the G3 tick. why():
+// the first trigger, sticky ("moved", "blind_gap", "blind_silent",
+// "wheel_bad"); 0 while none. Observation only, no I/O.
+struct G3TokenWatch {
+    uint64_t start_ns, last_ns;
+    double kmh_per_count, zero_kmh, speed_mps, distance_m;
+    bool active, have;
+    const char* why;
+    G3TokenWatch() { reset(); }
+    void reset() {
+        start_ns=last_ns=0;kmh_per_count=zero_kmh=speed_mps=distance_m=0;active=have=false;why=0;
+    }
+    void start(uint64_t now,double kmh_count,double zero) {
+        reset();active=true;start_ns=now;kmh_per_count=kmh_count;zero_kmh=zero;
+    }
+    // received_ns: the worker's receipt time; raw: the four wheel counts.
+    void wheel(uint64_t received_ns,const uint16_t raw[4]) {
+        if(!active)return;
+        double kmh=0;bool bad=!std::isfinite(kmh_per_count) || !std::isfinite(zero_kmh);
+        for(unsigned i=0;i<4 && !bad;++i) {
+            const double w=raw[i]*kmh_per_count+zero_kmh;
+            if(raw[i]>40000 || !std::isfinite(w) || w<0)bad=true;
+            kmh+=w*0.25;
+        }
+        if(bad) { if(!why)why="wheel_bad";return; }
+        if(have && received_ns>last_ns) {
+            const uint64_t gap=received_ns-last_ns;
+            if(gap>navigation::G3_BOOT_GAP_MAX_NS && !why)why="blind_gap";
+            distance_m+=speed_mps*double(gap<navigation::G3_SPEED_GAP_MAX_NS?gap:navigation::G3_SPEED_GAP_MAX_NS)/1e9;
+        }
+        if(!have || received_ns>=last_ns) { last_ns=received_ns;speed_mps=kmh/3.6;have=true; }
+        if(distance_m>=G3_TOKEN_MOVED_M && !why)why="moved";
+    }
+    const char* check(uint64_t now) {
+        if(!active)return 0;
+        const uint64_t last=have?last_ns:start_ns;
+        if(!why && now>last && now-last>G3_TOKEN_SILENT_NS)why="blind_silent";
+        return why;
+    }
+};
 
 // ---- store I/O idle rule and the dedicated store thread -----------------------
 // Why the parked write must wait now (0: it may be handed to the store thread).
@@ -579,6 +711,7 @@ struct G3Mailbox {
     size_t len;
     uint32_t seq, epoch, gen;
     unsigned sync;           // 1: the fsync step runs (a stop of >= 60 s)
+    unsigned target;         // G3_TARGET_STORE (the record) or G3_TARGET_TOKEN (g3-last-start)
     uint64_t posted_ns;
     G3FsyncHook fsync_hook;  // tests only
     uint64_t poll_ns, stale_ns;
@@ -588,13 +721,15 @@ inline bool g3_mailbox_init(G3Mailbox& m,const char* dir,G3FsyncHook hook) {
     const int n=dir?snprintf(m.dir,sizeof m.dir,"%s",dir):-1;
     if(n<=0 || size_t(n)>=sizeof m.dir)return false;
     m.fsync_hook=hook;m.poll_ns=G3_STORE_POLL_NS;m.stale_ns=G3_STORE_STALE_NS;m.len=0;m.seq=0;m.epoch=0;
+    m.target=G3_TARGET_STORE;
     return true;
 }
 inline bool g3_mailbox_idle(const G3Mailbox& m) { return !m.pending.load(std::memory_order_acquire); }
 inline bool g3_mailbox_post(G3Mailbox& m,const char* s,size_t n,uint32_t seq,uint32_t epoch,uint64_t now,
-                            bool sync=true) {
-    if(!g3_mailbox_idle(m) || m.stop.load(std::memory_order_acquire) || !n || n>sizeof m.line || !seq)return false;
-    memcpy(m.line,s,n);m.len=n;m.seq=seq;m.epoch=epoch;m.posted_ns=now;m.sync=sync?1:0;
+                            bool sync=true,unsigned target=G3_TARGET_STORE) {
+    if(!g3_mailbox_idle(m) || m.stop.load(std::memory_order_acquire) || !n || n>sizeof m.line || !seq ||
+       (target!=G3_TARGET_STORE && target!=G3_TARGET_TOKEN))return false;
+    memcpy(m.line,s,n);m.len=n;m.seq=seq;m.epoch=epoch;m.posted_ns=now;m.sync=sync?1:0;m.target=target;
     m.gen=m.cancel_gen.load(std::memory_order_acquire);
     m.pending.store(1,std::memory_order_release);
     return true;
@@ -622,7 +757,9 @@ inline bool g3_mailbox_run_once(G3Mailbox& m,uint64_t now) {
     if(!m.pending.load(std::memory_order_acquire))return false;
     G3IoResult r={G3_IO_STALE,0,0,G3_STEP_NONE,now,now};
     if(!(now>=m.posted_ns && now-m.posted_ns>m.stale_ns))
-        r=g3_write_atomic(m.dir,m.line,m.len,g3_mailbox_gate,&m,m.fsync_hook,m.sync!=0);
+        r=m.target==G3_TARGET_TOKEN?
+            g3_write_atomic_at(m.dir,G3_LAST_START_NAME,G3_LAST_START_TEMP,m.line,m.len,g3_mailbox_gate,&m,0,false):
+            g3_write_atomic(m.dir,m.line,m.len,g3_mailbox_gate,&m,m.fsync_hook,m.sync!=0);
     m.done_stage.store(r.stage,std::memory_order_relaxed);
     m.done_errno.store(r.error,std::memory_order_relaxed);
     m.done_step.store(r.step,std::memory_order_relaxed);
@@ -663,6 +800,7 @@ struct G3Sample {
     double yaw_error_rad_s, rotation_per_rad; // heading budget growth (BETA rule 5)
     bool beta_replacing;         // BETA replaces or overlays sends now (garage carry: no fsync write)
     uint64_t writer_lag_ns;      // journal writer's oldest unwritten row (garage carry: the mark while replacing)
+    const char* token_why;       // lazy token: G3TokenWatch::check() (0: no raw-stream trigger yet)
 };
 inline G3Sample g3_sample(const navigation::Pipeline& nav,uint64_t now,uint64_t rt_s) {
     G3Sample s;
@@ -747,11 +885,23 @@ public:
     bool garage() const { return garage_; }
     bool garage_carry() const { return garage_carry_; }
     double unc_max() const { return garage_carry_?G3_GARAGE_UNC_MAX_DEG:G3_UNC_MAX_DEG; }
+    // Lazy previous-product-boot token (G3_TOKEN_*): this boot rewrites it
+    // later (lazy), it still has to (wanted: no write landed and no terminal
+    // attempt yet), and the first trigger.
+    bool token_lazy() const { return token_lazy_; }
+    bool token_done() const { return token_done_; }
+    bool token_wanted() const { return token_lazy_ && !token_done_ && !token_closed_; }
+    const char* token_why() const { return token_why_; }
 
     // Worker start. stored is read only when load == G3_LOAD_OK. prev_boot:
-    // the previous product boot (g3_last_start_swap; garage carry only).
+    // the previous product boot (g3-last-start as read at this start; garage
+    // carry only). swap (garage carry only, journaled as "swap"): 0 = the
+    // caller swapped the token at start (beta.16/HEAD); "lazy" = this
+    // tracker requests the token write itself (G3_TOKEN_*); any other value
+    // (g3_worker_start_name) = the caller swapped at start for that reason.
     void start(uint64_t now,bool enabled,const char* off_reason,const char* boot_id,const char* chain_now,
-               uint64_t rt_now_s,G3Load load,const G3Record& stored,bool garage=false,const char* prev_boot=0) {
+               uint64_t rt_now_s,G3Load load,const G3Record& stored,bool garage=false,const char* prev_boot=0,
+               const char* swap=0) {
         clear();
         start_ns_=now;garage_=enabled && garage;
         if(!enabled) { state_=G3_OFF;reason_=off_reason?off_reason:"off";return; }
@@ -759,6 +909,12 @@ public:
         copy(boot_id_,sizeof boot_id_,boot_id?boot_id:"unknown");
         copy(chain_now_,sizeof chain_now_,chain_now?chain_now:"unread");
         copy(prev_boot_,sizeof prev_boot_,prev_boot?prev_boot:"unread");
+        token_mode_=garage_?swap:0;
+        token_lazy_=garage_ && swap && !strcmp(swap,"lazy");
+        // Nothing to write when the token already names this boot or the
+        // boot id is unknown (no record of an unknown boot is ever carried).
+        { char line[64];
+          token_done_=!token_lazy_ || !g3_last_start_line(boot_id_,line,sizeof line) || !strcmp(prev_boot_,boot_id_); }
         // The g3-garage-off marker restores beta.16 exactly: beta.16 decodes
         // a flag-4 record as a format error (flags > 3), so no build applies
         // the 30 deg rules to a record grown with the garage terms.
@@ -811,10 +967,15 @@ public:
                                  lround(stored_.unc_cdeg/10.0));
         else st[0]=0;
         if(age_known_)snprintf(age,sizeof age,"%llu",(unsigned long long)age_s_);else strcpy(age,"null");
-        char boot[9],prev[24];
+        char boot[9],prev[64];
         copy(boot,sizeof boot,have_stored_?stored_.boot_id:"none");
-        // Garage carry: the previous product boot (8 hex, "none" or "unread").
-        if(garage_) { char p[9];copy(p,sizeof p,prev_boot_);snprintf(prev,sizeof prev,",\"prev\":\"%s\"",p); }
+        // Garage carry: the previous product boot (8 hex, "none" or "unread")
+        // and, when the caller says so, how the token is maintained ("swap").
+        if(garage_) {
+            char p[9],w[24];copy(p,sizeof p,prev_boot_);copy(w,sizeof w,token_mode_?token_mode_:"");
+            if(token_mode_)snprintf(prev,sizeof prev,",\"prev\":\"%s\",\"swap\":\"%s\"",p,w);
+            else snprintf(prev,sizeof prev,",\"prev\":\"%s\"",p);
+        }
         else prev[0]=0;
         row(j,",\"mono_ns\":%llu,\"event\":\"%s\",\"reason\":\"%s\",\"g3\":\"%s\"%s,\"age_s\":%s,"
               "\"age_src\":\"%s\",\"boot\":\"%s\",\"chain\":\"%s\",\"seq\":%lu%s}",
@@ -919,10 +1080,14 @@ public:
     }
     // Writer handoff: the newest request, once. in_flight() until its result.
     // sync: whether this write runs the fsync step (a stop of >= 60 s).
-    bool take_request(char* out,size_t cap,size_t* n,uint32_t* seq,bool* sync=0) {
-        if(!pending_ || !store_on_ || cap<pending_len_)return false;
+    // target: G3_TARGET_STORE or G3_TARGET_TOKEN (the lazy token line); a
+    // caller that cannot route a token request (no target) gets none, so a
+    // token line never reaches the record file.
+    bool take_request(char* out,size_t cap,size_t* n,uint32_t* seq,bool* sync=0,unsigned* target=0) {
+        if(!pending_ || !store_on_ || cap<pending_len_ || (pending_token_ && !target))return false;
         memcpy(out,pending_line_,pending_len_);*n=pending_len_;*seq=pending_rec_.seq;
         if(sync)*sync=pending_sync_;
+        if(target)*target=pending_token_?G3_TARGET_TOKEN:G3_TARGET_STORE;
         pending_=false;in_flight_=true;cancel_why_=0;
         return true;
     }
@@ -941,12 +1106,17 @@ public:
     // the worker does not cancel it for a moving wheel or a stale stream) /
     // runs the fsync step.
     bool in_flight_mark() const { return in_flight_ && pending_mark_; }
+    // Static content (the departure mark or the lazy token line): not
+    // cancelled for a moving wheel or a stale stream.
+    bool in_flight_static() const { return in_flight_ && (pending_mark_ || pending_token_); }
+    bool in_flight_token() const { return in_flight_ && pending_token_; }
     bool in_flight_sync() const { return in_flight_ && pending_sync_; }
     // The store thread's mailbox refused the request: nothing in flight; the
     // stop may try again (not counted as a write failure).
     void post_failed() {
         if(!in_flight_)return;
         in_flight_=false;
+        if(pending_token_) { pending_token_=false;return; }   // requested again (token_why_ stays)
         if(pending_sync_)episode_synced_=false;
         if(!episode_stored_)episode_done_=false;
     }
@@ -959,6 +1129,17 @@ public:
         in_flight_=false;
         const bool published=r.stage==G3_IO_OK;
         const bool cancelled=r.stage==G3_IO_CANCELLED || r.stage==G3_IO_STALE || r.stage==G3_IO_STOPPED;
+        if(pending_token_) {
+            // Lazy token: landed = this boot is the previous product boot of
+            // the next one; cancelled/stale: requested again; stopped: no more
+            // store I/O this boot; a failure counts like a record failure.
+            pending_token_=false;
+            if(published) { token_done_=true;failures_=0; }
+            else if(cancelled) { if(r.stage==G3_IO_STOPPED)store_on_=false; }
+            else if(++failures_>=G3_WRITE_FAILURES_MAX)store_on_=false;
+            token_row(j,now,published?"written":cancelled?"cancelled":"failed",r);
+            return;
+        }
         if(published && pending_mark_) {
             // Departure mark: the S record is gone; the motion reference of
             // the last S record (g3_since, the 2 m rule) stays.
@@ -1010,14 +1191,30 @@ public:
     // No store thread: the store is off for this boot (never written inline).
     template<class J> void store_unavailable(J& j,uint64_t now,const char* why) {
         if(!store_on_)return;
-        store_on_=false;pending_=false;
+        store_on_=false;pending_=false;pending_token_=false;
         row(j,",\"mono_ns\":%llu,\"event\":\"unavailable\",\"reason\":\"%s\",\"g3\":\"%s\"}",
             "g3_store",(unsigned long long)now,why,g3_state_name(state_));
+    }
+    // Lazy token, synchronous write by the worker (no store thread, journal or
+    // audit fault, capture stop: the boot stops observing, so the rest of it
+    // counts as blind). One attempt per tracker; journaled like a store row.
+    template<class J> void token_sync(J& j,uint64_t now,const char* why,const G3IoResult& r) {
+        if(!token_wanted())return;
+        token_closed_=true;
+        if(r.stage==G3_IO_OK)token_done_=true;
+        if(!token_why_)token_why_=why;
+        token_row(j,now,r.stage==G3_IO_OK?"sync":"sync_failed",r);
     }
 
 private:
     G3State state_;
     bool garage_, garage_carry_, pending_mark_;
+    // Lazy token: this boot writes it; it landed (or nothing to write); a
+    // terminal attempt was made; the request in flight is the token line.
+    bool token_lazy_, token_done_, token_closed_, pending_token_;
+    const char* token_why_;
+    const char* token_mode_;
+    uint32_t token_seq_;
     const char* reason_;
     const char* chain_;
     const char* age_src_;
@@ -1080,6 +1277,8 @@ private:
     void clear() {
         state_=G3_OFF;reason_="not_started";chain_="none";age_src_="none";pos_check_="none";
         garage_=garage_carry_=pending_mark_=false;
+        token_lazy_=token_done_=token_closed_=pending_token_=false;token_why_=0;token_mode_=0;
+        token_seq_=G3_TOKEN_SEQ_BASE;
         strcpy(boot_id_,"unknown");strcpy(chain_now_,"unread");strcpy(prev_boot_,"unread");
         load_=G3_LOAD_MISSING;have_stored_=have_carried_=age_known_=first_fix_=have_utc_=false;
         stored_=g3_record();
@@ -1264,6 +1463,15 @@ private:
         const bool parked=stop_id && s.wheels_fresh && !s.wheels_moving && m.last_speed_ns>stop_id &&
             m.last_speed_ns-stop_id>=parked_ns;
         if(parked)episode_parked_=true;
+        // Lazy token (G3_TOKEN_*): a raw-stream trigger (moved / blind) or
+        // the pipeline's own 2 m: request the token write before anything
+        // else this boot stores (the departure mark may go first: an M
+        // record is never carried).
+        if(token_lazy_ && !token_done_) {
+            if(!token_why_ && s.token_why)token_why_=s.token_why;
+            if(!token_why_ && std::isfinite(m.distance_m) && m.distance_m>=G3_TOKEN_MOVED_M)token_why_="moved";
+            if(token_why_ && token_request(s,io_block))return;
+        }
         if(!parked) { if(garage_)depart(s,io_block);return; }
         const bool long_stop=m.last_speed_ns-stop_id>=G3_FSYNC_MIN_STOP_NS;
         // Garage carry: no fsync while BETA replaces (the write itself may run).
@@ -1300,13 +1508,24 @@ private:
         // while the record on disk is an S WITH heading: the car left that
         // stop without a landed departure mark (idle rule, 5 s spacing,
         // writer lag), so the old S would be carried by the next boot; the
-        // new S corrects it (at most one extra write per departure whose
-        // mark did not land). A spaced final park therefore leaves the mark
-        // on disk only if the mark landed (then no carry).
+        // new S corrects it. Bound: the 5 s request spacing (G3_WRITE_MIN_NS),
+        // i.e. one S per stop while the mark keeps failing, and a cancelled
+        // request is retried after 5 s (not "one extra write per departure").
+        // A spaced final park therefore leaves the mark on disk only if the
+        // mark landed (then no carry).
         const bool disk_heading_s=disk_=='S' && (disk_flags_&G3_FLAG_HEADING);
         if(garage_ && s.beta_replacing && !stale && !disk_heading_s && last_s_request_ns_ &&
            s.now>=last_s_request_ns_ && s.now-last_s_request_ns_<G3_GARAGE_REPLACING_S_GAP_NS) {
             episode_block_="replacing_rate";return;
+        }
+        // Lazy token: the token must name this boot BEFORE its first S record
+        // lands (the next boot compares the record's boot id with it), so the
+        // first S request becomes a token request; the S follows after it
+        // landed (rate limit).
+        if(token_lazy_ && !token_done_) {
+            if(!token_why_)token_why_="record";
+            token_request(s,io_block);
+            episode_block_="token";return;
         }
         const char state='S';
         G3Record r=g3_record();
@@ -1333,11 +1552,43 @@ private:
         copy(r.chain,sizeof r.chain,chain_now_);
         const size_t n=g3_encode(r,pending_line_,sizeof pending_line_);
         if(!n)return;
-        pending_len_=n;pending_rec_=r;pending_=true;pending_mark_=false;pending_m_=m.distance_m;
+        pending_len_=n;pending_rec_=r;pending_=true;pending_mark_=false;pending_token_=false;pending_m_=m.distance_m;
         pending_turn_=m.turn_rad;pending_aturn_=m.abs_turn_rad;
         pending_wait_s_=(m.last_speed_ns>stop_id+parked_ns?m.last_speed_ns-stop_id-parked_ns:0)/1e9;
         last_request_ns_=s.now?s.now:1;episode_done_=true;last_s_request_ns_=last_request_ns_;
         pending_sync_=sync;if(sync)episode_synced_=true;
+    }
+    // Lazy token request: the same gate as the departure mark (store on,
+    // nothing pending or in flight, the 5 s request spacing, the idle rule;
+    // while BETA replaces a journal writer lag <= 100 ms), never fsync.
+    bool token_request(const G3Sample& s,const char* io_block) {
+        if(!store_on_ || pending_ || in_flight_)return false;
+        if(last_request_ns_ && s.now>=last_request_ns_ && s.now-last_request_ns_<G3_WRITE_MIN_NS)return false;
+        if(io_block)return false;
+        if(s.beta_replacing && s.writer_lag_ns>G3_GARAGE_REPLACING_MARK_LAG_NS)return false;
+        const size_t n=g3_last_start_line(boot_id_,pending_line_,sizeof pending_line_);
+        if(!n)return false;
+        pending_len_=n;pending_rec_=g3_record();pending_rec_.seq=token_seq_++;
+        if(token_seq_<G3_TOKEN_SEQ_BASE)token_seq_=G3_TOKEN_SEQ_BASE;
+        pending_=true;pending_token_=true;pending_mark_=false;pending_sync_=false;
+        pending_m_=s.motion.distance_m;pending_turn_=s.motion.turn_rad;pending_aturn_=s.motion.abs_turn_rad;
+        pending_wait_s_=0;pending_beta_valid_=false;pending_ref_ns_=0;pending_discards_=s.motion.discards;
+        last_request_ns_=s.now?s.now:1;
+        return true;
+    }
+    template<class J> void token_row(J& j,uint64_t now,const char* result,const G3IoResult& r) {
+        char p[9];copy(p,sizeof p,prev_boot_);
+        char extra[160];
+        if(r.stage==G3_IO_OK)extra[0]=0;
+        else snprintf(extra,sizeof extra,",\"stage\":\"%s\",\"at\":\"%s\",\"errno\":%d%s%s%s%s",
+                      g3_io_stage_name(r.stage),g3_step_name(r.step),r.error,
+                      r.stage==G3_IO_CANCELLED?",\"why\":\"":"",
+                      r.stage==G3_IO_CANCELLED?(cancel_why_?cancel_why_:"unknown"):"",
+                      r.stage==G3_IO_CANCELLED?"\"":"",store_on_?"":",\"disabled\":true");
+        row(j,",\"mono_ns\":%llu,\"event\":\"token\",\"reason\":\"%s\",\"result\":\"%s\",\"g3\":\"%s\","
+              "\"prev\":\"%s\",\"garage\":1,\"sync\":0,\"lat_ms\":%.1f,\"start_ns\":%llu,\"end_ns\":%llu%s}",
+            "g3_store",(unsigned long long)now,token_why_?token_why_:"none",result,g3_state_name(state_),p,
+            r.latency_ns/1e6,(unsigned long long)r.start_ns,(unsigned long long)r.end_ns,extra);
     }
     // Garage carry departure mark: the car moved (G3_GARAGE_DEPART_M) or
     // turned (G3_GARAGE_DEPART_DEG) since the S record with heading on disk
@@ -1362,7 +1613,7 @@ private:
         copy(r.chain,sizeof r.chain,chain_now_);
         const size_t n=g3_encode(r,pending_line_,sizeof pending_line_);
         if(!n)return;
-        pending_len_=n;pending_rec_=r;pending_=true;pending_mark_=true;pending_sync_=false;
+        pending_len_=n;pending_rec_=r;pending_=true;pending_mark_=true;pending_token_=false;pending_sync_=false;
         pending_m_=m.distance_m;pending_turn_=m.turn_rad;pending_aturn_=m.abs_turn_rad;pending_wait_s_=0;
         pending_beta_valid_=s.heading_valid;pending_beta_deg_=s.heading_deg;pending_beta_unc_=s.unc_deg;
         pending_discards_=m.discards;pending_ref_ns_=0;
@@ -1372,12 +1623,13 @@ private:
 // The worker's cancel decision for an in-flight store write (runtime.cpp,
 // after each tick). Garage carry: a write without fsync is not cancelled
 // because BETA replaces (cancel_ignores_replacing() feeds the idle rule), and
-// a departure mark (static content) not for a moving wheel or a stale stream.
+// a departure mark or the lazy token line (static content) not for a moving
+// wheel or a stale stream.
 inline bool g3_cancel_ignores_replacing(const G3Tracker& g3) { return g3.garage() && !g3.in_flight_sync(); }
 inline const char* g3_cancel_reason(const char* io_cancel,const G3Sample& s,const G3Tracker& g3) {
     if(io_cancel)return io_cancel;
-    if(s.wheels_moving && !g3.in_flight_mark())return "wheels_moving";
-    if(!s.wheels_fresh && !g3.in_flight_mark())return "wheels_stale";
+    if(s.wheels_moving && !g3.in_flight_static())return "wheels_moving";
+    if(!s.wheels_fresh && !g3.in_flight_static())return "wheels_stale";
     return g3.discard_cancel(s);   // rule F taint end (v4)
 }
 template<class J> void G3Tracker::row(J& j,const char* fmt,const char* kind,...) {

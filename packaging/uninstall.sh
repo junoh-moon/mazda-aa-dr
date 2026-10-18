@@ -16,6 +16,9 @@ if [ -f "$BASE/diag" ] || [ -L "$BASE/diag" ]; then rm -f "$BASE/diag" || echo '
 if [ -f "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then rm -f "$BASE/acc-cap-off" || echo 'Warning: cannot remove the acc-cap-off marker; menu 6 removes it.'; fi
 # Likewise the G3 garage heading switch (menu 12).
 if [ -f "$BASE/g3-garage-off" ] || [ -L "$BASE/g3-garage-off" ]; then rm -f "$BASE/g3-garage-off" || echo 'Warning: cannot remove the g3-garage-off marker; menu 6 removes it.'; fi
+# The garage heading chain token: no heading stored before the removal is
+# carried after a later installation (install.sh removes it again).
+if [ -f "$BASE/logs/g3-last-start" ] || [ -L "$BASE/logs/g3-last-start" ]; then rm -f "$BASE/logs/g3-last-start" || echo 'Warning: cannot remove the garage heading chain token; menu 1 removes it.'; fi
 # The phone IMU Bluetooth configuration copy: bds copies it to /tmp only at
 # its start, so removing it now changes nothing in this boot; later boots
 # never select a trial (stock bds arguments).

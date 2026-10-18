@@ -197,7 +197,7 @@ test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association 
 	$(BUILD)/test_model_session_input
 	@set -e; for case in destroy recreate status failed_create ambiguous inflight bus_disconnect bus_reconnect bus_reuse bus_closed bus_signal bus_ambiguous bus_inflight bus_free_inflight bus_late_same; do sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session $$case; done
 	MX5DR_TEST_STALE_RAW=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session bus_reuse
-	@set -e; for case in main main_no_reverse contradict silence disable budget budget_cap_off fault no_anchor nofix withdrawn_class nofix_rearm cadence_gap cadence_gap_speed g3_park g3_move g3_stop g3_fault g3_send_conflict g3_send_abort g3_send_fence; do $(BUILD)/test_worker_beta $$case; done
+	@set -e; for case in main main_no_reverse contradict silence disable budget budget_cap_off fault no_anchor nofix withdrawn_class nofix_rearm cadence_gap cadence_gap_speed g3_park g3_move g3_stop g3_fault g3_send_conflict g3_send_abort g3_send_fence g3_idle g3_restart g3_blind g3_unadmitted; do $(BUILD)/test_worker_beta $$case; done
 	@set -e; for case in g3_garage g3_cancel; do sh tests/runtime/run_worker_beta_timing.sh $(BUILD)/test_worker_beta $$case; done
 	@MX5DR_G3_SENT_DUMP=$(BUILD)/g3_send_on.txt $(BUILD)/test_worker_beta g3_send && MX5DR_G3_SENT_DUMP=$(BUILD)/g3_send_off.txt $(BUILD)/test_worker_beta g3_send_off && python3 tests/runtime/g3_send_identity.py $(BUILD)/g3_send_on.txt $(BUILD)/g3_send_off.txt
 	MX5DR_TEST_SLOW_YAW=1 sh tests/runtime/run_worker_session.sh $(BUILD)/test_worker_session bus_reuse

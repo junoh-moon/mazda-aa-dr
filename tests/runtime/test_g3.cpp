@@ -1934,6 +1934,334 @@ static void last_start_token() {
     CHECK(!g3_last_start_swap(0,BOOT_A,prev) && !strcmp(prev,"unread"));
 }
 
+// ---- lazy previous-product-boot token (fourth fix, 2026-10-18) -------------
+// validation/G3_GARAGE_EXIT_FIX_2026-10-17.md "fourth fix": a garage-on boot
+// reads g3-last-start at start and rewrites it only once it moved, was blind,
+// wants its first S record or stops observing. Real files, the real tracker,
+// the real raw-wheel watch; the store thread is replaced by a synchronous pump
+// that routes each request to its target file (like the runtime's mailbox).
+static const char BOOT_C[]="cccccccc-1111-2222-3333-444444444444";
+static std::string token_of(const std::string& d) { return read_file(d+"/"+G3_LAST_START_NAME); }
+static std::string token_line(const char* boot) { return std::string("mx5g3start 1 ")+boot+"\n"; }
+static void token_codec() {
+    const std::string d=temp_dir();char prev[37];
+    // Read / line / write (the eager swap is the same read + write).
+    g3_last_start_read(d.c_str(),prev);CHECK(!strcmp(prev,"none"));
+    char line[64];CHECK(g3_last_start_line(BOOT_A,line,sizeof line)==50 && token_line(BOOT_A)==line);
+    CHECK(!g3_last_start_line("unknown",line,sizeof line) && !g3_last_start_line(0,line,sizeof line) &&
+          !g3_last_start_line(BOOT_A,line,40));
+    CHECK(g3_last_start_write(d.c_str(),BOOT_A) && token_of(d)==token_line(BOOT_A));
+    g3_last_start_read(d.c_str(),prev);CHECK(!strcmp(prev,BOOT_A));
+    CHECK(!g3_last_start_write(d.c_str(),"unknown") && token_of(d)==token_line(BOOT_A));
+    // The terminal path's own temporary name; no temporary file is left.
+    CHECK(g3_last_start_write(d.c_str(),BOOT_B,G3_LAST_START_SYNC_TEMP) && token_of(d)==token_line(BOOT_B));
+    CHECK(access((d+"/"+G3_LAST_START_SYNC_TEMP).c_str(),F_OK)!=0 && access((d+"/"+G3_LAST_START_TEMP).c_str(),F_OK)!=0);
+    struct stat st;CHECK(!stat((d+"/"+G3_LAST_START_NAME).c_str(),&st) && (st.st_mode&0777)==0600);
+    // Worker-boot file: first start, second start of the same boot, another boot.
+    CHECK(g3_worker_boot_mark(d.c_str(),BOOT_A)==G3_WORKER_FIRST);
+    CHECK(read_file(d+"/"+G3_WORKER_BOOT_NAME)==std::string("mx5g3worker 1 ")+BOOT_A+"\n");
+    CHECK(g3_worker_boot_mark(d.c_str(),BOOT_A)==G3_WORKER_RESTART);
+    CHECK(g3_worker_boot_mark(d.c_str(),BOOT_B)==G3_WORKER_FIRST && g3_worker_boot_mark(d.c_str(),BOOT_B)==G3_WORKER_RESTART);
+    CHECK(access((d+"/"+G3_WORKER_BOOT_TEMP).c_str(),F_OK)!=0);
+    // A malformed file is another boot; an unknown boot id or no directory: unmarked.
+    write_file(d+"/"+G3_WORKER_BOOT_NAME,std::string("mx5g3worker 2 ")+BOOT_A+"\n");
+    CHECK(g3_worker_boot_mark(d.c_str(),BOOT_A)==G3_WORKER_FIRST);
+    write_file(d+"/"+G3_WORKER_BOOT_NAME,std::string("mx5g3worker 1 ")+BOOT_A);   // no newline
+    CHECK(g3_worker_boot_mark(d.c_str(),BOOT_A)==G3_WORKER_FIRST);
+    CHECK(g3_worker_boot_mark(d.c_str(),"unknown")==G3_WORKER_UNMARKED);
+    CHECK(g3_worker_boot_mark((d+"/missing").c_str(),BOOT_A)==G3_WORKER_UNMARKED);
+    CHECK(g3_worker_boot_mark(0,BOOT_A)==G3_WORKER_UNMARKED);
+    CHECK(!strcmp(g3_worker_start_name(G3_WORKER_FIRST),"lazy") &&
+          !strcmp(g3_worker_start_name(G3_WORKER_RESTART),"eager_restart") &&
+          !strcmp(g3_worker_start_name(G3_WORKER_UNMARKED),"eager_unmarked"));
+}
+// Raw wheel counts of the research profile: kmh = raw * 0.01 - 100.
+static void raw_wheels(double kmh,uint16_t raw[4]) { for(unsigned i=0;i<4;++i)raw[i]=uint16_t(lround(kmh*100+10000)); }
+static void token_watch() {
+    const uint64_t MS=1000000ULL;uint16_t raw[4];
+    // Standing still for 10 min at 10 Hz: no trigger.
+    { G3TokenWatch w;w.start(0,0.01,-100.0);raw_wheels(0,raw);
+      bool any=false;for(uint64_t t=100*MS;t<=600*S;t+=100*MS) { w.wheel(t,raw);if(w.check(t))any=true; }
+      CHECK(!any && w.distance_m==0); }
+    // Rolling 1.9 m (below 2 m): no trigger; 2 m: moved.
+    { G3TokenWatch w;w.start(0,0.01,-100.0);raw_wheels(0.36,raw);    // 0.1 m/s
+      uint64_t t=0;for(unsigned k=1;k<=191;++k) { t=k*100*MS;w.wheel(t,raw); }
+      CHECK(!w.check(t) && w.distance_m>1.89 && w.distance_m<1.91);
+      for(unsigned k=192;k<=202;++k) { t=k*100*MS;w.wheel(t,raw); }
+      CHECK(w.check(t) && same(w.check(t),"moved")); }
+    // A receipt gap of 1.9 s keeps observing; 2.1 s that ends: blind_gap.
+    { G3TokenWatch w;w.start(0,0.01,-100.0);raw_wheels(0,raw);
+      w.wheel(1*S,raw);w.wheel(1*S+1900*MS,raw);CHECK(!w.check(4*S));
+      w.wheel(5*S+1*MS,raw);CHECK(w.check(5*S+1*MS) && same(w.why,"blind_gap")); }   // 2.101 s
+    // A gap that does not end (ignition off): silent only after 30 s.
+    { G3TokenWatch w;w.start(0,0.01,-100.0);raw_wheels(0,raw);w.wheel(1*S,raw);
+      CHECK(!w.check(1*S+G3_TOKEN_SILENT_NS));
+      CHECK(w.check(1*S+G3_TOKEN_SILENT_NS+1) && same(w.why,"blind_silent")); }
+    // No wheel event at all since the start: silent after 30 s.
+    { G3TokenWatch w;w.start(5*S,0.01,-100.0);CHECK(!w.check(5*S+G3_TOKEN_SILENT_NS));
+      CHECK(same(w.check(5*S+G3_TOKEN_SILENT_NS+1),"blind_silent")); }
+    // A bad wheel value: conservative trigger; the first trigger is sticky.
+    { G3TokenWatch w;w.start(0,0.01,-100.0);uint16_t bad[4]={10000,10000,40001,10000};w.wheel(1*S,bad);
+      CHECK(same(w.check(1*S),"wheel_bad"));raw_wheels(100,raw);w.wheel(2*S,raw);w.wheel(3*S,raw);
+      CHECK(same(w.check(3*S),"wheel_bad")); }
+    { G3TokenWatch w;w.start(0,0.01,-100.0);uint16_t neg[4]={9000,10000,10000,10000};w.wheel(1*S,neg);   // -10 km/h
+      CHECK(same(w.check(1*S),"wheel_bad")); }
+    // An inactive watch (not lazy) never triggers.
+    { G3TokenWatch w;raw_wheels(100,raw);w.wheel(1*S,raw);w.wheel(2*S,raw);CHECK(!w.check(100*S)); }
+}
+// One boot of a chain in directory dir: the runtime's start path (lazy unless
+// garage is off or eager is asked for), then 100 ms steps; every request goes
+// to its target file at once (or fails with force_stage).
+struct ChainBoot {
+    std::string dir;const char* id;G3Tracker t;G3TokenWatch w;Rows j;char prev[37];const char* swap;
+    uint64_t now,zero_since,last_moving;double dist;bool gps,feed;const char* block;int force_stage;
+    std::vector<char> landed;   // 'T' token, 'S', 'M' in landing order
+    ChainBoot(const std::string& d,const char* boot,bool garage=true,bool eager=false):
+        dir(d),id(boot),swap(0),now(0),zero_since(1),last_moving(0),dist(0),gps(false),feed(true),block(0),force_stage(-1) {
+        if(garage && !eager) {
+            g3_last_start_read(d.c_str(),prev);
+            const G3WorkerStart ws=g3_worker_boot_mark(d.c_str(),boot);
+            swap=g3_worker_start_name(ws);
+            if(ws!=G3_WORKER_FIRST)g3_last_start_write(d.c_str(),boot);
+            if(ws==G3_WORKER_RESTART)snprintf(prev,sizeof prev,"%s",boot);
+        } else g3_last_start_swap(d.c_str(),boot,prev);
+        G3Record rec=g3_record();const G3Load load=g3_load(d.c_str(),&rec);
+        t.start(0,true,"m",boot,"none",100,load,rec,garage,prev,swap);t.journal_start(j,0);
+        if(t.token_wanted())w.start(0,0.01,-100.0);
+    }
+    void pump() {
+        char b[G3_RECORD_MAX];size_t n;uint32_t seq;bool sync=false;unsigned target=99;
+        if(!t.take_request(b,sizeof b,&n,&seq,&sync,&target))return;
+        G3IoResult r={G3_IO_OK,0,0,G3_STEP_NONE,now,now};
+        if(force_stage>=0) { r.stage=force_stage;r.error=EIO;r.step=G3_STEP_RENAME; }
+        else if(target==G3_TARGET_TOKEN)r=g3_write_atomic_at(dir.c_str(),G3_LAST_START_NAME,G3_LAST_START_TEMP,b,n,0,0,0,false);
+        else { CHECK(target==G3_TARGET_STORE);r=g3_write_atomic(dir.c_str(),b,n,0,0,0,sync); }
+        if(r.stage==G3_IO_OK)landed.push_back(target==G3_TARGET_TOKEN?'T':b[n>60?0:0]=='m'?
+                                              (std::string(b,n).find(" S ")!=std::string::npos?'S':'M'):'?');
+        t.store_result(j,now,seq,r);
+    }
+    // kmh for `seconds` (100 ms steps).
+    void run(double kmh,double seconds) {
+        for(unsigned k=0;k<unsigned(seconds*10+0.5);++k) {
+            now+=100000000ULL;
+            const bool moving=kmh>0;
+            if(feed) { uint16_t raw[4];raw_wheels(kmh,raw);w.wheel(now,raw); }
+            if(moving) { dist+=kmh/3.6*0.1;last_moving=now;zero_since=0; }
+            else if(!zero_since)zero_since=now;
+            G3Sample s;memset(&s,0,sizeof s);
+            s.now=now;s.rt_s=100+now/S;s.heading_valid=gps;s.heading_deg=200;s.unc_deg=5;
+            s.position_valid=gps;s.lat=35.5;s.lon=139.5;s.pos_err_m=12;
+            s.motion.distance_m=dist;s.motion.speed_mps=kmh/3.6;
+            s.motion.last_speed_ns=feed?now:0;s.motion.last_moving_ns=last_moving;s.motion.zero_since_ns=zero_since;
+            s.motion.first_move_ns=last_moving?1:0;s.wheels_fresh=feed;s.wheels_moving=moving;
+            s.reverse=0;s.yaw_error_rad_s=0.002;s.rotation_per_rad=0.10;
+            if(t.token_wanted())s.token_why=w.check(now);
+            t.tick(j,s,0,block);pump();
+        }
+    }
+};
+static std::string landed(const ChainBoot& b) { return std::string(b.landed.begin(),b.landed.end()); }
+// Boot A: drives with GPS, parks 10 s: the token lands before its S record.
+static void chain_boot_a(const std::string& d) {
+    ChainBoot a(d,BOOT_A);a.gps=true;
+    CHECK(a.t.token_lazy() && a.t.token_wanted() && !strcmp(a.prev,"none"));
+    a.run(20,30);a.run(0,10);
+    CHECK(landed(a)=="TS" && token_of(d)==token_line(BOOT_A));
+    CHECK(has(a.j.last("\"event\":\"token\""),"\"reason\":\"moved\",\"result\":\"written\"") &&
+          has(a.j.last("\"event\":\"token\""),"\"garage\":1,\"sync\":0"));
+    CHECK(has(a.j.last("g3_store"),"\"event\":\"loaded\"")==false);
+    G3Record r;CHECK(g3_load(d.c_str(),&r)==G3_LOAD_OK && r.state=='S' && r.flags==7 && !strcmp(r.boot_id,BOOT_A));
+}
+// Boot C starts on a copy of the directory (a later check of the same chain
+// must not see C's own worker-boot mark).
+static void chain_expect(const std::string& d,const char* reason,const char* prev8) {
+    const std::string x=temp_dir();
+    const char* names[]={G3_LAST_START_NAME,G3_STORE_NAME,G3_WORKER_BOOT_NAME};
+    for(unsigned i=0;i<3;++i)if(access((d+"/"+names[i]).c_str(),F_OK)==0)write_file(x+"/"+names[i],read_file(d+"/"+names[i]));
+    ChainBoot c(x,BOOT_C);
+    CHECK(!strcmp(c.t.reason(),reason));
+    char want[32];snprintf(want,sizeof want,"\"prev\":\"%s\",\"swap\":\"lazy\"",prev8);
+    CHECK(has(c.j.last("g3_store"),want));
+}
+static void token_chain() {
+    // The real scenario: A drives and parks, B only stands (ignition on, no
+    // GPS, wheels exactly zero for 2 min), C starts: chain_depart (HEAD:
+    // not_prev_boot, the defect).
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);CHECK(!strcmp(b.prev,BOOT_A) && !strcmp(b.t.reason(),"chain_depart"));
+      b.run(0,120);
+      CHECK(b.landed.empty() && b.j.count("\"event\":\"token\"")==0 && token_of(d)==token_line(BOOT_A) &&
+            b.t.token_wanted());
+      CHECK(read_file(d+"/"+G3_WORKER_BOOT_NAME)==std::string("mx5g3worker 1 ")+BOOT_B+"\n");
+      ChainBoot c(d,BOOT_C);
+      CHECK(c.t.state()==G3_CARRIED && !strcmp(c.t.reason(),"chain_depart") && !strcmp(c.prev,BOOT_A)); }
+    // HEAD's eager swap at B's start (the defect, kept for a marker boot):
+    // C refuses A's record.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B,true,true);b.run(0,120);CHECK(token_of(d)==token_line(BOOT_B));
+      chain_expect(d,"not_prev_boot","bbbbbbbb"); }
+    // B rolls 1 m (below 2 m): no token write; the departure mark (0.5 m)
+    // lands, so C reads an M record (moving_at_end).
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.run(0,20);b.run(1.8,2);b.run(0,30);
+      CHECK(b.dist>0.9 && b.dist<1.1 && landed(b)=="M" && token_of(d)==token_line(BOOT_A) &&
+            b.j.count("\"event\":\"token\"")==0);
+      chain_expect(d,"moving_at_end","aaaaaaaa"); }
+    // ... with the mark blocked the whole boot (documented residual): A's S
+    // survives and C carries it (at most about 25 deg of turning fits in 2 m).
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.block="journal_draining";b.run(0,20);b.run(1.8,2);b.run(0,30);
+      CHECK(b.landed.empty() && token_of(d)==token_line(BOOT_A));
+      chain_expect(d,"chain_depart","aaaaaaaa"); }
+    // B moves 3 m then the ignition goes off. Order 1: the mark lands at
+    // 0.5 m, the token at 2 m (5 s spacing): C reads B's M.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.run(0,20);b.run(1.8,6);b.run(0,4);
+      CHECK(b.dist>2.9 && b.dist<3.1 && landed(b)=="MT" && token_of(d)==token_line(BOOT_B));
+      CHECK(has(b.j.last("\"event\":\"token\""),"\"reason\":\"moved\""));
+      chain_expect(d,"moving_at_end","bbbbbbbb");
+      // A park of 5 s after it: B's own S record (no heading: no GPS) after the token.
+      b.run(0,6);CHECK(landed(b)=="MTS");chain_expect(d,"no_heading","bbbbbbbb"); }
+    // Order 2: the token lands first (the mark waits for the 5 s spacing and
+    // the ignition goes off before it): A's S is still on disk but C refuses
+    // it because B is the previous product boot.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.run(0,20);b.block="journal_draining";b.run(10.8,1);   // 3 m in 1 s, mark held
+      b.block=0;b.run(0,1);
+      CHECK(landed(b)=="T" && token_of(d)==token_line(BOOT_B));
+      G3Record r;CHECK(g3_load(d.c_str(),&r)==G3_LOAD_OK && r.state=='S' && !strcmp(r.boot_id,BOOT_A));
+      chain_expect(d,"not_prev_boot","bbbbbbbb");
+      // ... and once the mark lands too (5 s later, rolling on), C reads B's M.
+      b.run(3.6,6);CHECK(landed(b)=="TM");chain_expect(d,"moving_at_end","bbbbbbbb"); }
+    // B drives and parks with a GPS heading: the token lands BEFORE B's S
+    // record, and C carries B's record (the record's writer is the token).
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.gps=true;b.run(0,5);b.run(20,20);b.run(0,15);
+      CHECK(landed(b)=="MTS" && token_of(d)==token_line(BOOT_B));
+      G3Record r;CHECK(g3_load(d.c_str(),&r)==G3_LOAD_OK && r.state=='S' && !strcmp(r.boot_id,BOOT_B));
+      ChainBoot c(d,BOOT_C);CHECK(!strcmp(c.t.reason(),"chain_depart") && !strcmp(c.prev,BOOT_B)); }
+    // The first S request is diverted to the token even without 2 m (turned:
+    // a GPS heading at a park after < 2 m): token first, the S 5 s later.
+    { const std::string d=temp_dir();
+      ChainBoot b(d,BOOT_B);b.gps=true;b.run(0,12);
+      CHECK(landed(b)=="TS" && has(b.j.last("\"event\":\"token\""),"\"reason\":\"record\""));
+      G3Record r;CHECK(g3_load(d.c_str(),&r)==G3_LOAD_OK && !strcmp(r.boot_id,BOOT_B) && token_of(d)==token_line(BOOT_B)); }
+    // Blind boots swap: no wheel event at all for 30 s ...
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.feed=false;b.run(0,29.5);CHECK(b.landed.empty());
+      b.run(0,1.5);CHECK(landed(b)=="T" && has(b.j.last("\"event\":\"token\""),"\"reason\":\"blind_silent\""));
+      chain_expect(d,"not_prev_boot","bbbbbbbb"); }
+    // ... or a wheel stream gap above 2 s that ends.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.run(0,10);b.feed=false;b.run(0,2.5);b.feed=true;b.run(0,1);
+      CHECK(landed(b)=="T" && has(b.j.last("\"event\":\"token\""),"\"reason\":\"blind_gap\""));
+      chain_expect(d,"not_prev_boot","bbbbbbbb"); }
+    // A gap of 1.5 s does not count.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.run(0,10);b.feed=false;b.run(0,1.5);b.feed=true;b.run(0,10);
+      CHECK(b.landed.empty() && token_of(d)==token_line(BOOT_A)); }
+    // Corrupt or missing token: C refuses ("unread"/"none"); an idle lazy boot
+    // leaves the file as it is; a boot that moves rewrites it.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      write_file(d+"/"+G3_LAST_START_NAME,"garbage\n");
+      ChainBoot b(d,BOOT_B);CHECK(!strcmp(b.prev,"unread") && !strcmp(b.t.reason(),"not_prev_boot"));
+      b.run(0,60);CHECK(token_of(d)=="garbage\n");
+      chain_expect(d,"not_prev_boot","unread");
+      ChainBoot e(d,BOOT_B);   // a second start of B: eager, prev = itself
+      CHECK(!strcmp(e.swap,"eager_restart") && !strcmp(e.prev,BOOT_B) && !e.t.token_lazy() &&
+            token_of(d)==token_line(BOOT_B) && !strcmp(e.t.reason(),"not_prev_boot")); }
+    { const std::string d=temp_dir();chain_boot_a(d);unlink((d+"/"+G3_LAST_START_NAME).c_str());
+      ChainBoot b(d,BOOT_B);CHECK(!strcmp(b.prev,"none") && !strcmp(b.t.reason(),"not_prev_boot"));
+      b.run(20,6);CHECK(landed(b)=="MT" && token_of(d)==token_line(BOOT_B)); }
+    // A second worker start of the same boot after an idle first worker: the
+    // gap between them was not observed: swap at once and refuse A's record.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      { ChainBoot b(d,BOOT_B);b.run(0,10);CHECK(token_of(d)==token_line(BOOT_A)); }
+      ChainBoot b2(d,BOOT_B);
+      CHECK(!strcmp(b2.swap,"eager_restart") && token_of(d)==token_line(BOOT_B) && !strcmp(b2.t.reason(),"not_prev_boot"));
+      CHECK(has(b2.j.last("g3_store"),"\"prev\":\"bbbbbbbb\",\"swap\":\"eager_restart\"")); }
+    // The token already names this boot (the first worker swapped): nothing to do.
+    { const std::string d=temp_dir();g3_last_start_write(d.c_str(),BOOT_B);
+      ChainBoot b(d,BOOT_B);CHECK(b.t.token_lazy() && b.t.token_done() && !b.t.token_wanted()); }
+}
+static void token_gate() {
+    // Retry when the gated write is blocked: the idle rule holds the request,
+    // a cancelled write is requested again after the 5 s spacing, a failure
+    // counts toward the store's three failures.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.block="journal_draining";b.run(0,1);b.run(20,20);
+      CHECK(b.landed.empty() && token_of(d)==token_line(BOOT_A));
+      b.block=0;b.force_stage=G3_IO_CANCELLED;b.run(20,0.1);
+      CHECK(b.j.count("\"event\":\"token\"")==1 && has(b.j.last("\"event\":\"token\""),"\"result\":\"cancelled\""));
+      b.force_stage=-1;b.run(20,4.8);CHECK(b.landed.empty());
+      b.run(20,0.3);CHECK(landed(b)=="T" && token_of(d)==token_line(BOOT_B)); }
+    // While BETA replaces: only with a journal writer lag <= 100 ms.
+    { const std::string d=temp_dir();
+      G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A,"lazy");Rows j;
+      G3Sample s=drive(1*S,10);s.token_why="moved";s.beta_replacing=true;s.writer_lag_ns=G3_GARAGE_REPLACING_MARK_LAG_NS+1;
+      t.tick(j,s,0,0);char b[G3_RECORD_MAX];size_t n;uint32_t q;unsigned target;
+      CHECK(!t.take_request(b,sizeof b,&n,&q,0,&target));
+      s.now=2*S;s.writer_lag_ns=G3_GARAGE_REPLACING_MARK_LAG_NS;t.tick(j,s,0,0);
+      // A caller without a target never receives the token line.
+      CHECK(!t.take_request(b,sizeof b,&n,&q));
+      CHECK(t.take_request(b,sizeof b,&n,&q,0,&target) && target==G3_TARGET_TOKEN && std::string(b,n)==token_line(BOOT_B) &&
+            q>=G3_TOKEN_SEQ_BASE && t.in_flight_token() && t.in_flight_static());
+      // Static content: a moving wheel or a stale stream does not cancel it;
+      // the idle rule does.
+      s.wheels_moving=true;CHECK(!g3_cancel_reason(0,s,t));
+      s.wheels_fresh=false;CHECK(!g3_cancel_reason(0,s,t));
+      CHECK(!strcmp(g3_cancel_reason("journal_lagging",s,t),"journal_lagging"));
+      // The mailbox refused: requested again (not a failure).
+      t.post_failed();CHECK(!t.in_flight_token() && t.token_wanted());
+      s.now=8*S;s.wheels_moving=false;s.wheels_fresh=true;t.tick(j,s,0,0);
+      CHECK(t.take_request(b,sizeof b,&n,&q,0,&target) && target==G3_TARGET_TOKEN);
+      G3IoResult f={G3_IO_RENAME,EIO,0,G3_STEP_NONE,0,0};t.store_result(j,8*S,q,f);
+      CHECK(has(j.last("\"event\":\"token\""),"\"result\":\"failed\",") && t.token_wanted() && t.store_on()); }
+    // The mailbox routes the token line to g3-last-start (store thread path).
+    { const std::string d=temp_dir();static G3Mailbox m;CHECK(g3_mailbox_init(m,d.c_str(),0));
+      const std::string l=token_line(BOOT_A);
+      CHECK(!g3_mailbox_post(m,l.data(),l.size(),G3_TOKEN_SEQ_BASE,1,0,false,7));
+      CHECK(g3_mailbox_post(m,l.data(),l.size(),G3_TOKEN_SEQ_BASE,1,0,false,G3_TARGET_TOKEN));
+      CHECK(g3_mailbox_run_once(m,0) && token_of(d)==l && access((d+"/"+G3_STORE_NAME).c_str(),F_OK)!=0);
+      G3IoResult r;CHECK(g3_mailbox_result(m,G3_TOKEN_SEQ_BASE,1,&r) && r.stage==G3_IO_OK);
+      const std::string rec=encode(depart_record());
+      CHECK(g3_mailbox_post(m,rec.data(),rec.size(),5,1,0,false));
+      CHECK(g3_mailbox_run_once(m,0) && read_file(d+"/"+G3_STORE_NAME)==rec && token_of(d)==l); }
+    // The swap and the mark both failed (documented residual): B drove 30 m,
+    // every write failed (store off after three), A's S and A's token stay,
+    // and C carries A's stale record. The previous eager swap at B's start
+    // would have caught it (if that one write had landed).
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.force_stage=G3_IO_WRITE;b.run(20,6);b.run(0,30);
+      CHECK(b.landed.empty() && !b.t.store_on() && token_of(d)==token_line(BOOT_A) && b.t.token_wanted());
+      chain_expect(d,"chain_depart","aaaaaaaa");
+      // A terminal synchronous attempt (journal fault / capture stop) closes it.
+      G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};b.t.token_sync(b.j,40*S,"capture_stop",ok);
+      CHECK(!b.t.token_wanted() && b.t.token_done() &&
+            has(b.j.last("\"event\":\"token\""),"\"reason\":\"moved\",\"result\":\"sync\""));
+      const size_t rows=b.j.count("\"event\":\"token\"");
+      CHECK(b.j.count("\"result\":\"failed\"")>=1 && b.j.count("\"disabled\":true")==1);
+      b.t.token_sync(b.j,41*S,"capture_stop",ok);CHECK(b.j.count("\"event\":\"token\"")==rows); }
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A,"lazy");Rows j;
+      G3IoResult f={G3_IO_OPEN,EACCES,0,G3_STEP_NONE,0,0};t.token_sync(j,1,"journal_failed",f);
+      CHECK(!t.token_wanted() && !t.token_done() &&
+            has(j.last("\"event\":\"token\""),"\"reason\":\"journal_failed\",\"result\":\"sync_failed\"")); }
+    // Marker semantics: with the garage switch off the tracker never writes the
+    // token (the runtime swapped it at start, as before) and has no "swap".
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_MISSING,g3_record(),false,BOOT_A,"lazy");
+      CHECK(!t.token_lazy() && !t.token_wanted());Rows j;t.journal_start(j,0);
+      CHECK(!has(j.last("g3_store"),"swap") && !has(j.last("g3_store"),"prev"));
+      G3Sample s=drive(1*S,10);s.token_why="moved";t.tick(j,s,0,0);
+      char b[G3_RECORD_MAX];size_t n;uint32_t q;unsigned target;CHECK(!t.take_request(b,sizeof b,&n,&q,0,&target)); }
+    // Garage on but the caller swapped (swap 0): no lazy token, no "swap" field.
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A);
+      CHECK(!t.token_lazy() && !t.token_wanted());Rows j;t.journal_start(j,0);
+      CHECK(has(j.last("g3_store"),"\"prev\":\"aaaaaaaa\"}") && !has(j.last("g3_store"),"swap")); }
+    // An unknown boot id has nothing to write.
+    { G3Tracker t;t.start(0,true,"m","unknown","none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A,"lazy");
+      CHECK(t.token_lazy() && !t.token_wanted()); }
+}
+
 int main(int argc,char** argv) {
     if(argc==3 && !strcmp(argv[1],"--two-boot"))return two_boot(argv[2]);
     codec();
@@ -1964,6 +2292,10 @@ int main(int argc,char** argv) {
     garage_send();
     garage_latch_pipeline();
     last_start_token();
+    token_codec();
+    token_watch();
+    token_chain();
+    token_gate();
     g3_send_adapter();   // configures the process-global adapter: last
     std::printf("test_g3: %u checks passed\n",checks);
     return 0;
