@@ -1,225 +1,123 @@
 # 릴리즈 생성 절차
 
-이 문서는 유지보수자와 자동화 에이전트가 **검증한 커밋으로 설치 ZIP을 만들고 GitHub Release에 게시**하는 절차다. 새 쉘 전용 묶음의 설치 방법은 [권한 있는 셸에서의 설치](../packaging/SHELL_START_KO.md)를 따른다.
+이 문서는 유지보수자와 자동화 에이전트가 **검증한 커밋으로 설치 ZIP을 만들고 GitHub Release에 게시**하는 절차입니다. 2026-10-18부터 절차의 각 단계는 저장소에 추적된 스크립트 `tools/release/*.sh`로 실행하고, 안정판 게이트(G7~G11, G16)는 `tests/gates/`의 스크립트로 재현합니다(설명: [게이트 시험 안내](../tests/gates/README_KO.md), 첫 실행 기록: `validation/V1_C_GATES_2026-10-18.md`). 게이트의 정의와 통과 기준은 `validation/V1_STABLE_DECISIONS_2026-10-18.md`와 `validation/V1_STABLE_AUDIT_2026-10-18.md` 4절이 정합니다.
 
-2026-10-01 허용된 한 번의 실차 설치·시험 기회는 이미 사용했으며 기동·센서
-기록을 확보하지 못했습니다. 릴리즈 발행을 추가 차량 시험 승인으로 해석하지
-마십시오. 새 SHADOW 개발판은 아래 오프라인 검증과 [현재 상태](STATUS_KO.md)를
-기준으로 준비하십시오. 별도 시험 기회가 정해지면 [통합 시험 준비](FIELD_TRIAL_KO.md)를
-따르며 실제 관성항법 적용이라는 [v1.0 완료 조건](V1_READINESS_KO.md)은 유지합니다.
+릴리즈 발행을 추가 차량 방문·주행 승인으로 해석하지 마십시오. 현재 기능·실차 범위는 [현재 상태](STATUS_KO.md)가 정합니다.
 
 ## 배포 단위와 적용 범위
 
-- 배포 단위는 **태그 + 해당 커밋에서 만든 설치 ZIP + SHA-256 + 릴리즈 노트**다. master 병합만으로 기존 릴리즈 파일이 바뀌지 않는다. GitHub가 자동 생성하는 `Source code (zip)`은 설치 묶음이 아니다.
-- 리뷰, Ready 전환, LGTM, 병합, 릴리즈 발행은 각각 다른 작업이다. 요청받은 범위만 수행한다. 이미 릴리즈 발행을 지시받았다면 같은 승인을 반복해서 묻지 않는다.
-- 이 절차 작성 시점(2026-09-29)의 master는 PR #12의 실제 센서 기반 SHADOW 계산을 포함한다. 기존 `v0.2.0-observe.2` 설치 파일은 이 변경을 포함하지 않는다. 새 릴리즈는 선택한 커밋의 전체 변경 범위를 설명해야 한다.
-- 현재 설치 기본값은 OBSERVE, live ASSIST는 코드에서 차단된 상태다. SHADOW 지원 코드가 포함돼도 기본 설치에서 SHADOW가 켜지는 것은 아니다. 릴리즈 생성 과정에서 설정이나 차단 조건을 바꾸지 않는다.
-- 예외적으로 [드문 실차 기회의 통합 시험](FIELD_TRIAL_KO.md)을 준비할 때는 의도적으로 선택한 `--default-mode=SHADOW` 묶음을 만들 수 있다. 일반 묶음의 OBSERVE 기본값은 유지한다. 이 경우 `bundle-default-mode`, build-info의 `default_mode`, 설치 안내와 릴리즈 노트가 모두 SHADOW로 일치해야 한다. 아래 일반 OBSERVE 예시를 그대로 복사해 잘못 표시하지 않는다. ASSIST 차단은 그대로다.
-- BETA 묶음(`--default-mode BETA`, 설정 `mode=BETA`)은 소유자가 BETA 시험을 명시적으로 요청했을 때만 만든다. 기본값이 되지 않으며 같은 일치 규칙(`bundle-default-mode`, build-info `default_mode`, 설치 안내, 릴리즈 노트)이 BETA로 적용된다. 메뉴 첫 화면이 `This USB installs mode BETA`를 보여 주므로 사용자가 추가로 입력할 것은 없다. 절차 초안은 [BETA 현장 절차](FIELD_PROCEDURE_BETA_KO.md)이며, BETA 묶음은 아직 발행된 적이 없다. 2026-10-06부터 BETA 묶음은 **상시 실행(persistent)** 으로 설치된다: 메뉴 1이 가드 `enable`로 `persist`를 쓰고 매 부팅 가드가 SM 리셋 보고서로 직전 부팅을 판정해 연속 두 번 실패하면 순정으로 차단한다(build-info `install_policy=persistent`). SHADOW·OBSERVE 묶음은 한 번 부팅 시험 그대로다. BETA 릴리즈 검증에는 [상시 실행 가드 기록](../validation/PERSISTENT_GUARD_2026-10-06.md)의 호스트·exact-ARM·순정 BusyBox 다중 부팅 시험을 다시 돌리고, 릴리즈 노트에 `healthy` 규칙이 꺼져 있다는 한계를 적는다.
-- 아래 명령은 **LDS 관측기를 포함한 여섯 바이너리 구성** 기준이다. 예전 태그를 재현할 때는 그 태그의 Makefile/packaging을 사용하며, 현재 스크립트나 바이너리를 섞지 않는다.
-- 실차 미검증 개발판은 pre-release로 발행한다. 빌드·호스트·QEMU 성공을 실제 차량 복구, 위치 정확도, 폰/지도 앱 수용 검증으로 표현하지 않는다. [현재 상태](STATUS_KO.md)가 기능·실차 시험 범위를 정한다.
-- **설치 ZIP은 그 자체로 완결적이어야 한다(2026-10-04, 소유자 지시).** 사용자가 ZIP만 내려받아 USB에 복사하면 바로 설치를 시작할 수 있어야 하므로, 새 공개 묶음에는 `mp3/`와 `js/`의 셸 진입 파일과 `USB_ENTRY_NOTICE.md`를 **항상 포함한다**(`make_usb_zip.py`를 `--shell-only` 없이 실행). 진입 파일이 빠진 셸 전용 ZIP(`v0.3.11-shadow.2`, `v0.3.12-shadow.1`·`.2`)은 사용자가 이전 묶음에서 파일을 따로 복사해야 해서 이 기준을 충족하지 못했다. `--shell-only`는 소유자가 명시적으로 요청할 때만 쓴다. 진입 파일의 출처와 라이선스 상태는 `USB_ENTRY_NOTICE.md`에 있는 그대로 보존한다.
+- 배포 단위는 **태그 + 해당 커밋에서 만든 설치 ZIP + SHA-256 + 릴리즈 노트**입니다. master 병합만으로 기존 릴리즈 파일이 바뀌지 않습니다. GitHub가 자동 생성하는 `Source code (zip)`은 설치 묶음이 아닙니다. **소스 병합만으로 배포가 끝난 것이 아닙니다.**
+- 리뷰, Ready 전환, LGTM, 병합, 릴리즈 발행은 각각 다른 작업입니다. 요청받은 범위만 수행합니다. 이미 릴리즈 발행을 지시받았다면 같은 승인을 반복해서 묻지 않습니다. `tools/release/all.sh`는 초안·발행을 하지 않으며, 발행(`publish.sh`)은 `REL_CONFIRM_PUBLISH=<태그>`를 명시해야만 실행됩니다.
+- 공개 묶음은 **BETA, 상시 실행(persistent)** 입니다: `tools/make_usb_zip.py --default-mode BETA`, build-info `default_mode=BETA`, `install_policy=persistent`, `bundle-default-mode`·설치 안내·릴리즈 노트가 모두 BETA로 일치해야 합니다. live ASSIST(검증 도메인)는 코드에서 차단된 채로 둡니다. 릴리즈 과정에서 설정이나 차단 조건을 바꾸지 않습니다. OBSERVE·SHADOW 묶음은 소유자가 명시적으로 요청할 때만 만들고 같은 일치 규칙을 적용합니다.
+- **설치 ZIP은 그 자체로 완결적이어야 합니다(2026-10-04, 소유자 지시).** 새 공개 묶음에는 `mp3/`(4개)와 `js/run.js`의 셸 진입 파일과 `USB_ENTRY_NOTICE.md`를 **항상 포함합니다**(`make_usb_zip.py`를 `--shell-only` 없이 실행). 진입 파일이 빠진 셸 전용 ZIP(`v0.3.11-shadow.2`, `v0.3.12-shadow.1`·`.2`)은 이 기준을 충족하지 못했습니다. `--shell-only`는 소유자가 명시적으로 요청할 때만 씁니다. 진입 파일의 출처와 라이선스 상태는 `USB_ENTRY_NOTICE.md`에 있는 그대로 보존합니다. `tests/gates/g5g6_zipcheck.py`가 이를 검사합니다.
+- **커밋을 고정합니다.** 분리된 새 체크아웃에서 40자리 커밋으로 빌드하고 `source_modified=false`여야 합니다. 한 작업 디렉터리에서 다른 커밋으로 전환하거나 빌드 결과를 재사용하지 않습니다.
+- **게시된 ZIP을 다시 받아 검증합니다**(`verify.sh`, G18). 다운로드 파일이 빌드한 ZIP과 바이트 동일하지 않으면 완료로 보고하지 않습니다.
+- 버전 이름: 태그에 `-`가 붙으면(`-beta.N`, `-rc.N`) pre-release로, 붙지 않은 `vX.Y.Z`는 정식(latest)으로 게시합니다(`REL_PRERELEASE`로 바꿀 수 있음). 실차 미검증 기능은 정식 릴리즈에서도 노트의 검증 상태 절에 그대로 적습니다(결정 기록의 라벨 규칙). 빌드·호스트·QEMU 성공을 실제 차량 복구, 위치 정확도, 폰/지도 앱 수용 검증으로 표현하지 않습니다.
+- 예전 태그를 재현할 때는 그 태그의 Makefile·packaging·스크립트를 사용하며 현재 스크립트나 바이너리를 섞지 않습니다.
 
-## 1. 환경과 배포 대상 고정
+## 0. 준비물과 환경 변수
 
-x86-64 Linux와 Bash를 기준으로 한다. 고정 도구체인의 컴파일러 자체가 Linux x86-64 실행 파일이므로 Apple Silicon macOS에서 직접 실행하는 절차가 아니다.
+x86-64 Linux 기준입니다(고정 도구체인 컴파일러가 Linux x86-64 실행 파일). 필요 도구: Git, Python 3, make, C/C++ 컴파일러, pkg-config, D-Bus 개발 파일, qemu-user(qemu-arm), PRoot, zip/unzip, file, jq, sha256sum, GitHub CLI(`gh`, 기존 승인된 계정으로 인증). Debian/Ubuntu: `build-essential python3 pkg-config libdbus-1-dev qemu-user proot zip unzip file jq git`.
 
-필요 도구: Git, Python 3, make, C/C++ 컴파일러, pkg-config, D-Bus 개발 파일, qemu-user, zip/unzip, file, sha256sum, GitHub CLI(`gh`). Debian/Ubuntu의 빌드 의존성은 `build-essential python3 pkg-config libdbus-1-dev qemu-user zip unzip file git`이며 `gh`는 별도 준비한다. GitHub 인증은 기존 승인된 계정을 사용한다.
+저장소 밖에 두는 비공개 입력(경로는 환경 변수로만 전달하며 저장소·공개 기록에 넣지 않습니다):
 
-먼저 [릴리즈 목록](https://github.com/junoh-moon/mazda-aa-dr/releases)과 변경 내용을 확인하여 **새 버전명과 배포할 40자리 커밋 SHA**를 정한다. `v0.2.0-observe.N`은 관측 시험판 명명 예시이지 다음 번호의 자동 결정 규칙이 아니다. 센서 SHADOW 기능 추가를 단순 설치 편의 변경으로 설명하지 않는다.
+| 변수 | 내용 | 쓰는 단계 |
+|---|---|---|
+| `MX5DR_STOCK_ROOT` | 순정 펌웨어 트리(`packaging/firmware.sha256`의 파일, `jci/version.ini`, `jci/sm/sm.conf`, `jci/sm/sm_WCP.conf`, `usr/bin/autostart`, 원본 runtime). **읽기 전용** | arm, host, pack, stock |
+| `MX5DR_LDS_STOCK`, `MX5DR_AA_STOCK` | 원본 LDS runtime, AA 프로브용 순정 루트 | arm (기본: `MX5DR_STOCK_ROOT`) |
+| `MX5DR_LIBPATCH`, `MX5DR_LIBPATCH_091` | 공개된 `libpatch-blmjciaapa.so` 0.10.0과 0.9.1(차량 버전) | arm (G4) |
+| `MX5DR_LIBPATCH_DIR` | 공개된 oem-aa-mod 폴더(0.9.1) | stock |
+| `MX5DR_VEHICLE_EXPORT` | 소유자 차량 내보내기 트리 | stock (터치, 메뉴 6 복제) |
+| `MX5DR_REPLAY_CHAIN` | 비공개 부팅 목록 | replay (G11) |
+| `MX5DR_PROOT`, `QEMU_ARM` | PRoot, qemu-arm | arm, pack, stock, soak (기본: PATH) |
+| `MX5_TOOLCHAIN` | 이미 받은 고정 도구체인(복사해서 씀) | build (없으면 `tools/fetch_m3_toolchain.py`) |
+| `HOST_DBUS_FLAGS`, `HOST_DBUS_LIBS` | 호스트 D-Bus 헤더·라이브러리 | host (기본: pkg-config) |
+| `REL_PREVIOUS_TAG`, `REL_PREVIOUS_SHA256` | 직전 공개 ZIP(G8, G16) | stock |
+| `G11_BASE_COMMIT` | 직전 릴리즈 태그의 커밋 | replay |
+| `REL_MAX_LOAD`(4), `REL_NICE`(10) | 무거운 단계는 1분 부하가 이 값 미만일 때 시작, nice 값 | 전부 |
 
-아래 자리표시자 두 개를 바꾼 뒤, 이후 블록을 **같은 Bash 세션에서 순서대로** 실행한다. 명령이 실패하면 원인을 해결한 뒤 해당 단계부터 진행한다.
+## 1. 고정과 전체 실행
 
 ```bash
 set -euo pipefail
-RELEASE_REPO='junoh-moon/mazda-aa-dr'
-RELEASE_TAG='REPLACE_WITH_NEW_TAG'
-RELEASE_COMMIT='REPLACE_WITH_40_CHARACTER_COMMIT_SHA'
-[[ "$RELEASE_TAG" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]
-[[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-
-gh auth status
-RELEASE_WORK=$(mktemp -d /tmp/mazda-aa-dr-release.XXXXXX)
-git clone "git@github.com:$RELEASE_REPO.git" "$RELEASE_WORK/source"
-cd "$RELEASE_WORK/source"
-git remote set-url --push origin "git@github.com:$RELEASE_REPO.git"
-git fetch origin master --tags
-git cat-file -e "$RELEASE_COMMIT^{commit}"
-git merge-base --is-ancestor "$RELEASE_COMMIT" origin/master
-git checkout --detach "$RELEASE_COMMIT"
-test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-test -z "$(git status --porcelain)"
-if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
-  echo 'Existing tag: select a new version; do not overwrite it.' >&2
-  exit 1
-fi
-
-mkdir "$RELEASE_WORK/evidence" "$RELEASE_WORK/dist"
-RELEASE_NAME="mazda-aa-dr-$RELEASE_TAG"
-RELEASE_BUNDLE="$RELEASE_WORK/dist/$RELEASE_NAME"
+TAG='vX.Y.Z'                               # 새 태그(이미 있으면 setup이 거부)
+COMMIT='<40자리 커밋 SHA, origin/master 위>'
+sh tools/release/setup.sh "$TAG" "$COMMIT"  # G0: 새 클론, 분리 체크아웃, 깨끗한 트리, 태그·릴리즈 없음
+nohup sh tools/release/all.sh > /dev/null 2>&1 &   # build → zip → arm → host → pack → stock → soak → replay
+sh tools/release/status.sh                  # 단계별 exit, 증거 목록
 ```
 
-한 작업 디렉터리에서 다른 커밋으로 전환하고 빌드 결과를 재사용하지 않는다. 버전이나 소스를 바꾸면 새 작업 디렉터리에서 다시 만든다.
+`setup.sh`는 `WORK=$(mktemp -d ${REL_TMP:-/tmp}/mazda-aa-dr-release.XXXXXX)`를 만들고 `WORK/release.env`(TAG, COMMIT, REPO, NAME)와 포인터 파일(`REL_POINTER`)을 씁니다. 이후 스크립트는 첫 인수, `REL_WORK`, 포인터 순으로 WORK를 찾습니다. 단계마다 `WORK/jobs/<단계>.log`와 `.exit`이 남고, 증거 파일은 `WORK/evidence/`와 해시 목록 `WORK/evidence/INDEX`에 모입니다. 실패하면 원인을 고친 뒤 **해당 단계만** 다시 실행합니다(`sh tools/release/arm.sh` 등). 소스나 버전을 바꿨다면 setup부터 새 WORK로 다시 합니다.
 
-## 2. 고정 ARM 도구체인으로 빌드
+`all.sh`는 오래 걸리므로(전원 차단 G9 전체와 4 h soak 포함 시 하루 가까이) 추적되는 백그라운드 작업으로 띄우고 `status.sh`로 봅니다. 프로세스를 남기지 않도록 끝난 뒤 `WORK/jobs/all.exit`을 확인하십시오.
 
-[도구체인 상세](toolchain.md)의 고정 upstream 커밋은 `61ec0343de84f6fc7c46840056df1d600d44be8a`, GCC 4.9.1, ARMv7 Cortex-A9 NEON **softfp**다. 임의 최신 ARM 컴파일러로 만든 결과를 정식 빌드와 혼동하지 않는다.
+## 2. 단계와 게이트
+
+| 단계 스크립트 | 게이트 | 하는 일 · 실패 조건 |
+|---|---|---|
+| `setup.sh TAG COMMIT` | G0 | 태그 형식, 40자리 커밋, origin/master 조상, 깨끗한 트리, 태그·같은 이름 릴리즈 없음 |
+| `build.sh` | G1 | 고정 도구체인(커밋 `61ec0343de84f6fc7c46840056df1d600d44be8a`, GCC 4.9.1, ARMv7 Cortex-A9 NEON **softfp**)으로 `tools/build_arm.py`; 새 빌드 디렉터리만, 여섯 산출물 해시와 `arm-build.json` |
+| `zip.sh` | G5, G6 | `make_usb_zip.py --default-mode BETA`(`--shell-only` 없음), `unzip -t`, `SHA256SUMS`, `g5g6_zipcheck.py`, `elf.txt` |
+| `arm.sh` | G3, G4 | `tests/run_arm_all.sh`(LDS 순정·AA 순정·libpatch 0.10.0) + AA 설치 프로브 libpatch 0.9.1; 종료 0, `ARM_TIMING_FAILED=0`, 프로브 SKIP 없음 |
+| `host.sh` | G2 | `make -k test`(순정 루트·릴리즈 묶음 지정); 종료 0, unittest 합계·SKIP·`WORKER_BETA_TIMING_RETRY` 기록 |
+| `pack.sh` | G2(패키징) | `tests/packaging` 전체; 실패·SKIP 없음(`REL_ALLOW_PACK_SKIP=1`이 아니면), 원본 `bds` 파싱 두 줄 |
+| `stock.sh` | G7, G8, G9, G16 | 순정 BusyBox 하네스(`g7_cmu_emulation`, `g7_multiboot`, `g7_menus`, `g7_touch` A/B, 메뉴 6 복제), 업그레이드(`g8_upgrade`, 직전 공개 ZIP을 gh로 받아 sha256 확인), 롤백(`g16_rollback`), 전원 차단(`g9_powerloss`, `REL_G9_STRIDE` 기본 1 = 모든 차단점) |
+| `soak.sh` | G10 | `g10_soak.sh`: QEMU-ARM 4 h 터널 교체 반복 + 100 짧은 부팅(`REL_SOAK=fast`는 연기 시험일 뿐 게이트가 아님) |
+| `replay.sh` | G11 | `g11_replay.sh`: 비공개 전 부팅, 실험 끔, 직전 릴리즈와 바이트 동일(`G11: X/N`) |
+| `draft.sh` | — | 노트·ZIP·체크섬으로 **초안**(태그는 만들지 않음, 같은 태그 릴리즈가 있으면 거부) |
+| `publish.sh` | 발행 | `REL_CONFIRM_PUBLISH=<태그>` 필수, 앞 단계 모두 exit 0, 초안 정확히 1개; 주석 태그 생성·push, 초안 공개 |
+| `verify.sh` | G18 | 게시 파일 재다운로드: sha256, 빌드 ZIP과 `cmp`, `unzip -t`, 내부 `SHA256SUMS`, build-info 커밋, 태그→커밋, 공개·pre-release/latest 상태, ZIP 검사 |
+
+G13(열린 CONFIRMED 결함 0), G14(독립 검토 2라운드), G15(문서)는 사람이 판단하는 게이트이므로 스크립트가 없습니다. 결과는 새 날짜의 릴리즈 기록 한 건에 모읍니다.
+
+### SKIP과 재시도 규칙
+
+- 어느 게이트든 SKIP(종료 77)은 통과가 아닙니다. 비공개 입력이 없는 기계에서 일부를 생략해야 하면 `REL_ALLOW_SKIP="g7-touch-A g7-touch-B g7-menu6-replica"`처럼 이름을 적고 릴리즈 기록에 생략과 이유를 적습니다.
+- `make test` 종료 코드만으로 판정하지 않습니다. fixture 누락에 따른 packaging skip과 소켓 금지 환경의 exit 77은 전체 명령에서 성공처럼 보일 수 있습니다. 실제 PASS/FAIL/SKIP과 이유를 기록합니다.
+- **시간 계열 ARM 시험과 flaky 보고**: 벽시계로 제품 시간 계약(기록 스레드 250 ms 자체 flush·50 ms 이하 잔여, 1.5 s 지연 가드, 워커 턴·idle 게이트 기한)을 단언하는 시험만 `tests/run_arm_timing.sh`로 최대 3회 실행합니다. 한 번이라도 통과하면 통과, 세 번 모두 실패하면 스위트 실패입니다. 임계값은 바꾸지 않으며 다른 ARM 시험은 재시도하지 않습니다. 로그 끝의 `== ARM timing-class flaky report` 블록과 `ARM_TIMING_RETRIES=n`, `ARM_TIMING_FAILED=n`을 확인하고, 릴리즈 노트에는 `ARM_TIMING_RETRIES` 값을 항상 적고 **1 이상이면** 재시도한 시험 이름·첫 실패 단언·부하를 함께 적습니다. 같은 시험이 연속 릴리즈에서 재시도되거나 부하 약 2 이하에서 재시도되면 실제 경쟁 조건일 수 있으므로 릴리즈 전에 원인을 조사합니다. 4코어에서 nice 0 작업이 코어를 모두 점유한 채 nice 10으로 돌리면 재시도해도 결정적으로 실패합니다(`journal_lag_bound` 미회복, `worker-session-test` 20 s alarm). 이때는 임계값을 바꾸지 말고 호스트가 조용할 때 다시 실행합니다. 근거: [ARM 시간 시험 안정화 기록](../validation/ARM_TIMING_STABILISATION_2026-10-10.md). 호스트 `test_worker_beta`의 같은 부류(`g3_garage`, `g3_cancel`)는 `tests/runtime/run_worker_beta_timing.sh`가 같은 규칙으로 재시도합니다.
+- G10 soak의 짧은 부팅에서 종료 77(시간 단언 불확정)은 실패로 셉니다. 부하가 높았던 실행은 부하 기록과 함께 다시 실행합니다.
+
+### 단계별 확인 사항
+
+- **ARM 입력 고정**: ARM 로그 처음과 끝의 `ARM_TEST_INPUTS`에서 `release_verified=true`, 여섯 artifact 해시, 도구체인과 sysroot를 확인합니다. 릴리즈 검사는 `MX5DR_ARM_BUILD`가 필수입니다. 개발용 `make arm`이나 `MX5DR_ARM_LIBRARY` 검사는 릴리즈 검증으로 표시하지 않습니다. ARM runner는 명시한 compiler/sysroot/preload만 사용합니다.
+- **ELF**: ELF32 little-endian ARM, softfp, TEXTREL 없음, GLIBC_2.4만, 동적 libstdc++ 없음. D-Bus는 collector에만 필요하며 AA preload로 돌아가면 안 됩니다. 과거 `elf.txt`를 새 바이너리의 결과로 재사용하지 않습니다.
+- **AA 설치 프로브(G4)**: 실제 BLM에 제품 preload와 서드파티 `libpatch`를 차량과 같은 순서로 올려 (1) 패치 없음: 설치 ok와 세션 관측, (2) 알려진 경로의 패치: 위치 후킹 설치와 세션 관측만 생략, (3) 알려지지 않은 경로: 안전 실패를 확인합니다. 0.10.0과 0.9.1 두 버전 모두 4/4여야 합니다. 순정 런처 대신 프로브를 쓰므로 차량 검증이 아닙니다.
+- **원본 `bds` 파싱 검사(휴대폰 IMU 채널)**: `pack.sh`가 돌리는 `tests/packaging/test_bds_parse_qemu.py`의 6개 시험이 모두 실행·통과해야 하며 SKIP은 통과가 아닙니다. `bds parse check: radio_open count=8 ids=5,8,9,10,11,12,14,15; exit 1`과 `bds parse check (wcp): …` 줄을 릴리즈 기록에 옮깁니다. 라디오·SDP·RFCOMM·페어링은 이 검사로 확인되지 않습니다. 근거: [휴대폰 IMU 채널 기록](../validation/PHONE_IMU_CHANNEL_2026-10-14.md).
+- **순정 BusyBox 하네스의 한계**: 순정 BusyBox를 사용했다는 사실만으로 파일시스템·mount·전체 기동까지 실제라고 판단하지 않습니다. `/proc/mounts -> self/mounts`처럼 실제 파일 형태를 보존하고, 실 Linux procfs의 직접 확인과 작성한 모델의 결과를 구분합니다(v0.3.9-shadow.1은 이 전제를 놓쳐 실차 회수가 실패했습니다). 메뉴 2의 런타임 증거 줄은 복제에서 'wait'일 수밖에 없으므로 게이트는 "NO 줄 없음"을 봅니다.
+- **G8 플래그**: 새 설치기의 실험 표식·trace 정리 규칙이 들어간 후보는 `REL_GATE_FLAGS='--exp-markers present --trace-cleanup yes'`로 실행합니다(기본은 skip, `tests/gates/README_KO.md`).
+- 원본 펌웨어, 개인 경로, 실차 위치 로그를 공개하지 않습니다. 실행 로그는 비공개 WORK에 두고, 공개 검증 요약에는 실행 환경·커밋·생략·미검증만 적습니다. `replay.sh`는 개수와 파일 이름만 evidence로 옮깁니다.
+- SHA-256은 손상/동일성 검사이며 서명이 아닙니다. ZIP에 원본 펌웨어, 위치 로그, 개인 공유 링크가 없음을 확인합니다(진입 파일은 의도적으로 포함). `INSTALL_KO.md`는 `packaging/SHELL_START_KO.md`와 일치해야 합니다. 묶음 내 파일을 고치면 다시 빌드합니다.
+
+## 3. 릴리즈 노트
+
+`WORK/release-notes.md`를 작성합니다. 최소 내용:
+
+- 대상 펌웨어(NA 74.00.324A), 배포 커밋의 전체 SHA, 직전 릴리즈 대비 변경과 포함 커밋/PR.
+- 기본 모드(BETA, persistent), 기본 켬·기본 끔(실험) 기능과 끄는 메뉴, ASSIST 차단, **검증 상태 절**(기능 × 라벨 × 근거 기록; 라벨은 결정 기록의 규칙).
+- 게이트별 결과(G0~G18): 실행한 검사와 생략한 검사·이유, `ARM_TIMING_RETRIES`, G9 차단점 수, G10 수치, `G11: X/N`. 과거 실행 결과를 이번 결과처럼 쓰지 않습니다.
+- 다운로드할 정확한 ZIP 이름·SHA-256, 주차 중 메뉴 `1` 설치 → `5`의 CMU 재부팅 → `2` 확인, 회수(메뉴 3)·제거(메뉴 4)·롤백 안내. 차량 점화 OFF/ON을 CMU Linux 재부팅으로 대신 설명하지 않습니다.
+
+## 4. 초안, 발행, 재다운로드 검증
 
 ```bash
-python3 tools/fetch_m3_toolchain.py --jobs 16
-MX5_TOOLCHAIN="$PWD/tools/m3-toolchain"
-RELEASE_ARM_PREFIX="$MX5_TOOLCHAIN/bin/arm-cortexa9_neon-linux-gnueabi-"
-RELEASE_SYSROOT="$MX5_TOOLCHAIN/arm-cortexa9_neon-linux-gnueabi/sysroot"
-RELEASE_BUILD="$RELEASE_WORK/arm"
-python3 tools/build_arm.py --toolchain "$MX5_TOOLCHAIN" --build-dir "$RELEASE_BUILD" \
-  2>&1 | tee "$RELEASE_WORK/evidence/arm-build.txt"
-sh packaging/make_bundle.sh --shell-only --default-mode=SHADOW \
-  "$RELEASE_BUILD/libmx5dr.so" "$RELEASE_BUNDLE"
+REL_TITLE="$TAG — ..." sh tools/release/draft.sh      # 초안(태그 없음)
+gh release view "$TAG" --repo junoh-moon/mazda-aa-dr  # 커밋·노트·첨부 이름·크기 확인
+REL_CONFIRM_PUBLISH="$TAG" sh tools/release/publish.sh  # 발행이 요청된 경우에만
+sh tools/release/verify.sh                             # G18
 ```
 
-묶음에는 같은 빌드의 `libmx5dr.so`, `libmx5dr-vimtap.so`, `libmx5dr-ldstap.so`, `mx5dr-collector`, `mx5dr-guard`, 정적 `mx5dr-sha256`, 각각의 `.sha256`, 설치·제거·로그 회수 helper와 기본 설정이 들어간다. `make_bundle.sh`는 ZIP, 전체 파일 manifest, 릴리즈 노트, GitHub Release를 생성하지 않는다. 출력 디렉터리가 이미 있으면 실패하므로 기존 묶음 위에 덮어쓰지 않는다.
+초안 작성만 요청받았다면 `draft.sh`에서 멈춥니다. `publish.sh`는 태그를 고정 커밋에 만들고 push한 뒤 기존 초안을 공개로 바꿉니다. 두 번째 릴리즈를 만들지 않으며(beta.11에서 중복 초안이 생긴 적 있음) 태그를 강제 갱신하지 않습니다. `gh`를 쓸 수 없으면 GitHub UI/API로 **같은 태그·커밋, pre-release/latest 설정, ZIP·체크섬 첨부**를 적용합니다.
 
-릴리즈 빌더는 새 디렉터리에서만 컴파일하고 도구체인 blob, 컴파일 전후 입력,
-실제 ARM ELF와 의존성, 여섯 결과물 해시를 `arm-build.json`에 기록한다.
-ZIP 빌더는 이 기록과 현재 소스·바이너리를 대조한다. 과거 빌드 디렉터리에
-새 소스의 정보를 덧붙여 릴리즈로 표시하지 않는다. 개발용 `make arm`은
-계속 사용할 수 있지만 릴리즈 기록을 대신하지 않는다.
+`verify.sh`가 통과한 뒤 **릴리즈 URL·태그·소스 커밋·ZIP 해시·검증 범위**를 보고합니다. SHA/태그/파일이 다르거나 다운로드가 실패하면 완료로 보고하지 않습니다. Git에 옮길 검증 기록은 새 날짜의 파일로 남기고 이전 결과를 덮어쓰지 않습니다.
 
-## 3. 실제 배포 바이너리와 테스트 확인
+이미 게시한 태그를 다른 커밋으로 옮기거나 같은 이름의 ZIP을 조용히 교체하지 않습니다. 코드나 첨부 파일 수정은 새 버전으로 발행하고 이전 버전의 알려진 문제를 설명합니다. 차량에 설치한 내용을 제거하는 절차(메뉴 4, 메뉴 6)는 GitHub 릴리즈 삭제와 별개입니다.
 
-독립적으로 확보한 해당 펌웨어 fixture를 저장소 밖에 둔다. `packaging/firmware.sha256`에 나열된 파일 외에 `jci/version.ini`, `jci/sm/sm.conf`, `jci/sm/sm_WCP.conf`, `usr/bin/autostart`가 필요하다. 심볼릭 링크는 원본 형태로 보존한다. 호스트 packaging 검사는 파일을 읽고 복사한다. 별도의 LDS ARM 설치 검사는 원본 loader·공유 runtime과 LDS 의존성을 QEMU에서 실제 실행한다. 이 원본 runtime은 빌드 sysroot와 구분하며 [LDS 검사 runner](../validation/LDS_COLD_INSTALL_2026-10-02.md)의 필수 파일을 갖춰야 한다.
+## 수동 절차와의 관계
 
-```bash
-MX5DR_STOCK_ROOT='/absolute/path/to/private/stock_reference'
-MX5DR_LDS_STOCK='/absolute/path/to/private/original_runtime'
-test -d "$MX5DR_STOCK_ROOT"
-test -d "$MX5DR_LDS_STOCK"
-MX5DR_STOCK_ROOT="$MX5DR_STOCK_ROOT" \
-MX5DR_RELEASE_BUNDLE="$RELEASE_BUNDLE" \
-  make test 2>&1 | tee "$RELEASE_WORK/evidence/host-tests.txt"
-
-CROSS_COMPILE="$RELEASE_ARM_PREFIX" QEMU_SYSROOT="$RELEASE_SYSROOT" \
-MX5DR_ARM_BUILD="$RELEASE_BUILD" MX5DR_LDS_STOCK="$MX5DR_LDS_STOCK" \
-  sh tests/run_arm_all.sh 2>&1 | tee "$RELEASE_WORK/evidence/arm-tests.txt"
-
-for artifact in libmx5dr.so libmx5dr-vimtap.so libmx5dr-ldstap.so mx5dr-collector mx5dr-guard mx5dr-sha256; do
-  file "$RELEASE_BUILD/$artifact"
-  "${RELEASE_ARM_PREFIX}readelf" -h -A -d -V "$RELEASE_BUILD/$artifact"
-done > "$RELEASE_WORK/evidence/elf.txt"
-```
-
-확인 사항:
-
-- `set -o pipefail`로 `tee` 성공이 빌드/테스트 실패를 가리지 않게 한다.
-- `make test` 종료 코드만으로 판정하지 않는다. fixture 누락에 따른 packaging skip과 소켓 금지 환경의 exit 77은 전체 명령에서 성공처럼 보일 수 있다. 실제 PASS/FAIL/SKIP과 이유를 기록한다. 이번 여섯 바이너리를 사용하는 packaging 시험이 생략된 채 차량용 설치 ZIP의 검증이 끝났다고 하지 않는다.
-- ELF32 little-endian ARM, softfp 호출 규약, TEXTREL 부재, GLIBC 버전/의존성을 확인한다. 현재 기대값은 GLIBC_2.4만 필요하고 동적 libstdc++ 의존성이 없는 것이다. D-Bus는 collector에 필요하며 AA preload로 돌아가면 안 된다. 과거 elf.txt를 새 바이너리의 결과로 재사용하지 않는다.
-- ARM 로그 처음과 끝의 `ARM_TEST_INPUTS`에서 `release_verified=true`, 여섯 artifact 해시, 도구체인과 sysroot를 확인한다. 릴리즈 검사는 `MX5DR_ARM_BUILD`가 필수다. 개발용 `MX5DR_ARM_LIBRARY` 검사에는 입력 해시만 기록하며 릴리즈 검증으로 표시하지 않는다.
-- **시간 계열 ARM 시험과 flaky 보고**: 벽시계로 제품 시간 계약(기록 스레드 250 ms 자체 flush·50 ms 이하 잔여, 1.5 s 지연 가드, 워커 턴·idle 게이트 기한)을 단언하는 시험(`journal-test --writer`, `runtime-lds-association-test`, `worker-session-test`, `worker-lds-test`, `worker-lds-source-test`, 제품 DSO `runtime-assist` 묶음, G3 저장 스레드의 `g3-test`와 `worker-beta-test g3_park/g3_garage/g3_cancel/g3_move/g3_stop`, G3 방위 송신의 `worker-beta-test g3_send/g3_send_conflict/g3_send_off/g3_send_abort/g3_send_fence`)만 `tests/run_arm_timing.sh`로 최대 3회 실행한다. 한 번이라도 통과하면 통과, 세 번 모두 실패하면 스위트 실패다. 임계값은 바꾸지 않으며 다른 ARM 시험은 재시도하지 않는다. 모든 시도는 `ARM_TIMING_ATTEMPT name=... attempt=k/3 exit=... load=... assertion=...` 줄과 전체 출력으로 로그에 남으므로 첫 실패 증거가 보존된다. 로그 끝의 `== ARM timing-class flaky report` 블록이 재시도한 시험(`RETRIED`)과 세 번 모두 실패한 시험(`FAILED`)을 첫 실패 단언·부하와 함께 나열하고, `ARM_TIMING_RETRIES=n`(재시도 뒤 통과한 시험 수)과 `ARM_TIMING_FAILED=n`을 출력한다. 릴리즈 노트에는 `ARM_TIMING_RETRIES` 값을 항상 적고, **1 이상이면** 재시도한 시험 이름·첫 실패 단언·부하를 함께 적는다. 같은 시험이 연속 릴리즈에서 재시도되거나 부하 약 2 이하에서 재시도되면 실제 경쟁 조건일 수 있으므로 릴리즈 전에 원인을 조사한다. 시간 계열 시험은 에뮬레이션된 기록 스레드에 CPU 몫이 필요하다: 4코어에서 nice 0 작업이 코어를 모두 점유한 채 nice 10으로 돌리면 재시도해도 결정적으로 실패한다(`journal_lag_bound` 미회복, `worker-session-test` 20 s alarm). 이때는 임계값을 바꾸지 말고 호스트가 조용할 때 다시 실행한다. 근거와 측정은 [ARM 시간 시험 안정화 기록](../validation/ARM_TIMING_STABILISATION_2026-10-10.md).
-- **필수: Bluetooth 설정 오프라인 파싱 검사(휴대폰 IMU 채널, 2026-10-14).** SHADOW/BETA 설치는 순정 `bds`를 우리 설정 사본(`-configFilePath /data_persist/mx5-aa-dr/bt/BdsConfiguration.xml`)으로 띄운다. 손상된 XML은 `bds` SIGSEGV와 SM `reset_board` 경로이므로, 릴리즈마다 **원본 `bds`를 qemu-arm으로 실행해** 설치기와 같은 편집기(`packaging/edit_bds.awk`)가 만든 XML을 읽히고 결과를 기록한다. 아래 명령의 6개 시험이 **모두 실행되어 통과**해야 하며 SKIP은 통과가 아니다(순정 루트, `qemu-arm`, 고정 ARM 컴파일러 중 하나라도 없으면 SKIP으로 끝나므로 릴리즈를 멈춘다). 출력의 `bds parse check: radio_open count=8 ids=5,8,9,10,11,12,14,15; exit 1` 줄과 WCP 인수(`-interface dbus -wcp`) 실행의 `bds parse check (wcp): …` 줄을 릴리즈 기록에 옮긴다. 고정 ARM 컴파일러는 `CROSS_COMPILE` 또는 저장소의 `tools/m3-toolchain`(fetch 결과나 그 심볼릭 링크)에서 찾는다. 대조군(순정 XML 7개, 손상 XML의 충돌 검출, 21개 항목의 20개 상한)과 순정 BusyBox 1.19.2 awk의 동일 출력, `packaging/bt.sha256`의 순정 `bds`·XML 해시 일치도 같은 명령이 확인한다. 라디오·SDP·RFCOMM·페어링은 이 검사로 확인되지 않는다. 근거와 범위: [휴대폰 IMU 채널 기록](../validation/PHONE_IMU_CHANNEL_2026-10-14.md).
-
-```bash
-MX5DR_STOCK_ROOT="$MX5DR_STOCK_ROOT" QEMU_ARM="$(command -v qemu-arm)" CROSS_COMPILE="$RELEASE_ARM_PREFIX" \
-  python3 -m unittest discover -s tests/packaging -p test_bds_parse_qemu.py -v 2>&1 | tee "$RELEASE_WORK/evidence/bds-parse.txt"
-grep -q 'bds parse check: radio_open count=8 ids=5,8,9,10,11,12,14,15; exit 1' "$RELEASE_WORK/evidence/bds-parse.txt"
-grep -q 'bds parse check (wcp): radio_open count=8 ids=5,8,9,10,11,12,14,15; exit 1' "$RELEASE_WORK/evidence/bds-parse.txt"
-! grep -q 'skipped' "$RELEASE_WORK/evidence/bds-parse.txt"
-```
-- `MX5DR_LDS_STOCK` 누락은 원본 LDS 설치 검사의 명시적인 생략이다. 필수 원본 파일 누락은 종료 77이며 릴리즈 통과로 세지 않는다. 원본 설치기의 사례 수는 해당 고정 커밋에서 실행한 로그로 집계하고, 실제 제품 DSO의 자동 기동·원본 입력부터 AA 기록까지의 검증과 구분하여 기록한다.
-- **차량 배치 전 AA 설치 시험(선택, 권장)**: `MX5DR_AA_STOCK`(순정 루트)과 `MX5DR_LIBPATCH`(공개된 oem-aa-mod `libpatch-blmjciaapa.so`, 저장소에 두지 않음)를 지정하면 ARM 러너가 `tests/adapter/run_aa_install_probe.sh`를 실행한다. 실제 BLM에 제품 preload와 서드파티 `libpatch`를 차량과 같은 순서로 올려 (1) 패치 없음: 설치 ok와 세션 관측, (2) 알려진 경로의 패치: 위치 후킹 설치와 세션 관측만 생략, (3) 알려지지 않은 경로: 안전 실패를 확인한다. 이 조합은 2026-10-04 실차 시험 전까지 한 번도 실행되지 않아 후킹이 조용히 거부됐다. 미지정이면 러너가 SKIP으로 출력하므로 릴리즈 기록에 생략으로 적는다. 순정 런처 대신 프로브를 쓰고 `libpatch` 한 버전만 보므로 차량 검증이 아니다.
-- ARM runner는 명시한 compiler/sysroot/preload를 사용한다. 상속된 GCC 검색 경로와 `LD_LIBRARY_PATH`, `LD_PRELOAD`, QEMU guest 환경 덮어쓰기는 제거하고 실제 loader 시험에서 지정한 preload만 적용한다.
-- 변경 부분에 따른 추가 ARM 로더/guard 시험은 [통합 검증](../validation/INTEGRATION_2026-09-28.md), SHADOW 범위는 [기능 검증](../validation/LIVE_SHADOW_2026-09-29.md)을 참고한다.
-- 원본 펌웨어, 개인 경로, 실차 위치 로그를 공개하지 않는다. 실행 로그는 먼저 비공개 evidence에 보관하고, 공개 검증 요약에 실행 환경·커밋·생략·미검증을 적는다.
-- 최종 ZIP으로 숫자 메뉴의 설치·USB 분리·다음 부팅·회수·제거와 제거 후 회수를 실행한다. `/proc/mounts -> self/mounts`처럼 실제 환경의 파일 형태를 보존하고, 모의 remount가 링크를 일반 파일로 바꾸지 않았는지도 확인한다. 순정 BusyBox를 사용했다는 사실만으로 파일시스템·mount·전체 기동까지 실제라고 판단하지 않는다. 실 Linux procfs의 직접 확인과 작성한 mount 모델의 결과를 구분한다. v0.3.9-shadow.1은 이 전제를 놓쳐 실차 회수가 실패했다.
-
-## 4. USB 최상위 ZIP과 전체 체크섬
-
-다음 빌더는 숫자 메뉴와 설치 helper, 정적 해시 도구, 셸 전용 한국어 안내,
-소스/바이너리 해시가 포함된 build-info, 전체 SHA256SUMS와 ZIP 외부 체크섬을 만듭니다.
-SHADOW 통합 시험은 아래 모드를 `SHADOW`로 명시하십시오. 기존 3절에서
-검사한 바이너리와 동일한 build 디렉터리를 사용하십시오.
-
-```bash
-python3 tools/make_usb_zip.py --build-dir "$RELEASE_BUILD" --default-mode SHADOW \
-  --output "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
-unzip -t "$RELEASE_WORK/dist/$RELEASE_NAME.zip"
-mkdir "$RELEASE_WORK/unpacked"
-unzip -q "$RELEASE_WORK/dist/$RELEASE_NAME.zip" -d "$RELEASE_WORK/unpacked"
-(cd "$RELEASE_WORK/unpacked" && sha256sum -c SHA256SUMS)
-```
-
-ZIP에는 상위 폴더가 없어야 하며 `trial`, `install.sh`가 최상위에 있어야 합니다.
-`mp3/`(4개)와 `js/run.js`, `USB_ENTRY_NOTICE.md`가 포함되어 있고 build-info가 진입 파일 포함 배포임을 표시하는지 확인하십시오. ZIP만으로 설치를 시작할 수 있어야 한다.
-`INSTALL_KO.md`는 `packaging/SHELL_START_KO.md`와 일치해야 합니다.
-묶음 내 파일을 고치면 다시 빌드하십시오.
-
-가능하면 실제 펌웨어 rootfs와 ARM binfmt/QEMU가 있는 격리된 Linux 컨테이너에서
-압축을 푼 최종 파일로 전체 설치 경로를 실행하십시오. 이 명령은 컨테이너
-UID 0으로 실행하며 호스트를 재마운트하지 않습니다.
-
-```bash
-python3 tests/packaging/cmu_emulation.py \
-  --stock "$MX5DR_STOCK_ROOT" --bundle "$RELEASE_WORK/unpacked"
-```
-
-SHA-256은 손상/동일성 검사이며 서명이 아닙니다. `build-info.json`의
-`source_modified`는 정식 릴리즈에서 false여야 합니다. 로컬 수정 후보를
-배포 커밋 그대로의 빌드로 표시하지 마십시오. ZIP에 원본 펌웨어, 위치 로그,
-개인 공유 링크가 없음을 확인하십시오(진입 파일은 의도적으로 포함된다).
-
-## 5. 릴리즈 노트와 게시
-
-`$RELEASE_WORK/release-notes.md`를 작성한다. 최소 내용:
-
-- 대상 펌웨어, 배포 커밋의 전체 SHA, 이전 릴리즈 대비 변경 사항과 포함 PR.
-- 기본 모드, 실제 켜지는 기능, ASSIST 차단과 실차 미검증 범위.
-- 실행한 호스트/ARM/패키징 검사와 생략한 검사·이유. 과거 실행 결과를 이번 결과처럼 쓰지 않는다.
-- 다운로드할 정확한 ZIP 이름·SHA-256, 설치 `sh ./install.sh`, 주차 중 메뉴 `1` 설치 → `5`의 명시적인 CMU 재부팅 → `2`의 새 boot ID·기동 기록 확인과 회수·제거 안내. 차량 점화 OFF/ON을 CMU Linux 재부팅으로 대신 설명하지 않는다. 엔진·ACC 상태와 단일 USB 교체 순서는 배포 커밋 또는 태그에 고정한 설치 문서로 안내한다.
-- 이전 릴리즈와의 명령 차이와 알려진 제한. 예를 들어 `observe.1`은 `--remount`가 필요했고 `observe.2`부터 기본 설치가 이를 처리한다.
-
-준비 완료 후 명시적으로 선택한 커밋에 태그를 만들고 **초안 릴리즈**에 정확한 두 파일만 첨부한다. 태그가 중간에 다른 곳에서 만들어졌다면 push 실패를 해결하기 위해 강제 갱신하지 않는다.
-
-```bash
-test -s "$RELEASE_WORK/release-notes.md"
-test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-test -z "$(git status --porcelain)"
-git tag -a "$RELEASE_TAG" "$RELEASE_COMMIT" -m "Release $RELEASE_TAG"
-git push origin "refs/tags/$RELEASE_TAG"
-gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" \
-  --verify-tag --draft --prerelease --latest=false \
-  --title "$RELEASE_TAG" --notes-file "$RELEASE_WORK/release-notes.md" \
-  "$RELEASE_WORK/dist/$RELEASE_NAME.zip" \
-  "$RELEASE_WORK/dist/$RELEASE_NAME.zip.sha256"
-gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO"
-```
-
-릴리즈 화면에서 태그의 커밋, 노트, 첨부 파일 이름·크기를 확인한다. 이번 작업 범위에 발행이 포함되어 있고 검증이 끝났으면 게시한다. 초안 작성만 요청받았다면 여기서 멈춘다.
-
-```bash
-gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" \
-  --draft=false --prerelease --latest=false
-```
-
-`gh`를 사용할 수 없는 경우에도 GitHub UI/API로 **동일한 태그·커밋, pre-release 설정, ZIP·체크섬 첨부**를 적용한다. 릴리즈 제목만 만들거나 소스 ZIP만 있는 상태를 배포 완료라고 하지 않는다.
-
-## 6. 게시된 파일을 다시 받아 검증
-
-```bash
-mkdir "$RELEASE_WORK/downloaded"
-gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" \
-  --pattern "$RELEASE_NAME.zip" --pattern "$RELEASE_NAME.zip.sha256" \
-  --dir "$RELEASE_WORK/downloaded"
-(cd "$RELEASE_WORK/downloaded" && sha256sum -c "$RELEASE_NAME.zip.sha256")
-cmp "$RELEASE_WORK/dist/$RELEASE_NAME.zip" "$RELEASE_WORK/downloaded/$RELEASE_NAME.zip"
-unzip -t "$RELEASE_WORK/downloaded/$RELEASE_NAME.zip"
-gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO"
-```
-
-공개 상태와 pre-release 표시, 다운로드 파일 동일성을 확인한 뒤 **릴리즈 URL·태그·소스 커밋·ZIP 해시·검증 범위**를 보고한다. SHA/태그/파일이 다르거나 다운로드가 실패하면 완료로 보고하지 않는다. Git에 옮길 검증 기록은 새 날짜의 파일로 남기고, 이전 결과를 덮어쓰지 않는다.
-
-이미 게시한 태그를 다른 커밋으로 옮기거나 같은 이름의 ZIP을 조용히 교체하지 않는다. 코드나 첨부 파일 수정은 새 버전으로 발행하고 이전 버전의 알려진 문제를 설명한다. 사용자의 차량에 설치한 내용을 제거하는 절차는 [첫 시험 문서](FIRST_TRIAL_KO.md)를 따르며 GitHub 릴리즈 삭제와는 별개다.
+스크립트는 이 문서의 이전 판에 있던 명령 블록(클론·고정, `build_arm.py`, `make test`, `run_arm_all.sh`, `make_usb_zip.py`, `gh release create/edit/download`)을 그대로 감싼 것입니다. 스크립트를 쓸 수 없는 환경에서는 `tools/release/*.sh`의 본문을 같은 순서로 실행하되, 같은 실패 조건(위 표)을 지키십시오.
 
 ## 참고
 
-- [고정 도구체인](toolchain.md), [기여·테스트](../CONTRIBUTING.md), [패키징 스크립트](../packaging/make_bundle.sh)
+- [게이트 시험 안내](../tests/gates/README_KO.md), [고정 도구체인](toolchain.md), [기여·테스트](../CONTRIBUTING.md)
 - GitHub CLI 공식 문서: [create](https://cli.github.com/manual/gh_release_create), [edit](https://cli.github.com/manual/gh_release_edit), [download](https://cli.github.com/manual/gh_release_download)
-- 이 문서는 수동 발행 절차다. 작성 시점에 자동 릴리즈 GitHub Actions는 없다.
+- 자동 릴리즈 GitHub Actions는 없습니다(비공개 입력이 필요하기 때문).

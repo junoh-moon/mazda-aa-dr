@@ -793,7 +793,10 @@ def main():
         # Later status fixtures describe SHADOW. Select that mode explicitly for
         # this simulated new boot, including a real arm/consume transition.
         run('sh /data_persist/mx5-aa-dr/tools/arm.sh --mode=SHADOW')
-        require((base / 'guard/armed-boot.previous').read_text() == BOOT and
+        # A persistent install never consumed an arm, so no previous identity
+        # exists to separate; the one-boot flow must keep the old identity.
+        require(((not persistent) and
+                 (base / 'guard/armed-boot.previous').read_text() == BOOT or persistent) and
                 (base / 'guard/armed-boot').read_text() ==
                 '21234567-1234-1234-1234-0123456789ab\n',
                 'Rearm did not separate old and new boot identities')

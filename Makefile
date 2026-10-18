@@ -468,3 +468,6 @@ test-phone-imu-sender:
 .PHONY: test-phone-imu-interop
 test-phone-imu-interop: $(BUILD)/test_collector $(BUILD)/fake_bca
 	MX5DR_TEST_BUILD=$(abspath $(BUILD)) $(PYTHON) tests/phone_imu/interop/rig.py $(PIMU_INTEROP_ARGS)
+
+# Release gates (tests/gates/README_KO.md); not part of make test.
+-include tests/gates/gates.mk
