@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="me.sixtyfive.mx5imu" android:versionCode="3" android:versionName="0.2.1">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="me.sixtyfive.mx5imu" android:versionCode="4" android:versionName="0.2.2">
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="36" />
     <!-- Android 12+: bonded-device communication. No BLUETOOTH_SCAN, no location, no internet. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
