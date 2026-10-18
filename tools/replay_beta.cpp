@@ -719,6 +719,14 @@ void g3_turn(uint64_t now) {
         g3.store_result(g3_journal, now, g3_job.seq, r);
         g3_job.active = false;
     }
+    // runtime.cpp (review P3): the token's synchronous attempt once the store
+    // thread cannot write it, never while BETA replaces.
+    if (const char* due = g3.token_sync_due(sample.beta_replacing)) {
+        R::G3IoResult r = {R::G3_IO_OK, 0, 0, R::G3_STEP_NONE, now, now};
+        if (count_latch && !opt.g3_store.empty())
+            r = R::g3_last_start_write_io(opt.g3_store.c_str(), g3.boot_id(), R::G3_LAST_START_SYNC_TEMP);
+        g3.token_sync(g3_journal, now, due, r);
+    }
     if (!g3_job.active && g3.take_request(g3_job.line, sizeof g3_job.line, &g3_job.n, &g3_job.seq, &g3_job.sync,
                                           &g3_job.target)) {
         g3_job.active = true;

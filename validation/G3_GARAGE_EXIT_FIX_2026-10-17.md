@@ -433,3 +433,105 @@
 3. "The previous-product-boot token write (logs/g3-last-start, temp+rename without fsync) is a further exception to that invariant: it runs at every BETA worker start, with or without the markers, including a mid-drive worker restart in the same boot." →
 
 "The previous-product-boot token write (logs/g3-last-start, temp+rename without fsync) is a further exception to that invariant: with the garage carry on it is requested through the store thread under the departure mark's gate (idle rule, 5 s request spacing shared with the records, while BETA replaces only with a journal writer lag <= 100 ms, also while the car moves, not cancelled by moving wheels or a stale stream) until it lands once per boot, written synchronously on the worker only at a journal or audit fault, a capture stop or without a store thread, and every garage-on worker start writes the small logs/g3-worker-boot file; with either marker or without the BETA core it runs at every BETA worker start as before, including a mid-drive worker restart in the same boot."
+
+## 다섯 번째 수정 (2026-10-18): 네 번째 검토(`G3_GARAGE_EXIT_FIX_REVIEW4_FABLE_2026-10-18.md`) 반영
+
+상태: 구현, 호스트 시험, 손 변이, 비공개 주행 기록의 오프라인 재생과 비공개 정지 부팅 측정만 했습니다. 차량·폰·DHU·정확한 ARM에서는 실행하지 않았습니다(정확한 ARM은 릴리스 파이프라인이 돌립니다). 이 절이 위 "네 번째 수정" 절의 토큰 문의 기술과 AGENTS 문안보다 우선합니다. 좌표·주소는 적지 않았습니다. 표식(`g3-garage-off`/`g3-off`)·BETA 코어 없음 경로는 바뀌지 않았습니다(아래 재생).
+
+### C3 (확인된 회귀, 고침): 우회된 토큰 요청은 S의 문을 씀
+
+- 결함(검토 9절 탐침): 부팅의 첫 S 요청이 토큰 요청으로 바뀌면서 출발 표시의 100 ms 기록기 지연 규칙을 물려받았습니다. BETA 교체 중 지연이 100~300 ms에 머무는 부팅에서는 표시·토큰·S가 모두 들어가지 못해 앞 부팅의 낡은 S가 이월되었습니다(HEAD~1은 그 S를 썼음).
+- 고침(검토의 첫 완화안): 주차 S 경로에서 우회된 토큰 요청(`token_request(..., s_gate=true)`)은 S 요청의 문 전체를 씁니다 — 저장 켜짐, 대기·진행 없음, 5 s 요청 간격, idle 규칙, 교체 중 30 s S 간격과 그 예외(위에서 이미 확인), 그리고 100 ms 지연 규칙 없음. 움직이는 동안(주차 전) 원시 트리거로 세운 토큰 요청은 표시의 문(100 ms 규칙 포함)을 그대로 씁니다.
+- 둘째 완화안("막히면 S 먼저")을 고르지 않은 이유: S(B)+토큰 A는 다음 부팅이 `not_prev_boot`로 거부하므로 안전하지만 B의 올바른 기록도 버립니다. 첫 안은 HEAD~1이 같은 조건에서 하던 것(B의 S를 쓰고 다음 부팅이 이월)을 되찾으면서 "토큰이 S보다 먼저"라는 불변식을 지킵니다. 추가 쓰기는 부팅당 토큰 한 번이고, 그 시점은 3차 검토가 idle 규칙만으로 받아들인 주차 S와 같은 조건(5 s 완전 정지)입니다.
+- 남은 가장자리(문서화): 원시 감시만 움직임을 보고(세션 승인 전 배제 이벤트) 파이프라인은 못 본 부팅이 BETA 교체 중 지연 > 100 ms로 내내 주행하면 주차에서도 S가 원해지지 않아(파이프라인 거리 0) 토큰이 들어가지 않습니다. BETA 교체는 AA 세션이 있어야 하고 세션 중 바퀴 이벤트는 승인되므로 실제로는 생기기 어렵다고 봅니다(INFERENCE).
+
+### P3 (고침): 토큰 실패는 저장을 끄지 않음, 한도 뒤 동기 쓰기 한 번
+
+- 토큰 쓰기 실패는 별도 계수기(`G3_TOKEN_FAILURES_MAX`=3)로 셉니다. 기록 실패 계수기(`G3_WRITE_FAILURES_MAX`)에는 들어가지 않으므로 토큰 실패만으로 저장이 꺼지지 않습니다.
+- `G3Tracker::token_sync_due(beta_replacing)`: 토큰 트리거가 있고 아직 들어가지 않았는데 (토큰 실패 3회 → `"token_failed"`) 또는 (기록 실패로 저장이 꺼짐 → `"store_off"`)이면, 워커가 종료 경로와 같은 동기 토큰 쓰기(`g3_token_terminal`, `.g3-last-start.sync.tmp`, fsync 없음)를 **한 번** 합니다. BETA 교체 중에는 하지 않고(G1 경로에서 워커 파일 I/O 없음) 교체가 끝난 뒤나 종료 지점에서 합니다. 저장이 꺼진 뒤 S가 원해지면(회전·이동) 트리거 `record`가 세워져 같은 동기 쓰기로 갑니다. 재생기도 같은 규칙을 따릅니다(재생에서는 쓰기가 실패하지 않으므로 발동하지 않음).
+- 동기 쓰기까지 실패하면(`token_closed_`, 토큰 아님) 그 부팅의 S는 더 이상 토큰을 기다리지 않습니다: 디스크가 S(B)+토큰 A가 되어 다음 부팅이 `not_prev_boot`로 거부하고, A의 낡은 S는 덮입니다(안전 쪽). 모든 기록 쓰기와 동기 쓰기가 함께 실패한 부팅만 기록된 잔여로 남습니다.
+- P5(토큰 경로가 디렉터리)는 이제 실제 워커 시나리오(`g3_token_dir`)로 고정됩니다: 토큰 실패 3회 + `sync_failed` 1회, 저장은 켜진 채이고 그 부팅의 S가 들어갑니다(이전 부팅의 기록은 `prev` "unread"로 거부).
+
+### P4 (고침): 대상 없는 호출자
+
+`take_request`가 대상 인수 없이 불려 토큰 요청을 줄 수 없으면 그 요청을 버리고(`pending_` 해제) 그 요청이 차지한 5 s 간격을 되돌려 다음 틱에 다시 세웁니다. 동기 쓰기가 토큰을 마치면 대기 중인 토큰 요청도 버립니다. 그래서 추적기가 막히지 않고 토큰이 (동기 경로로) 들어간 뒤에는 S·M 요청이 그 호출자에게도 갑니다. 제품·재생은 언제나 대상을 넘깁니다.
+
+### P1/P2 (측정, 제품 변경 없음)
+
+- 분석기(`tools/analyze_logs.py`)에 부팅별 "Wheel stream start / stationary noise" 줄과 JSON `wheel_start`를 더했습니다: boot 행에서 첫 WHEELS 수신까지의 지연, 정지 10 s 다이제스트 창(원시 바퀴 최대 < 1 km/h) 중 0이 아닌 창·지속 창(최소 > 0, 창 전체가 0 아님)·가장 긴 지속 구간, 정지 창의 적분 거리(평균 km/h × 창 길이 = `G3TokenWatch`가 거기서 적분할 값), 원시 수신 중 정지 비영 수신 수와 가장 긴 연속 비영 구간. 30 s 넘는 첫 바퀴 지연과 정지 거리 2 m 이상인 부팅 수를 요약 줄에 냅니다.
+- 비공개 2026-10-17 내보내기(`trace.2/1/0.jsonl`, 14개 부팅, 정지 부팅 6개 포함)에 새 분석기 줄을 돌린 결과(FACT, 수치만):
+  - 워커 boot 행 → 첫 WHEELS 수신: 14개 부팅 모두 30 s 미만, 최소 78 ms, 최대 4,192 ms(주행 부팅 하나 2,656 ms, 정지 부팅 하나 4,192 ms, 나머지 12개 78~222 ms). 30 s 넘는 부팅 0개.
+  - 정지 부팅 6개(위치 행 없음): 정지 10 s 창 5~33개, 그중 0이 아닌 창 0~3개, **지속 창(창 전체 비영) 0개**, 정지 적분 거리 0.000~0.078 m, 원시 정지 비영 수신 0~25개, 가장 긴 연속 비영 수신 1.6 s.
+  - 주행 부팅 8개의 정지 창(신호·주차 대기 포함): 지속 창 0개, 정지 적분 거리 0.000~0.945 m(부팅 전체 합, 창 88개 = 880 s에서 최대), 가장 긴 연속 비영 수신 2.6 s.
+  - 14개 부팅 중 정지 거리 ≥ 2 m인 부팅 0개. 다이제스트 최대 수신 간격은 104~1,032 ms(< 2 s), 센서 정지 뒤 저널 끝까지의 꼬리 최대 9.6 s(작성자 디지스트와 같음).
+- 판단: P2 — 워커 시작에서 첫 바퀴 수신까지 최대 4.2 s로 30 s 침묵 규칙과 7배 넘는 여유가 있습니다(14개 부팅 모두; 영속 프로파일은 BETA 상태 행 뒤 30 s 원시 기간이 있어 첫 이벤트가 직접 기록됨). P1 — 정지 창의 비영 판독은 순간적이며(지속 창 0, 가장 긴 연속 비영 수신 2.6 s) 정지 부팅의 적분 거리는 최대 0.078 m입니다. 그 속도로 2 m에 이르려면 정지 부팅이 약 48분 이상 공회전해야 하므로(가장 나쁜 정지 부팅 0.078 m/112 s) 지금 자료에서는 실제 거짓 양성 위험이 보이지 않습니다. 그래서 제품 변경(속도 바닥)을 제안하지 않습니다. 다음 내보내기에서 이 줄의 "still distance ≥ 2 m" 또는 "sustained" 창이 정지 부팅에 나오면 그때 바닥(예: 평균 < 0.5 km/h는 토큰 거리에 넣지 않음)을 사전 등록 규칙으로 검토하십시오.
+- 한계: 측정은 한 내보내기(14개 부팅)이며 시동 끔 뒤 액세서리 30 s 이상 꼬리(P2 a)의 빈도는 이 자료에 없습니다(꼬리 최대 9.6 s).
+
+### 시험
+
+- `test_g3` 1,872 검사(HEAD 1,699). 새 `token_fifth`:
+  - C3 탐침(검토 9절 그대로): BETA 교체 중, 기록기 지연 150 ms, A가 주행·주차(S(A), 토큰 A), B가 GPS 방위와 함께 16 m 주행 뒤 40 s 주차, C 시작. 순서 1(주차 5.5 s, S는 아직): 디스크 S(A)+토큰 B → C `not_prev_boot prev bbbbbbbb`. 순서 2(그 뒤): 착지 "TS", 디스크 S(B, 290°)+토큰 B → C `CARRIED chain_depart prev B`, `h` 2900. HEAD 코드에서는 아무것도 들어가지 않아 C가 A의 S를 이월합니다(검토의 재현).
+  - 움직이는 동안은 표시의 문: 지연 150 ms에서 토큰·표시 모두 대기, 100 ms에서 토큰 뒤 표시("TM").
+  - 우회된 토큰은 S의 문 전체: 주차 중 idle 규칙(`journal_lagging`)이 막는 동안 대기, 풀린 첫 틱에 토큰.
+  - P3: 토큰 쓰기만 실패(rename) → 실패 행 3개 뒤 동기 쓰기 `sync`(착지 "Mt"), 저장 켜짐·`disabled` 없음, 주차 뒤 "MtS", C `chain_depart prev B`. 교체 중에는 동기 쓰기 없음(`token_sync_due(true)`가 0, 추가 비동기 시도 없음: 실패 행 3개 그대로), 교체가 끝난 첫 틱에 동기 쓰기. 동기 쓰기도 실패 → "MS"(S(B)+토큰 A) → C `not_prev_boot prev aaaaaaaa`. 표시 실패 3회로 저장이 꺼진 뒤 2 m → `store_off` 동기 쓰기 "t" → C `not_prev_boot prev B`. 저장이 꺼진 뒤 주차에서 회전한 GPS 방위(S가 원해짐) → 트리거 `record`, 동기 쓰기.
+  - 모든 쓰기와 동기 쓰기가 함께 실패(기록된 잔여): 저장 꺼짐, 토큰 A, C가 A를 이월; 토큰 행 4개(실패 3 + `sync_failed` 1). 종료 동기 쓰기가 저장 스레드가 못 쓴 토큰을 닫는 경우와 두 번째 호출이 행을 더하지 않는 것은 별도 사례로 유지.
+  - P4: 대상 없는 호출자가 거부하면 요청이 버려지고(진행 없음) 다음 틱에 새 요청(seq BASE+1)을 대상 있는 호출자가 받음; 동기 쓰기 뒤 같은 대상 없는 호출자가 S 요청을 받음(HEAD: 영원히 거부); 동기 쓰기가 끝나면 대기 중인 토큰 요청은 버려짐.
+  - R1: 원시 감시 정확히 2.000 m(1.5 m + 1 m/s × 0.5 s)에서 `moved`, 1.9 m에서는 없음. R2: 파이프라인 거리 분기 단독(원시 감시 트리거 없음) 2.0 m에서 토큰 요청 `moved`, 1.99 m에서는 없음.
+- `test_worker_beta g3_token_dir`(실제 워커·저장 스레드): `logs/g3-last-start`가 디렉터리 → `prev` "unread", `not_prev_boot`; 토큰 `failed` 3행(errno 21) + `moved/sync_failed` 1행, `disabled` 없음, 이번 부팅의 S 기록 착지. HEAD 코드에서는 토큰 실패 3회로 저장이 꺼져 S가 없어 중단(종료 134)으로 실패함을 확인했습니다. Makefile·`tests/run_arm_all.sh` 목록에 더함.
+- `test_analyze_g3`의 새 사례: 첫 WHEELS 지연(boot 행 전 수신 제외), 정지·비영·지속 창, 가장 긴 지속 구간, 정지 거리, 원시 연속 비영, 30 s 지연과 2 m 표시, 자료 없으면 줄 없음.
+- 호스트 전체 결과는 아래 "결과".
+
+### 결과 (2026-10-18, 스크래치 사본, 호스트만)
+
+- 호스트 `make test`(D-Bus 헤더·라이브러리를 스크래치 경로로 make 변수로 넘김, `MX5DR_STOCK_ROOT` 읽기 전용): 첫 실행은 `test-tools`에서 1건 실패(`test_analyze_diag` 옛 보고서 바이트 동일성: 새 `wheel_start` 키가 모든 보고서에 들어감). 그 키를 지연 토큰 행(`swap`)이 있는 로그 또는 `--wheel-start` 요청일 때만 넣도록 고친 뒤 `test-tools test-integration test-replay-beta`를 다시 돌려 종료 0. 합계 unittest 1,148건(건너뜀 17: 고정 ARM 컴파일러 없음 6, 릴리스 번들 미지정 등 — 이 변경과 무관; 비공개 여행 재생은 `MX5DR_TRIP_DIR` 미지정으로 건너뜀), `test_g3` 1,872, `test_worker_beta` 시나리오 전부(목록 26개 + 타이밍 래퍼 `g3_garage`·`g3_cancel` + `g3_send`·`g3_send_off` 동일성), `WORKER_BETA_TIMING_RETRY` 0회. 두 번째 실행 시작 때 1분 부하 6.3(다른 작업), 통과.
+- 정확한 ARM은 돌리지 않았습니다(릴리스 파이프라인이 돌림). `tests/run_arm_all.sh` 목록에 `g3_token_dir`을 더했습니다.
+
+### 손 변이
+
+17개, 각각 단독(패턴이 정확히 한 번 있는지 확인, 세 바이너리 재빌드, 빌드 실패 없음), 순서: `test_g3` → `test_worker_beta g3_token_dir/g3_idle/g3_unadmitted/g3_blind/g3_restart` → `g3_garage`(타이밍 래퍼) → `test_replay_g3_garage`. **모두 잡힘**(M28은 처음 실행에서 살아남아 교체 중 사례에 "실패 행 3개 그대로" 단언을 더한 뒤 잡힘).
+
+| 변이 | 내용 | 잡은 시험 |
+|---|---|---|
+| R1 | 원시 거리 문턱 `>=` → `>` | test_g3 (정확히 2.000 m) |
+| R2 | 파이프라인 거리 분기 삭제 | test_g3 (파이프라인 단독 2.0 m) |
+| R4 | 주차 S 경로에서 트리거가 이미 있으면 토큰을 기다리지 않음 | test_g3 (C3 탐침 순서 1) |
+| M19 | 우회된 토큰이 표시의 문(100 ms 규칙) | test_g3 (C3 탐침) |
+| M20 | `s_gate` 무시 | test_g3 (C3 탐침) |
+| M21 | 토큰 실패가 기록 실패 계수기로(HEAD 동작) | test_g3 (잔여 사례 행 수) |
+| M22 | 동기 쓰기 넘김 없음 | test_g3 |
+| M23 | `store_off` 넘김 없음 | test_g3 (표시 실패 뒤 2 m) |
+| M24 | 교체 중에도 동기 쓰기 | test_g3 |
+| M25 | 동기 쓰기 실패 뒤에도 S가 토큰을 기다림 | test_g3 |
+| M26 | 대상 없는 거부가 요청을 남김(HEAD) | test_g3 |
+| M27 | 거부 뒤 간격 되돌리지 않음 | test_g3 |
+| M28 | 토큰 실패 한도 뒤에도 비동기 재시도 | test_g3 (추가 단언) |
+| M29 | 동기 쓰기 뒤 대기 중인 토큰 요청 유지 | test_g3 |
+| M30 | 저장 꺼짐에서 `record` 트리거 없음 | test_g3 |
+| M31 | 런타임의 동기 쓰기 넘김 호출 삭제 | test_worker_beta g3_token_dir |
+| M34 | 움직이는 동안의 토큰도 S의 문 | test_g3 (주행 중 150 ms) |
+
+동등 변이로 보아 돌리지 않은 것(근거): `token_request`의 `token_closed_` 검사 삭제 — 닫힘은 동기 쓰기 성공(그때 `token_done_`), 종료 지점(저장 스레드 정지) 또는 실패 한도·저장 꺼짐 뒤에만 생기고 그 경우는 각각 다른 검사(`token_failures_`, `store_on_`)가 이미 막음. `token_sync_due`의 "토큰 진행 중" 검사 삭제 — 실패 한도 뒤에는 새 토큰 요청이 없고, 저장이 꺼지는 결과는 진행 중인 요청이 토큰이 아닐 때만 옴(한 번에 하나).
+
+### 비공개 재생
+
+20개 부팅(재생 가능 14·위치 행 없음 6, 위와 같은 사슬 스크립트, `--real-only --g3 on --g3-send on`, 저장 디렉터리를 뺀 110개 파일, `lat_ms`·`start_ns`·`end_ns`만 정규화):
+- 새 코드 `--g3-garage off` 대 beta.16(`0af9a0f`, 앞선 실행의 산출물): **110/110 동일**, `g3-heading.v1` 해시 동일.
+- 새 코드 `--g3-garage off` 대 HEAD(`893c71c`) `--g3-garage off`: **110/110 동일**, `g3-heading.v1`·`g3-last-start` 해시 동일, `g3-worker-boot` 없음.
+- 새 코드 `--g3-garage on` 대 HEAD `--g3-garage on`: **110/110 동일**, 저장 디렉터리 세 파일 해시 동일(재생은 기본 기록기 지연 0이고 쓰기가 실패하지 않으므로 바뀐 경로에 닿지 않음).
+- 추가: `--g3-garage on --writer-lag-ms 150`(교체 중 지연 150 ms): 새 코드 대 HEAD는 g3 행 14개 파일만 다르고 송신·보고서·CSV·저널 96개는 동일. 복원 결정(`chain_depart` 3, `no_heading` 9, `moving_at_end` 1, `missing` 1)과 토큰 행(12: `blind_silent` 7, `moved` 5)은 같고, 새 코드는 S 기록 27개(HEAD 25개)로 둘 더 씁니다(INFERENCE: C3 고침이 지연 규칙에 막혔던 첫 S를 들여보낸 것; 이 재생 자료의 이월 결정은 바뀌지 않음). 재생은 효과의 근거가 아닙니다.
+
+### AGENTS.md 토큰 문장 교체 문안 (AGENTS.md 자체는 고치지 않음; 위 "네 번째 수정"의 문안 1~3을 대신함)
+
+`AGENTS.md`의 garage carry 문단에서 아래 세 곳을 그대로 바꿉니다(1·2·3은 위 "네 번째 수정" 문안의 원문 위치와 같습니다: 1은 "written by another boot that is the previous product boot (...)," 괄호 전체, 2는 "a drive without any product start ... leaves a stale S (...)," 목록, 3은 "The previous-product-boot token write ..." 문장). 나머지 문장은 그대로입니다.
+
+1. "written by another boot that is the previous product boot (logs/g3-last-start, read at every BETA worker start before the record; with the garage carry on it is rewritten lazily: a boot writes its own id only once it observed 2 m of wheel distance (the raw distance of every received wheel event, also those excluded before the session/bus admission, or the pipeline distance), was blind (a raw wheel receipt gap above 2 s that ended, no raw wheel event for 30 s while the worker ran, or an undecodable wheel value), wants its first S record (that S request is diverted to the token write, which lands before any S record of the boot, so a carried record and the token always name the same writer; the diverted request uses the S record's gate, not the departure mark's 100 ms writer-lag rule) or stops observing (journal or audit fault, capture stop, no store thread: one synchronous write), so a boot that only stood with the ignition on keeps the earlier boot's record carryable; a second worker start in the same boot (logs/g3-worker-boot already names it) swaps at start and refuses every other boot's record (prev = this boot); a lost worker-boot write swaps at start with prev as read; with either marker or without the BETA core the token is swapped at every worker start as before; menu 1 installation and menu 4 removal delete it, so the first start after either never carries a heading (the carry resumes after that start drove and parked); otherwise CARRIED_UNVERIFIED not_prev_boot, no window),"
+
+2. "a drive without any product start and without a menu 1/4 installation step in between, a non-BETA mode, a boot whose worker did not reach the token read (stop requested, locale failure, no worker thread), a turntable or mechanical parking system, a power cut soon after the mark, and with the lazy token a garage-on boot that moved but left neither the token nor any later record of its own (its store-thread token writes and its one synchronous token attempt failed and its departure mark and S records failed too, or the idle rule blocked every 5 s retry for the whole drive without a journal fault or capture stop), whose whole motion ended before its worker attached (about 39-44 s after power-on in the 2026-10-17 boots) and that never moved again, whose process ended mid-boot without a same-boot restart before the token landed, whose raw wheel stream stopped while the car still moved and the boot ended within 30 s, or that rolled less than 2 m while its mark was blocked (up to about 25 deg of turning) leaves a stale S (a second worker start in the same boot refuses the previous boot's record: not_prev_boot),"
+
+3. "The previous-product-boot token write (logs/g3-last-start, temp+rename without fsync) is a further exception to that invariant: with the garage carry on it is requested through the store thread until it lands once per boot, while the car moves under the departure mark's gate (idle rule, 5 s request spacing shared with the records, while BETA replaces only with a journal writer lag <= 100 ms, not cancelled by moving wheels or a stale stream) and, when the boot's first S request is diverted to it at a park, under that S request's gate (idle rule, 5 s spacing, the 30 s replacing S spacing and its exemptions, no writer-lag rule); token write failures count toward their own limit of three and never turn the store off; the token is written synchronously on the worker at a journal or audit fault, a capture stop, without a store thread, and once after three failed token writes or when the store went off for record failures while the token is due (never while BETA replaces); if that synchronous write fails too, the boot's S records are written without the token and the next boot refuses them (not_prev_boot); every garage-on worker start writes the small logs/g3-worker-boot file; with either marker or without the BETA core it runs at every BETA worker start as before, including a mid-drive worker restart in the same boot."
+
+### 남은 위험 (바뀐 것만)
+
+- 토큰 실패가 저장을 끄지 않게 되어 토큰 쓰기가 계속 실패하는 부팅에서도 S·M 쓰기는 이어집니다(쓰기 수는 기존 5 s 간격과 기록 실패 3회 한도로 묶임). 동기 쓰기는 부팅당 한 번, BETA 교체 중에는 하지 않습니다. 실패가 빠른 오류(EIO·ENOSPC·EISDIR)가 아니라 멈추는 쓰기라면 워커가 그 한 번 동안 막힐 수 있습니다(종료 경로의 동기 쓰기와 같은 위험).
+- C3 고침으로 BETA 교체 중 지연 100~300 ms에서도 주차 때 토큰 쓰기가 한 번 더 들어갑니다(S와 같은 조건, fsync 없음). 사전 등록 규칙(lat_ms > 500, 저널 지연 겹침)이 토큰 행도 셉니다.
+- P1/P2는 한 내보내기의 측정입니다. 차량 검증 아님.

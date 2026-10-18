@@ -22,7 +22,9 @@
 //    the worker also reads the previous-product-boot token there. With the
 //    garage carry the token is rewritten LAZILY (G3_TOKEN_*: through the
 //    store thread once this boot moved, was blind or wants its first S
-//    record; synchronously only at a terminal fault or capture stop) and a
+//    record; synchronously only at a terminal fault or capture stop, or
+//    once after G3_TOKEN_FAILURES_MAX failed token writes or a store that
+//    went off while the token is due, never while BETA replaces) and a
 //    small worker-boot file is written at start (g3_worker_boot_mark); with
 //    a marker the token is swapped at start as before (g3_last_start_swap,
 //    one small write without fsync).
@@ -137,8 +139,13 @@ static const uint64_t G3_PLAUSIBLE_UTC_S=1600000000ULL;
 //    wheel gap > G3_TOKEN_GAP_NS that ended, or no raw wheel event for
 //    G3_TOKEN_SILENT_NS), wants its first S record (the token lands BEFORE
 //    any S record of this boot, so a record and the token name the same
-//    writer), or ends observation (journal/audit fault, capture stop, no
-//    store thread: synchronous). A boot that only stood (ignition on, no
+//    writer; that diverted request takes the S request's gate, without the
+//    departure mark's writer-lag rule), or ends observation (journal/audit
+//    fault, capture stop, no store thread: synchronous; also once after
+//    G3_TOKEN_FAILURES_MAX failed token writes or when the store went off
+//    while the token is due). Token write failures never turn the store
+//    off; when the synchronous attempt failed too, the boot's S records are
+//    written without the token (the next boot refuses them: not_prev_boot). A boot that only stood (ignition on, no
 //    drive) leaves the token, so the next boot still carries the record of
 //    the drive before it. A second worker start in the same boot (worker-
 //    boot file names this boot) or a lost worker-boot write swaps at once.
@@ -213,6 +220,13 @@ static const char G3_WORKER_BOOT_TEMP[]=".g3-worker-boot.tmp";
 static const double G3_TOKEN_MOVED_M=G3_MOVING_MARK_M;
 static const uint64_t G3_TOKEN_SILENT_NS=30000000000ULL;
 static const uint32_t G3_TOKEN_SEQ_BASE=0x80000000u;
+// Lazy token write failures (fifth fix, review P3): counted apart from the
+// record failures (a failed token write never turns the store off by itself,
+// so the boot's own S record can still land); after this many the token
+// is handed to ONE synchronous write on the worker (G3Tracker::token_sync_due,
+// reason "token_failed", only while BETA does not replace), as is a store
+// that went off for record failures while the token is due ("store_off").
+static const unsigned G3_TOKEN_FAILURES_MAX=3;
 // Store thread mailbox targets.
 enum G3Target { G3_TARGET_STORE=0, G3_TARGET_TOKEN=1 };
 
@@ -892,6 +906,18 @@ public:
     bool token_done() const { return token_done_; }
     bool token_wanted() const { return token_lazy_ && !token_done_ && !token_closed_; }
     const char* token_why() const { return token_why_; }
+    const char* boot_id() const { return boot_id_; }
+    // Review P3: the token is due (a trigger exists) but the store thread
+    // cannot write it any more: G3_TOKEN_FAILURES_MAX failed token writes
+    // ("token_failed") or the store went off for record failures
+    // ("store_off"). The worker then makes the one synchronous attempt
+    // (token_sync). 0 while a token write is in flight, none is due, or
+    // BETA replaces (no worker file I/O on the G1 path: it stays due and
+    // runs once BETA stops replacing, or at a terminal point).
+    const char* token_sync_due(bool beta_replacing) const {
+        if(beta_replacing || !token_wanted() || !token_why_ || (in_flight_ && pending_token_))return 0;
+        return token_failures_>=G3_TOKEN_FAILURES_MAX?"token_failed":!store_on_?"store_off":0;
+    }
 
     // Worker start. stored is read only when load == G3_LOAD_OK. prev_boot:
     // the previous product boot (g3-last-start as read at this start; garage
@@ -1082,9 +1108,18 @@ public:
     // sync: whether this write runs the fsync step (a stop of >= 60 s).
     // target: G3_TARGET_STORE or G3_TARGET_TOKEN (the lazy token line); a
     // caller that cannot route a token request (no target) gets none, so a
-    // token line never reaches the record file.
+    // token line never reaches the record file. Review P4: the refused token
+    // request is DROPPED (not left pending, which would block every later S
+    // and M request of the boot) with the request spacing it took restored,
+    // so the next tick raises it again. Such a caller therefore never gets
+    // an S record of a lazy boot before the token landed (by the
+    // synchronous path); the product and the replay always pass a target.
     bool take_request(char* out,size_t cap,size_t* n,uint32_t* seq,bool* sync=0,unsigned* target=0) {
-        if(!pending_ || !store_on_ || cap<pending_len_ || (pending_token_ && !target))return false;
+        if(pending_ && pending_token_ && !target) {
+            pending_=false;pending_token_=false;last_request_ns_=token_prev_request_ns_;
+            return false;
+        }
+        if(!pending_ || !store_on_ || cap<pending_len_)return false;
         memcpy(out,pending_line_,pending_len_);*n=pending_len_;*seq=pending_rec_.seq;
         if(sync)*sync=pending_sync_;
         if(target)*target=pending_token_?G3_TARGET_TOKEN:G3_TARGET_STORE;
@@ -1132,11 +1167,14 @@ public:
         if(pending_token_) {
             // Lazy token: landed = this boot is the previous product boot of
             // the next one; cancelled/stale: requested again; stopped: no more
-            // store I/O this boot; a failure counts like a record failure.
+            // store I/O this boot; a failure counts toward the token's own
+            // limit (review P3: never toward the record failures that turn
+            // the store off), after which token_sync_due() hands it to the
+            // worker's one synchronous attempt.
             pending_token_=false;
-            if(published) { token_done_=true;failures_=0; }
+            if(published) { token_done_=true;token_failures_=0; }
             else if(cancelled) { if(r.stage==G3_IO_STOPPED)store_on_=false; }
-            else if(++failures_>=G3_WRITE_FAILURES_MAX)store_on_=false;
+            else ++token_failures_;
             token_row(j,now,published?"written":cancelled?"cancelled":"failed",r);
             return;
         }
@@ -1202,6 +1240,8 @@ public:
         if(!token_wanted())return;
         token_closed_=true;
         if(r.stage==G3_IO_OK)token_done_=true;
+        // A token request not yet handed over is obsolete (review P4).
+        if(pending_ && pending_token_ && !in_flight_) { pending_=false;pending_token_=false; }
         if(!token_why_)token_why_=why;
         token_row(j,now,r.stage==G3_IO_OK?"sync":"sync_failed",r);
     }
@@ -1215,6 +1255,8 @@ private:
     const char* token_why_;
     const char* token_mode_;
     uint32_t token_seq_;
+    unsigned token_failures_;
+    uint64_t token_prev_request_ns_;
     const char* reason_;
     const char* chain_;
     const char* age_src_;
@@ -1278,7 +1320,7 @@ private:
         state_=G3_OFF;reason_="not_started";chain_="none";age_src_="none";pos_check_="none";
         garage_=garage_carry_=pending_mark_=false;
         token_lazy_=token_done_=token_closed_=pending_token_=false;token_why_=0;token_mode_=0;
-        token_seq_=G3_TOKEN_SEQ_BASE;
+        token_seq_=G3_TOKEN_SEQ_BASE;token_failures_=0;token_prev_request_ns_=0;
         strcpy(boot_id_,"unknown");strcpy(chain_now_,"unread");strcpy(prev_boot_,"unread");
         load_=G3_LOAD_MISSING;have_stored_=have_carried_=age_known_=first_fix_=have_utc_=false;
         stored_=g3_record();
@@ -1466,7 +1508,13 @@ private:
         // Lazy token (G3_TOKEN_*): a raw-stream trigger (moved / blind) or
         // the pipeline's own 2 m: request the token write before anything
         // else this boot stores (the departure mark may go first: an M
-        // record is never carried).
+        // record is never carried). The pipeline branch is a second source
+        // on purpose (review R2): with the raw watch fed it is normally
+        // redundant (the watch sees a superset of the wheel events), but the
+        // pipeline integrates events the watch skips (a receipt time older
+        // than the last one) and covers a caller whose watch saw nothing
+        // (test_g3 token_gate exercises it alone). Mark gate here; the
+        // request diverted from a park S request below takes the S gate.
         if(token_lazy_ && !token_done_) {
             if(!token_why_ && s.token_why)token_why_=s.token_why;
             if(!token_why_ && std::isfinite(m.distance_m) && m.distance_m>=G3_TOKEN_MOVED_M)token_why_="moved";
@@ -1494,7 +1542,13 @@ private:
         // is written once more with the fsync.
         if(!want && long_stop && written_ && !disk_synced_ && !episode_synced_ && sync_ok) { want=true;sync=true; }
         if(!want)return;
-        if(!store_on_) { episode_block_="store_off";return; }
+        if(!store_on_) {
+            // Review P3: this boot wants an S record the store cannot write;
+            // the token is due (token_sync_due "store_off": the synchronous
+            // attempt), so the next boot refuses the older record on disk.
+            if(token_lazy_ && !token_done_ && !token_why_)token_why_="record";
+            episode_block_="store_off";return;
+        }
         if(pending_ || in_flight_)return;
         if(last_request_ns_ && s.now>=last_request_ns_ && s.now-last_request_ns_<G3_WRITE_MIN_NS) {
             episode_block_="rate";return;
@@ -1521,10 +1575,20 @@ private:
         // Lazy token: the token must name this boot BEFORE its first S record
         // lands (the next boot compares the record's boot id with it), so the
         // first S request becomes a token request; the S follows after it
-        // landed (rate limit).
-        if(token_lazy_ && !token_done_) {
+        // landed (rate limit). Fifth fix (review C3): this diverted request
+        // uses the S request's gate (checked above: store on, nothing pending,
+        // 5 s spacing, idle rule, the replacing 30 s S spacing and its
+        // exemptions), NOT the departure mark's 100 ms writer-lag rule, so a
+        // boot that drives with a writer lag of 100-300 ms while BETA
+        // replaces still lands token + S at its final park (HEAD~1 landed
+        // its S there; the lag rule left the older boot's S on disk and it
+        // was carried stale). After the one synchronous attempt failed
+        // (token_closed_ without token_done_) the S is no longer diverted: an
+        // S of this boot with the older token on disk is refused by the next
+        // boot (not_prev_boot) and replaces the older S, the safe order.
+        if(token_lazy_ && !token_done_ && !token_closed_) {
             if(!token_why_)token_why_="record";
-            token_request(s,io_block);
+            token_request(s,io_block,true);
             episode_block_="token";return;
         }
         const char state='S';
@@ -1561,11 +1625,15 @@ private:
     // Lazy token request: the same gate as the departure mark (store on,
     // nothing pending or in flight, the 5 s request spacing, the idle rule;
     // while BETA replaces a journal writer lag <= 100 ms), never fsync.
-    bool token_request(const G3Sample& s,const char* io_block) {
-        if(!store_on_ || pending_ || in_flight_)return false;
+    // s_gate (review C3): the request diverted from a park S request takes
+    // the S request's gate instead (no writer-lag rule; the caller checked
+    // the rest). Not after the token's own failure limit (token_sync_due) or
+    // the synchronous attempt.
+    bool token_request(const G3Sample& s,const char* io_block,bool s_gate=false) {
+        if(!store_on_ || pending_ || in_flight_ || token_closed_ || token_failures_>=G3_TOKEN_FAILURES_MAX)return false;
         if(last_request_ns_ && s.now>=last_request_ns_ && s.now-last_request_ns_<G3_WRITE_MIN_NS)return false;
         if(io_block)return false;
-        if(s.beta_replacing && s.writer_lag_ns>G3_GARAGE_REPLACING_MARK_LAG_NS)return false;
+        if(!s_gate && s.beta_replacing && s.writer_lag_ns>G3_GARAGE_REPLACING_MARK_LAG_NS)return false;
         const size_t n=g3_last_start_line(boot_id_,pending_line_,sizeof pending_line_);
         if(!n)return false;
         pending_len_=n;pending_rec_=g3_record();pending_rec_.seq=token_seq_++;
@@ -1573,7 +1641,7 @@ private:
         pending_=true;pending_token_=true;pending_mark_=false;pending_sync_=false;
         pending_m_=s.motion.distance_m;pending_turn_=s.motion.turn_rad;pending_aturn_=s.motion.abs_turn_rad;
         pending_wait_s_=0;pending_beta_valid_=false;pending_ref_ns_=0;pending_discards_=s.motion.discards;
-        last_request_ns_=s.now?s.now:1;
+        token_prev_request_ns_=last_request_ns_;last_request_ns_=s.now?s.now:1;
         return true;
     }
     template<class J> void token_row(J& j,uint64_t now,const char* result,const G3IoResult& r) {

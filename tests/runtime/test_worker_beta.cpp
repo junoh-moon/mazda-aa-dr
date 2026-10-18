@@ -111,9 +111,14 @@ static bool g3_scenario(const std::string& s) {
 // G3_TOKEN_SILENT_NS; g3_unadmitted: the car rolls 2 m/s for 4 s but every
 // wheel event carries a transport time before the session (excluded from the
 // MODEL, so the pipeline and the departure mark see no motion): the raw watch
-// still swaps the token ("moved").
+// still swaps the token ("moved"). g3_token_dir (fifth fix, review P3/P5):
+// logs/g3-last-start is a directory, so every token write fails (rename
+// EISDIR); the car drives 2 m/s for 4 s (admitted) and parks: the three token
+// failures no longer turn the store off, the one synchronous attempt fails
+// too, and the boot's own S record still lands (the next boot refuses it:
+// prev unread).
 static bool token_scenario(const std::string& s) {
-    return s=="g3_idle" || s=="g3_restart" || s=="g3_blind" || s=="g3_unadmitted";
+    return s=="g3_idle" || s=="g3_restart" || s=="g3_blind" || s=="g3_unadmitted" || s=="g3_token_dir";
 }
 static bool g3_send_scenario(const std::string& s) {
     return s=="g3_send" || s=="g3_send_conflict" || s=="g3_send_off" || s=="g3_send_abort" ||
@@ -321,8 +326,11 @@ int main(int argc,char** argv) {
         char line[mx5::runtime::G3_RECORD_MAX];const size_t n=mx5::runtime::g3_encode(r,line,sizeof line);assert(n);
         int fd=open((logs+"/"+mx5::runtime::G3_STORE_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
         assert(fd>=0 && write(fd,line,n)==ssize_t(n));close(fd);
-        fd=open((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
-        assert(fd>=0 && write(fd,PREV_TOKEN,sizeof PREV_TOKEN-1)==ssize_t(sizeof PREV_TOKEN-1));close(fd);
+        if(scenario=="g3_token_dir")assert(!mkdir((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str(),0700));
+        else {
+            fd=open((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+            assert(fd>=0 && write(fd,PREV_TOKEN,sizeof PREV_TOKEN-1)==ssize_t(sizeof PREV_TOKEN-1));close(fd);
+        }
         if(scenario=="g3_restart" && real_boot) {
             const std::string w=std::string("mx5g3worker 1 ")+own_boot+"\n";
             fd=open((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
@@ -407,7 +415,7 @@ int main(int argc,char** argv) {
     if(token_case) {
         const std::string token_file=logs+"/"+mx5::runtime::G3_LAST_START_NAME;
         const std::string earlier_token(PREV_TOKEN),own_token=std::string("mx5g3start 1 ")+own_boot+"\n";
-        const unsigned end_ms=scenario=="g3_blind"?32000:8000;
+        const unsigned end_ms=scenario=="g3_blind"?32000:scenario=="g3_token_dir"?26000:8000;
         const uint64_t start=clock_ns(0);
         std::string token_mid;
         for(unsigned ms=0;ms<=end_ms;ms+=20) {
@@ -421,6 +429,8 @@ int main(int argc,char** argv) {
                     r.source_mono_ms=1;   // before the session: excluded from the MODEL
                     if(kind==N::WHEELS && ms<4000)for(unsigned i=0;i<4;++i)r.raw[i]=uint16_t(10720);   // 7.2 km/h
                 }
+                if(scenario=="g3_token_dir" && kind==N::WHEELS && ms<4000)
+                    for(unsigned i=0;i<4;++i)r.raw[i]=uint16_t(10720);   // 7.2 km/h, admitted
                 assert(sender.send_event(r));
             }
         }
@@ -431,17 +441,20 @@ int main(int argc,char** argv) {
         { std::ifstream tf(token_file.c_str());std::stringstream b;b<<tf.rdbuf();token_end=b.str(); }
         std::string worker_file;
         { std::ifstream wf((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str());std::stringstream b;b<<wf.rdbuf();worker_file=b.str(); }
-        std::string loaded,token_rows;unsigned tokens=0,written=0;
+        std::string loaded,token_rows;unsigned tokens=0,written=0,written_s=0,disabled=0;
         std::ifstream f((logs+"/trace.0.jsonl").c_str());std::string line;
         while(std::getline(f,line)) {
             if(line.find("{\"kind\":\"g3_store\"")!=0)continue;
             if(line.find("\"event\":\"loaded\"")!=std::string::npos || line.find("\"event\":\"rejected\"")!=std::string::npos)loaded=line;
             if(line.find("\"event\":\"token\"")!=std::string::npos) { ++tokens;token_rows+=line+"\n"; }
-            if(line.find("\"event\":\"written\"")!=std::string::npos)++written;
+            if(line.find("\"event\":\"written\"")!=std::string::npos) {
+                ++written;if(line.find("\"st\":\"S\"")!=std::string::npos)++written_s;
+            }
+            if(line.find("\"disabled\":true")!=std::string::npos)++disabled;
         }
         printf("%s: loaded=%s\n%s: token rows=%u\n%s%s: token_mid=%s%s: token_end=%s",scenario.c_str(),loaded.c_str(),
                scenario.c_str(),tokens,token_rows.c_str(),scenario.c_str(),token_mid.c_str(),scenario.c_str(),token_end.c_str());
-        assert(!written && A::mode()==A::OBSERVE);
+        assert((scenario=="g3_token_dir" || !written) && A::mode()==A::OBSERVE);
         if(real_boot) {
             if(scenario=="g3_idle") {
                 // The defect fix: an ignition-on boot without motion keeps the
@@ -458,6 +471,15 @@ int main(int argc,char** argv) {
                 assert(has_text(loaded,"\"reason\":\"not_prev_boot\"") &&
                        has_text(loaded,(std::string("\"prev\":\"")+std::string(own_boot,8)+"\",\"swap\":\"eager_restart\"").c_str()) &&
                        !tokens && token_mid==own_token && token_end==own_token);
+            } else if(scenario=="g3_token_dir") {
+                // The earlier boot's record is refused (the token is unreadable);
+                // three failed token writes, one failed synchronous attempt, the
+                // store stays on and this boot's own S record lands.
+                assert(has_text(loaded,"\"reason\":\"not_prev_boot\"") &&
+                       has_text(loaded,"\"prev\":\"unread\",\"swap\":\"lazy\""));
+                size_t failed=0;for(size_t p=0;(p=token_rows.find("\"result\":\"failed\"",p))!=std::string::npos;++p)++failed;
+                assert(tokens==4 && failed==3 && has_text(token_rows,"\"reason\":\"moved\",\"result\":\"sync_failed\"") &&
+                       !disabled && written_s>=1);
             } else if(scenario=="g3_unadmitted") {
                 assert(has_text(loaded,"\"reason\":\"chain_depart\""));
                 assert(tokens==1 && has_text(token_rows,"\"reason\":\"moved\",\"result\":\"written\"") &&
@@ -470,7 +492,8 @@ int main(int argc,char** argv) {
         }
         unlink((logs+"/capture.done").c_str());rmdir((logs+"/capture.stop").c_str());
         for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
-        unlink((logs+"/"+mx5::runtime::G3_STORE_NAME).c_str());unlink(token_file.c_str());
+        unlink((logs+"/"+mx5::runtime::G3_STORE_NAME).c_str());
+        if(scenario=="g3_token_dir")rmdir(token_file.c_str());else unlink(token_file.c_str());
         unlink((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str());
         assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);
         puts("BETA runtime wiring checks passed");

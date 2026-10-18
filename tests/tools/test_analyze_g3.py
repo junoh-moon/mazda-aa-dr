@@ -352,6 +352,70 @@ class G3Rows(unittest.TestCase):
             self.assertIn("malformed_g3_row", codes(report), row)
             self.assertEqual(report["g3"]["boots"], [])
 
+    def test_wheel_start_and_still_noise(self):
+        # Fifth fix (review P1/P2): per boot the delay from the boot row to the
+        # first WHEELS receipt and the non-zero raw wheel readings while still.
+        def wheel(seq, t_ns, kmh):
+            raw = int(round(kmh * 100 + 10000))
+            return dict(kind="motion", producer_time_status="unknown", epoch=1, sensor=1, receive_seq=seq,
+                        received_ns=t_ns, source_mono_ms=0, raw=[raw] * 4, count=1, reverse=0)
+        def digest(since, mono, lo, hi, mean):
+            return dict(kind="log_digest", schema=1, mono_ns=mono, since_ns=since, motion_events=100,
+                        speed_kmh_min=lo, speed_kmh_max=hi, speed_kmh_mean=mean)
+        lazy = dict(kind="g3_store", mono_ns=2, event="missing", reason="missing", g3="UNKNOWN", age_s=None,
+                    age_src="none", boot="none", chain="none", seq=0, prev="cccccccc", swap="lazy")
+        b = boot(BOOT_A)
+        b["mono_ns"] = 40 * S
+        rows = [b, lazy, wheel(1, 30 * S, 0.0),   # before the boot row: not the first receipt
+                wheel(2, 40 * S + 250 * 10**6, 0.0), wheel(3, 40 * S + 350 * 10**6, 0.2),
+                wheel(4, 40 * S + 450 * 10**6, 0.2), wheel(5, 40 * S + 550 * 10**6, 0.0),
+                digest(40 * S, 50 * S, 0.0, 0.2, 0.01),         # still, non-zero, not sustained
+                digest(50 * S, 60 * S, 0.18, 0.2, 0.19),        # still, sustained
+                digest(60 * S, 70 * S, 0.18, 0.2, 0.19),        # still, sustained (run 20 s)
+                digest(70 * S, 80 * S, 0.0, 30.0, 10.0),        # moving: not still
+                digest(80 * S, 90 * S, 0.1, 0.3, 0.2)]          # still, sustained (new run)
+        _, report = consume(rows)
+        ws = report["wheel_start"]
+        self.assertEqual(len(ws["boots"]), 1)
+        w = ws["boots"][0]
+        self.assertEqual((w["boot_id"], w["first_wheel_ms"], w["still_windows"], w["still_nonzero_windows"],
+                          w["still_sustained_windows"], w["still_longest_sustained_s"]),
+                         ("aaaaaaaa", 250.0, 4, 4, 3, 20.0))
+        self.assertAlmostEqual(w["still_distance_m"], (0.01 + 0.19 + 0.19 + 0.2) / 3.6 * 10, places=3)
+        self.assertEqual((w["raw_still_nonzero"], w["raw_longest_nonzero_run_s"]), (2, 0.1))
+        self.assertEqual((ws["max_first_wheel_ms"], ws["late_first_wheel_boots"], ws["still_distance_over_2m_boots"]),
+                         (250.0, 0, 0))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_wheel_start(ws)
+        self.assertIn("max first WHEELS 250.0 ms after the boot row (> 30 s: 0 boots)", out.getvalue())
+        self.assertIn("boot aaaaaaaa: first WHEELS +250.0 ms; still 10 s windows 4 (non-zero 4, sustained 3, "
+                      "longest sustained 20.0 s), still distance 1.639 m", out.getvalue())
+        # A late wheel stream (40 s) and a long sustained creep (>= 2 m) are flagged.
+        b2 = boot(BOOT_B)
+        b2["mono_ns"] = 1 * S
+        rows = [b2, lazy, wheel(1, 41 * S, 0.0)] + [digest(k * 10 * S, (k + 1) * 10 * S, 0.2, 0.3, 0.25) for k in range(30)]
+        _, report = consume(rows)
+        ws = report["wheel_start"]
+        self.assertEqual((ws["late_first_wheel_boots"], ws["still_distance_over_2m_boots"]), (1, 1))
+        self.assertEqual(ws["boots"][0]["still_longest_sustained_s"], 300.0)
+        # Without lazy-token rows (earlier logs) the section is absent (byte-identical
+        # reports) unless asked for (--wheel-start).
+        _, report = consume([b, wheel(2, 41 * S, 0.0)])
+        self.assertNotIn("wheel_start", report)
+        a = audit.Auditor()
+        a.wheel_start_always = True
+        for i, row in enumerate([b, wheel(2, 41 * S, 0.0)]):
+            a.consume(row, "synthetic:%d" % i)
+        self.assertEqual(a.report()["wheel_start"]["boots"][0]["first_wheel_ms"], 1000.0)
+        # No wheel data: no boot, no text.
+        _, report = consume([boot(BOOT_A), lazy])
+        self.assertEqual(report["wheel_start"]["boots"], [])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            audit.print_wheel_start(report["wheel_start"])
+        self.assertEqual(out.getvalue(), "")
+
     def test_no_rows_no_section(self):
         _, report = consume([boot(BOOT_A)])
         self.assertEqual(report["g3"]["boots"], [])

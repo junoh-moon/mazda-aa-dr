@@ -1009,6 +1009,11 @@ class Auditor:
         self.chan_side_states = []   # (session index, shadow_boot vim_side_channel value)
         self.chan_digest_spans = {}  # session index -> [first since_ns, last mono_ns, motion events]
         self.g3_rows = []       # (session index, g3_store/g3_first row)
+        # Lazy-token review P1/P2 (fifth fix): per session the boot row time,
+        # WHEELS receipts (received_ns, mm/s) and log_digest raw-wheel speed
+        # windows (since_ns, mono_ns, min, max, mean km/h).
+        self.wheel_start = {}
+        self.wheel_start_always = False
         self.drive_rows = []    # (session index, fix1/exit_jump/yaw_learn/rec_drop row)
         self.g3_events = []     # (session index, mono_ns, beta_journal_lag | GPS_LOST | ENGAGED)
         self.g3_beta_states = []   # (session index, mono_ns, BETA state entered): garage write latency by state
@@ -1266,6 +1271,10 @@ class Auditor:
         if kind == "boot":
             self.new_session(row)
             self.boots.append(row)
+            self.wheel_start[len(self.sessions)] = dict(
+                start_ns=row["mono_ns"] if bounded_int(row.get("mono_ns"), 0, 2**64-1) else None,
+                boot_id=row["boot_id"][:8] if isinstance(row.get("boot_id"), str) else None,
+                wheels=[], digests=[])
             if not self.validate(row, source, ("schema", "pid", "mono_ns", "mode"),
                                  ("install", "assist_block"), ("assist_ready", "wire_timestamp_modified")):
                 return
@@ -1578,6 +1587,12 @@ class Auditor:
             if row["kind"] == "log_digest" and bounded_number(row.get("speed_kmh_min"), -1000, 1000):
                 self.chan_speeds.append((len(self.sessions), fields["since_ns"], fields["mono_ns"],
                                          row["speed_kmh_min"], sum(fields["y1"]), sum(fields["y1n"])))
+        ws = self.wheel_start.get(len(self.sessions))
+        if (ws is not None and row["kind"] == "log_digest" and bounded_int(row.get("since_ns"), 0, 2**64-1) and
+                all(bounded_number(row.get(f), -1000, 1000)
+                    for f in ("speed_kmh_min", "speed_kmh_max", "speed_kmh_mean"))):
+            ws["digests"].append((row["since_ns"], row["mono_ns"], row["speed_kmh_min"], row["speed_kmh_max"],
+                                  row["speed_kmh_mean"]))
         if (row["kind"] == "log_digest" and bounded_int(row.get("since_ns"), 0, 2**64-1) and
                 bounded_int(row.get("motion_events"), 0, 2**63-1)):
             span = self.chan_digest_spans.setdefault(len(self.sessions), [row["since_ns"], row["mono_ns"], 0])
@@ -1838,6 +1853,14 @@ class Auditor:
             speed = wheel_speed_e3(row["raw"], s["beta"]["wheel_profile"])
             if speed is not None:
                 s["beta"]["wheels"].append((row["received_ns"], speed))
+        ws = self.wheel_start.get(len(self.sessions))
+        if row["sensor"] == 1 and ws is not None and len(ws["wheels"]) < 1000000:
+            k, zero = s["beta"]["wheel_profile"]
+            wheels = [r * k + zero for r in row["raw"]]
+            # Raw mean km/h as G3TokenWatch integrates it (None: undecodable).
+            kmh = None if any(r > 40000 for r in row["raw"]) or any(w < 0 for w in wheels) else \
+                sum(w * 0.25 for w in wheels)
+            ws["wheels"].append((row["received_ns"], kmh))
         s["last_diagnostic_ns"] = max(s["last_diagnostic_ns"], row["received_ns"])
         self.note_time(row["received_ns"], closes=False)
         epoch, seq, ns = cursor + "_epoch", cursor + "_seq", cursor + "_ns"
@@ -3572,6 +3595,12 @@ class Auditor:
         # Likewise the phone IMU section (logs/pimu.N.jsonl).
         if self.pimu_rows or self.pimu_bad:
             report["phone_imu"] = phone_imu_report(self.pimu_rows, self.pimu_bad)
+        # Wheel stream start / stationary noise (lazy token P1/P2): with
+        # lazy-token logs (a g3_store row carrying "swap") or on request
+        # (--wheel-start), so reports of earlier logs stay byte-identical.
+        if self.wheel_start_always or any(row.get("swap") is not None for _, row in self.g3_rows
+                                          if row["kind"] == "g3_store"):
+            report["wheel_start"] = wheel_start_report(self.wheel_start)
         return report
 
 
@@ -4041,6 +4070,86 @@ def g3_send_report(rows, boots, overlays=0):
                 end_reasons=dict(Counter(b["end"]["reason"] for b in out if b["end"])),
                 overlaid_sends=overlays,
                 scope="FIX LOCATION bearing replaced by the carried G3 heading until the stock course is trusted")
+
+
+# Lazy previous-product-boot token (fifth fix, review P1/P2): a digest window
+# whose raw-wheel maximum stays below this counts as standing still.
+WHEEL_STILL_KMH = 1.0
+
+
+def wheel_start_report(sessions):
+    """Per boot: the delay from the worker's boot row to the first WHEELS
+    receipt (does the 30 s blind_silent rule fire in a boot whose wheel
+    stream starts late?) and the non-zero raw wheel readings while standing
+    still (does the 2 m moved rule fire in a long idle boot?). Still digest
+    windows: raw-wheel maximum < WHEEL_STILL_KMH; sustained: also the minimum
+    > 0 (every reading of the 10 s window non-zero); still distance: sum of
+    mean km/h x window length over still windows (what G3TokenWatch would
+    integrate there). Raw: still receipts (0 < km/h < WHEEL_STILL_KMH) and the
+    longest run of consecutive non-zero still receipts. Receipt times are the
+    collector's CLOCK_MONOTONIC, the boot row's mono_ns the worker's (same
+    clock). Diagnostic only; RAW rows of the persistent profile exist only
+    around events, digests every 10 s."""
+    boots = []
+    for index in sorted(sessions):
+        ws = sessions[index]
+        if not ws["wheels"] and not ws["digests"]:
+            continue
+        start = ws["start_ns"]
+        after = [t for t, _ in ws["wheels"] if start is None or t >= start]
+        first_ms = round((min(after) - start) / 1e6, 1) if after and start is not None else None
+        still = [d for d in sorted(ws["digests"]) if d[3] < WHEEL_STILL_KMH]
+        nonzero = [d for d in still if d[3] > 0]
+        sustained = [d for d in still if d[2] > 0]
+        longest = run = 0.0
+        last_end = None
+        for d in sorted(ws["digests"]):
+            if d[3] < WHEEL_STILL_KMH and d[2] > 0:
+                run = (run if last_end is not None and d[0] <= last_end + 1000000 else 0.0) + (d[1] - d[0]) / 1e9
+                last_end = d[1]
+                longest = max(longest, run)
+            else:
+                run, last_end = 0.0, None
+        dist = sum(max(d[4], 0) / 3.6 * (d[1] - d[0]) / 1e9 for d in still)
+        raw_nonzero = 0
+        raw_run = 0.0
+        run_start = None
+        for t, kmh in sorted(ws["wheels"], key=lambda w: w[0]):
+            if kmh is not None and 0 < kmh < WHEEL_STILL_KMH:
+                raw_nonzero += 1
+                run_start = t if run_start is None else run_start
+                raw_run = max(raw_run, (t - run_start) / 1e9)
+            else:
+                run_start = None
+        boots.append(dict(session=index, boot_id=ws["boot_id"], first_wheel_ms=first_ms,
+                          wheel_receipts=len(ws["wheels"]), still_windows=len(still),
+                          still_nonzero_windows=len(nonzero), still_sustained_windows=len(sustained),
+                          still_longest_sustained_s=round(longest, 1), still_distance_m=round(dist, 3),
+                          raw_still_nonzero=raw_nonzero, raw_longest_nonzero_run_s=round(raw_run, 1)))
+    firsts = [b["first_wheel_ms"] for b in boots if b["first_wheel_ms"] is not None]
+    return dict(boots=boots, max_first_wheel_ms=max(firsts) if firsts else None,
+                late_first_wheel_boots=sum(1 for f in firsts if f > 30000),
+                max_still_distance_m=max([b["still_distance_m"] for b in boots] or [None], key=lambda v: v or 0),
+                still_distance_over_2m_boots=sum(1 for b in boots if b["still_distance_m"] >= 2.0),
+                scope="diagnostic; blind_silent 30 s and moved 2 m of the lazy token, receipt/digest based")
+
+
+def print_wheel_start(ws):
+    """Text: wheel stream start delay and stationary wheel noise per boot."""
+    if not ws or not ws["boots"]:
+        return
+    def f(value, fmt="%.1f"):
+        return "-" if value is None else fmt % value
+    print("Wheel stream start / stationary noise (lazy token blind_silent 30 s, moved 2 m): %d boots, "
+          "max first WHEELS %s ms after the boot row (> 30 s: %d boots), max still distance %s m "
+          "(>= 2 m: %d boots)" % (len(ws["boots"]), f(ws["max_first_wheel_ms"]), ws["late_first_wheel_boots"],
+                                  f(ws["max_still_distance_m"], "%.3f"), ws["still_distance_over_2m_boots"]))
+    for b in ws["boots"]:
+        print("  boot %s: first WHEELS +%s ms; still 10 s windows %d (non-zero %d, sustained %d, longest "
+              "sustained %s s), still distance %s m; raw still non-zero receipts %d, longest run %s s" %
+              (b["boot_id"] or "?", f(b["first_wheel_ms"]), b["still_windows"], b["still_nonzero_windows"],
+               b["still_sustained_windows"], f(b["still_longest_sustained_s"]), f(b["still_distance_m"], "%.3f"),
+               b["raw_still_nonzero"], f(b["raw_longest_nonzero_run_s"])))
 
 
 def g3_report(rows, boots, events=(), overlays=0, states=()):
@@ -4754,8 +4863,9 @@ def print_map_aid(section):
     map_aid_eval.print_report(section)
 
 
-def analyze(paths):
+def analyze(paths, wheel_start=False):
     auditor = Auditor()
+    auditor.wheel_start_always = wheel_start
     for path in paths:
         auditor.read_path(path)
     return auditor.report()
@@ -4768,8 +4878,11 @@ def main(argv=None):
     parser.add_argument("--map-db", metavar="PATH",
                         help="optional: OSM tunnel database (tools/osm_tunnels.py); adds the record-only map-aided "
                              "tunnel counterfactual section (tools/map_aid_eval.py, no coordinates)")
+    parser.add_argument("--wheel-start", action="store_true",
+                        help="also for logs without lazy-token rows: per boot the delay to the first WHEELS receipt "
+                             "and the stationary wheel noise (lazy token blind_silent 30 s / moved 2 m)")
     args = parser.parse_args(argv)
-    report = analyze(args.inputs)
+    report = analyze(args.inputs, args.wheel_start)
     map_aid = map_aid_section(args.inputs, args.map_db) if args.map_db else None
     if map_aid is not None:
         report["map_aid"] = map_aid
@@ -4848,6 +4961,7 @@ def main(argv=None):
         print_yaw_data(report["yaw_data"])
         print_chan_data(report["chan_data"])
         print_g3_data(report["g3"])
+        print_wheel_start(report.get("wheel_start"))
         print_drive_data(report.get("drive_data"))
         print_phone_imu(report.get("phone_imu"))
         print_diag_data(report.get("diagnostic"))

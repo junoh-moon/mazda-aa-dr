@@ -2011,13 +2011,19 @@ static void token_watch() {
 }
 // One boot of a chain in directory dir: the runtime's start path (lazy unless
 // garage is off or eager is asked for), then 100 ms steps; every request goes
-// to its target file at once (or fails with force_stage).
+// to its target file at once (or fails with force_stage, or per target with
+// force_token / force_store). replacing / lag_ns: BETA replaces with that
+// journal writer lag. The runtime's synchronous token attempt (review P3,
+// token_sync_due, not while replacing) runs after each step; sync_fail makes
+// it fail ('t' in landed when it lands).
 struct ChainBoot {
     std::string dir;const char* id;G3Tracker t;G3TokenWatch w;Rows j;char prev[37];const char* swap;
     uint64_t now,zero_since,last_moving;double dist;bool gps,feed;const char* block;int force_stage;
-    std::vector<char> landed;   // 'T' token, 'S', 'M' in landing order
+    int force_token,force_store;bool replacing,sync_fail;uint64_t lag_ns;double heading;
+    std::vector<char> landed;   // 'T' token, 't' synchronous token, 'S', 'M' in landing order
     ChainBoot(const std::string& d,const char* boot,bool garage=true,bool eager=false):
-        dir(d),id(boot),swap(0),now(0),zero_since(1),last_moving(0),dist(0),gps(false),feed(true),block(0),force_stage(-1) {
+        dir(d),id(boot),swap(0),now(0),zero_since(1),last_moving(0),dist(0),gps(false),feed(true),block(0),force_stage(-1),
+        force_token(-1),force_store(-1),replacing(false),sync_fail(false),lag_ns(0),heading(200) {
         if(garage && !eager) {
             g3_last_start_read(d.c_str(),prev);
             const G3WorkerStart ws=g3_worker_boot_mark(d.c_str(),boot);
@@ -2033,7 +2039,8 @@ struct ChainBoot {
         char b[G3_RECORD_MAX];size_t n;uint32_t seq;bool sync=false;unsigned target=99;
         if(!t.take_request(b,sizeof b,&n,&seq,&sync,&target))return;
         G3IoResult r={G3_IO_OK,0,0,G3_STEP_NONE,now,now};
-        if(force_stage>=0) { r.stage=force_stage;r.error=EIO;r.step=G3_STEP_RENAME; }
+        const int forced=force_stage>=0?force_stage:target==G3_TARGET_TOKEN?force_token:force_store;
+        if(forced>=0) { r.stage=forced;r.error=EIO;r.step=G3_STEP_RENAME; }
         else if(target==G3_TARGET_TOKEN)r=g3_write_atomic_at(dir.c_str(),G3_LAST_START_NAME,G3_LAST_START_TEMP,b,n,0,0,0,false);
         else { CHECK(target==G3_TARGET_STORE);r=g3_write_atomic(dir.c_str(),b,n,0,0,0,sync); }
         if(r.stage==G3_IO_OK)landed.push_back(target==G3_TARGET_TOKEN?'T':b[n>60?0:0]=='m'?
@@ -2049,14 +2056,21 @@ struct ChainBoot {
             if(moving) { dist+=kmh/3.6*0.1;last_moving=now;zero_since=0; }
             else if(!zero_since)zero_since=now;
             G3Sample s;memset(&s,0,sizeof s);
-            s.now=now;s.rt_s=100+now/S;s.heading_valid=gps;s.heading_deg=200;s.unc_deg=5;
+            s.now=now;s.rt_s=100+now/S;s.heading_valid=gps;s.heading_deg=heading;s.unc_deg=5;
             s.position_valid=gps;s.lat=35.5;s.lon=139.5;s.pos_err_m=12;
             s.motion.distance_m=dist;s.motion.speed_mps=kmh/3.6;
             s.motion.last_speed_ns=feed?now:0;s.motion.last_moving_ns=last_moving;s.motion.zero_since_ns=zero_since;
             s.motion.first_move_ns=last_moving?1:0;s.wheels_fresh=feed;s.wheels_moving=moving;
             s.reverse=0;s.yaw_error_rad_s=0.002;s.rotation_per_rad=0.10;
+            s.beta_replacing=replacing;s.writer_lag_ns=lag_ns;
             if(t.token_wanted())s.token_why=w.check(now);
             t.tick(j,s,0,block);pump();
+            if(const char* due=t.token_sync_due(replacing)) {
+                G3IoResult r={G3_IO_RENAME,EIO,0,G3_STEP_RENAME,now,now};
+                if(!sync_fail)r=g3_last_start_write_io(dir.c_str(),id,G3_LAST_START_SYNC_TEMP);
+                if(r.stage==G3_IO_OK)landed.push_back('t');
+                t.token_sync(j,now,due,r);
+            }
         }
     }
 };
@@ -2202,10 +2216,14 @@ static void token_gate() {
       t.tick(j,s,0,0);char b[G3_RECORD_MAX];size_t n;uint32_t q;unsigned target;
       CHECK(!t.take_request(b,sizeof b,&n,&q,0,&target));
       s.now=2*S;s.writer_lag_ns=G3_GARAGE_REPLACING_MARK_LAG_NS;t.tick(j,s,0,0);
-      // A caller without a target never receives the token line.
+      // A caller without a target never receives the token line; the refused
+      // request is dropped (review P4) with its spacing restored, so the
+      // next tick raises a new one at once.
       CHECK(!t.take_request(b,sizeof b,&n,&q));
+      CHECK(!t.take_request(b,sizeof b,&n,&q,0,&target) && !t.in_flight_token());
+      s.now=2*S+100000000ULL;t.tick(j,s,0,0);
       CHECK(t.take_request(b,sizeof b,&n,&q,0,&target) && target==G3_TARGET_TOKEN && std::string(b,n)==token_line(BOOT_B) &&
-            q>=G3_TOKEN_SEQ_BASE && t.in_flight_token() && t.in_flight_static());
+            q==G3_TOKEN_SEQ_BASE+1 && t.in_flight_token() && t.in_flight_static());
       // Static content: a moving wheel or a stale stream does not cancel it;
       // the idle rule does.
       s.wheels_moving=true;CHECK(!g3_cancel_reason(0,s,t));
@@ -2227,20 +2245,29 @@ static void token_gate() {
       const std::string rec=encode(depart_record());
       CHECK(g3_mailbox_post(m,rec.data(),rec.size(),5,1,0,false));
       CHECK(g3_mailbox_run_once(m,0) && read_file(d+"/"+G3_STORE_NAME)==rec && token_of(d)==l); }
-    // The swap and the mark both failed (documented residual): B drove 30 m,
-    // every write failed (store off after three), A's S and A's token stay,
-    // and C carries A's stale record. The previous eager swap at B's start
-    // would have caught it (if that one write had landed).
+    // Every store-thread write AND the synchronous token attempt failed
+    // (documented residual): B drove 30 m, the store went off after three
+    // record failures (the token failures have their own limit and did not
+    // count), A's S and A's token stay, and C carries A's stale record.
     { const std::string d=temp_dir();chain_boot_a(d);
-      ChainBoot b(d,BOOT_B);b.force_stage=G3_IO_WRITE;b.run(20,6);b.run(0,30);
-      CHECK(b.landed.empty() && !b.t.store_on() && token_of(d)==token_line(BOOT_A) && b.t.token_wanted());
+      ChainBoot b(d,BOOT_B);b.force_stage=G3_IO_WRITE;b.sync_fail=true;b.run(20,6);b.run(0,30);
+      CHECK(b.landed.empty() && !b.t.store_on() && token_of(d)==token_line(BOOT_A) && !b.t.token_wanted() &&
+            !b.t.token_done());
+      CHECK(b.j.count("\"event\":\"token\"")==4 && b.j.count("\"result\":\"sync_failed\"")==1);
       chain_expect(d,"chain_depart","aaaaaaaa");
-      // A terminal synchronous attempt (journal fault / capture stop) closes it.
+      // A later terminal attempt (capture stop) adds nothing: one per tracker.
+      const size_t rows=b.j.count("\"event\":\"token\"");
+      G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};b.t.token_sync(b.j,41*S,"capture_stop",ok);
+      CHECK(b.j.count("\"event\":\"token\"")==rows); }
+    // The terminal synchronous write (journal fault / capture stop) closes a
+    // boot whose store thread never wrote the token.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.block="journal_draining";b.run(20,6);
+      CHECK(b.landed.empty() && b.t.token_wanted() && !b.t.token_sync_due(false));
       G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};b.t.token_sync(b.j,40*S,"capture_stop",ok);
       CHECK(!b.t.token_wanted() && b.t.token_done() &&
             has(b.j.last("\"event\":\"token\""),"\"reason\":\"moved\",\"result\":\"sync\""));
       const size_t rows=b.j.count("\"event\":\"token\"");
-      CHECK(b.j.count("\"result\":\"failed\"")>=1 && b.j.count("\"disabled\":true")==1);
       b.t.token_sync(b.j,41*S,"capture_stop",ok);CHECK(b.j.count("\"event\":\"token\"")==rows); }
     { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A,"lazy");Rows j;
       G3IoResult f={G3_IO_OPEN,EACCES,0,G3_STEP_NONE,0,0};t.token_sync(j,1,"journal_failed",f);
@@ -2260,6 +2287,129 @@ static void token_gate() {
     // An unknown boot id has nothing to write.
     { G3Tracker t;t.start(0,true,"m","unknown","none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A,"lazy");
       CHECK(t.token_lazy() && !t.token_wanted()); }
+}
+
+// Fifth fix (validation/G3_GARAGE_EXIT_FIX_REVIEW4_FABLE_2026-10-18.md).
+static void token_fifth() {
+    // C3, the reviewer's probe: BETA replaces for the whole of B with a
+    // journal writer lag of 150 ms (the 100-300 ms band of the third review:
+    // the departure mark waits, the S lands). A drove and parked (S(A),
+    // token A); B drives 16 m with a GPS heading and parks 40 s; C starts.
+    // HEAD (fourth fix): nothing landed (mark, token and the diverted S all
+    // under the 100 ms rule) and C carried A's stale heading. Now the token
+    // diverted from the park S request takes the S gate: token, then B's S.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.gps=true;b.replacing=true;b.lag_ns=150000000ULL;b.heading=290;
+      b.run(0,5);b.run(20,2.9);
+      CHECK(b.dist>15.9 && b.dist<16.2 && b.landed.empty() && b.t.token_why() && same(b.t.token_why(),"moved"));
+      // Order 1 on disk: the token landed at the park, B's S not yet (the
+      // ignition goes off within the 5 s spacing): A's S, token B -> refused.
+      b.run(0,5.5);
+      CHECK(landed(b)=="T" && token_of(d)==token_line(BOOT_B));
+      { G3Record r;CHECK(g3_load(d.c_str(),&r)==G3_LOAD_OK && r.state=='S' && !strcmp(r.boot_id,BOOT_A)); }
+      chain_expect(d,"not_prev_boot","bbbbbbbb");
+      // Order 2: B's S follows 5 s later: S(B) with heading, token B -> C
+      // carries B's own record (not A's).
+      b.run(0,34.5);
+      CHECK(landed(b)=="TS" && token_of(d)==token_line(BOOT_B));
+      CHECK(has(b.j.last("\"event\":\"token\""),"\"reason\":\"moved\",\"result\":\"written\""));
+      { G3Record r;CHECK(g3_load(d.c_str(),&r)==G3_LOAD_OK && r.state=='S' && !strcmp(r.boot_id,BOOT_B) &&
+                         (r.flags&G3_FLAG_HEADING) && r.heading_cdeg==29000); }
+      const std::string x=temp_dir();
+      write_file(x+"/"+G3_LAST_START_NAME,read_file(d+"/"+G3_LAST_START_NAME));
+      write_file(x+"/"+G3_STORE_NAME,read_file(d+"/"+G3_STORE_NAME));
+      ChainBoot c(x,BOOT_C);
+      CHECK(c.t.state()==G3_CARRIED && same(c.t.reason(),"chain_depart") && !strcmp(c.prev,BOOT_B));
+      CHECK(has(c.j.last("g3_store"),"\"h\":2900")); }
+    // While moving the token keeps the departure mark's gate: a lag of
+    // 150 ms while BETA replaces holds it (and the mark); 100 ms lets both go.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.replacing=true;b.lag_ns=150000000ULL;b.run(20,10);
+      CHECK(b.landed.empty() && token_of(d)==token_line(BOOT_A));
+      b.lag_ns=G3_GARAGE_REPLACING_MARK_LAG_NS;b.run(20,0.1);CHECK(landed(b)=="T");b.run(20,5.1);CHECK(landed(b)=="TM"); }
+    // A parked S that is spaced (replacing_rate) or blocked by the idle rule
+    // also holds the diverted token: the S gate is the whole S gate.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.gps=true;b.replacing=true;b.lag_ns=150000000ULL;b.run(20,3);
+      b.block="journal_lagging";b.run(0,20);CHECK(b.landed.empty());
+      b.block=0;b.run(0,0.2);CHECK(landed(b)=="T"); }
+    // P3: token write failures have their own limit and never turn the store
+    // off; after three the worker makes ONE synchronous attempt (landed 't'),
+    // and the boot's own S still lands after it.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.gps=true;b.force_token=G3_IO_RENAME;b.run(20,30);
+      CHECK(landed(b)=="Mt" && b.t.store_on() && b.t.token_done() && token_of(d)==token_line(BOOT_B));
+      CHECK(b.j.count("\"event\":\"token\"")==4 && b.j.count("\"result\":\"failed\"")==3 &&
+            has(b.j.last("\"event\":\"token\""),"\"reason\":\"moved\",\"result\":\"sync\"") &&
+            b.j.count("\"disabled\":true")==0);
+      b.run(0,10);CHECK(landed(b)=="MtS");
+      chain_expect(d,"chain_depart","bbbbbbbb"); }
+    // ... never while BETA replaces (no worker file I/O on the G1 path): it
+    // stays due and runs once BETA stops replacing.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.force_token=G3_IO_RENAME;b.replacing=true;b.run(20,30);
+      CHECK(landed(b)=="M" && !b.t.token_sync_due(true) && same(b.t.token_sync_due(false),"token_failed") && b.t.token_wanted());
+      // No further store-thread token attempt after the limit (it waits for the synchronous one).
+      CHECK(b.j.count("\"result\":\"failed\"")==3);
+      b.replacing=false;b.run(20,0.1);CHECK(landed(b)=="Mt" && !b.t.token_sync_due(false)); }
+    // ... and when the synchronous attempt fails too, the S is no longer held
+    // for the token: S(B) with token A on disk -> C refuses (not_prev_boot)
+    // instead of carrying A's stale S.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.gps=true;b.force_token=G3_IO_RENAME;b.sync_fail=true;b.run(20,30);b.run(0,10);
+      CHECK(landed(b)=="MS" && b.t.store_on() && !b.t.token_wanted() && !b.t.token_done() &&
+            token_of(d)==token_line(BOOT_A) && b.j.count("\"result\":\"sync_failed\"")==1);
+      { G3Record r;CHECK(g3_load(d.c_str(),&r)==G3_LOAD_OK && r.state=='S' && !strcmp(r.boot_id,BOOT_B)); }
+      chain_expect(d,"not_prev_boot","aaaaaaaa"); }
+    // P3: the store went off for record failures (three failed marks) while
+    // the token is due (moved): one synchronous attempt ("store_off").
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.force_store=G3_IO_WRITE;b.run(0.36,17);
+      CHECK(b.landed.empty() && !b.t.store_on() && b.t.token_wanted() && !b.t.token_sync_due(false));
+      b.run(0.36,4);
+      CHECK(landed(b)=="t" && token_of(d)==token_line(BOOT_B) && b.j.count("\"result\":\"sync\"")==1);
+      chain_expect(d,"not_prev_boot","bbbbbbbb"); }
+    // ... or wants an S record (turned at a park) that the store can no
+    // longer write: trigger "record", synchronous attempt.
+    { const std::string d=temp_dir();chain_boot_a(d);
+      ChainBoot b(d,BOOT_B);b.force_store=G3_IO_WRITE;b.run(0.36,16);
+      CHECK(b.landed.empty() && !b.t.store_on() && b.dist<1.7);
+      b.gps=true;b.heading=300;b.run(0,8);
+      CHECK(landed(b)=="t" && token_of(d)==token_line(BOOT_B) &&
+            has(b.j.last("\"event\":\"token\""),"\"reason\":\"record\",\"result\":\"sync\""));
+      chain_expect(d,"not_prev_boot","bbbbbbbb"); }
+    // P4: a caller without a target drops the token request; once the token
+    // landed (here: the synchronous path) S and M requests reach that caller
+    // again (HEAD: the token line stayed pending and blocked them forever).
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A,"lazy");Rows j;
+      G3Sample s=drive(1*S,10);s.token_why="moved";t.tick(j,s,0,0);
+      char b[G3_RECORD_MAX];size_t n;uint32_t q;
+      CHECK(!t.take_request(b,sizeof b,&n,&q) && !t.in_flight(&q));
+      G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};t.token_sync(j,2*S,"capture_stop",ok);CHECK(t.token_done());
+      t.tick(j,park(30*S,10,20*S),0,0);
+      CHECK(t.take_request(b,sizeof b,&n,&q) && std::string(b,n).find(" S ")!=std::string::npos); }
+    // A token request still pending when the synchronous write landed is
+    // dropped (no second, needless token write through the store thread).
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A,"lazy");Rows j;
+      G3Sample s=drive(1*S,10);s.token_why="moved";t.tick(j,s,0,0);
+      G3IoResult ok={G3_IO_OK,0,0,G3_STEP_NONE,0,0};t.token_sync(j,2*S,"capture_stop",ok);
+      char b[G3_RECORD_MAX];size_t n;uint32_t q;unsigned target=99;
+      CHECK(!t.take_request(b,sizeof b,&n,&q,0,&target) && !t.in_flight_token()); }
+    // R1: the raw 2 m threshold is inclusive (exactly 2.000 m: moved).
+    { G3TokenWatch w;w.start(0,0.01,-100.0);uint16_t raw[4];raw_wheels(3.6,raw);
+      w.wheel(1*S,raw);w.speed_mps=1.0;w.distance_m=1.5;w.wheel(1*S+500000000ULL,raw);
+      CHECK(w.distance_m==2.0 && same(w.check(2*S),"moved")); }
+    { G3TokenWatch w;w.start(0,0.01,-100.0);uint16_t raw[4];raw_wheels(3.6,raw);
+      w.wheel(1*S,raw);w.speed_mps=1.0;w.distance_m=1.4;w.wheel(1*S+500000000ULL,raw);
+      CHECK(w.distance_m<2.0 && !w.check(2*S)); }
+    // R2: the pipeline distance branch alone (the raw watch saw nothing):
+    // exactly 2.000 m requests the token ("moved"), 1.99 m does not.
+    { G3Tracker t;t.start(0,true,"m",BOOT_B,"none",100,G3_LOAD_MISSING,g3_record(),true,BOOT_A,"lazy");Rows j;
+      G3Sample s=drive(1*S,1.99);s.token_why=0;t.tick(j,s,0,0);
+      char b[G3_RECORD_MAX];size_t n;uint32_t q;unsigned target=99;
+      CHECK(!t.take_request(b,sizeof b,&n,&q,0,&target) && !t.token_why());
+      s=drive(2*S,2.0);s.token_why=0;t.tick(j,s,0,0);
+      CHECK(t.take_request(b,sizeof b,&n,&q,0,&target) && target==G3_TARGET_TOKEN && same(t.token_why(),"moved")); }
 }
 
 int main(int argc,char** argv) {
@@ -2296,6 +2446,7 @@ int main(int argc,char** argv) {
     token_watch();
     token_chain();
     token_gate();
+    token_fifth();
     g3_send_adapter();   // configures the process-global adapter: last
     std::printf("test_g3: %u checks passed\n",checks);
     return 0;

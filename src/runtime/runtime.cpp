@@ -2027,6 +2027,11 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       const char* g3_cancel=mx5::runtime::g3_cancel_reason(
           g3_io_block(j,beta.state(),g3_now,false,mx5::runtime::g3_cancel_ignores_replacing(g3)),g3_sample_now,g3);
       g3_pump(j,g3,g3_worker_epoch,g3_cancel);
+      // Review P3: the token is due but the store thread cannot write it
+      // (its own failure limit, or the store went off for record failures):
+      // one synchronous attempt on the worker, as at the terminal points,
+      // never while BETA replaces (token_sync_due).
+      if(const char* due=g3.token_sync_due(g3_sample_now.beta_replacing))g3_token_terminal(j,g3,root,boot_id,due);
       mx5::runtime::G3SendView view;
       view.now=g3_now;view.journal_ok=!j.failed;
       view.journal_current=journal_current.load(std::memory_order_acquire)!=0;
