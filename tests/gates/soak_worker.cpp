@@ -72,7 +72,11 @@ int main(int argc,char** argv) {
     const unsigned FIX_MS=12000;
     unsigned tunnel=0,cycle_start=0,lost_ms=5000;
     unsigned tunnels_done=0,tunnels_replaced=0,replaced_total=0,replaced_this=0,unreplaced_after_anchor=0;
-    unsigned guard_trips=0,max_files=0,size_violations=0,rotations=0;
+    unsigned guard_trips=0,stall_trips=0,max_files=0,size_violations=0,rotations=0;
+    // Host stalls: this loop runs on the wall clock; an iteration that starts more than 500 ms
+    // late means the emulated process itself did not get the CPU. A guard trip within 3 s of
+    // such a stall is attributed to the host (reported separately), not to the product.
+    unsigned stall_events=0,max_late_ms=0;long last_stall_ms=-100000;
     size_t max_size=0,prev_size0=0;
     int prev_current=journal_current.load()!=0;
     // Reserved up front: the harness's own sample log must not grow the heap it measures.
@@ -82,6 +86,12 @@ int main(int argc,char** argv) {
     for(unsigned ms=0;ms<=end_ms;ms+=20) {
         until(start+uint64_t(ms)*1000000ULL);
         const uint64_t now=clock_ns(0);
+        {
+            const uint64_t due=start+uint64_t(ms)*1000000ULL;
+            const unsigned late=now>due?unsigned((now-due)/1000000ULL):0;
+            if(late>max_late_ms)max_late_ms=late;
+            if(late>500) { ++stall_events;last_stall_ms=long(ms); }
+        }
         for(unsigned kind=1;kind<=3;++kind) {
             if(kind==N::YAW && ms%100)continue;
             if(kind==N::REVERSE && ms!=0 && ms!=100)continue;
@@ -104,11 +114,11 @@ int main(int argc,char** argv) {
         }
         const int current=journal_current.load()!=0;
         if(prev_current && !current) {
-            ++guard_trips;
+            if(long(ms)-last_stall_ms<=3000)++stall_trips;else ++guard_trips;
             char load[64]="-";FILE* lf=fopen("/proc/loadavg","r");
             if(lf) { if(!fgets(load,sizeof load,lf))strcpy(load,"-");fclose(lf); }
             load[strcspn(load,"\n")]=0;
-            printf("GUARD_TRIP t_ms=%u tunnel=%u loadavg=%s\n",ms,tunnel,load);
+            printf("%s t_ms=%u tunnel=%u loadavg=%s\n",long(ms)-last_stall_ms<=3000?"GUARD_TRIP_HOST_STALL":"GUARD_TRIP",ms,tunnel,load);
         }
         prev_current=current;
         if(ms%1000==0) {
@@ -125,8 +135,8 @@ int main(int argc,char** argv) {
             }
             if(files>max_files)max_files=files;
             Sample s={ms,heap_in_use(),rss_kb()};samples.push_back(s);
-            if(ms%60000==0)printf("SOAK t=%us heap=%zu rss_kb=%zu tunnels=%u replaced=%u guard_trips=%u files=%u rotations=%u\n",
-                                  ms/1000,s.heap,s.rss_kb,tunnels_done,replaced_total,guard_trips,files,rotations);
+            if(ms%60000==0)printf("SOAK t=%us heap=%zu rss_kb=%zu tunnels=%u replaced=%u guard_trips=%u host_stall_trips=%u stalls=%u files=%u rotations=%u\n",
+                                  ms/1000,s.heap,s.rss_kb,tunnels_done,replaced_total,guard_trips,stall_trips,stall_events,files,rotations);
         }
     }
     assert(!mkdir((logs+"/capture.stop").c_str(),0700));
@@ -146,11 +156,11 @@ int main(int argc,char** argv) {
     const bool ok=!guard_trips && !lag_rows && !unreplaced_after_anchor && tunnels_done>0 &&
                   max_files<=3 && !size_violations && heap_ok;
     printf("{\"soak_seconds\":%u,\"max_log_bytes\":%zu,\"tunnels\":%u,\"tunnels_replaced\":%u,"
-           "\"unreplaced_after_first_anchor\":%u,\"replaced_sends\":%u,\"guard_trips\":%u,\"lag_rows_retained\":%u,"
+           "\"unreplaced_after_first_anchor\":%u,\"replaced_sends\":%u,\"guard_trips\":%u,\"guard_trips_host_stall\":%u,\"host_stall_events\":%u,\"max_loop_late_ms\":%u,\"lag_rows_retained\":%u,"
            "\"max_trace_files\":%u,\"max_trace_bytes\":%zu,\"size_violations\":%u,\"rotations\":%u,"
            "\"heap_first\":%zu,\"heap_warm\":%zu,\"heap_end\":%zu,\"heap_max\":%zu,"
            "\"rss_kb_first\":%zu,\"rss_kb_warm\":%zu,\"rss_kb_end\":%zu,\"rss_kb_max\":%zu,\"result\":\"%s\"}\n",
-           seconds,max_log,tunnels_done,tunnels_replaced,unreplaced_after_anchor,replaced_total,guard_trips,lag_rows,
+           seconds,max_log,tunnels_done,tunnels_replaced,unreplaced_after_anchor,replaced_total,guard_trips,stall_trips,stall_events,max_late_ms,lag_rows,
            max_files,max_size,size_violations,rotations,first.heap,warm.heap,last.heap,heap_max,
            first.rss_kb,warm.rss_kb,last.rss_kb,rss_max,ok?"PASS":"FAIL");
     // Clean up the scratch tree (files the worker owns).
