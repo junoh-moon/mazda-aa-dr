@@ -145,6 +145,8 @@ class PersistentBetaTests(unittest.TestCase):
         result = self.menu('4\n')
         self.assertIn('the persistent enablement', result.stdout)
         self.assertFalse((self.base / 'guard/persist').exists())
+        # The product loaded in this boot is asked to stop replacing now.
+        self.assertTrue((self.base / 'logs/capture.stop').is_dir())
         self.assertEqual(self.fixture.autostart.read_bytes(), self.fixture.original_autostart)
         # Evidence stays for export.
         self.assertTrue((self.base / 'guard/persist-state').exists())

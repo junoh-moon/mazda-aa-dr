@@ -10,6 +10,7 @@
 | `WAIT 60 s, then run 2 again` | 아직 시작 중입니다(`wait` 줄이 있음) | 60초 뒤 `2`를 다시. 서너 번 반복해도 WAIT이면 [05](05_TROUBLE_KO.md) |
 | `NO-GO` | `NO` 줄이 있습니다. 이 부팅은 제품이 꺼져 있거나 덜 준비됐습니다 | 아래 표에서 `NO` 줄을 찾습니다 |
 | `NO-GO: tripped, stock runs, BETA off.` | 자동 차단: 가드가 순정으로 되돌려 매 부팅 순정만 실행합니다 | 급하지 않습니다(이미 순정). [05](05_TROUBLE_KO.md)의 "자동 차단" |
+| `WAIT choose 5, then run 2 again` + `reboot pending` | 제거(`4`) 직후, 제품이 이번 부팅에서 아직 메모리에 있습니다(새 교체는 이미 멈췄습니다) | `5`로 재부팅한 뒤 다시 열어 `2` |
 | `STOCK` | 제거된 상태입니다(`ok   BOOT  stock this boot`, `Product is off; stock runs.`) | 제거(`4` → `5`) 뒤라면 정상. 다시 켜려면 `1` → `5` → `2` |
 
 ## 자주 보는 `NO` 줄

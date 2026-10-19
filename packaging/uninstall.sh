@@ -17,6 +17,13 @@ prepare_storage
 mount_rw "$ROOT/jci/sm"
 mount_rw "$ROOT/usr/bin"
 rm -f "$BASE/guard/arm" "$BASE/guard/persist"
+# The product loaded in this boot keeps running until the reboot (menu 5): ask
+# its worker to stop replacing (it drops to observe-only within a second) so
+# that choosing 4 and then driving does not leave tunnel replacement active.
+# Best effort; menu 1 and the guard clear the marker.
+if [ -d "$BASE/logs" ] && [ ! -L "$BASE/logs" ] && [ ! -e "$BASE/logs/capture.stop" ] && [ ! -L "$BASE/logs/capture.stop" ]; then
+    mkdir "$BASE/logs/capture.stop" 2>/dev/null || :
+fi
 # Every owner switch (menus 7-12, the removed diagnostic marker diag) and the
 # garage heading chain token files: a later menu 1 starts from the defaults
 # and no heading stored before the removal is carried after it. A directory

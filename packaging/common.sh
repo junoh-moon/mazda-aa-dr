@@ -580,10 +580,10 @@ stash_arm_boot() {
     # any failure after entering this transaction, including type validation.
     ARM_PENDING=1
     if [ -e "$arm_marker_old" ] || [ -L "$arm_marker_old" ]; then
-        read_boot_record "$arm_marker_old" quiet || fail 'Invalid prior arming boot marker'
+        read_boot_record "$arm_marker_old" quiet || fail 'Invalid prior arming boot marker; menu 6 removes it, then menu 1'
     fi
     if [ -e "$arm_marker_previous" ] || [ -L "$arm_marker_previous" ]; then
-        read_boot_record "$arm_marker_previous" quiet || fail 'Invalid previous arming boot marker'
+        read_boot_record "$arm_marker_previous" quiet || fail 'Invalid previous arming boot marker; menu 6 removes it, then menu 1'
     fi
     if [ -e "$arm_marker_old" ]; then
         mv -f "$arm_marker_old" "$arm_marker_previous" || fail 'Cannot preserve prior arming boot marker'

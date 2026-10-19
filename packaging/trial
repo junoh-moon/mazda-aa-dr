@@ -98,6 +98,18 @@ startup_verdict() {
         # Product removed (menu 4) or never installed: nothing is armed and the
         # stock system runs. Say so instead of a block of NO rows.
         if (want=="BETA" && !persistent && field("config_mode=")=="OFF") {
+            # Menu 4 stops the running product replacing within a second but
+            # the stock system is only fully back after the reboot (menu 5).
+            loaded=0
+            for (i=1;i<=NR;i++)
+                if (index(line[i],"service_jciAAPA=")==1 && index(line[i],"package_preload=yes")) loaded=1
+            if (loaded) {
+                print "wait BOOT  reboot pending"
+                print "Product removed; it sends nothing"
+                print "new. Choose 5 to reboot, then 2."
+                print "WAIT choose 5, then run 2 again"
+                exit
+            }
             print "ok   BOOT  stock this boot"
             print "Product is off; stock runs."
             print "Menu 1 installs it again."
