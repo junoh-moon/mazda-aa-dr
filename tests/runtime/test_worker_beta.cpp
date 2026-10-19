@@ -821,6 +821,24 @@ int main(int argc,char** argv) {
             assert(starts==1 && ends==1 && bearing>=3 && choice6==bearing);
             // Overlaid while parked (the first send precedes the window).
             assert(first_ms<=2000);
+            // Generation gate (G3Send::publish, last_generation_ == generation):
+            // a candidate is published only after the worker processed a FIX
+            // POSITION of the current generation, so the send of the FIRST FIX
+            // call after the window opened (whose POSITION the worker had not
+            // yet seen when that send was decided) always leaves as the stock
+            // LOCATION: stock >= 1 in the end row and the first overlaid call
+            // comes later. Without the term that first send was overlaid too.
+            { const size_t sat=start_row.find("\"mono_ns\":");assert(sat!=std::string::npos);
+              const uint64_t start_ns=strtoull(start_row.c_str()+sat+10,0,10);
+              size_t first_fix=calls.size(),first_overlay=calls.size();
+              for(size_t i=0;i<calls.size();++i) {
+                  if(first_fix==calls.size() && calls[i].mode==1 && calls[i].sent_ns>start_ns)first_fix=i;
+                  if(first_overlay==calls.size() && calls[i].bearing)first_overlay=i;
+              }
+              assert(first_fix<calls.size() && !calls[first_fix].bearing && !calls[first_fix].overlay);
+              assert(first_overlay<calls.size() && first_overlay>first_fix);
+              const size_t at=end_row.find("\"stock\":");assert(at!=std::string::npos);
+              assert(strtoull(end_row.c_str()+at+8,0,10)>=1); }
             if(scenario=="g3_send") {
                 // The stock trust rule itself (4 gated fixes at 2 Hz after 6 s).
                 assert(e6==2000000 && start_row.find("\"h\":20,")!=std::string::npos && !conflicts);

@@ -157,6 +157,8 @@ static void beta_send(void (*mutate)(DrSnapshot&), Reason expected) {
     else {assert(last_event.choice==ORIGINAL);assert(!std::memcmp(sent,beta_payload,48));}
     for(unsigned i=0;i<48;++i)assert(beta_payload[i]==uint8_t(0xa0+i)); // OEM memory untouched
 }
+static uint32_t published_generation;
+static void m_record_generation(DrSnapshot& s){published_generation=s.prediction_generation;}
 static void m_not_ready(DrSnapshot& s){s.ready=false;}
 static void m_not_beta(DrSnapshot& s){s.beta=false;s.profile_verified=s.input_quality_verified=s.limits_ok=true;}
 static void m_source_epoch(DrSnapshot& s){s.source_epoch=99;}
@@ -621,8 +623,13 @@ static int beta_main(const char* test) {
         assert(storage_calls==3); // every send, LOCATION or not
         beta_send(0,PASS);assert(storage_calls==4);
     } else if (!std::strcmp(test,"beta_hold")) {
-        const uint32_t before_fail=generation();
-        next_result=-5;beta_send(0,PASS);                 // replaced send failed
+        // before_fail is the generation the candidate was published with (seen
+        // inside the sink, after position_enter's own mode/class revoke), so
+        // only the hold path's invalidate() can move generation() past it.
+        published_generation=0;
+        next_result=-5;beta_send(m_record_generation,PASS); // replaced send failed
+        const uint32_t before_fail=published_generation;
+        assert(before_fail!=0);
         assert(beta_held() && hold_set_events==1 && !hold_cleared_events);
         // The adapter itself revoked the failed candidate's generation.
         assert(generation()>before_fail);

@@ -322,15 +322,18 @@ class Editor(unittest.TestCase):
    for with_timeout in [True,False]:
     if not with_timeout:bbtimeout.unlink()
     for board,base in [('2','/jci/sm/sm_WCP.conf'),('0','/jci/sm/sm.conf')]:
-     for state in ['missing','failed','success','malformed']+(['hang'] if with_timeout else []):
+     # failed_path: the guard prints a well-formed trial path but exits
+     # non-zero; the block's "|| MX5DR_TRIAL=''" must discard that output so
+     # the SM gets the stock config (2026-10-19 hardening, P3).
+     for state in ['missing','failed','failed_path','success','malformed']+(['hang'] if with_timeout else []):
       with self.subTest(board=board,state=state,with_timeout=with_timeout):
        helper.unlink(missing_ok=True);calls.unlink(missing_ok=True);launches.unlink(missing_ok=True);tcalls.unlink(missing_ok=True)
        if state=='hang':
         # A guard that never returns: the bound kills it and SM gets the baseline.
         helper.write_text('#!/bin/sh\nprintf "%s\\n" "$2" >> "$CALLS"\nexec sleep 100\n');helper.chmod(0o700)
        elif state!='missing':
-        output='/tmp/mx5dr-trial-ABC123/sm.conf' if state=='success' else 'garbage'
-        helper.write_text('#!/bin/sh\nprintf "%s\\n" "$2" >> "$CALLS"\nprintf "%s\\n" "'+output+'"\nexit '+('2' if state=='failed' else '0')+'\n');helper.chmod(0o700)
+        output='/tmp/mx5dr-trial-ABC123/sm.conf' if state in ('success','failed_path') else 'garbage'
+        helper.write_text('#!/bin/sh\nprintf "%s\\n" "$2" >> "$CALLS"\nprintf "%s\\n" "'+output+'"\nexit '+('2' if state in ('failed','failed_path') else '0')+'\n');helper.chmod(0o700)
        started=time.monotonic()
        r=subprocess.run(['sh'],input=script,text=True,capture_output=True,timeout=30,env=dict(os.environ,BOARD=board,CALLS=str(calls),LAUNCHES=str(launches),TCALLS=str(tcalls)))
        self.assertEqual(r.returncode,0,r.stderr)

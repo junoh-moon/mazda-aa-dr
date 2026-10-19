@@ -25,6 +25,11 @@ REL_MAX_LOAD=${REL_MAX_LOAD:-4}
 REL_NICE=${REL_NICE:-10}
 REL_TOOLS=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
+# Make every stage (and its children) the first OOM victim of a shared host:
+# nice only orders CPU time, the OOM killer ranks by memory use and
+# oom_score_adj. Raising the value is allowed for an unprivileged process.
+echo "${REL_OOM_ADJ:-900}" > /proc/$$/oom_score_adj 2>/dev/null || :
+
 die() { echo "FAIL: $*" >&2; exit 1; }
 
 rel_work() {  # resolve WORK from $1, $REL_WORK or the pointer

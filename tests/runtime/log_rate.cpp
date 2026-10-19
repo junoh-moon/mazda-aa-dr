@@ -89,6 +89,28 @@ bool g3_on=false,g3_send_on=false;double g3_heading_deg=90.0;
 // store requests (parked records, departure marks) complete at once in memory
 // (no file I/O, no store thread), so their journal rows count in the rate.
 bool g3_garage=false;
+// --probe NAME (2026-10-19, validation/V1_TEST_HARDENING_2026-10-19.md): one
+// authored stimulus at the worker/controller boundary, checked in simulated
+// time; the result goes to stderr as one {"probe":...} row and a failed check
+// exits 3. Default none: the run is the one without a probe, byte for byte.
+//   generation  ENGAGED in a GPS outage: between two worker turns the OEM
+//               reports a GPS return (FIX) and a new loss (LOST) that the
+//               worker has not popped before its BETA tick; a LOST call right
+//               after that tick must leave unmodified (the controller's
+//               position_generation_ gate; the adapter's per-call class and
+//               generation gates alone would accept a candidate of the
+//               current generation).
+//   silence     ENGAGED: all motion (wheels and yaw) stops for 2 s; the
+//               episode is withdrawn with reason sensor_silence within 350 ms.
+//   silence_arg ENGAGED: the tick contract alone (pipeline inputs keep
+//               flowing): last_motion_ns 299 ms old keeps ENGAGED, 301 ms old
+//               withdraws with reason sensor_silence (BETA_SENSOR_SILENCE_NS).
+//   wheel_gap   SPEED_ENGAGED (boot NO_FIX, moving): wheel events stop for 2 s
+//               while yaw continues (receipt silence never reached); the
+//               speed overlay ends with reason speed_unavailable within the
+//               500 ms BETA lease plus one turn (Pipeline::speed_publication
+//               lease, independent of the adapter's valid_until lease).
+std::string probe;
 // This harness journal is synchronous (no writer thread), where the product
 // gate refuses drive rows (GATE_NO_WRITER). Here they are written as a
 // current writer thread would accept them; every other gate reason is the
@@ -169,7 +191,7 @@ struct SimChanReceiver {
 
 int manager_object;
 // One OEM POSITION callback with one LOCATION send.
-void oem_position(const Truth& x,int mode,uint64_t utc,bool stored,const Truth& frozen) {
+bool oem_position(const Truth& x,int mode,uint64_t utc,bool stored,const Truth& frozen) {
     uint8_t position[72];memset(position,0,sizeof position);
     const Truth& p=mode==0?frozen:x;
     const double lat=stored?35.0005:p.lat,lon=stored?135.0005:p.lon;
@@ -189,6 +211,7 @@ void oem_position(const Truth& x,int mode,uint64_t utc,bool stored,const Truth& 
     A::position_enter(&manager_object,position);
     A::send_vehicle_data(&manager_object,&data);
     A::position_leave();
+    return sent_type==1 && memcmp(sent,original,48)!=0;
 }
 void oem_other_send(uint32_t type,unsigned counter) {
     uint8_t payload[8];put32(payload,counter);put32(payload+4,0x01020304);
@@ -224,6 +247,7 @@ int main(int argc,char** argv) {
         else if(k=="--g3-send" && (v=="on" || v=="off"))g3_send_on=v=="on";
         else if(k=="--g3-heading")g3_heading_deg=atof(v.c_str());
         else if(k=="--g3-garage" && (v=="on" || v=="off"))g3_garage=v=="on";
+        else if(k=="--probe" && (v=="generation" || v=="silence" || v=="silence_arg" || v=="wheel_gap"))probe=v;
         else { fprintf(stderr,"unknown option %s\n",k.c_str());return 64; }
     }
     if(out.empty() || (profile!="full" && profile!="persistent") || !motion_ms || motion_ms%20 ||
@@ -310,6 +334,9 @@ int main(int argc,char** argv) {
     const uint64_t start=clock_ns(0),step=10000000ULL; // 10 ms simulation step
     const uint64_t end=start+uint64_t(seconds)*1000000000ULL;
     unsigned outages=0;
+    // --probe state: trigger time, done, result and what was observed.
+    uint64_t probe_t0=0,probe_delay=0;bool probe_done=false,probe_ok=false;
+    std::string probe_note="not_triggered";
     for(uint64_t now=start;now<=end;now+=step) {
         simulated_clock_ns=now;
         const uint64_t ms=(now-start)/1000000ULL;
@@ -317,7 +344,11 @@ int main(int argc,char** argv) {
         const Truth x=drive.truth();
         // Motion producer: wheels and yaw every motion_ms each (offset by
         // half a period), reverse 1 then 0 at boot.
-        if(ms%motion_ms==0 || ms%motion_ms==motion_ms/2) {
+        const bool probe_quiet=probe_t0 && now>probe_t0 && now<probe_t0+2000000000ULL;
+        const bool probe_no_motion=probe_quiet && probe=="silence";
+        const bool probe_no_wheels=probe_quiet && probe=="wheel_gap";
+        if((ms%motion_ms==0 && !probe_no_motion && !probe_no_wheels) ||
+           (ms%motion_ms==motion_ms/2 && !probe_no_motion)) {
             N::RawEvent e=N::RawEvent();e.epoch=7;e.receive_seq=++sequence;e.received_ns=now;
             if(ms%motion_ms==0) {
                 e.kind=N::WHEELS;
@@ -406,7 +437,50 @@ int main(int argc,char** argv) {
             last_shadow=now;journal_shadow(j,now,navigation,model_session,model_bus,drain_calls);
         }
         if(beta.cadence_fence(j,now))navigation.fence_beta();
-        beta.tick(j,now,navigation,true,navigation.status().last_received_ns,1,0);
+        uint64_t tick_motion_ns=navigation.status().last_received_ns;
+        const unsigned probe_second=unsigned(ms/1000);
+        if(!probe.empty() && !probe_t0) {
+            const bool engaged=beta.state()==mx5::runtime::BETA_ENGAGED && ms>=205000;
+            if(probe=="generation" && engaged && ms%1000==700) {
+                // Unpopped GPS return and new loss (the next turn pops them).
+                const uint32_t before=A::generation();
+                oem_position(x,1,1700000000ULL+probe_second+1,false,frozen);
+                oem_position(x,0,1700000000ULL+probe_second+1,false,frozen);
+                probe_t0=now;
+                if(A::generation()<before+2) { probe_done=true;probe_note="no_generation_change"; }
+            } else if((probe=="silence" || probe=="silence_arg") && engaged) probe_t0=now;
+            else if(probe=="wheel_gap" && beta.state()==mx5::runtime::BETA_SPEED_ENGAGED && ms>=20000 && x.kmh>=30)
+                probe_t0=now;
+        }
+        if(probe=="silence_arg" && probe_t0 && !probe_done)
+            tick_motion_ns=now-(now==probe_t0?299000000ULL:301000000ULL);
+        beta.tick(j,now,navigation,true,tick_motion_ns,1,0);
+        if(probe_t0 && !probe_done) {
+            const mx5::runtime::BetaState st=beta.state();
+            if(probe=="generation") {
+                // The worker has not popped the return/loss; a LOST call now
+                // passes the adapter's per-call gates for the current
+                // generation, so only the worker-side gate keeps it stock.
+                const bool replaced=oem_position(x,0,1700000000ULL+probe_second+1,false,frozen);
+                probe_done=true;probe_ok=!replaced;probe_note=replaced?"replaced_after_unprocessed_return":"stock";
+            } else if(probe=="silence_arg") {
+                if(now==probe_t0) {
+                    if(st!=mx5::runtime::BETA_ENGAGED) { probe_done=true;probe_note=std::string("left_at_299ms:")+beta.reason(); }
+                } else {
+                    probe_done=true;probe_delay=now-probe_t0;probe_note=beta.reason();
+                    probe_ok=st==mx5::runtime::BETA_WITHDRAWN && !strcmp(beta.reason(),"sensor_silence");
+                }
+            } else {
+                const mx5::runtime::BetaState engaged=probe=="wheel_gap"?mx5::runtime::BETA_SPEED_ENGAGED:
+                    mx5::runtime::BETA_ENGAGED;
+                const uint64_t limit=probe=="wheel_gap"?600000000ULL:350000000ULL;
+                if(st!=engaged) {
+                    probe_done=true;probe_delay=now-probe_t0;probe_note=beta.reason();
+                    probe_ok=probe_delay<=limit && !strcmp(beta.reason(),probe=="wheel_gap"?"speed_unavailable":
+                                                                                          "sensor_silence");
+                } else if(now-probe_t0>limit) { probe_done=true;probe_delay=now-probe_t0;probe_note="still_engaged"; }
+            }
+        }
         if(g3.active()) {
             mx5::runtime::G3Sample g3s=mx5::runtime::g3_sample(navigation,now,g3_rt+3600+(now-start)/1000000000ULL);
             g3s.beta_replacing=beta.state()==mx5::runtime::BETA_GPS_LOST || beta.state()==mx5::runtime::BETA_ENGAGED ||
@@ -433,6 +507,10 @@ int main(int argc,char** argv) {
         }
         if(j.failed)break;
     }
+    if(!probe.empty())
+        fprintf(stderr,"{\"probe\":\"%s\",\"ok\":%s,\"note\":\"%s\",\"delay_ms\":%.1f,\"at_ms\":%.1f}\n",
+                probe.c_str(),probe_ok?"true":"false",probe_note.c_str(),probe_delay/1e6,
+                probe_t0?(probe_t0-start)/1e6:-1.0);
     // Parked capture stop: final drain, terminal rows, durable close.
     simulated_clock_ns+=step;
     freeze_capture();
@@ -470,5 +548,6 @@ int main(int argc,char** argv) {
     }
     printf("}}\n");
     delete[] window;
+    if(!probe.empty() && !probe_ok)return 3;
     return j.failed?1:0;
 }
