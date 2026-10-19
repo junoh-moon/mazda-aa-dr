@@ -96,7 +96,7 @@ class PersistentBetaTests(unittest.TestCase):
 
     def test_beta_install_is_persistent_and_shadow_stays_one_boot(self):
         result = self.install_beta()
-        self.assertIn('Automatic fallback: after 2 boots in a row that end in a CMU reset', result.stdout)
+        self.assertIn('Automatic fallback: after 2 CMU resets since the last confirmed boot', result.stdout)
         self.assertIn('Choose 5 to start the first BETA boot', result.stdout)
         installed = (self.base / 'installed.txt').read_text()
         self.assertIn('mode=BETA\npolicy=persistent\n', installed)

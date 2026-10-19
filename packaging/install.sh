@@ -316,7 +316,7 @@ printf '%s\n' 'Experimental features are OFF:' \
     '켜려면 메뉴 11 또는 12, 그다음 5.'
 if [ "$POLICY" = persistent ]; then
     echo "Installed $MODE persistent: the guard starts it on every CMU boot. Persistent service configs retain existing touch only. No processes restarted."
-    echo 'Automatic fallback: after 2 boots in a row that end in a CMU reset, the guard starts stock only and keeps the logs. Menu 1 re-enables, menu 4 removes.'
+    echo 'Automatic fallback: after 2 CMU resets since the last confirmed boot, the guard starts stock only and keeps the logs. Menu 1 re-enables, menu 4 removes.'
 fi
 if [ -z "$ROOT" ] && [ "$POLICY" = persistent ]; then
     echo 'Install steps finished. Remain parked with the engine running and this USB connected. Choose trial menu 5 once to start the first product boot; later boots start it automatically.'

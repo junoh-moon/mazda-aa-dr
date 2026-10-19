@@ -2,6 +2,21 @@
 
 Experimental **Android Auto (AA) / Dead Reckoning (DR)** research for first-generation Mazda Connect, targeting **NA 74.00.324A** and a 2019 MX-5 ND2.
 
+## Current release: v1.0.0 stable (final)
+
+**v1.0.0 is a safety- and rollback-focused final stable release. It is not evidence that the tunnel guidance or the underground-garage exit heading problems are solved.**
+Only while the stock unit has lost GPS (tunnels, garages) does it replace the position and speed sent to Android Auto with values dead-reckoned from vehicle sensors; otherwise it forwards the stock data unchanged.
+The 25 m reported in tunnels is a reporting ceiling for app acceptance, not a position-accuracy claim. The garage-exit heading carry (menu 12) and the phone Bluetooth channel (menu 11) are experimental and OFF by default; the OBD yaw-bias correction is not included.
+There is no later version, and no further vehicle check is assumed.
+
+- Owner guides (Korean, one page each; the only typed input is `sh /tmp/mnt/sda1/trial` and digits): [docs/OWNER](docs/OWNER/01_INSTALL_KO.md).
+- Per-feature validation status (real-car proven / offline-verified / unverified) and off switches: [status](docs/STATUS_KO.md), [draft release notes](docs/RELEASE_NOTES_V1_0_0_KO.md).
+- Rollback: while parked, menu `4`, then `5`, then `2` shows `STOCK`.
+
+## Historical notes (before v1.0; scope not upgraded)
+
+The paragraphs below were written during the SHADOW and early trial period. A version called "current" there is not the current release.
+
 **The current public development pre-release is
 [v0.3.12-shadow.3](https://github.com/junoh-moon/mazda-aa-dr/releases/tag/v0.3.12-shadow.3).**
 It adds a short GO/NO-GO block to the parked status check (menu 2) for the small CMU screen and
