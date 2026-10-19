@@ -33,7 +33,7 @@ def install_and_boot(r, tag):
             'ok   BOOT  product this boot' in block and r.install_side_go(block)[0], r.install_side_go(block)[1])
 
 
-def rollback(r, tag):
+def rollback(r, tag, stock_text=True):
     rc, screen = r.menu('4\n', f'{tag}: menu 4 uninstall')
     r.check(f'{tag}: menu 4 rc 0', rc == 0, f'rc={rc}')
     r.menu('5\n', f'{tag}: menu 5 reboot (witness)')
@@ -43,7 +43,11 @@ def rollback(r, tag):
     r.check(f'{tag}: SM gets the stock sm_WCP.conf', chosen == '/jci/sm/sm_WCP.conf', chosen)
     screen, block = r.status(f'{tag} after rollback')
     want = os.environ.get('MX5DR_GATE_STOCK_TEXT', 'stock this boot')
-    r.check(f'{tag}: menu 2 says {want!r}', any(want in x for x in block), str(block[:12]))
+    if stock_text:
+        r.check(f'{tag}: menu 2 says {want!r}', any(want in x for x in block), str(block[:12]))
+    else:
+        # An earlier release's own menu 2 has no such text: only the facts below apply.
+        r.emit(f'{tag}: menu 2 wording not asserted for an earlier release')
     r.autostart_restored(tag)
     auto = (r.root / 'usr/bin/autostart').read_text(errors='replace')
     r.check(f'{tag}: no owned autostart block left', emu.BEGIN not in auto)
@@ -76,7 +80,7 @@ def main():
     r.emit('\n#### 3. Previous ZIP reinstallable, then removed again')
     r.swap_usb(prev)
     install_and_boot(r, 'previous')
-    rollback(r, 'previous removed')
+    rollback(r, 'previous removed', stock_text=False)
     return r.summary('G16')
 
 

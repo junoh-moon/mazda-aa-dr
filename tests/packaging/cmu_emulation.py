@@ -824,7 +824,7 @@ def main():
         # No OEM sensor callback or AA process is claimed by these records.
         current_boot = (root / 'proc/sys/kernel/random/boot_id').read_text().strip()
         original_collector = journal.read_bytes()
-        trace = [dict(kind='boot', boot_id=current_boot, mono_ns=1000000000, mode=4),
+        trace = [dict(kind='boot', boot_id=current_boot, mono_ns=1000000000, mode=4, install='ok'),
                  dict(kind='shadow_boot', active=True, capture_active=True),
                  dict(kind='health', mono_ns=99000000000, hook_installed=True,
                       audit_fault=0, dropped=0, capture_active=True, computation_active=True),
