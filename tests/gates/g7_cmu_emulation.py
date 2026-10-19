@@ -13,7 +13,9 @@ wrapper changes only how a guest command is started, nothing the flow checks:
     /dev/null over it);
  D3 the UID 0 precondition is satisfied by PRoot's fake root;
  D4 the archive owner comparison maps the invoking host user to 0 (PRoot -0
-    shows the host owner as 0 inside the guest).
+    shows the host owner as 0 inside the guest);
+ D5 the collector service-ownership check (uid 1001 after the privilege drop)
+    is not observable under PRoot and is printed as SKIP-CHECK, not as a pass.
 The same deviations were used by the beta.17 release run. The account and
 ownership regression modes (--account-regressions-only,
 --ownership-regressions-only) change real file owners and need a real UID-0
@@ -78,6 +80,19 @@ def main():
     stock, PROOT, QEMU, work = emu.environment()
     bundle = emu.unpack(a.bundle, work / 'g7cmu-bundle')
     h.subprocess = Sub()
+    # D5: PRoot fakes UID 0 and setuid, so a file the collector creates after
+    # dropping to uid 1001 is owned by the host user: the ownership check cannot
+    # be observed here (it needs a real UID-0 container). It is recorded as a
+    # skipped check, never as a pass; the rest of the flow still runs.
+    unobservable = ('Collector failed service ownership',)
+    real_require = h.require
+
+    def require(condition, message, *x, **y):
+        if message in unobservable and not condition:
+            print('SKIP-CHECK (not observable under PRoot): ' + message, flush=True)
+            return
+        return real_require(condition, message, *x, **y)
+    h.require = require
     if os.geteuid() != 0:
         h.os = type('OsProxy', (), {'__getattr__': lambda self, n: getattr(os, n)})()
         h.os.geteuid = lambda: 0

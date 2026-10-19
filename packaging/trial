@@ -95,6 +95,15 @@ startup_verdict() {
         # menu-5 receipt and the one-boot consumption do not apply.
         persistent=(field("guard_policy=")=="persistent")
         tripped=0
+        # Product removed (menu 4) or never installed: nothing is armed and the
+        # stock system runs. Say so instead of a block of NO rows.
+        if (want=="BETA" && !persistent && field("config_mode=")=="OFF") {
+            print "ok   BOOT  stock this boot"
+            print "Product is off; stock runs."
+            print "Menu 1 installs it again."
+            print "STOCK"
+            exit
+        }
         if (persistent) {
             p=field("persist="); r=field("persist_reason="); vf=field("persist_verify=")
             sel=field("persist_selected_this_boot="); conf=field("persist_confirmed_this_boot=")

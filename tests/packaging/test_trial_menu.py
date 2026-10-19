@@ -707,6 +707,22 @@ class TrialMenuTests(unittest.TestCase):
         self.assertEqual(empty[-1], 'NO-GO')
         self.assertEqual(sum(l.startswith('NO ') for l in empty), 9)
 
+    def test_beta_bundle_after_removal_says_stock_this_boot(self):
+        # After menu 4 the persistent policy is gone and the mode is OFF: the
+        # owner must see one clear stock line, not a block of NO rows.
+        text = self.BETA_GO.replace('config_mode=BETA', 'config_mode=OFF')
+        result = self.verdict(text, 'BETA').splitlines()
+        self.assertIn('ok   BOOT  stock this boot', result)
+        self.assertEqual(result[-1], 'STOCK')
+        self.assertFalse([l for l in result if l.startswith('NO')])
+        # A SHADOW bundle with the mode missing stays a failure.
+        shadow = self.verdict(self.GO.replace('config_mode=SHADOW', 'config_mode=OFF'), 'SHADOW').splitlines()
+        self.assertEqual(shadow[-1], 'NO-GO')
+        # A BETA bundle that is still persistent is judged as before.
+        still = self.verdict(self.BETA_GO.replace('config_mode=BETA', 'config_mode=OFF') +
+                             'guard_policy=persistent\n', 'BETA').splitlines()
+        self.assertEqual(still[-1], 'NO-GO')
+
     def test_invalid_reboot_receipt_does_not_claim_a_new_boot(self):
         self.prepare_logs()
         (self.usb / 'reboot-request.txt').write_text('boot_id=broken\n')

@@ -10,9 +10,8 @@ For each listed menu digit and marker file name, on an installed replica:
    with no staging file (*.new.*) left behind; a second time flips it back;
  - menu 2 runs without a shell/awk error while the marker is set;
  - a marker that is a directory is reported and left alone.
-The default list is the beta.17 menu set; the candidate's list (menu 9
-removed, experimental switches inverted) is given with --toggles or
-MX5DR_GATE_TOGGLES. The marker semantics (which state means on) are not
+The default list is the v1.0 menu set (menu 9 removed); the beta.17 list
+(with 9:diag) is given with --toggles or MX5DR_GATE_TOGGLES. The marker semantics (which state means on) are not
 asserted here; G8 asserts the installer's marker rules.
 Exit 0 pass, 1 fail, 77 skip."""
 import argparse
@@ -23,7 +22,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import emu  # noqa: E402
 
-DEFAULT = '7:vimchan-off 8:g3-off 9:diag 10:acc-cap-off 11:bt-off 12:g3-garage-off'
+DEFAULT = '7:vimchan-off 8:g3-off 10:acc-cap-off 11:bt-off 12:g3-garage-off'
 
 
 def main():
@@ -55,6 +54,13 @@ def main():
         marker = r.base / name
         r.emit(f'\n#### menu {digit}: {name}')
         start = marker.exists()
+        if name == 'bt-off' and start:
+            # Turning the phone Bluetooth channel ON needs a prepared config copy,
+            # which the replica CMU does not have: the refusal is the contract.
+            rc, screen = r.menu(f'{digit}\n{digit}\n0\n', f'menu {digit} ON without a prepared copy')
+            r.check(f'menu {digit}: ON is refused without a prepared Bluetooth copy and the marker stays',
+                    'Not prepared' in screen and marker.exists(), f'rc={rc}')
+            continue
         rc, screen = r.menu(f'{digit}\n5\n0\n', f'menu {digit} cancelled with a wrong digit')
         r.check(f'menu {digit}: wrong digit cancels', 'Cancelled; nothing changed.' in screen and marker.exists() == start)
         rc, screen = r.menu(f'{digit}\n{digit}\n0\n', f'menu {digit} confirmed')
