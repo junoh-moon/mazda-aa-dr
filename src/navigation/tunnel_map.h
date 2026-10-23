@@ -18,6 +18,7 @@
 // [TUNNEL_MAP_S_MIN_M, min(TUNNEL_MAP_S_MAX_M, length - TUNNEL_MAP_END_MARGIN_M)],
 // |entry course - chain tangent| <= TUNNEL_MAP_HEADING_DEG, one candidate only,
 // fix fresher than TUNNEL_MAP_MAX_AGE_S and above TUNNEL_MAP_MIN_KMH.
+#include <cmath>
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -142,8 +143,8 @@ inline bool tunnel_map_project(const TunnelMap* m,const TunnelMapChain& c,
 inline bool tunnel_map_match(const TunnelMap* m,double lat,double lon,double course_deg,
                              double speed_kmh,double age_s,TunnelMatch* out) {
     if (!m||!m->chains||!m->points||m->nchains==0) return false;
-    if (!isfinite(lat)||!isfinite(lon)||!isfinite(course_deg)) return false;
-    if (!(speed_kmh>=TUNNEL_MAP_MIN_KMH)||!isfinite(age_s)||age_s<0.0||age_s>TUNNEL_MAP_MAX_AGE_S)
+    if (!std::isfinite(lat)||!std::isfinite(lon)||!std::isfinite(course_deg)) return false;
+    if (!(speed_kmh>=TUNNEL_MAP_MIN_KMH)||!std::isfinite(age_s)||age_s<0.0||age_s>TUNNEL_MAP_MAX_AGE_S)
         return false;
     const double mLat=tunnel_map_m_per_deg_lat(lat), mLon=tunnel_map_m_per_deg_lon(lat);
     if (!(mLon>1.0)) return false;
