@@ -53,3 +53,10 @@
 2. 실측 재확인: trace.1.jsonl 부팅별 행 수·첫 이벤트·최대 간격 계산(위 FACT 1).
 3. 상수·히스테리시스 반영, 시험 갱신, 전체 시험.
 4. 본 기록 작성. 날짜 2026-10-23.
+
+## 후보 번들 (2026-10-24, FACT; 발행 안 함)
+
+- ARM 빌드: 고정 도구체인(m3-toolchain, `.m3-toolchain/SOURCE_COMMIT` 핀 검증)으로 현재 HEAD(`b9f4f94b99e14b2b871cfefc024bd5c887a19280`, TAN 후보 + 본 G3 수정 모두 포함)를 `build/release-arm-g3-20261024`에서 새로 빌드 — **검증 통과**. (낡은 `release-arm-tan-20261023b`는 본 수정 이전이므로 쓰지 않았다.)
+- 번들: `tools/make_usb_zip.py --default-mode BETA --tunnel-md5 56271d9c2d466d239ea81b840148fe6d`로 `/tmp/opencode/mazda-aa-dr-v1.1.0-beta.1-candidate-20261024.zip` 작성. SHA-256 `0f6066f9036436b815b11e0b4d2fcb80ed8f55797d3ea291cd91fe864b18408a`.
+- 게이트: `tests/gates/g5g6_zipcheck.py --zip … --commit b9f4b99e14b2b871cfefc024bd5c887a19280 --sha256 … --mode BETA --tunnel-md5 56271d9c…` → **67/67 PASS**(`source_modified false`, `default_mode BETA`, `install_policy persistent`, 터널 md5 핀 포함). 파일명의 `v1.1.0-beta.1`은 후보 식별명이고 태그·발행은 아니다.
+- 미실행: QEMU 설치·복구 시험(qemu-arm/proot 없음 — 과거 스킵과 동일, 이는 통과가 아니다), 실차·폰 시험. 이 ZIP 설치는 소유자 별도 요청이며 발행은 아니다.
