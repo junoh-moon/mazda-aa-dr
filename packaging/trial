@@ -213,10 +213,12 @@ startup_verdict() {
         }
         # Menu 10 tunnel ceiling: shown only when switched off (not a GO condition).
         if (field("acc_cap_marker=")=="present") print "CAP 25 m tunnel cap OFF (menu 10)"
-        # Map constraint: a missing database is a silent ordinary-DR fallback,
-        # so surface it even though it is not a startup GO condition.
-        if (field("tunnel_map_db=")!="present") print "MAP no tunnel db"
-        else if (field("tunnel_map_marker=")=="present") print "MAP tunnel map OFF (menu 13)"
+        # Map constraint (BETA only): a missing database is a silent ordinary-DR
+        # fallback, so surface it even though it is not a startup GO condition.
+        if (beta) {
+            if (field("tunnel_map_db=")!="present") print "MAP no tunnel db"
+            else if (field("tunnel_map_marker=")=="present") print "MAP tunnel map OFF (menu 13)"
+        }
         # Experimental features switched ON (menus 11 and 12); not a GO condition.
         v=field("experimental_on=")
         if (v=="none") print "EXP none (11, 12 off)"

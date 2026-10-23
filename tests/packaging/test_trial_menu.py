@@ -205,6 +205,9 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('Menu 13 is only for the BETA bundle; nothing changed.', result.stdout)
         self.assertNotIn('\n13 ', result.stdout)
         self.assertFalse(marker.exists())
+        # A non-BETA bundle has no map database by design; do not print the
+        # BETA-only "MAP no tunnel db" line.
+        self.assertNotIn('MAP no tunnel db', self.menu('2\n0\n').stdout)
 
     def test_menu_nine_is_removed_and_its_marker_is_cleared(self):
         # v1.0 stable (validation/V1_STABLE_DECISIONS_2026-10-18.md): the
