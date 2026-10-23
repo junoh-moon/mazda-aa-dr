@@ -373,6 +373,30 @@ class EvaluatorTest(unittest.TestCase):
         self.assertNotIn('"lat"', text)                      # no coordinates in the report
         self.assertNotIn("%.3f" % ORIGIN[1], text)
 
+    def test_chain_end_release_diagnostic(self):
+        # A 200 m chain, a straight 400 m drive, GPS lost from 50 m to 350 m:
+        # TAN runs 150 m past the chain end.  The product's own DR is straight,
+        # so the chain-end release jump is zero and holding TAN at the end
+        # leaves the 150 m along-track gap.  Diagnostic only, not a decision.
+        net = Net()
+        net.way(1, line(0, 0, 0, 200), oneway="yes")
+        d = Drive()
+        d.drive(straight_path(0.0, 0.0, 0.0), 400.0, 20.0, lost=(50.0, 350.0))
+        with tempfile.TemporaryDirectory() as tmp:
+            rep = evaluate(d, net, tmp)
+        [ep] = [r for r in rep["episodes"] if r["match"] == "unique"]
+        rel = ep.get("release")
+        self.assertIsNotNone(rel)
+        self.assertGreater(ep["TAN"]["beyond_end_m"], 100.0)
+        self.assertAlmostEqual(rel["portal_jump"], 0.0, delta=1.0)
+        # Straight chain and straight DR: holding TAN at the chain end leaves
+        # exactly the along-track overrun to the fix.
+        self.assertAlmostEqual(rel["tan_end_to_fix"], ep["TAN"]["beyond_end_m"], delta=1.0)
+        self.assertAlmostEqual(rel["current_fix_jump"], 0.0, delta=1.0)
+        self.assertGreater(rel["reps"], 0)
+        text = json.dumps(rep)
+        self.assertNotIn('"lat"', text)
+
     def test_curved_tunnel(self):
         net = Net()
         net.way(1, arc(400.0, 0.0, 400.0, -90.0, 0.0), oneway="yes")   # quarter circle: west -> north end, heading N -> E

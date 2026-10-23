@@ -28,6 +28,10 @@ validation/MAP_AIDED_TUNNEL_HEADING_FABLE_2026-10-14.md):
   current the product's last replacement LOCATION extrapolated to the fix time
           with its own speed and bearing (and the beta.14 exit_jump row when
           present, unextrapolated).
+  release diagnostic only: when TAN reaches the chain end before the exit fix,
+          the jump from TAN at the end to the product's own DR at that same
+          time (portal jump) and to the fix (hold at the end). It is not a
+          variant and does not affect the decision.
 Jumps are |first returned fix - estimate| in metres, split along/cross the
 fix course (cross > 0: the fix lies right of the estimate). The GPS fix is a
 reference, not ground truth.
@@ -467,6 +471,41 @@ def run_variant(name, ch, s0, seed_course, steps):
     return (x, y), h, s
 
 
+def tan_release(ch, s0, steps, length):
+    """(x, y, t_rel) at the first step where TAN reaches the chain end.
+    Same midpoint-tangent rule as run_variant('TAN'). None if it never
+    reaches the end inside the episode."""
+    x = y = 0.0
+    s = s0
+    for k, ds in enumerate(steps):
+        if ds <= 0.0:
+            continue
+        h = ch.tangent(s + ds / 2.0)
+        if s + ds >= length:
+            frac = (length - s) / ds
+            return (x + ds * frac * math.sin(math.radians(h)),
+                    y + ds * frac * math.cos(math.radians(h)),
+                    (k + frac) * STEP_S)
+        x += ds * math.sin(math.radians(h))
+        y += ds * math.cos(math.radians(h))
+        s += ds
+    return None
+
+
+def product_at(reps, origin, t):
+    """Product DR position at t from the last replacement send <= t.
+    None when no send precedes t."""
+    prev = [r for r in reps if r[0] <= t]
+    if not prev:
+        return None, None
+    last = prev[-1]
+    dt = t - last[0]
+    x, y = osm_tunnels.local_xy(origin, (last[1], last[2]))
+    x += last[3] * dt * math.sin(math.radians(last[4]))
+    y += last[3] * dt * math.cos(math.radians(last[4]))
+    return (x, y), dt
+
+
 def jump_parts(fix_xy, est_xy, course):
     jx, jy = fix_xy[0] - est_xy[0], fix_xy[1] - est_xy[1]
     u = (math.sin(math.radians(course)), math.cos(math.radians(course)))
@@ -593,6 +632,23 @@ def evaluate_episode(index, b, ep):
         res["beyond_end_m"] = round(max(0.0, s_end - ch.length))
         res["fork_passed"] = bool(ch.rec.get("end") == "fork" and s_end > ch.length)
         row[name] = res
+    # Diagnostic only (does not affect the decision): if TAN would pass the
+    # OSM chain end before the exit fix, measure the jump a release at that
+    # end would show against the product's own DR, and the jump if TAN were
+    # held at the end. A release is not a variant here; it is a candidate
+    # rule for later data, not part of the pre-registered decision.
+    if row["TAN"]["beyond_end_m"] > 0.0 and reps:
+        got = tan_release(ch, c["s"], steps, ch.length)
+        if got is not None:
+            xr, yr, trel = got
+            tabs = pre[0] + trel
+            cur, dt = product_at(reps, (pre[1], pre[2]), tabs)
+            if cur is not None:
+                row["release"] = dict(
+                    portal_jump=round(math.hypot(xr - cur[0], yr - cur[1]), 1),
+                    tan_end_to_fix=round(math.hypot(fix_xy[0] - xr, fix_xy[1] - yr), 1),
+                    current_fix_jump=(row.get("current") or {}).get("jump"),
+                    at_pre_s=round(trel, 2), reps=len(reps), last_dt_s=round(dt, 2))
     private = dict(pre=(round(pre[1], 6), round(pre[2], 6)), post=(round(post[1], 6), round(post[2], 6)),
                    chain=ch.rec.get("id"), ways=ch.rec.get("ways"), name=ch.rec.get("name"))
     return row, private
@@ -747,6 +803,12 @@ def print_report(report, private=None, out=sys.stdout):
            r["REL"]["heading_err"], r["SNAP"]["heading_err"], r["TAN"]["beyond_end_m"],
            "; fork passed (branch not chosen)" if r["TAN"]["fork_passed"] else "",
            "; exit_jump row %s m" % r["exit_jump_row"]["jump"] if r.get("exit_jump_row") else ""))
+        rel = r.get("release")
+        if rel:
+            w("  %s chain-end release diagnostic: portal %.1f m, TAN-end-to-fix %.1f m, "
+              "current-at-fix %s m (%d reps, last send %.2f s before the end)" %
+              (r["id"], rel["portal_jump"], rel["tan_end_to_fix"],
+               fmt(rel.get("current_fix_jump")), rel["reps"], rel["last_dt_s"]))
     scan = report.get("false_match_scan")
     if scan:
         w("False-match scan (fixes >= %.0f km/h as synthetic losses): %d fixes, %d unique matches (%d entered GPS "
