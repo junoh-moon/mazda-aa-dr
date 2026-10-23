@@ -161,7 +161,7 @@
 
 - `tests/tools/test_map_aid.py`: **21 passed, 2 skipped**(pyosmium 선택, 비공개 회귀 환경 변수 없음). 새 합성 시험은 200 m 체인·400 m 직진 주행에서 `portal_jump≈0`, `tan_end_to_fix == beyond_end_m`, 좌표 비노출을 확인합니다.
 - `build/test_beta`: **82,380 checks, 통과**. `build/test_tunnel_map`, `build/test_tunnel_map_switch`: 통과.
-- 전체 `make test`는 2026-10-23 1차 시도가 30분 포그라운드 제한에서 `test_phone_imu_rx` 중간에 종료되었습니다. 같은 명령을 백그라운드로 다시 실행했고, 이 기록을 쓰는 시점에는 아직 `test_journal --writer` 단계에서 진행 중입니다. 완료 전에는 **전체 통과를 주장하지 않습니다.**
+- 전체 `make test`는 2026-10-23 1차 시도가 30분 포그라운드 제한에서 `test_phone_imu_rx` 중간에 종료되었고, 같은 명령을 백그라운드로 다시 실행해 **EXIT=0**으로 완료했습니다. 이 재실행은 unittest **1,261건, skip 59건**(비공개 replay·선택 입력)과 C++ 시험(`test_beta` 82,380 checks 등)을 포함합니다. skip은 통과가 아니며, 비공개 입력이 필요한 시험은 별도입니다. §8의 이전 전체 실행 기록은 그대로 보존합니다.
 
 ### 12.7 결정
 
