@@ -83,7 +83,9 @@ static const double G3_SEND_MIN_KMH=3.6;
 static const double G3_SEND_MIN_WHEEL_MPS=1.0;
 static const double G3_SEND_RATIO_MAX=0.1;
 // Agreement with the carried heading: within max(10 deg, the honest
-// propagated uncertainty, which is <= G3_UNC_MAX_DEG while CARRIED).
+// propagated uncertainty, which the tracker keeps under its close gate
+// (G3_UNC_MAX_DEG generally; open bound + 15 deg for a carried flag-4
+// garage record, validation/G3_WINDOW_MARGIN_2026-10-23.md)).
 static const double G3_SEND_AGREE_MIN_DEG=10.0;
 // Consecutive gated fixes: agreeing ones make the stock course trusted,
 // disagreeing ones make the carried heading wrong (the stock course wins).

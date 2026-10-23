@@ -1442,20 +1442,28 @@ static void garage_codec_restore() {
       CHECK(t.state()==G3_CARRIED && !strcmp(t.reason(),"chain_ok") && t.garage_carry()); }
     { G3Record m=r;m.state='M';m.flags=G3_FLAG_DEPART;G3Tracker t=started_garage(m);
       CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"moving_at_end")); }
-    // Limit 60 deg for departure-marked records, 30 deg otherwise.
-    { G3Tracker t=started_garage(depart_record(6000));CHECK(t.state()==G3_CARRIED); }
-    { G3Tracker t=started_garage(depart_record(6001));CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"unc")); }
+    // Limit 90 deg for departure-marked records (owner revision, the load
+    // gate), 30 deg otherwise.
+    { G3Tracker t=started_garage(depart_record(9000));CHECK(t.state()==G3_CARRIED); }
+    { G3Tracker t=started_garage(depart_record(9001));CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"unc")); }
     { G3Record o=depart_record(3001);o.flags=3;o.rt_s=RT;G3Tracker t=started_garage(o,"none",RT+60);
       CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"unc")); }
     { G3Tracker t=started_garage(depart_record(4500),"none",100,BOOT_B,false);
       CHECK(t.state()==G3_UNKNOWN && !strcmp(t.reason(),"format")); }
     // Propagation: rotation term 2 % (garage) instead of 10 %: 20 deg + 600 deg
-    // of |rotation| = 32 deg stays CARRIED (limit 60) ...
+    // of |rotation| = 32 deg stays CARRIED. The close gate is the 90 deg open
+    // gate + the 15 deg margin: 20 + 0.02 * 2101 deg = 62.02 is carried here
+    // (it was the 60 deg-era rejection), the open bound itself 105.0 deg is
+    // still carried (strict compare), and 20 + 0.02 * 4301 = 106.02 deg is
+    // rejected (unc_grew).
     { G3Tracker t=started_garage(depart_record(2000));Rows j;
       G3Sample s=sample(2*S,30,0,0,true);s.motion.abs_turn_rad=600*G3_PI/180;s.motion.first_move_ns=1;
       t.tick(j,s,0,0);CHECK(t.state()==G3_CARRIED && fabs(t.propagated_unc()-32.0)<1e-6);
-      // ... and 20 + 0.02 * 2101 deg = 62.02 deg is rejected (unc_grew).
       s.motion.abs_turn_rad=2101*G3_PI/180;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_CARRIED && fabs(t.propagated_unc()-62.02)<1e-9);
+      s.motion.abs_turn_rad=4250*G3_PI/180;t.tick(j,s,0,0);
+      CHECK(t.state()==G3_CARRIED && fabs(t.propagated_unc()-105.0)<1e-9);
+      s.motion.abs_turn_rad=4301*G3_PI/180;t.tick(j,s,0,0);
       CHECK(t.state()==G3_REJECTED && !strcmp(t.reason(),"unc_grew")); }
     // The beta.16 coefficient with the switch off (a record without flag 4):
     // 20 + 60 deg.
@@ -1797,15 +1805,15 @@ static void garage_send() {
             has(j.last("\"kind\":\"g3_send\""),"\"event\":\"wait\",\"reason\":\"reverse\""));
       const G3Sample s=garage_sample(41*S,8.2,true,0);t.tick(j,s,0,0);g.tick(j,t,s,view(41*S));
       CHECK(g.active()); }
-    // The propagated heading is what the window sends; a 60 deg garage limit
-    // passed ends it (rejected/unc_grew).
+    // The propagated heading is what the window sends; passing the close gate
+    // (90 + 15 = 105 deg) ends it (rejected/unc_grew).
     { G3Tracker t=started_garage(depart_record(5000));G3Send g;g.start(true,true);Rows j;
       t.send(location(1*S,true,0,0));
       G3Sample s=garage_sample(1*S,0,false,0);t.tick(j,s,0,0);g.tick(j,t,s,view(1*S));CHECK(g.active());
       s=garage_sample(2*S,30,true,-1);s.motion.turn_rad=45*G3_PI/180;s.motion.abs_turn_rad=45*G3_PI/180;
       t.tick(j,s,0,0);g.tick(j,t,s,view(2*S));
       CHECK(g.active() && fabs(g.heading()-208.6)<1e-6);
-      s=garage_sample(3*S,60,true,-1);s.motion.turn_rad=45*G3_PI/180;s.motion.abs_turn_rad=600*G3_PI/180;
+      s=garage_sample(3*S,60,true,-1);s.motion.turn_rad=45*G3_PI/180;s.motion.abs_turn_rad=2801*G3_PI/180;
       t.tick(j,s,0,0);g.tick(j,t,s,view(3*S));
       CHECK(!g.active() && !strcmp(g.end_reason(),"rejected") && !strcmp(g.end_why(),"unc_grew")); }
     adapter::set_bearing_overlay(false);

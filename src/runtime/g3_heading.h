@@ -190,7 +190,21 @@ static const double G3_GARAGE_YAW_ERROR_RAD_S=0.0023;
 // of the real error: in 3 of 9 private chains with a bound <= 60 deg the
 // real carried error was larger (validation/G3_UNC_LIMIT_2026-10-18.md); the
 // window's end conditions (trust, conflict, m_course, caps) bound the cost.
-static const double G3_GARAGE_UNC_MAX_DEG=60.0;
+// The limit itself is now 90 deg at the owner's revision decision (the
+// pre-registered sufficiency check failed: only 2 real chains change their
+// sends, E-Mart 2026-10-17 and the home spiral 2026-10-10/11, both carried
+// better than stock on the extra sends; the tail check at 90: 5 % of the
+// segment windows with 60 < bound <= 90 showed a real error above 60 deg).
+static const double G3_GARAGE_UNC_MAX_DEG=90.0;
+// Hysteresis of the carried window (validation/G3_WINDOW_MARGIN_2026-10-23.md,
+// the owner's revision decision after validation/G3_UNC_LIMIT_2026-10-18.md
+// stayed NOT DECIDABLE): once the carried heading is accepted, growth of the
+// propagated budget closes the window only above OPEN + 15 deg; a fixed
+// allowance, larger than the growth actually observed across one real exit
+// (<= 8.8 deg), per the record's proposal; the load/open bound stays the
+// limit above. A carried record without flag 4 keeps the 30 deg gate without
+// a margin (BETA rules exactly).
+static const double G3_GARAGE_UNC_GREW_MARGIN_DEG=15.0;
 static const uint64_t G3_GARAGE_REPLACING_S_GAP_NS=30000000000ULL;
 static const uint64_t G3_GARAGE_REPLACING_MARK_LAG_NS=100000000ULL;
 // Previous-product-boot token (review P1): <root>/logs/g3-last-start.
@@ -1072,7 +1086,8 @@ public:
     template<class J> void tick(J& j,const G3Sample& s,const G3Course* course,const char* io_block) {
         if(!active())return;
         if(have_carried_)propagate(s);
-        if((state_==G3_CARRIED || state_==G3_CARRIED_UNVERIFIED) && prop_unc_>unc_max()) {
+        if((state_==G3_CARRIED || state_==G3_CARRIED_UNVERIFIED) &&
+            prop_unc_>unc_max()+(garage_carry_?G3_GARAGE_UNC_GREW_MARGIN_DEG:0.0)) {
             state_=G3_REJECTED;reason_="unc_grew";
             row(j,",\"mono_ns\":%llu,\"event\":\"checked\",\"reason\":\"%s\",\"g3\":\"%s\",\"punc\":%ld,\"m_b\":%.1f}",
                 "g3_store",(unsigned long long)s.now,reason_,g3_state_name(state_),lround(prop_unc_*10),
