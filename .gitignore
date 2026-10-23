@@ -22,3 +22,16 @@ __pycache__/
 # Private data (vehicle logs) and the ODbL-derived OSM tunnel database
 # (tools/osm_tunnels.py writes private-data/osm/; regenerate, never commit).
 /private-data/
+# Local reverse-engineering artifacts and working notes. These are read-only
+# analysis inputs (APK dex files, decompiler logs, phone-study scaffolding,
+# review scratch data); publishing them would redistribute protected material.
+# They are not part of the product source. Stage product files explicitly.
+/.serena/
+/reports/
+/research_notes/
+/tools/aa-dex/
+/tools/*-jadx.log
+/tools/phone-imu-study/
+/validation/V100_LIMITS_REVIEW_2026-10-20*
+/validation/BETA3_RUNTIME_REVIEW_2026-10-07.md
+/validation/YAW_DECODE_2026-10-10/
