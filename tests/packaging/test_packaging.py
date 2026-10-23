@@ -122,7 +122,7 @@ class PackagingTests(unittest.TestCase):
             self.assertTrue(installed.is_file(), name)
             self.assertEqual(installed.read_bytes(), (self.bundle / name).read_bytes(), name)
             self.assertEqual(installed.stat().st_mode & 0o777, 0o644, name)
-        self.assertFalse((base / 'tunnels-v1.bin.new.1').exists())
+        self.assertFalse(list(base.glob('tunnels-v1.bin.new.*')))
         # A non-BETA install must not leave an unused national ODbL extract.
         self.run_script('install.sh', '--mode=OBSERVE')
         for name in ('tunnels-v1.bin', 'tunnels-v1.manifest.json', 'MAP_DATA_NOTICE.md'):
