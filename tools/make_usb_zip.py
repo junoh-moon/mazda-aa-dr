@@ -63,7 +63,7 @@ def source_modified(source, commit, shell_only=False):
     return False
 
 
-def write_verified_zip(bundle, output, sidecar, shell_only=False):
+def write_verified_zip(bundle, output, sidecar, shell_only=False, beta=False, tunnel_md5=None):
     if shell_only:
         names = [p.relative_to(bundle).as_posix() for p in bundle.rglob('*')]
         if any(n.split('/')[0] in ('mp3', 'js', 'USB_ENTRY_NOTICE.md', 'USB_START_KO.md') for n in names):
@@ -93,8 +93,26 @@ def write_verified_zip(bundle, output, sidecar, shell_only=False):
             required |= {'trial', 'INSTALL_KO.md', 'build-info.json'} if shell_only else {'js/run.js', 'mp3/a.mp3'}
             if shell_only:
                 required |= set(ARTIFACTS) | {name + '.sha256' for name in ARTIFACTS}
-            if not required <= set(archive.namelist()):
-                raise RuntimeError('Missing USB root entry')
+            if beta:
+                # A BETA install enables the map-constrained tunnel DR by
+                # default, so the ODbL database and its provenance must travel
+                # in the same ZIP. A missing or stale file fails packaging,
+                # not the parked install.
+                required |= {'tunnels-v1.bin', 'tunnels-v1.bin.sha256',
+                             'tunnels-v1.manifest.json', 'MAP_DATA_NOTICE.md'}
+            missing = required - set(archive.namelist())
+            if missing:
+                raise RuntimeError('Missing USB root entry: ' + ', '.join(sorted(missing)))
+            if beta:
+                db = archive.read('tunnels-v1.bin')
+                side = archive.read('tunnels-v1.bin.sha256').decode().split()
+                if side and side[0] != hashlib.sha256(db).hexdigest():
+                    raise RuntimeError('tunnel database sidecar mismatch')
+                if tunnel_md5 and hashlib.md5(db).hexdigest() != tunnel_md5:
+                    raise RuntimeError('tunnel database md5 does not match the pin')
+                manifest = json.loads(archive.read('tunnels-v1.manifest.json'))
+                if not isinstance(manifest, dict) or not manifest:
+                    raise RuntimeError('tunnel manifest is empty or not an object')
         checksum_line = digest(Path(partial.name)) + '  ' + output.name + '\n'
         checksum.write(checksum_line.encode())
         checksum.flush()
@@ -122,6 +140,8 @@ def main():
                              'the persistent product (every boot); OBSERVE/SHADOW stay one-boot trials')
     parser.add_argument('--shell-only', action='store_true',
                         help='Package for an already authorized shell, without entry assets')
+    parser.add_argument('--tunnel-md5', default=None,
+                        help='Require the BETA tunnel database to match this md5 (release pin check)')
     args = parser.parse_args()
     output = args.output.absolute()
     sidecar = output.with_suffix(output.suffix + '.sha256')
@@ -162,7 +182,9 @@ def main():
         files = sorted(p for p in bundle.rglob('*') if p.is_file())
         manifest = ''.join(digest(p) + '  ' + p.relative_to(bundle).as_posix() + '\n' for p in files)
         (bundle / 'SHA256SUMS').write_text(manifest)
-        checksum_line = write_verified_zip(bundle, output, sidecar, args.shell_only)
+        checksum_line = write_verified_zip(bundle, output, sidecar, args.shell_only,
+                                           beta=args.default_mode == 'BETA',
+                                           tunnel_md5=args.tunnel_md5)
         print(output)
         print(checksum_line, end='')
 

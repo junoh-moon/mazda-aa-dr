@@ -24,7 +24,7 @@ rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 if [ -d "$BASE/logs" ] && [ ! -L "$BASE/logs" ] && [ ! -e "$BASE/logs/capture.stop" ] && [ ! -L "$BASE/logs/capture.stop" ]; then
     mkdir "$BASE/logs/capture.stop" 2>/dev/null || :
 fi
-# Every owner switch (menus 7-12, the removed diagnostic marker diag) and the
+# Every owner switch (menus 7-13, the removed diagnostic marker diag) and the
 # garage heading chain token files: a later menu 1 starts from the defaults
 # and no heading stored before the removal is carried after it. A directory
 # of such a name is not a marker file and is left for menu 6.

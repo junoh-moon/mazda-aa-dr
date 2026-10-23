@@ -55,6 +55,17 @@ class PackagingTests(unittest.TestCase):
         (self.bundle / 'mx5dr-guard.sha256').write_text(hashlib.sha256(fake).hexdigest() + '  mx5dr-guard\n')
         (self.bundle / 'mx5dr-sha256').write_bytes(fake)  # never run; host hash tool used
         (self.bundle / 'mx5dr-sha256.sha256').write_text(hashlib.sha256(fake).hexdigest() + '  mx5dr-sha256\n')
+        # BETA installs now carry the map-constrained tunnel database
+        # (validation/TUNNEL_MAP_CONSTRAINT_2026-10-22.md). The synthetic
+        # bundle uses a 24-byte fixture: install.sh checks only its size and
+        # checksum (the worker's tunnel_map_load validates the format and
+        # falls back to the ordinary DR), so tests need no private OSM data.
+        tunnel_db = self.bundle / 'tunnels-v1.bin'
+        tunnel_db.write_bytes(b'MX5TUN01' + bytes(16))
+        (self.bundle / 'tunnels-v1.bin.sha256').write_text(
+            hashlib.sha256(tunnel_db.read_bytes()).hexdigest() + '  tunnels-v1.bin\n')
+        (self.bundle / 'tunnels-v1.manifest.json').write_text('{"fixture":"synthetic"}\n')
+        (self.bundle / 'MAP_DATA_NOTICE.md').write_text('Synthetic packaging fixture, not ODbL data.\n')
         files = [line.split()[1] for line in (PACK / 'firmware.sha256').read_text().splitlines()]
         files += ['jci/version.ini', 'jci/sm/sm.conf', 'jci/sm/sm_WCP.conf', 'usr/bin/autostart']
         for file in files:
@@ -102,6 +113,29 @@ class PackagingTests(unittest.TestCase):
         if multiline:
             env = env.replace(' env_value=', '\n                env_value=')
         self.sm.write_text(text[:end] + env + text[end:])
+
+    def test_beta_install_copies_the_tunnel_database_and_removes_it_when_not_beta(self):
+        self.run_script('install.sh', '--mode=BETA')
+        base = self.root / 'data_persist/mx5-aa-dr'
+        for name in ('tunnels-v1.bin', 'tunnels-v1.manifest.json', 'MAP_DATA_NOTICE.md'):
+            installed = base / name
+            self.assertTrue(installed.is_file(), name)
+            self.assertEqual(installed.read_bytes(), (self.bundle / name).read_bytes(), name)
+            self.assertEqual(installed.stat().st_mode & 0o777, 0o644, name)
+        self.assertFalse((base / 'tunnels-v1.bin.new.1').exists())
+        # A non-BETA install must not leave an unused national ODbL extract.
+        self.run_script('install.sh', '--mode=OBSERVE')
+        for name in ('tunnels-v1.bin', 'tunnels-v1.manifest.json', 'MAP_DATA_NOTICE.md'):
+            self.assertFalse((base / name).exists(), name)
+
+    def test_beta_install_refuses_a_tampered_tunnel_database(self):
+        (self.bundle / 'tunnels-v1.bin').write_bytes(b'MX5TUN01' + bytes(16) + b'tampered')
+        result = self.run_script('install.sh', '--mode=BETA', ok=False)
+        self.assertIn('Tunnel map checksum mismatch', result.stderr)
+        base = self.root / 'data_persist/mx5-aa-dr'
+        self.assertFalse((base / 'tunnels-v1.bin').exists())
+        self.assertEqual(self.sm.read_bytes(), self.original)
+        self.assertEqual(self.autostart.read_bytes(), self.original_autostart)
 
     def test_stock_and_uninstall_round_trip(self):
         self.run_script('install.sh')

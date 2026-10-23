@@ -72,7 +72,10 @@ class StorageTests(unittest.TestCase):
             beta = self.fixture.run_script('install.sh', '--mode=BETA')
         self.assertEqual(self.field(beta.stdout, 'remaining_log_kib'), 52 * 1024)
         need = self.field(beta.stdout, 'required_kib')
-        self.assertEqual(need, 8192 + 64 + 1024 + 52 * 1024 + 1)
+        # BETA also carries the ~1 MiB tunnel database into the persistent
+        # directory; the budget must reserve it explicitly.
+        self.assertEqual(self.field(beta.stdout, 'map_db_kib'), 1024)
+        self.assertEqual(need, 8192 + 64 + 1024 + 1024 + 52 * 1024 + 1)
         conf = (self.base / 'mx5dr.conf').read_text()
         self.assertIn('max_log_bytes=16777216\nmax_log_files=3\n', conf)
         with self.free_space(need):

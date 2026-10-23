@@ -28,6 +28,20 @@ cp "$lib" "$dest/libmx5dr.so"
 cp "$build_dir/libmx5dr-vimtap.so" "$dest/libmx5dr-vimtap.so"
 cp "$build_dir/libmx5dr-ldstap.so" "$dest/libmx5dr-ldstap.so"
 cp "$build_dir/mx5dr-guard" "$dest/mx5dr-guard"
+# Map-constrained tunnel DR (validation/TUNNEL_MAP_CONSTRAINT_2026-10-22.md):
+# the BETA bundle carries the ODbL tunnel database next to the worker. It is
+# host-generated (tools/osm_tunnels.py --bin), not committed; a BETA bundle
+# without it would silently fall back to the ordinary DR, so refuse to build.
+if [ "$DEFAULT_MODE" = BETA ]; then
+  tunnel_db="$HERE/../private-data/osm/tunnels-v1.bin"
+  tunnel_manifest="${tunnel_db%.bin}.manifest.json"
+  [ -f "$tunnel_db" ] || { echo "Missing $tunnel_db; build it with: python3 tools/osm_tunnels.py <south-korea-latest.osm.pbf> --bin private-data/osm/tunnels-v1.bin" >&2; exit 1; }
+  [ -f "$tunnel_manifest" ] || { echo "Missing $tunnel_manifest; rebuild the database with tools/osm_tunnels.py" >&2; exit 1; }
+  cp "$tunnel_db" "$dest/tunnels-v1.bin"
+  cp "$tunnel_manifest" "$dest/tunnels-v1.manifest.json"
+  cp "$HERE/MAP_DATA_NOTICE.md" "$dest/MAP_DATA_NOTICE.md"
+  (cd "$dest" && sha256sum tunnels-v1.bin > tunnels-v1.bin.sha256)
+fi
 cp "$build_dir/mx5dr-collector" "$dest/mx5dr-collector"
 cp "$build_dir/mx5dr-sha256" "$dest/mx5dr-sha256"
 if [ "$SHELL_ONLY" = 1 ]; then

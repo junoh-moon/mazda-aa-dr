@@ -276,6 +276,30 @@ echo "g3_marker=$g3_marker (read at CMU start; present = heading log and start b
 acc_cap_marker=absent
 if [ -e "$BASE/acc-cap-off" ] || [ -L "$BASE/acc-cap-off" ]; then acc_cap_marker=present; fi
 echo "acc_cap_marker=$acc_cap_marker (read at CMU start; present = 25 m tunnel cap off)"
+# Map-constrained tunnel DR (validation/TUNNEL_MAP_CONSTRAINT_2026-10-22.md),
+# menu 13: ON by default for BETA; any marker type turns it off (ordinary DR).
+tunnel_map_marker=absent
+if [ -e "$BASE/tunnelmap-off" ] || [ -L "$BASE/tunnelmap-off" ]; then tunnel_map_marker=present; fi
+echo "tunnel_map_marker=$tunnel_map_marker (read at CMU start; present = map-constrained tunnel DR off)"
+# A BETA worker silently falls back to the ordinary tunnel DR when the
+# database is missing or unreadable. Surface that while parked, before a drive.
+tunnel_map_db=missing
+tunnel_map_db_bytes=0
+tunnel_map_db_built=unknown
+if [ -e "$BASE/tunnels-v1.bin" ] || [ -L "$BASE/tunnels-v1.bin" ]; then
+    if [ -f "$BASE/tunnels-v1.bin" ] && [ -r "$BASE/tunnels-v1.bin" ]; then
+        tunnel_map_db=present
+        tunnel_map_db_bytes=$(wc -c < "$BASE/tunnels-v1.bin" 2>/dev/null || echo 0)
+        if [ -f "$BASE/tunnels-v1.manifest.json" ]; then
+            tunnel_map_db_built=$(sed -n 's/.*"built_utc"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$BASE/tunnels-v1.manifest.json" 2>/dev/null | head -n 1)
+            [ -n "$tunnel_map_db_built" ] || tunnel_map_db_built=unknown
+        fi
+    else
+        tunnel_map_db=unreadable
+    fi
+fi
+echo "tunnel_map_db=$tunnel_map_db bytes=$tunnel_map_db_bytes built=$tunnel_map_db_built (BETA bundle; missing/unreadable = ordinary tunnel DR)"
 # Experimental owner switch of the G3 garage heading carry (menu 12; v1.0
 # default OFF: menu 1 writes the marker); read once at start. Any marker type
 # counts as present (beta.16 G3 rules).

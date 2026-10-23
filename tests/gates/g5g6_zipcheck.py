@@ -54,6 +54,8 @@ def main():
     ap.add_argument('--commit')
     ap.add_argument('--sha256')
     ap.add_argument('--mode', default='BETA')
+    ap.add_argument('--tunnel-md5', default=None,
+                    help='Require this md5 for tunnels-v1.bin (release pin check)')
     ap.add_argument('--readelf', default=None)
     a = ap.parse_args()
     cross = os.environ.get('CROSS_COMPILE')
@@ -96,6 +98,18 @@ def main():
         if a.commit:
             check('build-info source_commit == pinned commit', commit == a.commit, f'{commit} vs {a.commit}')
         check(f'bundle-default-mode {a.mode}', (u / 'bundle-default-mode').read_text().strip() == a.mode)
+        if a.mode == 'BETA':
+            db = u / 'tunnels-v1.bin'
+            if check('tunnels-v1.bin present (BETA default enables the map constraint)', db.is_file()):
+                sh = hashlib.sha256(db.read_bytes()).hexdigest()
+                sc = u / 'tunnels-v1.bin.sha256'
+                check('tunnels-v1.bin.sha256 matches', sc.is_file() and
+                      (sc.read_text().split() or [''])[0] == sh)
+                if a.tunnel_md5:
+                    check('tunnels-v1.bin md5 pin', hashlib.md5(db.read_bytes()).hexdigest() == a.tunnel_md5,
+                          a.tunnel_md5)
+            check('tunnels-v1.manifest.json present', (u / 'tunnels-v1.manifest.json').is_file())
+            check('MAP_DATA_NOTICE.md present', (u / 'MAP_DATA_NOTICE.md').is_file())
         arts = info.get('artifacts', {})
         for b in BINARIES:
             p = u / b

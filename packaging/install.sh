@@ -167,11 +167,11 @@ fi
 # No old arm or persistent enablement may survive a partial replacement.
 rm -f "$BASE/guard/arm" "$BASE/guard/persist"
 clear_capture_markers
-# Menu 1 returns every owner switch to the v1.0 default: the stable features
-# on (vimchan-off, g3-off and acc-cap-off cleared; the removed diagnostic
-# marker diag cleared too) and both experimental features OFF (bt-off and
-# g3-garage-off written), whatever an earlier menu 7-12 set.
-for name in vimchan-off g3-off diag acc-cap-off; do
+# Menu 1 returns every owner switch to the default: the default-on features
+# (vimchan-off, g3-off, acc-cap-off and tunnelmap-off cleared; the removed
+# diagnostic marker diag cleared too) and both experimental features OFF
+# (bt-off and g3-garage-off written), whatever an earlier menu 7-13 set.
+for name in vimchan-off g3-off diag acc-cap-off tunnelmap-off; do
     if [ -e "$BASE/$name" ] || [ -L "$BASE/$name" ]; then
         if [ -d "$BASE/$name" ] && [ ! -L "$BASE/$name" ]; then fail "Cannot clear $name: it is a directory"; fi
         rm -f "$BASE/$name" || fail "Cannot clear the $name marker"
@@ -252,6 +252,32 @@ for name in libmx5dr.so libmx5dr-vimtap.so libmx5dr-ldstap.so mx5dr-guard mx5dr-
     if [ -z "$ROOT" ]; then chown 0 "$dest.new.$$"; fi
     mv -f "$dest.new.$$" "$dest"
 done
+# Map-constrained tunnel DR (validation/TUNNEL_MAP_CONSTRAINT_2026-10-22.md):
+# the BETA bundle carries tunnels-v1.bin next to the worker. Verify it before
+# staging; a non-BETA install removes a stale copy so no unused national ODbL
+# extract is left behind.
+if [ "$MODE" = BETA ]; then
+    regular "$HERE/tunnels-v1.bin"
+    regular "$HERE/tunnels-v1.bin.sha256"
+    [ "$(wc -c < "$HERE/tunnels-v1.bin")" -ge 24 ] || fail 'Truncated tunnel map'
+    [ "$(hash "$HERE/tunnels-v1.bin")" = "$(awk 'NR==1{print $1}' "$HERE/tunnels-v1.bin.sha256")" ] || fail 'Tunnel map checksum mismatch'
+    cp "$HERE/tunnels-v1.bin" "$BASE/tunnels-v1.bin.new.$$"
+    chmod 0644 "$BASE/tunnels-v1.bin.new.$$"
+    if [ -z "$ROOT" ]; then chown 0 "$BASE/tunnels-v1.bin.new.$$"; fi
+    mv -f "$BASE/tunnels-v1.bin.new.$$" "$BASE/tunnels-v1.bin"
+    # ODbL attribution travels with the derived database.
+    for name in MAP_DATA_NOTICE.md tunnels-v1.manifest.json; do
+        regular "$HERE/$name"
+        cp "$HERE/$name" "$BASE/$name.new.$$"
+        chmod 0644 "$BASE/$name.new.$$"
+        if [ -z "$ROOT" ]; then chown 0 "$BASE/$name.new.$$"; fi
+        mv -f "$BASE/$name.new.$$" "$BASE/$name"
+    done
+else
+    for name in tunnels-v1.bin tunnels-v1.bin.sha256 MAP_DATA_NOTICE.md tunnels-v1.manifest.json; do
+        remove_entry "$BASE/$name" || fail "Cannot remove a stale $name"
+    done
+fi
 set_config
 [ ! -L "$BASE/tools" ] || fail 'Symlink tools directory'
 mkdir -p "$BASE/tools"

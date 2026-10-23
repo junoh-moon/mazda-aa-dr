@@ -38,6 +38,12 @@ class ShellBundle(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 expected = set(HELPERS) | set(PRODUCTS) | {n + '.sha256' for n in PRODUCTS}
                 expected |= {'bundle-default-mode', 'INSTALL_KO.md'}
+                if mode == 'BETA':
+                    # The map-constrained tunnel DR database travels with a
+                    # BETA bundle, including an explicitly requested shell-only
+                    # build (install.sh verifies and copies it).
+                    expected |= {'tunnels-v1.bin', 'tunnels-v1.bin.sha256',
+                                 'tunnels-v1.manifest.json', 'MAP_DATA_NOTICE.md'}
                 self.assertEqual({p.name for p in output.iterdir()}, expected)
                 self.assertEqual((output / 'bundle-default-mode').read_text(), mode + '\n')
                 self.assertEqual((output / 'INSTALL_KO.md').read_bytes(),
@@ -48,7 +54,7 @@ class ShellBundle(unittest.TestCase):
                     self.assertEqual((output / (name + '.sha256')).read_text(),
                                      hashlib.sha256(data).hexdigest() + '  ' + name + '\n')
 
-    def archive(self, base, extra=None):
+    def archive(self, base, extra=None, beta=False):
         bundle = base / 'bundle'
         bundle.mkdir()
         for name in ('trial', 'install.sh', 'INSTALL_KO.md', *PRODUCTS):
@@ -58,6 +64,13 @@ class ShellBundle(unittest.TestCase):
                 hashlib.sha256((bundle / name).read_bytes()).hexdigest() + '  ' + name + '\n')
         (bundle / 'build-info.json').write_text(json.dumps({
             'bundle_type': 'shell-only', 'entry_payloads_included': False}))
+        if beta:
+            (bundle / 'tunnels-v1.bin').write_bytes(b'authored tunnel fixture\n')
+            (bundle / 'tunnels-v1.bin.sha256').write_text(
+                hashlib.sha256((bundle / 'tunnels-v1.bin').read_bytes()).hexdigest()
+                + '  tunnels-v1.bin\n')
+            (bundle / 'tunnels-v1.manifest.json').write_text('{"version": 1}\n')
+            (bundle / 'MAP_DATA_NOTICE.md').write_text('authored notice\n')
         if extra:
             path = bundle / extra
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +105,51 @@ class ShellBundle(unittest.TestCase):
                     zipper.write_verified_zip(bundle, output, checksum, shell_only=True)
                 self.assertFalse(output.exists())
                 self.assertFalse(checksum.exists())
+
+    def test_beta_zip_requires_tunnel_database_and_provenance(self):
+        for name in ('tunnels-v1.bin', 'tunnels-v1.bin.sha256',
+                     'tunnels-v1.manifest.json', 'MAP_DATA_NOTICE.md'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                bundle = self.archive(base, beta=True)
+                (bundle / name).unlink()
+                lines = (bundle / 'SHA256SUMS').read_text().splitlines(keepends=True)
+                (bundle / 'SHA256SUMS').write_text(''.join(
+                    line for line in lines if line.split('  ', 1)[1].strip() != name))
+                with self.assertRaisesRegex(RuntimeError, 'Missing USB root entry'):
+                    zipper.write_verified_zip(bundle, base / 'out.zip', base / 'out.zip.sha256',
+                                              shell_only=True, beta=True)
+                self.assertFalse((base / 'out.zip').exists())
+                self.assertFalse((base / 'out.zip.sha256').exists())
+
+    def test_beta_zip_rejects_stale_tunnel_sidecar_and_md5_pin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            bundle = self.archive(base, beta=True)
+            (bundle / 'tunnels-v1.bin.sha256').write_text('0' * 64 + '  tunnels-v1.bin\n')
+            paths = sorted(p for p in bundle.glob('*') if p.is_file() and p.name != 'SHA256SUMS')
+            (bundle / 'SHA256SUMS').write_text(''.join(
+                hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in paths))
+            with self.assertRaisesRegex(RuntimeError, 'sidecar'):
+                zipper.write_verified_zip(bundle, base / 'out.zip', base / 'out.zip.sha256',
+                                          shell_only=True, beta=True)
+            self.assertFalse((base / 'out.zip').exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            bundle = self.archive(base, beta=True)
+            with self.assertRaisesRegex(RuntimeError, 'md5'):
+                zipper.write_verified_zip(bundle, base / 'out.zip', base / 'out.zip.sha256',
+                                          shell_only=True, beta=True, tunnel_md5='0' * 32)
+            self.assertFalse((base / 'out.zip').exists())
+
+    def test_beta_zip_accepts_the_pinned_tunnel_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            bundle = self.archive(base, beta=True)
+            md5 = hashlib.md5((bundle / 'tunnels-v1.bin').read_bytes()).hexdigest()
+            zipper.write_verified_zip(bundle, base / 'out.zip', base / 'out.zip.sha256',
+                                      shell_only=True, beta=True, tunnel_md5=md5)
+            self.assertTrue((base / 'out.zip').is_file())
 
     def test_shell_zip_requires_every_product_and_checksum(self):
         for name in (*PRODUCTS, *(n + '.sha256' for n in PRODUCTS)):

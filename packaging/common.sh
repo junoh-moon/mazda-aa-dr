@@ -246,8 +246,13 @@ require_trial_space() {
         done
     fi
     space_free=$((space_free + space_reclaim / 1024))
-    space_need=$((8192 + 64 + 1024 + (space_missing + $1 + 1023) / 1024))
-    echo "storage_available_kib=$space_free required_kib=$space_need remaining_log_kib=$(((space_missing + 1023) / 1024)) reserve_kib=8192 reclaimed_old_trace_kib=$((space_reclaim / 1024))"
+    # The BETA bundle carries the ~1 MiB ODbL tunnel database next to the
+    # worker. It is copied into the persistent directory, so it must be counted
+    # in the same free-space decision as the binaries and logs.
+    space_map=0
+    [ "${MODE:-}" = BETA ] && space_map=1024
+    space_need=$((8192 + 64 + 1024 + space_map + (space_missing + $1 + 1023) / 1024))
+    echo "storage_available_kib=$space_free required_kib=$space_need remaining_log_kib=$(((space_missing + 1023) / 1024)) reserve_kib=8192 map_db_kib=$space_map reclaimed_old_trace_kib=$((space_reclaim / 1024))"
     [ "$space_free" -ge "$space_need" ] || fail 'Insufficient persistent space; installation/rearm not started. Export existing logs and inspect storage while parked.'
 }
 # Persistent installs only: rotated trace files above the persistent cap (the
@@ -333,9 +338,13 @@ prune_backup_sets() {
 # Owner switches (markers in the package directory, read once at CMU start by
 # the guard, runtime and collector). Experimental features are OFF while their
 # marker exists: bt-off (phone Bluetooth channel; the guard then starts the
-# stock bds arguments) and g3-garage-off (garage heading carry).
+# stock bds arguments) and g3-garage-off (garage heading carry). Features that
+# are ON by default use an off marker: vimchan-off, g3-off, acc-cap-off and
+# tunnelmap-off (map-constrained tunnel DR, a BETA default-on choice that is
+# not vehicle-validated); menu 1 clears those so a reinstall returns to the
+# defaults.
 EXPERIMENTAL_MARKERS='bt-off g3-garage-off'
-OWNER_MARKERS='vimchan-off g3-off acc-cap-off diag bt-off g3-garage-off'
+OWNER_MARKERS='vimchan-off g3-off acc-cap-off diag bt-off g3-garage-off tunnelmap-off'
 # The garage heading chain files in logs/ (runtime g3_heading.h): the
 # previous-product-boot token and the worker-boot file. Menu 4 removes both;
 # menu 1 only the token (a running worker may still use its boot file).

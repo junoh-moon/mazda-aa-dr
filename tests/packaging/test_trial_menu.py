@@ -197,6 +197,15 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('Cleared g3-off', result.stdout)
         self.assertFalse(marker.exists())
 
+    def test_menu_thirteen_is_beta_only(self):
+        (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
+        marker = self.base / 'tunnelmap-off'
+        result = self.menu('13\n0\n')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('Menu 13 is only for the BETA bundle; nothing changed.', result.stdout)
+        self.assertNotIn('\n13 ', result.stdout)
+        self.assertFalse(marker.exists())
+
     def test_menu_nine_is_removed_and_its_marker_is_cleared(self):
         # v1.0 stable (validation/V1_STABLE_DECISIONS_2026-10-18.md): the
         # diagnostic tunnel test is removed. The other numbers keep their
@@ -218,6 +227,8 @@ class TrialMenuTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         listed = [line.split(' ', 1)[0] for line in result.stdout.splitlines()
                   if line[:1].isdigit() and ' ' in line and line.split(' ', 1)[0].isdigit()]
+        # The fixture bundle is not BETA, so the BETA-only tunnel-map menu is
+        # not listed. BETA is covered by its own test below.
         self.assertEqual(listed[:12], ['1', '2', '3', '4', '5', '6', '7', '8', '10', '11', '12', '0'])
         status = self.menu('2\n0\n')
         self.assertIn('0 Exit (1-8, 10-12 as listed before)', status.stdout)
@@ -405,12 +416,64 @@ class TrialMenuTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(marker.exists())
 
+    def test_menu_thirteen_turns_the_tunnel_map_constraint_off_and_on(self):
+        # BETA candidate: the map constraint is ON by default, so the owner
+        # marker is an off switch. Menu 13 shows the state first, then one
+        # numeric confirmation; menu 1 clears the marker (back to ON); menu 2
+        # reports it; mx5dr.conf is never touched.
+        (self.usb / 'bundle-default-mode').write_text('BETA\n')
+        marker = self.base / 'tunnelmap-off'
+        result = self.menu('13\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('13 Tunnel map constraint on/off (BETA)', result.stdout)
+        self.assertIn('Tunnel map constraint: package not installed;', result.stdout)
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+        config = (self.base / 'mx5dr.conf').read_bytes()
+        self.assertIn('tunnel_map_marker=absent', self.menu('2\n0\n').stdout)
+        for keys in ('13\n0\n', '13\n\n0\n', '13\n1\n0\n', '13\n12\n0\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('Tunnel map constraint now: ON', result.stdout)
+                self.assertIn('Enter 13 again to switch it OFF,', result.stdout)
+                self.assertIn('Cancelled; nothing changed.', result.stdout)
+                self.assertFalse(marker.exists())
+        result = self.menu('13\n13\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Tunnel map constraint set to OFF.', result.stdout)
+        self.assertIn('Read once at CMU start: choose 5', result.stdout)
+        self.assertEqual(marker.read_bytes(), b'off\n')
+        self.assertIn('tunnel_map_marker=present', self.menu('2\n0\n').stdout)
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        result = self.menu('13\n13\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Tunnel map constraint set to ON.', result.stdout)
+        self.assertFalse(marker.exists())
+        # A directory marker is OFF and is left for menu 6, not written into.
+        self.menu('13\n13\n0\n')
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        marker.mkdir()
+        result = self.menu('13\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Tunnel map constraint: OFF (marker is a dir).', result.stdout)
+        self.assertIn('Not changed here; menu 6 removes it.', result.stdout)
+        self.assertTrue(marker.is_dir())
+        marker.rmdir()
+        # Reinstall resets the switch to the default ON.
+        result = self.menu('1\n0\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+
     def test_menu_four_removes_every_owner_marker_and_both_chain_files(self):
-        # v1.0 stable: menu 4 removes all six owner markers and both garage
+        # v1.0 stable: menu 4 removes all seven owner markers and both garage
         # chain files uniformly (a directory of such a name is left for menu
         # 6 with a warning); the stored heading record and the logs stay.
         self.fixture.run_script('install.sh')
-        names = ('vimchan-off', 'g3-off', 'bt-off', 'g3-garage-off', 'acc-cap-off', 'diag')
+        names = ('vimchan-off', 'g3-off', 'bt-off', 'g3-garage-off', 'acc-cap-off',
+                 'tunnelmap-off', 'diag')
         for name in names:
             (self.base / name).write_text('off\n')
         for name in ('g3-last-start', 'g3-worker-boot'):

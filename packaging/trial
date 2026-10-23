@@ -213,6 +213,10 @@ startup_verdict() {
         }
         # Menu 10 tunnel ceiling: shown only when switched off (not a GO condition).
         if (field("acc_cap_marker=")=="present") print "CAP 25 m tunnel cap OFF (menu 10)"
+        # Map constraint: a missing database is a silent ordinary-DR fallback,
+        # so surface it even though it is not a startup GO condition.
+        if (field("tunnel_map_db=")!="present") print "MAP no tunnel db"
+        else if (field("tunnel_map_marker=")=="present") print "MAP tunnel map OFF (menu 13)"
         # Experimental features switched ON (menus 11 and 12); not a GO condition.
         v=field("experimental_on=")
         if (v=="none") print "EXP none (11, 12 off)"
@@ -522,6 +526,50 @@ garage_toggle() {
     experimental_toggle 12 g3-garage-off 'Garage heading'
 }
 
+# Menu 13 (2026-10-22, validation/TUNNEL_MAP_CONSTRAINT_2026-10-22.md): the
+# owner switch of the map-constrained tunnel DR. ON by default inside the
+# BETA tunnel replacement; while BASE/tunnelmap-off exists (any type) the
+# worker keeps the ordinary dead-reckoned position and heading. Read once at
+# CMU start. Never touches mx5dr.conf. Shows the state first, then one numeric
+# confirmation (13 again).
+tunnelmap_toggle() {
+    marker=$BASE/tunnelmap-off
+    if [ ! -d "$BASE" ] || [ -L "$BASE" ]; then
+        echo 'Tunnel map constraint: package not installed;'
+        echo 'nothing changed.'
+        return 0
+    fi
+    if [ -d "$marker" ] && [ ! -L "$marker" ]; then
+        echo 'Tunnel map constraint: OFF (marker is a dir).'
+        echo 'Not changed here; menu 6 removes it.'
+        return 0
+    fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then state=OFF; next=ON
+    else state=ON; next=OFF; fi
+    printf '%s\n' "Tunnel map constraint now: $state" \
+        'BETA only. OFF = ordinary tunnel DR.' \
+        "Enter 13 again to switch it $next," \
+        'anything else cancels.'
+    printf 'Number, then Enter: '
+    if ! IFS= read -r confirm; then echo 'Cancelled; nothing changed.'; return 1; fi
+    if [ "$confirm" != 13 ]; then echo 'Cancelled; nothing changed.'; return 0; fi
+    if [ "$next" = OFF ]; then
+        marker_tmp=$BASE/tunnelmap-off.new.$$
+        rm -f "$marker_tmp" || fail 'Cannot stage the tunnelmap-off marker'
+        if ! printf 'off\n' > "$marker_tmp" || ! mv -f "$marker_tmp" "$marker"; then
+            rm -f "$marker_tmp" || :
+            fail 'Cannot write the tunnelmap-off marker'
+        fi
+    else
+        rm -f "$marker" || fail 'Cannot remove the tunnelmap-off marker'
+    fi
+    sync
+    echo "Tunnel map constraint set to $next."
+    echo 'Read once at CMU start: choose 5'
+    echo '(parked reboot) for it to take effect.'
+    return 0
+}
+
 # Display only: install.sh validates the same marker again before any write.
 bundle_mode() {
     marker=$HERE/bundle-default-mode
@@ -546,30 +594,39 @@ start_text='After install choose 5; keep this USB connected. After restart reope
 installed_text='Installation finished. Choose 5 to request a CMU reboot; ignition off/on is not a reboot check.'
 if [ "$BUNDLE_MODE" = BETA ]; then
     install_text='1 Install or re-enable BETA, every boot'
-    start_text='BETA runs on every boot once installed. After install choose 5 once, then 2 before switching to AA. 2 shows status, 3 saves logs (then 5), 4 removes BETA (then 5); after 4 and a reboot with 5, 6 deletes every file it left. 11 and 12 are experimental and OFF after every 1.'
+    start_text='BETA runs on every boot once installed. After install choose 5 once, then 2 before switching to AA. 2 shows status, 3 saves logs (then 5), 4 removes BETA (then 5); after 4 and a reboot with 5, 6 deletes every file it left. 11 and 12 are experimental and OFF after every 1; 13 switches the tunnel map off/on.'
     installed_text='Installation finished. Choose 5 to start the first BETA boot; later boots start it by themselves.'
 fi
+print_menu() (
+    set -- 'Parked USB trial menu' \
+        "This USB installs mode $BUNDLE_MODE: $mode_text" \
+        "$install_text" \
+        '2 Check CMU reboot, current capture and retained records' \
+        '3 Finish capture and save logs plus startup diagnostics to this USB' \
+        '4 Uninstall, also recovers an interrupted install (keeps collected logs)' \
+        '5 Reboot CMU now through the original system reboot command' \
+        '6 Delete everything this package left on the CMU (run 4, then 5, first)' \
+        '7 VIM side-channel log on/off (log only)' \
+        '8 Heading (G3) log and start bearing on/off' \
+        '10 Tunnel 25 m cap on/off (BETA)' \
+        '11 Phone Bluetooth: turn on/off (experimental, default OFF)' \
+        '12 Garage heading: turn on/off (experimental, default OFF)'
+    [ "$BUNDLE_MODE" = BETA ] && set -- "$@" '13 Tunnel map constraint on/off (BETA)'
+    set -- "$@" '0 Exit'
+    printf '\n%s\n' "$@"
+)
 last_rc=0
 short_menu=0
 while :; do
     if [ "$short_menu" = 1 ]; then
         short_menu=0
-        printf '\n%s\n' '0 Exit (1-8, 10-12 as listed before)'
+        if [ "$BUNDLE_MODE" = BETA ]; then
+            printf '\n%s\n' '0 Exit (1-8, 10-13 as listed before)'
+        else
+            printf '\n%s\n' '0 Exit (1-8, 10-12 as listed before)'
+        fi
     else
-        printf '\n%s\n' 'Parked USB trial menu' \
-            "This USB installs mode $BUNDLE_MODE: $mode_text" \
-            "$install_text" \
-            '2 Check CMU reboot, current capture and retained records' \
-            '3 Finish capture and save logs plus startup diagnostics to this USB' \
-            '4 Uninstall, also recovers an interrupted install (keeps collected logs)' \
-            '5 Reboot CMU now through the original system reboot command' \
-            '6 Delete everything this package left on the CMU (run 4, then 5, first)' \
-            '7 VIM side-channel log on/off (log only)' \
-            '8 Heading (G3) log and start bearing on/off' \
-            '10 Tunnel 25 m cap on/off (BETA)' \
-            '11 Phone Bluetooth: turn on/off (experimental, default OFF)' \
-            '12 Garage heading: turn on/off (experimental, default OFF)' \
-            '0 Exit'
+        print_menu
         echo "$start_text"
         echo 'Installation and CMU reboot: remain parked with the engine actually running (not ACC or engine-off ON). Do not press the engine start/stop button during these steps.'
     fi
@@ -598,6 +655,10 @@ while :; do
         10) if ! acc_cap_toggle; then exit "$last_rc"; fi;;
         11) if ! bt_toggle; then exit "$last_rc"; fi;;
         12) if ! garage_toggle; then exit "$last_rc"; fi;;
+        13) if [ "$BUNDLE_MODE" != BETA ]; then
+                echo 'Menu 13 is only for the BETA bundle; nothing changed.'
+                last_rc=1
+            elif ! tunnelmap_toggle; then exit "$last_rc"; fi;;
         0) exit "$last_rc";;
         *) echo 'Enter one of the listed numbers; no action taken.';;
     esac
