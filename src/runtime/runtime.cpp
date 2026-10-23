@@ -25,6 +25,7 @@
 #include "g3_heading.h"
 #include "g3_send.h"
 #include "acc_cap.h"
+#include "tunnel_map_switch.h"
 #include "motion_gap.h"
 #include "model_bus.h"
 #include "lds_sideband.h"
@@ -1664,6 +1665,21 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       navigation.init_model(model,mx5_dr_default_config(),nav_context,true,true,beta_requested) &&
       holdout.init_model(model,mx5_dr_default_config(),nav_context);
   const bool beta_core=shadow && beta_requested && navigation.enable_beta(mx5::runtime::beta_profile_tunnel());
+  // Map-constrained tunnel DR (validation/TUNNEL_MAP_CONSTRAINT_2026-10-22.md):
+  // default ON inside the BETA tunnel replacement; owner marker tunnelmap-off
+  // (trial menu 13) restores the ordinary DR. A missing or invalid database, or
+  // an unreadable marker state, also leaves the ordinary DR (fail closed).
+  struct TunnelMapOwner {
+    mx5::navigation::TunnelMap* map;
+    ~TunnelMapOwner(){ mx5::navigation::tunnel_map_free(map); }
+  } tunnel_map_owner={0};
+  if(beta_core && !mx5::runtime::tunnel_map_off_marker(root)) {
+    char tunnel_path[512];
+    const int tn=snprintf(tunnel_path,sizeof tunnel_path,"%s/tunnels-v1.bin",root);
+    if(tn>0&&size_t(tn)<sizeof tunnel_path)
+      tunnel_map_owner.map=mx5::navigation::tunnel_map_load(tunnel_path);
+    navigation.set_tunnel_map(tunnel_map_owner.map);
+  }
   mx5::runtime::BetaController beta(beta_shared);
   // Tunnel reporting ceiling off switch (owner menu 10, runtime/acc_cap.h):
   // read once; present = the beta.12 numbers (40 m ceiling, stopped rule).

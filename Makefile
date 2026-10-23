@@ -10,7 +10,7 @@ CORE = src/core/dr_core.c
 REQUEST = src/adapter/request_hooks.cpp src/runtime/request_observer.cpp src/runtime/request_trace.cpp
 ADAPTER = src/adapter/adapter.cpp src/adapter/arm_entry.cpp src/adapter/v74_install.cpp src/adapter/bus_hooks.cpp src/adapter/session_hooks.cpp $(REQUEST)
 NAVIGATION = src/navigation/pipeline.cpp src/navigation/channel.cpp src/navigation/holdout.cpp
-NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h src/runtime/beta_profile.h src/runtime/core_bridge.h src/runtime/beta_controller.h src/runtime/motion_gap.h src/runtime/g3_heading.h src/runtime/g3_send.h
+NAV_HEADERS = src/navigation/channel.h src/navigation/pipeline.h src/navigation/gyro_bias.h src/navigation/gps_wheel.h src/navigation/holdout.h src/navigation/tunnel_map.h src/runtime/beta_profile.h src/runtime/core_bridge.h src/runtime/beta_controller.h src/runtime/motion_gap.h src/runtime/g3_heading.h src/runtime/g3_send.h
 SENSOR_TAP = src/sensors/vim_tap.cpp src/sensors/vim_source.cpp src/navigation/channel.cpp src/runtime/config.cpp src/runtime/sha256.cpp
 SENSOR_OBJECTS = $(patsubst %.cpp,$(BUILD)/arm/%.o,$(SENSOR_TAP))
 RUNTIME_SUPPORT = src/runtime/config.cpp src/runtime/sha256.cpp
@@ -163,12 +163,20 @@ $(BUILD)/test_g3: tests/runtime/test_g3.cpp $(NAVIGATION) $(NAV_HEADERS) src/run
 	$(CXX) $(CXX_WARN) $(filter-out %.h,$^) -lm -ldl -pthread -o $@
 $(BUILD)/test_acc_cap: tests/runtime/test_acc_cap.cpp src/runtime/acc_cap.h | $(BUILD)
 	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_acc_cap.cpp -o $@
+# Map-constrained tunnel DR (validation/TUNNEL_MAP_CONSTRAINT_2026-10-22.md):
+# synthetic database match/tangent/point checks and the owner off marker.
+$(BUILD)/test_tunnel_map: tests/runtime/test_tunnel_map.cpp src/navigation/tunnel_map.h | $(BUILD)
+	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_tunnel_map.cpp -lm -o $@
+$(BUILD)/test_tunnel_map_switch: tests/runtime/test_tunnel_map_switch.cpp src/runtime/tunnel_map_switch.h | $(BUILD)
+	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_tunnel_map_switch.cpp -o $@
 $(BUILD)/test_worker_thread: tests/runtime/test_worker_thread.cpp src/runtime/worker_thread.h | $(BUILD)
 	$(CXX) $(CXX_WARN) -Isrc tests/runtime/test_worker_thread.cpp -pthread -o $@
-test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_drive_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 $(BUILD)/test_acc_cap test-request-publication test-journal-boundaries
+test-runtime: $(BUILD)/test_worker_thread $(BUILD)/test_runtime_lds_association $(BUILD)/test_assist_worker $(BUILD)/test_runtime_assist $(BUILD)/test_runtime $(BUILD)/test_request_trace $(BUILD)/test_request_observer $(BUILD)/test_request_handoff $(BUILD)/test_request_status $(BUILD)/test_journal_queue $(BUILD)/test_journal_ring $(BUILD)/test_log_profile $(BUILD)/test_yaw_rows $(BUILD)/test_chan_rows $(BUILD)/test_drive_rows $(BUILD)/test_journal $(BUILD)/test_model_session $(BUILD)/test_model_session_reset $(BUILD)/test_model_session_input $(BUILD)/test_worker_session $(BUILD)/test_worker_beta $(BUILD)/test_g3 $(BUILD)/test_acc_cap $(BUILD)/test_tunnel_map $(BUILD)/test_tunnel_map_switch test-request-publication test-journal-boundaries
 	$(BUILD)/test_worker_thread
 	$(BUILD)/test_g3
 	$(BUILD)/test_acc_cap
+	$(BUILD)/test_tunnel_map
+	$(BUILD)/test_tunnel_map_switch
 	@set -e; for scenario in adopted freeze audit journal_failure pre_stopped fork journal bounds drain_bus drain_session; do $(BUILD)/test_runtime_lds_association $$scenario; done
 	$(BUILD)/test_assist_worker
 	@set -e; for scenario in publication source_fault unqualified recovery audit journal_failure pre_stopped unhooked shadow; do $(BUILD)/test_runtime_assist $$scenario; done

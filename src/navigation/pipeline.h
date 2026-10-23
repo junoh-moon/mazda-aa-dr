@@ -3,6 +3,7 @@
 #include "adapter/adapter.h"
 #include "navigation/gyro_bias.h"
 #include "navigation/gps_wheel.h"
+#include "navigation/tunnel_map.h"
 #include "core/dr_core.h"
 #include "runtime/core_bridge.h"
 #include <stddef.h>
@@ -388,6 +389,12 @@ public:
         return beta_core_.estimate.heading_budget_rad+beta_.rotation_budget_per_rad*beta_rotation_rad_;
     }
     const runtime::BetaProfile& beta_profile_in_use() const { return beta_; }
+    // Optional on-device OSM tunnel database (tunnel_map.h). Null keeps the
+    // ordinary BETA DR. The map only refines the replaced LOCATION position
+    // and heading while a BETA GPS-lost episode is inside one uniquely
+    // matched tunnel; it never seeds, gates or changes the reported accuracy.
+    void set_tunnel_map(const TunnelMap* map) { tunnel_map_=map; }
+    bool beta_tunnel_active() const { return tunnel_.active; }
     GpsAnchorGate anchor_gate() const { return gps_wheel_.gate(); }
     mx5_dr_context context() const { return core_.estimate.context; }
     uint64_t reorder_ns() const { return profile_.reorder_ns; }
@@ -504,6 +511,27 @@ private:
     YawRecord beta_yaw_[HISTORY_CAPACITY];
     size_t beta_yaw_size_, beta_yaw_next_;
     G3Motion g3_;
+    // Map-constrained tunnel position (tunnel_map.h). Position is advanced from
+    // the entry anchor along the chain tangent by the core's wheel distance;
+    // it only exists while one unique match is active (fail closed otherwise).
+    struct TunnelConstraint {
+        bool active;
+        uint32_t chain;
+        double s,last_distance;
+        double origin_lat,origin_lon;
+        double east,north;
+        double heading_deg;
+        double m_lat,m_lon;
+        // Yaw-mismatch release (tunnel_map.h TUNNEL_MAP_YAW_RELEASE_DEG):
+        // changes are measured against the entry values.
+        double entry_core_heading_deg,entry_tangent_deg;
+    };
+    const TunnelMap* tunnel_map_;
+    TunnelConstraint tunnel_;
+    bool beta_tunnel_entry(const adapter::Observation&);
+    void beta_tunnel_advance();
+    void beta_tunnel_clear();
+    void beta_tunnel_apply(mx5_dr_snapshot*) const;
     void g3_speed(const Event&);
     void g3_yaw(const Event&,double rate);
     PipelineResult enqueue_raw_event(const RawEvent&);

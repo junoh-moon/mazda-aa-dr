@@ -345,6 +345,64 @@ def manifest_path(out_path):
     return base + ".manifest.json"
 
 
+def bin_path(out_path):
+    base = out_path[:-len(".json.gz")] if out_path.endswith(".json.gz") else out_path
+    return base + ".bin"
+
+
+# Compact on-device database (src/navigation/tunnel_map.h). Little-endian:
+#   char magic[8]="MX5TUN01"; u32 version; u32 nchains; u32 npoints; u32 pad;
+#   chains[nchains] x 32 B: u32 first; u16 count; u16 flags(bit0 oneway);
+#            f32 length_m; f32 lat_min,lat_max,lon_min,lon_max; u32 pad
+#   points[npoints] x 8 B: f32 lat, lon   (degrees)
+BIN_MAGIC = b"MX5TUN01"
+BIN_VERSION = 1
+BIN_CHAIN = 32
+
+
+def bin_image(db):
+    """bytes of the on-device database for a loaded/just-built db."""
+    import struct
+    chains = db["chains"]
+    pts = []
+    recs = []
+    for c in chains:
+        raw = c["pts"]
+        if len(raw) < 2:
+            continue
+        if len(raw) > 0xFFFF:
+            raise ValueError("chain %s has %d points (max 65535)" % (c.get("id"), len(raw)))
+        first = len(pts)
+        lats = [p[0] / 1e7 for p in raw]
+        lons = [p[1] / 1e7 for p in raw]
+        pts.extend(zip(lats, lons))
+        # bit0 one-way; bit1 end is not a portal (fork/loop), so the device
+        # must not extrapolate past the chain end (tunnel_map.h flags).
+        flags = (1 if c.get("oneway") else 0) | (2 if c.get("end", "portal") != "portal" else 0)
+        recs.append((first, len(raw), flags, float(c.get("len_m", 0.0)),
+                     min(lats), max(lats), min(lons), max(lons)))
+    out = bytearray()
+    out += BIN_MAGIC
+    out += struct.pack("<IIII", BIN_VERSION, len(recs), len(pts), 0)
+    for rec in recs:
+        out += struct.pack("<IHHfffffI", rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], rec[6], rec[7], 0)
+    for lat, lon in pts:
+        out += struct.pack("<ff", lat, lon)
+    return bytes(out)
+
+
+def write_bin(db, out_path):
+    """Write the compact on-device database; returns the path."""
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    tmp = out_path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(bin_image(db))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, out_path)
+    return out_path
+
+
 def load_db(path):
     with gzip.open(path, "rt", encoding="utf-8") as f:
         db = json.load(f)
@@ -357,6 +415,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("extract", help="OSM extract (.osm.pbf or .osm), e.g. Geofabrik south-korea-latest.osm.pbf")
     parser.add_argument("--out", default=DEFAULT_OUT, help="database path (default %(default)s, git-ignored)")
+    parser.add_argument("--bin", default=None,
+                        help="compact on-device database path (default: the --out path with .bin)")
+    parser.add_argument("--no-bin", action="store_true", help="do not write the compact on-device database")
     parser.add_argument("--simplify-m", type=float, default=2.0, help="Douglas-Peucker tolerance (m)")
     parser.add_argument("--classes", default=",".join(DEFAULT_CLASSES), help="comma-separated highway classes")
     args = parser.parse_args(argv)
@@ -372,7 +433,12 @@ def main(argv=None):
                   built_utc=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     db = make_db(chains, source, params)
     path = write_db(db, args.out)
-    log("wrote %s (%d chains, %.1f km) and %s" % (args.out, db["counts"]["chains"], db["counts"]["km"], path))
+    bin_out = None if args.no_bin else (args.bin or bin_path(args.out))
+    if bin_out:
+        write_bin(db, bin_out)
+    log("wrote %s (%d chains, %.1f km), %s%s" % (
+        args.out, db["counts"]["chains"], db["counts"]["km"], path,
+        " and %s" % bin_out if bin_out else ""))
     return 0
 
 

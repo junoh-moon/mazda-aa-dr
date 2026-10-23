@@ -259,6 +259,99 @@ class BuilderTest(unittest.TestCase):
             self.assertEqual(db["source"]["tunnel_ways"], 1)
 
 
+class BinImageTest(unittest.TestCase):
+    """bin_image()/write_bin()/bin_path(): the compact little-endian
+    MX5TUN01 database read on the device by src/navigation/tunnel_map.h.
+    Synthetic coordinates only (37.0 N / 127.0 E)."""
+
+    @staticmethod
+    def _synthetic_db():
+        # Minimal dict with the keys bin_image() reads: pts as 1e-7-degree
+        # integer pairs, len_m, oneway, end. The 1-point chain is dropped;
+        # the fork chain sets flag bit1 (no past-end extrapolation).
+        return {"chains": [
+            dict(id=0, pts=[[370000000, 1270000000], [370080000, 1270000000]],
+                 len_m=800.0, oneway=True, end="portal"),
+            dict(id=1, pts=[[370100000, 1270100000], [370110000, 1270150000],
+                            [370200000, 1270200000]], len_m=1350.0, oneway=False,
+                 end="portal"),
+            dict(id=2, pts=[[370300000, 1270300000], [370340000, 1270300000]],
+                 len_m=400.0, oneway=False, end="fork"),
+            dict(id=3, pts=[[372000000, 1270300000]], len_m=0.0, oneway=False),
+        ]}
+
+    def test_image_layout(self):
+        db = self._synthetic_db()
+        img = T.bin_image(db)
+        self.assertEqual(img[:8], T.BIN_MAGIC)
+        version, nchains, npoints, pad = struct.unpack_from("<IIII", img, 8)
+        self.assertEqual((version, nchains, npoints, pad), (T.BIN_VERSION, 3, 7, 0))
+        self.assertEqual(len(img), 24 + 32 * 3 + 8 * 7)
+        first = 0
+        for i, chain in enumerate(db["chains"][:3]):
+            (rec_first, count, flags, length, lat_min, lat_max, lon_min, lon_max,
+             rec_pad) = struct.unpack_from("<IHHfffffI", img, 24 + 32 * i)
+            pts = [[p[0] / 1e7, p[1] / 1e7] for p in chain["pts"]]
+            self.assertEqual(rec_first, first)
+            self.assertEqual(count, len(pts))
+            expected_flags = (1 if chain["oneway"] else 0) | (
+                2 if chain.get("end", "portal") != "portal" else 0)
+            self.assertEqual(flags, expected_flags)
+            self.assertAlmostEqual(length, chain["len_m"], delta=1e-3)
+            self.assertAlmostEqual(lat_min, min(p[0] for p in pts), delta=1e-5)
+            self.assertAlmostEqual(lat_max, max(p[0] for p in pts), delta=1e-5)
+            self.assertAlmostEqual(lon_min, min(p[1] for p in pts), delta=1e-5)
+            self.assertAlmostEqual(lon_max, max(p[1] for p in pts), delta=1e-5)
+            self.assertEqual(rec_pad, 0)
+            first += count
+        base = 24 + 32 * 3
+        flat = [p for chain in db["chains"][:3] for p in chain["pts"]]
+        for k, p in enumerate(flat):
+            lat, lon = struct.unpack_from("<ff", img, base + 8 * k)
+            self.assertAlmostEqual(lat, p[0] / 1e7, delta=1e-5)
+            self.assertAlmostEqual(lon, p[1] / 1e7, delta=1e-5)
+
+    def test_write_bin_is_exact(self):
+        db = self._synthetic_db()
+        img = T.bin_image(db)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "tunnels-v1.bin")
+            self.assertEqual(T.write_bin(db, path), path)
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), img)
+
+    def test_bin_path(self):
+        self.assertEqual(T.bin_path("x/tunnels-v1.json.gz"), "x/tunnels-v1.bin")
+        self.assertEqual(T.bin_path("tunnels-v1.json.gz"), "tunnels-v1.bin")
+        self.assertEqual(T.bin_path("x/tunnels-v1.json"), "x/tunnels-v1.json.bin")
+
+    def test_chain_point_limit(self):
+        big = dict(chains=[dict(id=9, pts=[[370000000, 1270000000]] * 0x10000,
+                                len_m=1.0, oneway=True)])
+        self.assertRaises(ValueError, T.bin_image, big)   # > 65535 points
+
+    def test_bin_from_built_network(self):
+        net = Net()
+        net.way(1, line(0, 0, 0, 500), oneway="yes")
+        chains = T.build(net.ways, net.coords)
+        img = T.bin_image(dict(chains=chains))
+        npoints = sum(len(c["pts"]) for c in chains)
+        self.assertEqual(struct.unpack_from("<IIII", img, 8),
+                         (T.BIN_VERSION, len(chains), npoints, 0))
+        self.assertEqual(len(img), 24 + 32 * len(chains) + 8 * npoints)
+        c = chains[0]
+        (first, count, flags, length, lat_min, lat_max, lon_min, lon_max,
+         pad) = struct.unpack_from("<IHHfffffI", img, 24)
+        self.assertEqual((first, count, flags, pad), (0, len(c["pts"]), 1, 0))
+        self.assertAlmostEqual(length, c["len_m"], delta=0.5)
+        lats = [p[0] / 1e7 for p in c["pts"]]
+        lons = [p[1] / 1e7 for p in c["pts"]]
+        self.assertAlmostEqual(lat_min, min(lats), delta=1e-5)
+        self.assertAlmostEqual(lat_max, max(lats), delta=1e-5)
+        self.assertAlmostEqual(lon_min, min(lons), delta=1e-5)
+        self.assertAlmostEqual(lon_max, max(lons), delta=1e-5)
+
+
 class EvaluatorTest(unittest.TestCase):
     def test_straight_tunnel_offset_kept(self):
         net = Net()

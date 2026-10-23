@@ -52,8 +52,10 @@ Pipeline::Pipeline() : size_(0), watermark_(0), raw_epoch_(0),
     beta_streak_(false), beta_streak_mono_(0), beta_streak_utc_(0),
     reverse_exit_seen_(false), beta_reverse_suspect_(false), reverse_any_seen_(false),
     keep_latch_on_reset_(false), last_latch_clear_(LATCH_CLEAR_RESET), beta_reverse_fast_since_(0),
-    beta_record_seq_(0), beta_yaw_size_(0), beta_yaw_next_(0) {
+    beta_record_seq_(0), beta_yaw_size_(0), beta_yaw_next_(0),
+    tunnel_map_(0) {
     std::memset(beta_records_,0,sizeof beta_records_);
+    std::memset(&tunnel_,0,sizeof tunnel_);
     std::memset(&g3_,0,sizeof g3_); g3_.first_move_reverse=-1;
     std::memset(latch_clears_,0,sizeof latch_clears_);
     std::memset(af_run_,0,sizeof af_run_); std::memset(&assumption_,0,sizeof assumption_);
@@ -961,6 +963,7 @@ void Pipeline::fence_beta() {
     reset_beta(x);
 }
 void Pipeline::reset_beta(mx5_dr_context x) {
+    beta_tunnel_clear();
     beta_have_prev_=false; beta_prev_=adapter::Observation(); beta_mode_=-1; beta_core_failure_=MX5_DR_OK;
     beta_position_seq_=0; beta_conflict_since_=0; beta_rotation_rad_=0; beta_rotation_budget_m_=0;
     beta_streak_=false; beta_streak_mono_=beta_streak_utc_=0;
@@ -989,6 +992,10 @@ mx5_dr_result Pipeline::beta_control(mx5_dr_control_kind kind) {
 }
 void Pipeline::beta_step(const mx5_dr_interval& base,double rate) {
     if (!beta_enabled_||!beta_core_.seeded) return;
+    // The core's distance is unsigned and the map integration always advances
+    // forward, so a reverse must not keep the centreline constraint: fall back
+    // to the ordinary DR (which carries the reverse sign) until a new fix.
+    if (base.reverse_active==1) beta_tunnel_clear();
     // 3.4: a latched reverse while the wheels exceed 15 km/h for more than
     // 2 s contradicts the latch. Withdraw until a new accepted fix reseeds.
     if (base.reverse_active==1&&speed_.value*3.6>beta_.reverse_suspect_kmh) {
@@ -1012,6 +1019,7 @@ void Pipeline::beta_step(const mx5_dr_interval& base,double rate) {
         // 3.3: the rotation part of hb(tau) in the position budget. R at the
         // interval end bounds R(tau) inside it (R only grows).
         beta_rotation_budget_m_+=b.speed_mps*beta_.rotation_budget_per_rad*beta_rotation_rad_*dt;
+        beta_tunnel_advance();
     }
 }
 // G3 record-only observation (see G3Motion). Reads drained events only;
@@ -1459,9 +1467,128 @@ void Pipeline::beta_assume_forward(const adapter::Observation& o) {
     for (unsigned k=0;k<3;++k) assumption_.fixes[k]=af_run_[k];
     af_count_=0;
 }
+void Pipeline::beta_tunnel_clear() {
+    std::memset(&tunnel_,0,sizeof tunnel_);
+    tunnel_.active=false;
+}
+
+// Enter the map constraint for a new BETA GPS-lost episode. The anchor is the
+// BETA core's seed (the last accepted fix); the entry gates are the evaluator's
+// (tunnel_map.h). Any failure leaves the ordinary DR untouched.
+bool Pipeline::beta_tunnel_entry(const adapter::Observation& o) {
+    beta_tunnel_clear();
+    if (!tunnel_map_||!beta_core_.seeded||!beta_core_.configured) return false;
+    const mx5_dr_anchor& a=beta_core_.anchor;
+    if (!std::isfinite(a.latitude_deg)||!std::isfinite(a.longitude_deg)||
+        !std::isfinite(a.body_heading_rad)) return false;
+    // Entry speed provenance: the evaluator uses the pre-loss fix speed and its
+    // age. Use the last observation's GPS speed only when that observation is
+    // the accepted fix that seeded the core (beta_fix_ns_); otherwise the core's
+    // zero/unscaled wheel speed is the same-time source. A gate-rejected fix
+    // must not lend its speed to a different anchor.
+    double speed_kmh=beta_core_.estimate.speed_mps*3.6;
+    if (beta_have_prev_&&beta_fix_ns_&&beta_prev_.mono_ns==beta_fix_ns_&&
+        std::isfinite(beta_prev_.position.velocity_kmh))
+        speed_kmh=beta_prev_.position.velocity_kmh;
+    const double age_s=beta_fix_ns_?(double)(o.mono_ns-beta_fix_ns_)/1e9:1e9;
+    const double course_deg=a.body_heading_rad*180.0/PI;
+    TunnelMatch m;
+    if (!tunnel_map_match(tunnel_map_,a.latitude_deg,a.longitude_deg,course_deg,
+                          speed_kmh,age_s,&m)) return false;
+    tunnel_.active=true;
+    tunnel_.chain=m.chain_index;
+    tunnel_.s=m.s_m;
+    // The core's distance_m is measured from this anchor (mx5_dr_seed zeroes
+    // it), so the entry position must catch up the wheel distance already
+    // travelled between the anchor and the GPS-loss transition.
+    tunnel_.last_distance=0.0;
+    tunnel_.origin_lat=a.latitude_deg; tunnel_.origin_lon=a.longitude_deg;
+    tunnel_.east=0.0; tunnel_.north=0.0;
+    tunnel_.m_lat=tunnel_map_m_per_deg_lat(a.latitude_deg);
+    tunnel_.m_lon=tunnel_map_m_per_deg_lon(a.latitude_deg);
+    if (!(tunnel_.m_lat>1.0)||!(tunnel_.m_lon>1.0)) { beta_tunnel_clear(); return false; }
+    tunnel_.heading_deg=tunnel_map_tangent_deg(tunnel_map_,tunnel_.chain,tunnel_.s,
+                                               tunnel_.m_lat,tunnel_.m_lon);
+    // Catch-up reference: the core's heading at the transition already includes
+    // the yaw over the anchor-to-loss distance, so the tangent reference must be
+    // taken at the same caught-up point; otherwise the first advance would see a
+    // false yaw mismatch on a curved portal.
+    double d0=beta_core_.estimate.distance_m;
+    if (!std::isfinite(d0)||d0<0.0) d0=0.0;
+    tunnel_.entry_core_heading_deg=beta_core_.estimate.body_heading_rad*180.0/PI;
+    tunnel_.entry_tangent_deg=tunnel_map_tangent_deg(tunnel_map_,tunnel_.chain,
+                                                     tunnel_.s+d0,tunnel_.m_lat,tunnel_.m_lon);
+    beta_tunnel_advance();
+    return tunnel_.active;
+}
+
+// TAN step (validation/MAP_AIDED_TUNNEL_HEADING_2026-10-14.md): keep the entry
+// lateral offset, advance by the wheel distance along the chain tangent.
+void Pipeline::beta_tunnel_advance() {
+    if (!tunnel_.active) return;
+    if (!tunnel_map_||tunnel_.chain>=tunnel_map_->nchains) { beta_tunnel_clear(); return; }
+    const double d=beta_core_.estimate.distance_m;
+    if (!std::isfinite(d)||d<tunnel_.last_distance) { beta_tunnel_clear(); return; }
+    const double ds=d-tunnel_.last_distance;
+    if (ds>0.0) {
+        const double h=tunnel_map_tangent_deg(tunnel_map_,tunnel_.chain,
+                                              tunnel_.s+0.5*ds,tunnel_.m_lat,tunnel_.m_lon);
+        tunnel_.east+=ds*std::sin(h*PI/180.0);
+        tunnel_.north+=ds*std::cos(h*PI/180.0);
+        tunnel_.s+=ds; tunnel_.last_distance=d;
+        tunnel_.heading_deg=tunnel_map_tangent_deg(tunnel_map_,tunnel_.chain,tunnel_.s,
+                                                   tunnel_.m_lat,tunnel_.m_lon);
+    }
+    const double length=tunnel_map_->chains[tunnel_.chain].length_m;
+    const uint16_t flags=tunnel_map_->chains[tunnel_.chain].flags;
+    // A chain that ends at a fork/loop is not extrapolated: branch selection is
+    // not attempted, so the constraint ends at the chain end and the ordinary
+    // DR resumes (fail closed). A portal end keeps the short 150 m exit
+    // extrapolation the evaluator used.
+    if ((flags&TUNNEL_MAP_FLAG_NO_PAST_END) ? tunnel_.s>=length
+                                            : tunnel_.s>length+TUNNEL_MAP_PAST_END_M) {
+        beta_tunnel_clear(); return;
+    }
+    // Yaw-mismatch release (2026-10-14 section 2 item 4): compare the core's
+    // dead-reckoned heading change with the chain-tangent change since entry.
+    // A fixed, tighter 15 deg (no k*t growth) only falls back to the ordinary
+    // DR; it never creates a map-derived position.
+    if (tunnel_.active) {
+        const double dr=tunnel_.entry_core_heading_deg;
+        const double core_deg=beta_core_.estimate.body_heading_rad*180.0/PI;
+        double a=core_deg-dr, b=tunnel_.heading_deg-tunnel_.entry_tangent_deg;
+        a=std::fmod(a+540.0,360.0); if (a<0.0) a+=360.0; a-=180.0;
+        b=std::fmod(b+540.0,360.0); if (b<0.0) b+=360.0; b-=180.0;
+        double diff=a-b;
+        diff=std::fmod(diff+540.0,360.0); if (diff<0.0) diff+=360.0; diff-=180.0;
+        if (std::fabs(diff)>TUNNEL_MAP_YAW_RELEASE_DEG) beta_tunnel_clear();
+    }
+}
+
+// Replace the published position/heading with the centreline-constrained one.
+// The accuracy, speed and every other field stay the core's (no accuracy claim).
+void Pipeline::beta_tunnel_apply(mx5_dr_snapshot* s) const {
+    if (!tunnel_.active||!s) return;
+    const double lat=tunnel_.origin_lat+tunnel_.north/tunnel_.m_lat;
+    const double lon=tunnel_.origin_lon+tunnel_.east/tunnel_.m_lon;
+    if (!std::isfinite(lat)||!std::isfinite(lon)||
+        std::fabs(lat)>=85.0||lon<-180.0||lon>=180.0) return;
+    double hr=std::fmod(tunnel_.heading_deg*PI/180.0,2.0*PI);
+    if (hr<0.0) hr+=2.0*PI;
+    if (hr>=2.0*PI) hr=0.0;
+    s->latitude_deg=lat; s->longitude_deg=lon;
+    s->body_heading_rad=hr;
+    // Keep the core's stopped/still contract (core_bridge.cpp): a stopped or
+    // zero-speed estimate must carry no bearing and uses body_heading_rad as
+    // the held heading; a moving estimate carries the tangent as its bearing.
+    if (!(s->stopped||s->speed_mps==0.0)) {
+        s->travel_bearing_rad=hr; s->has_bearing=1;
+    }
+}
 void Pipeline::beta_position(const adapter::Observation& o) {
     if (!beta_enabled_||!beta_core_.configured) return;
     const int mode=o.position.mode;
+    if (mode!=0) beta_tunnel_clear();
     if (mode==0||mode==3) {
         if (beta_mode_!=mode) {
             bool refuse=false;
@@ -1484,6 +1611,7 @@ void Pipeline::beta_position(const adapter::Observation& o) {
                 beta_have_heading_ref_=false; beta_resync_count_=0; return;
             }
             beta_control(mode==0?MX5_DR_GAP:MX5_DR_NATIVE_POSITION);
+            if (mode==0 && beta_.unbounded && beta_.continuous_anchor) beta_tunnel_entry(o);
         }
         beta_mode_=mode; beta_have_prev_=false; beta_streak_=false;
         beta_have_heading_ref_=false; beta_resync_count_=0; return;
@@ -1832,6 +1960,7 @@ runtime::BetaModelInput Pipeline::model_publication(uint64_t now) const {
             in.lease_cap_mono_ns=min64(in.lease_cap_mono_ns,queue_[i].time-1);
         }
     }
+    if (in.result==MX5_DR_OK) beta_tunnel_apply(&in.snapshot);
     if (in.result!=MX5_DR_OK) { in.snapshot.valid=0; in.snapshot.model_valid=0; }
     in.heading_budget_rad=in.snapshot.heading_budget_rad+beta_.rotation_budget_per_rad*beta_rotation_rad_;
     in.rotation_rad=beta_rotation_rad_; in.rotation_budget_m=beta_rotation_budget_m_;

@@ -2399,6 +2399,282 @@ static void g3_taint_ends_on_every_unconfirmed_origin_loss() {
         CHECK(origin);
     }
 }
+static double metres_between(const adapter::DrSnapshot& a,const adapter::DrSnapshot& b) {
+    const double mLat=tunnel_map_m_per_deg_lat(a.latitude_deg);
+    const double mLon=tunnel_map_m_per_deg_lon(a.latitude_deg);
+    const double dy=(b.latitude_deg-a.latitude_deg)*mLat;
+    const double dx=(b.longitude_deg-a.longitude_deg)*mLon;
+    return std::sqrt(dx*dx+dy*dy);
+}
+// A fork/loop end must stop the constraint at the chain end without branch
+// selection. The chain runs 15 deg east of the entry course (inside the 20 deg
+// entry gate): a constant course offset is not a yaw release, so the car
+// reaches the fork end with a real lateral divergence and the first ordinary
+// DR publication jumps by that divergence. This test measures and bounds the
+// known mid-episode release class (review F1) instead of hiding it.
+static void tunnel_map_fork_release_jump() {
+    const double anchor_lat=fix(ANCHOR_MS).lat;
+    const double mLat=tunnel_map_m_per_deg_lat(anchor_lat);
+    const double mLon=tunnel_map_m_per_deg_lon(anchor_lat);
+    const double d15=15.0*3.14159265358979323846/180.0;
+    const double ue=std::sin(d15), un=std::cos(d15);
+    const double ne=std::cos(d15), nn=-std::sin(d15);
+    const double start_n=-58.0*un+4.0*nn, start_e=-58.0*ue+4.0*ne;
+    TunnelMapPoint pts[2];
+    pts[0].lat=float(anchor_lat+start_n/mLat); pts[0].lon=float(135.0+start_e/mLon);
+    pts[1].lat=float(anchor_lat+(start_n+200.0*un)/mLat);
+    pts[1].lon=float(135.0+(start_e+200.0*ue)/mLon);
+    TunnelMapChain ch; std::memset(&ch,0,sizeof ch);
+    ch.first=0; ch.count=2; ch.flags=TUNNEL_MAP_FLAG_NO_PAST_END; ch.length_m=200.0f;
+    ch.lat_min=pts[0].lat<pts[1].lat?pts[0].lat:pts[1].lat;
+    ch.lat_max=pts[0].lat<pts[1].lat?pts[1].lat:pts[0].lat;
+    ch.lon_min=pts[0].lon<pts[1].lon?pts[0].lon:pts[1].lon;
+    ch.lon_max=pts[0].lon<pts[1].lon?pts[1].lon:pts[0].lon;
+    TunnelMap map; std::memset(&map,0,sizeof map);
+    map.chains=&ch; map.points=pts; map.nchains=1; map.npoints=2;
+    const BetaProfile profile=runtime::beta_profile_tunnel();
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+    p.set_tunnel_map(&map);
+    Plan plan=straight(ANCHOR_MS+30000);
+    adapter::DrSnapshot prev;
+    bool have_prev=false,released=false;
+    double release_jump=-1.0;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        adapter::DrSnapshot out;
+        if(runtime::map_model_publication(q.model_publication(T(ms)),profile,&out)!=
+           runtime::CORE_BRIDGE_OK) return;
+        if(have_prev && prev.beta && q.beta_tunnel_active()==false && !released) {
+            // The first post-release publication is the ordinary DR; compare
+            // it with the last map-constrained publication.
+            released=true;
+            release_jump=metres_between(prev,out);
+        }
+        prev=out; have_prev=true;
+    };
+    run(p,plan);
+    CHECK(released);
+    CHECK(release_jump>25.0 && release_jump<50.0);
+    CHECK(!p.beta_tunnel_active());
+}
+// The yaw release is the other mid-episode exit class: unlike the fork test it
+// does not end at a chain boundary. A smoothly curving chain with an honest
+// straight core makes the tangent/core difference cross 15 deg mid-tunnel and
+// releases the constraint. The measured jump is the path divergence between
+// the curve and the straight DR; it must be a bounded, characterized value,
+// not an unmeasured blow-up.
+static void tunnel_map_yaw_release_jump() {
+    const double anchor_lat=fix(ANCHOR_MS).lat;
+    const double mLat=tunnel_map_m_per_deg_lat(anchor_lat);
+    const double mLon=tunnel_map_m_per_deg_lon(anchor_lat);
+    TunnelMapPoint pts[40];
+    int n=0;
+    // s=0 is 58 m before the anchor; the curve starts at the anchor with a
+    // due-north tangent and gains 2 deg every 10 m (30 deg by s=208).
+    double north=-58.0, east=0.0;
+    pts[n].lat=float(anchor_lat+north/mLat); pts[n].lon=float(135.0+east/mLon); ++n;
+    for(int i=0;i<=30;++i) {
+        if(i>0) {
+            const double h=(2.0*i)*3.14159265358979323846/180.0;
+            north+=10.0*std::cos(h); east+=10.0*std::sin(h);
+        }
+        pts[n].lat=float(anchor_lat+north/mLat);
+        pts[n].lon=float(135.0+east/mLon);
+        ++n;
+    }
+    TunnelMapChain ch; std::memset(&ch,0,sizeof ch);
+    ch.first=0; ch.count=uint32_t(n); ch.flags=0; ch.length_m=float(58.0+300.0);
+    ch.lat_min=ch.lat_max=pts[0].lat; ch.lon_min=ch.lon_max=pts[0].lon;
+    for(int i=1;i<n;++i) {
+        if(pts[i].lat<ch.lat_min) ch.lat_min=pts[i].lat;
+        if(pts[i].lat>ch.lat_max) ch.lat_max=pts[i].lat;
+        if(pts[i].lon<ch.lon_min) ch.lon_min=pts[i].lon;
+        if(pts[i].lon>ch.lon_max) ch.lon_max=pts[i].lon;
+    }
+    TunnelMap map; std::memset(&map,0,sizeof map);
+    map.chains=&ch; map.points=pts; map.nchains=1; map.npoints=uint32_t(n);
+    const BetaProfile profile=runtime::beta_profile_tunnel();
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+    p.set_tunnel_map(&map);
+    Plan plan=straight(ANCHOR_MS+30000);
+    adapter::DrSnapshot prev;
+    bool have_prev=false,released=false;
+    double release_jump=-1.0;
+    unsigned release_ms=0;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        adapter::DrSnapshot out;
+        if(runtime::map_model_publication(q.model_publication(T(ms)),profile,&out)!=
+           runtime::CORE_BRIDGE_OK) return;
+        if(have_prev && prev.beta && !q.beta_tunnel_active() && !released) {
+            released=true; release_ms=ms; release_jump=metres_between(prev,out);
+        }
+        prev=out; have_prev=true;
+    };
+    run(p,plan);
+    CHECK(released);
+    CHECK(release_ms>LOST_MS&&release_ms<plan.end_ms);
+    // This geometry (2 deg/10 m ramp starting before the anchor) releases at a
+    // measured ~9 m divergence, well inside the R2 one-tick scale; the 5-30 m
+    // window tolerates f32 quantization and the 100 ms wheel grid, while still
+    // failing on a runaway release. The value is a characterization of this
+    // chain, not a fleet bound.
+    CHECK(release_jump>5.0&&release_jump<30.0);
+    CHECK(!p.beta_tunnel_active());
+}
+// Two GPS-loss episodes in one boot: one or two return fixes are not enough
+// to re-seed (PREVIOUS -> COURSE -> seed, review M2); three are. The map must
+// not re-enter from a stale seed and must re-enter after a real re-seed.
+static void tunnel_map_two_episodes() {
+    const double anchor_lat=fix(ANCHOR_MS).lat;
+    const double mLat=tunnel_map_m_per_deg_lat(anchor_lat);
+    TunnelMapPoint pts[2];
+    pts[0].lat=float(anchor_lat-58.0/mLat); pts[0].lon=135.0f;
+    pts[1].lat=float(anchor_lat-58.0/mLat+394.0/mLat); pts[1].lon=135.0f;
+    TunnelMapChain ch; std::memset(&ch,0,sizeof ch);
+    ch.first=0; ch.count=2; ch.flags=0; ch.length_m=394.0f;
+    ch.lat_min=pts[0].lat; ch.lat_max=pts[1].lat; ch.lon_min=pts[0].lon; ch.lon_max=pts[1].lon;
+    TunnelMap map; std::memset(&map,0,sizeof map);
+    map.chains=&ch; map.points=pts; map.nchains=1; map.npoints=2;
+    const BetaProfile profile=runtime::beta_profile_tunnel();
+    // One return fix then a second loss: no re-entry.
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+        p.set_tunnel_map(&map);
+        Plan plan=straight(ANCHOR_MS+5000);
+        plan.fixes.push_back(fix(12620,1,36,0));
+        plan.fixes.push_back(fix(13620,0,36,0));
+        run(p,plan);
+        CHECK(!p.beta_tunnel_active());
+    }
+    // Three consecutive return fixes re-seed; the second loss re-enters and
+    // the constraint is active at the end of the plan.
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+        p.set_tunnel_map(&map);
+        Plan plan=straight(ANCHOR_MS+9000);
+        for(unsigned ms=12620;ms<=14620;ms+=1000) plan.fixes.push_back(fix(ms,1,36,0));
+        plan.fixes.push_back(fix(15620,0,36,0));
+        run(p,plan);
+        CHECK(p.beta_tunnel_active());
+    }
+}
+// Mode 3 mid-episode clears the constraint. A later loss does not re-enter:
+// the entry window is s in [-60, 150] from the chain start, and by the time the
+// car is past the mode-3 stretch it is already beyond that window. This is the
+// fail-closed behaviour (no mid-episode re-seed onto a stale anchor) and is
+// pinned here rather than left implicit.
+static void tunnel_map_mode_three() {
+    const double anchor_lat=fix(ANCHOR_MS).lat;
+    const double mLat=tunnel_map_m_per_deg_lat(anchor_lat);
+    TunnelMapPoint pts[2];
+    pts[0].lat=float(anchor_lat-58.0/mLat); pts[0].lon=135.0f;
+    pts[1].lat=float(anchor_lat-58.0/mLat+394.0/mLat); pts[1].lon=135.0f;
+    TunnelMapChain ch; std::memset(&ch,0,sizeof ch);
+    ch.first=0; ch.count=2; ch.flags=0; ch.length_m=394.0f;
+    ch.lat_min=pts[0].lat; ch.lat_max=pts[1].lat; ch.lon_min=pts[0].lon; ch.lon_max=pts[1].lon;
+    TunnelMap map; std::memset(&map,0,sizeof map);
+    map.chains=&ch; map.points=pts; map.nchains=1; map.npoints=2;
+    const BetaProfile profile=runtime::beta_profile_tunnel();
+    Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+    p.set_tunnel_map(&map);
+    Plan plan=straight(ANCHOR_MS+2500);
+    plan.fixes.push_back(fix(LOST_MS+200,3,36,0));
+    plan.fixes.push_back(fix(LOST_MS+600,0,36,0));
+    plan.fixes.push_back(fix(LOST_MS+1000,1,36,0));
+    plan.fixes.push_back(fix(LOST_MS+1300,0,36,0));
+    bool after_mode3=false,after_later_loss=false;
+    plan.each=[&](Pipeline& q,unsigned ms){
+        if(ms==LOST_MS+300) after_mode3=q.beta_tunnel_active();
+        if(ms==LOST_MS+1400) after_later_loss=q.beta_tunnel_active();
+    };
+    run(p,plan);
+    CHECK(!after_mode3);
+    CHECK(!after_later_loss);
+}
+static void tunnel_map_constraint_lifecycle() {
+    // One synthetic OSM-style chain, ~394 m, bearing ~9 deg east of north.
+    // The anchor (35.001025, 135.0) projects 58 m in with 4 m lateral, so the
+    // entry gates pass; the tangent differs from the northbound DR heading.
+    TunnelMapPoint pts[2];
+    pts[0].lat=35.0005f; pts[0].lon=134.99995f;
+    pts[1].lat=35.0040f; pts[1].lon=135.00060f;
+    TunnelMapChain ch;
+    std::memset(&ch,0,sizeof ch);
+    ch.first=0; ch.count=2; ch.flags=0;
+    const double north=(35.0040-35.0005)*111320.0;
+    const double east=(135.00060-134.99995)*111320.0*std::cos(35.0*3.14159265358979323846/180.0);
+    ch.length_m=float(std::sqrt(north*north+east*east));
+    ch.lat_min=35.0005f; ch.lat_max=35.0040f;
+    ch.lon_min=134.99995f; ch.lon_max=135.00060f;
+    TunnelMap map;
+    std::memset(&map,0,sizeof map);
+    map.chains=&ch; map.points=pts; map.nchains=1; map.npoints=2;
+    const BetaProfile profile=runtime::beta_profile_tunnel();
+    // Entry, moving publish: the bearing is the chain tangent, not the DR's
+    // north. The map constraint is active only inside the GPS-lost episode.
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+        p.set_tunnel_map(&map);
+        Plan plan=straight(ANCHOR_MS+2000);
+        run(p,plan);
+        CHECK(p.beta_tunnel_active());
+        adapter::DrSnapshot out;
+        const runtime::CoreBridgeResult br=
+            runtime::map_model_publication(p.model_publication(T(plan.end_ms)),profile,&out);
+        CHECK(br==runtime::CORE_BRIDGE_OK);
+        CHECK(out.travel_bearing_deg>5.0 && out.travel_bearing_deg<15.0);
+    }
+    // Stopped in a tunnel: the core's stopped contract (no has_bearing) must
+    // survive the map override; the old forced has_bearing=1 made
+    // map_model_publication return CORE_BRIDGE_BEARING and withdrew the
+    // episode.
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+        p.set_tunnel_map(&map);
+        Plan plan=straight(ANCHOR_MS+5000);
+        plan.wheel=[](unsigned ms){return ms<LOST_MS+300?36.0:0.0;};
+        run(p,plan);
+        CHECK(p.beta_tunnel_active());
+        adapter::DrSnapshot out;
+        CHECK(runtime::map_model_publication(p.model_publication(T(plan.end_ms)),profile,&out)==
+              runtime::CORE_BRIDGE_OK);
+        CHECK(out.speed_mps==0.0);
+    }
+    // Reverse clears the constraint (the core distance is unsigned).
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+        p.set_tunnel_map(&map);
+        Plan plan=straight(ANCHOR_MS+2000);
+        plan.reverse.push_back(std::make_pair(12000u,1));
+        run(p,plan);
+        CHECK(!p.beta_tunnel_active());
+    }
+    // A GPS return (mode 1) clears it.
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+        p.set_tunnel_map(&map);
+        Plan plan=straight(ANCHOR_MS+2000);
+        plan.fixes.push_back(fix(LOST_MS+500,1,36,0));
+        run(p,plan);
+        CHECK(!p.beta_tunnel_active());
+    }
+    // The cadence fence clears it.
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+        p.set_tunnel_map(&map);
+        Plan plan=straight(ANCHOR_MS+500);
+        run(p,plan);
+        CHECK(p.beta_tunnel_active());
+        p.fence_beta();
+        CHECK(!p.beta_tunnel_active());
+    }
+    // Without a map there is no entry (fail closed to the ordinary DR).
+    {
+        Pipeline p; init(p,true,false); CHECK(p.enable_beta(profile));
+        Plan plan=straight(ANCHOR_MS+500);
+        run(p,plan);
+        CHECK(!p.beta_tunnel_active());
+    }
+}
 int main() {
     beta_location_bearing_normalised();
     tunnel_zero_wheel_yaw_holds_heading();
@@ -2458,6 +2734,11 @@ int main() {
     yaw_rail_saturation_while_driving_keeps_the_chain();
     yaw_rail_parked_window_is_a_hold();
     yaw_rail_policy_off_is_beta12();
+    tunnel_map_constraint_lifecycle();
+    tunnel_map_fork_release_jump();
+    tunnel_map_yaw_release_jump();
+    tunnel_map_two_episodes();
+    tunnel_map_mode_three();
     std::printf("beta tests passed (%u checks)\n",checks);
     return 0;
 }
