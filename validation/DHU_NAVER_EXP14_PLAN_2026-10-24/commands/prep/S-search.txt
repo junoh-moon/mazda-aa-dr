@@ -1,0 +1,5 @@
+location 37.5280498 126.8964879 1 NAN 0 121.4
+sleep 1
+tap 600 44
+sleep 2
+screenshot ../../../../experiment10/@TAG@-prep-search.png

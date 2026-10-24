@@ -1,0 +1,1341 @@
+{
+ "question": "Screen effect of (A) a carried heading published on the first valid fixes and (B) a single-fix position jump at the end of tunnel replacement: what does Naver draw, and for how long?",
+ "geometry": {
+  "source": "exp13 geometry/route-seoul.json (ODbL), not copied",
+  "fork": [
+   37.5246001,
+   126.91233
+  ],
+  "origin_before_fork_m": 1500.0,
+  "origin": [
+   37.5280498,
+   126.8964879
+  ],
+  "origin_bearing_deg": 121.4,
+  "a_end_from_fork_m": -876.0,
+  "b_end_from_fork_m": -320.0,
+  "destinations": [
+   "노량진수산시장",
+   "노량진역",
+   "반포한강공원"
+  ]
+ },
+ "timeline": {
+  "A": {
+   "duration_s": 60,
+   "still_s": 8,
+   "carry_s": 40,
+   "true_s": 12,
+   "speed_mps": 12.0,
+   "accuracy_valid_m": 1.0,
+   "bearing": "true + DELTA while carrying, true afterwards"
+  },
+  "B": {
+   "duration_s": 60,
+   "plain_s": 10,
+   "tunnel_s": 35,
+   "after_s": 15,
+   "speed_mps": 20.0,
+   "accuracy_tunnel_m": 25.0,
+   "accuracy_plain_m": 1.0,
+   "transition_t": 45,
+   "jump": "the transition fix and every later fix are shifted JUMP m along the line"
+  }
+ },
+ "prep": {
+  "files": "byte copies of exp13 commands/prep (same origin)",
+  "list": [
+   "S-search",
+   "S-route-y130",
+   "S-route-y225",
+   "S-route-y318",
+   "S-route-retry",
+   "S-gate",
+   "S-gate-nopopup",
+   "S-start",
+   "search-again",
+   "end-guidance"
+  ],
+  "tier0": "T0-E14.txt (exp13 T0-S13 retagged)",
+  "placeholder": "@TAG@ in screenshot lines only"
+ },
+ "tier0_min": {
+  "1": 7.0,
+  "2": 8.0
+ },
+ "sessions": {
+  "1": [
+   "G0-r1",
+   "G37-r1",
+   "G84-r1",
+   "G171-r1"
+  ],
+  "2": [
+   "J0-r1",
+   "J15-r1",
+   "J37-r1",
+   "J113-r1"
+  ]
+ },
+ "required": {
+  "1": [
+   "G0-r1",
+   "G37-r1"
+  ],
+  "2": [
+   "J0-r1",
+   "J15-r1"
+  ]
+ },
+ "budget_min": 25,
+ "env_min": 2.0,
+ "run_min": 2.5,
+ "cumulative_estimate_min": {
+  "G0-r1": 11.5,
+  "G37-r1": 14.0,
+  "G84-r1": 16.5,
+  "G171-r1": 19.0,
+  "J0-r1": 12.5,
+  "J15-r1": 15.0,
+  "J37-r1": 17.5,
+  "J113-r1": 20.0
+ },
+ "runs": {
+  "G0-r1": {
+   "tag": "G0-r1",
+   "session": 1,
+   "question": "control: the bearing field equals the true road bearing",
+   "duration_s": 60,
+   "frames": [
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 121.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 0,
+     "screenshot": "G0-r1-000.png"
+    },
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 121.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 3,
+     "screenshot": "G0-r1-003.png"
+    },
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 121.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 7,
+     "screenshot": "G0-r1-007.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 121.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": 0.0,
+     "from_fork_m": -1500.0,
+     "t": 8,
+     "screenshot": "G0-r1-008.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 121.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": 0.0,
+     "from_fork_m": -1488.0,
+     "t": 9,
+     "screenshot": "G0-r1-009.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 120.7,
+     "road_bearing_deg": 120.7,
+     "delta_deg": 0.0,
+     "from_fork_m": -1416.0,
+     "t": 15,
+     "screenshot": "G0-r1-015.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 108.8,
+     "road_bearing_deg": 108.8,
+     "delta_deg": 0.0,
+     "from_fork_m": -1236.0,
+     "t": 30,
+     "screenshot": "G0-r1-030.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": 0.0,
+     "from_fork_m": -1032.0,
+     "t": 47,
+     "screenshot": "G0-r1-047.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": 0.0,
+     "from_fork_m": -1020.0,
+     "t": 48,
+     "screenshot": "G0-r1-048.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": 0.0,
+     "from_fork_m": -996.0,
+     "t": 50,
+     "screenshot": "G0-r1-050.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 108.6,
+     "road_bearing_deg": 108.6,
+     "delta_deg": 0.0,
+     "from_fork_m": -936.0,
+     "t": 55,
+     "screenshot": "G0-r1-055.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 110.5,
+     "road_bearing_deg": 110.5,
+     "delta_deg": 0.0,
+     "from_fork_m": -888.0,
+     "t": 59,
+     "screenshot": "G0-r1-059.png"
+    }
+   ],
+   "family": "A (bearing)",
+   "delta_deg": 0.0,
+   "still_t": [
+    0,
+    7
+   ],
+   "carry_t": [
+    8,
+    47
+   ],
+   "true_t": [
+    48,
+    59
+   ]
+  },
+  "G37-r1": {
+   "tag": "G37-r1",
+   "session": 1,
+   "question": "E-Mart 2026-10-17: carried 6.7 deg where stock had 43.3 deg",
+   "duration_s": 60,
+   "frames": [
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 84.8,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 0,
+     "screenshot": "G37-r1-000.png"
+    },
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 84.8,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 3,
+     "screenshot": "G37-r1-003.png"
+    },
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 84.8,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 7,
+     "screenshot": "G37-r1-007.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 84.8,
+     "road_bearing_deg": 121.4,
+     "delta_deg": -36.6,
+     "from_fork_m": -1500.0,
+     "t": 8,
+     "screenshot": "G37-r1-008.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 84.8,
+     "road_bearing_deg": 121.4,
+     "delta_deg": -36.6,
+     "from_fork_m": -1488.0,
+     "t": 9,
+     "screenshot": "G37-r1-009.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 84.1,
+     "road_bearing_deg": 120.7,
+     "delta_deg": -36.6,
+     "from_fork_m": -1416.0,
+     "t": 15,
+     "screenshot": "G37-r1-015.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 72.2,
+     "road_bearing_deg": 108.8,
+     "delta_deg": -36.6,
+     "from_fork_m": -1236.0,
+     "t": 30,
+     "screenshot": "G37-r1-030.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 73.0,
+     "road_bearing_deg": 109.6,
+     "delta_deg": -36.6,
+     "from_fork_m": -1032.0,
+     "t": 47,
+     "screenshot": "G37-r1-047.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": -36.6,
+     "from_fork_m": -1020.0,
+     "t": 48,
+     "screenshot": "G37-r1-048.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": -36.6,
+     "from_fork_m": -996.0,
+     "t": 50,
+     "screenshot": "G37-r1-050.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 108.6,
+     "road_bearing_deg": 108.6,
+     "delta_deg": -36.6,
+     "from_fork_m": -936.0,
+     "t": 55,
+     "screenshot": "G37-r1-055.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 110.5,
+     "road_bearing_deg": 110.5,
+     "delta_deg": -36.6,
+     "from_fork_m": -888.0,
+     "t": 59,
+     "screenshot": "G37-r1-059.png"
+    }
+   ],
+   "family": "A (bearing)",
+   "delta_deg": -36.6,
+   "still_t": [
+    0,
+    7
+   ],
+   "carry_t": [
+    8,
+    47
+   ],
+   "true_t": [
+    48,
+    59
+   ]
+  },
+  "G84-r1": {
+   "tag": "G84-r1",
+   "session": 1,
+   "question": "home spiral 2026-10-10/11: carried -34.3 deg where stock had 49.9 deg",
+   "duration_s": 60,
+   "frames": [
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 37.2,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 0,
+     "screenshot": "G84-r1-000.png"
+    },
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 37.2,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 3,
+     "screenshot": "G84-r1-003.png"
+    },
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 37.2,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 7,
+     "screenshot": "G84-r1-007.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 37.2,
+     "road_bearing_deg": 121.4,
+     "delta_deg": -84.2,
+     "from_fork_m": -1500.0,
+     "t": 8,
+     "screenshot": "G84-r1-008.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 37.2,
+     "road_bearing_deg": 121.4,
+     "delta_deg": -84.2,
+     "from_fork_m": -1488.0,
+     "t": 9,
+     "screenshot": "G84-r1-009.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 36.5,
+     "road_bearing_deg": 120.7,
+     "delta_deg": -84.2,
+     "from_fork_m": -1416.0,
+     "t": 15,
+     "screenshot": "G84-r1-015.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 24.6,
+     "road_bearing_deg": 108.8,
+     "delta_deg": -84.2,
+     "from_fork_m": -1236.0,
+     "t": 30,
+     "screenshot": "G84-r1-030.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 25.4,
+     "road_bearing_deg": 109.6,
+     "delta_deg": -84.2,
+     "from_fork_m": -1032.0,
+     "t": 47,
+     "screenshot": "G84-r1-047.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": -84.2,
+     "from_fork_m": -1020.0,
+     "t": 48,
+     "screenshot": "G84-r1-048.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": -84.2,
+     "from_fork_m": -996.0,
+     "t": 50,
+     "screenshot": "G84-r1-050.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 108.6,
+     "road_bearing_deg": 108.6,
+     "delta_deg": -84.2,
+     "from_fork_m": -936.0,
+     "t": 55,
+     "screenshot": "G84-r1-055.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 110.5,
+     "road_bearing_deg": 110.5,
+     "delta_deg": -84.2,
+     "from_fork_m": -888.0,
+     "t": 59,
+     "screenshot": "G84-r1-059.png"
+    }
+   ],
+   "family": "A (bearing)",
+   "delta_deg": -84.2,
+   "still_t": [
+    0,
+    7
+   ],
+   "carry_t": [
+    8,
+    47
+   ],
+   "true_t": [
+    48,
+    59
+   ]
+  },
+  "G171-r1": {
+   "tag": "G171-r1",
+   "session": 1,
+   "question": "the largest carried-vs-stock divergence in the 2026-10-10/11 export",
+   "duration_s": 60,
+   "frames": [
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 292.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 0,
+     "screenshot": "G171-r1-000.png"
+    },
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 292.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 3,
+     "screenshot": "G171-r1-003.png"
+    },
+    {
+     "phase": "still",
+     "accuracy_m": null,
+     "speed_sent_mps": 0.0,
+     "bearing_sent_deg": 292.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": null,
+     "from_fork_m": -1500.0,
+     "t": 7,
+     "screenshot": "G171-r1-007.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 292.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": 171.0,
+     "from_fork_m": -1500.0,
+     "t": 8,
+     "screenshot": "G171-r1-008.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 292.4,
+     "road_bearing_deg": 121.4,
+     "delta_deg": 171.0,
+     "from_fork_m": -1488.0,
+     "t": 9,
+     "screenshot": "G171-r1-009.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 291.7,
+     "road_bearing_deg": 120.7,
+     "delta_deg": 171.0,
+     "from_fork_m": -1416.0,
+     "t": 15,
+     "screenshot": "G171-r1-015.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 279.8,
+     "road_bearing_deg": 108.8,
+     "delta_deg": 171.0,
+     "from_fork_m": -1236.0,
+     "t": 30,
+     "screenshot": "G171-r1-030.png"
+    },
+    {
+     "phase": "carry",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 280.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": 171.0,
+     "from_fork_m": -1032.0,
+     "t": 47,
+     "screenshot": "G171-r1-047.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": 171.0,
+     "from_fork_m": -1020.0,
+     "t": 48,
+     "screenshot": "G171-r1-048.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 109.6,
+     "road_bearing_deg": 109.6,
+     "delta_deg": 171.0,
+     "from_fork_m": -996.0,
+     "t": 50,
+     "screenshot": "G171-r1-050.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 108.6,
+     "road_bearing_deg": 108.6,
+     "delta_deg": 171.0,
+     "from_fork_m": -936.0,
+     "t": 55,
+     "screenshot": "G171-r1-055.png"
+    },
+    {
+     "phase": "true",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 12.0,
+     "bearing_sent_deg": 110.5,
+     "road_bearing_deg": 110.5,
+     "delta_deg": 171.0,
+     "from_fork_m": -888.0,
+     "t": 59,
+     "screenshot": "G171-r1-059.png"
+    }
+   ],
+   "family": "A (bearing)",
+   "delta_deg": 171.0,
+   "still_t": [
+    0,
+    7
+   ],
+   "carry_t": [
+    8,
+    47
+   ],
+   "true_t": [
+    48,
+    59
+   ]
+  },
+  "J0-r1": {
+   "tag": "J0-r1",
+   "session": 2,
+   "question": "control: no jump, the fix stays on the true position",
+   "duration_s": 60,
+   "frames": [
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 121.4,
+     "from_fork_m": -1500.0,
+     "from_fork_true_m": -1500.0,
+     "jump_m": 0.0,
+     "t": 0,
+     "screenshot": "J0-r1-000.png"
+    },
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 120.7,
+     "from_fork_m": -1400.0,
+     "from_fork_true_m": -1400.0,
+     "jump_m": 0.0,
+     "t": 5,
+     "screenshot": "J0-r1-005.png"
+    },
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.0,
+     "from_fork_m": -1320.0,
+     "from_fork_true_m": -1320.0,
+     "jump_m": 0.0,
+     "t": 9,
+     "screenshot": "J0-r1-009.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.0,
+     "from_fork_m": -1300.0,
+     "from_fork_true_m": -1300.0,
+     "jump_m": 0.0,
+     "t": 10,
+     "screenshot": "J0-r1-010.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.6,
+     "from_fork_m": -1100.0,
+     "from_fork_true_m": -1100.0,
+     "jump_m": 0.0,
+     "t": 20,
+     "screenshot": "J0-r1-020.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 110.5,
+     "from_fork_m": -900.0,
+     "from_fork_true_m": -900.0,
+     "jump_m": 0.0,
+     "t": 30,
+     "screenshot": "J0-r1-030.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 97.0,
+     "from_fork_m": -620.0,
+     "from_fork_true_m": -620.0,
+     "jump_m": 0.0,
+     "t": 44,
+     "screenshot": "J0-r1-044.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 97.0,
+     "from_fork_m": -600.0,
+     "from_fork_true_m": -600.0,
+     "jump_m": 0.0,
+     "t": 45,
+     "screenshot": "J0-r1-045.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 98.4,
+     "from_fork_m": -580.0,
+     "from_fork_true_m": -580.0,
+     "jump_m": 0.0,
+     "t": 46,
+     "screenshot": "J0-r1-046.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 98.4,
+     "from_fork_m": -540.0,
+     "from_fork_true_m": -540.0,
+     "jump_m": 0.0,
+     "t": 48,
+     "screenshot": "J0-r1-048.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 100.5,
+     "from_fork_m": -460.0,
+     "from_fork_true_m": -460.0,
+     "jump_m": 0.0,
+     "t": 52,
+     "screenshot": "J0-r1-052.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 85.4,
+     "from_fork_m": -320.0,
+     "from_fork_true_m": -320.0,
+     "jump_m": 0.0,
+     "t": 59,
+     "screenshot": "J0-r1-059.png"
+    }
+   ],
+   "family": "B (jump)",
+   "jump_m": 0.0,
+   "plain_t": [
+    0,
+    9
+   ],
+   "tunnel_t": [
+    10,
+    44
+   ],
+   "transition_t": 45,
+   "after_t": [
+    45,
+    59
+   ]
+  },
+  "J15-r1": {
+   "tag": "J15-r1",
+   "session": 2,
+   "question": "53 s tunnel: the measured 15.0 m portal jump (TAN 29.5 m vs ordinary 24.2 m)",
+   "duration_s": 60,
+   "frames": [
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 121.4,
+     "from_fork_m": -1500.0,
+     "from_fork_true_m": -1500.0,
+     "jump_m": 0.0,
+     "t": 0,
+     "screenshot": "J15-r1-000.png"
+    },
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 120.7,
+     "from_fork_m": -1400.0,
+     "from_fork_true_m": -1400.0,
+     "jump_m": 0.0,
+     "t": 5,
+     "screenshot": "J15-r1-005.png"
+    },
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.0,
+     "from_fork_m": -1320.0,
+     "from_fork_true_m": -1320.0,
+     "jump_m": 0.0,
+     "t": 9,
+     "screenshot": "J15-r1-009.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.0,
+     "from_fork_m": -1300.0,
+     "from_fork_true_m": -1300.0,
+     "jump_m": 0.0,
+     "t": 10,
+     "screenshot": "J15-r1-010.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.6,
+     "from_fork_m": -1100.0,
+     "from_fork_true_m": -1100.0,
+     "jump_m": 0.0,
+     "t": 20,
+     "screenshot": "J15-r1-020.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 110.5,
+     "from_fork_m": -900.0,
+     "from_fork_true_m": -900.0,
+     "jump_m": 0.0,
+     "t": 30,
+     "screenshot": "J15-r1-030.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 97.0,
+     "from_fork_m": -620.0,
+     "from_fork_true_m": -620.0,
+     "jump_m": 0.0,
+     "t": 44,
+     "screenshot": "J15-r1-044.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 98.4,
+     "from_fork_m": -585.0,
+     "from_fork_true_m": -600.0,
+     "jump_m": 15.0,
+     "t": 45,
+     "screenshot": "J15-r1-045.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 98.4,
+     "from_fork_m": -565.0,
+     "from_fork_true_m": -580.0,
+     "jump_m": 15.0,
+     "t": 46,
+     "screenshot": "J15-r1-046.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 98.4,
+     "from_fork_m": -525.0,
+     "from_fork_true_m": -540.0,
+     "jump_m": 15.0,
+     "t": 48,
+     "screenshot": "J15-r1-048.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 97.7,
+     "from_fork_m": -445.0,
+     "from_fork_true_m": -460.0,
+     "jump_m": 15.0,
+     "t": 52,
+     "screenshot": "J15-r1-052.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 85.4,
+     "from_fork_m": -305.0,
+     "from_fork_true_m": -320.0,
+     "jump_m": 15.0,
+     "t": 59,
+     "screenshot": "J15-r1-059.png"
+    }
+   ],
+   "family": "B (jump)",
+   "jump_m": 15.0,
+   "plain_t": [
+    0,
+    9
+   ],
+   "tunnel_t": [
+    10,
+    44
+   ],
+   "transition_t": 45,
+   "after_t": [
+    45,
+    59
+   ]
+  },
+  "J37-r1": {
+   "tag": "J37-r1",
+   "session": 2,
+   "question": "fork mid-release: the ~36.8 m jump measured on a synthetic chain",
+   "duration_s": 60,
+   "frames": [
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 121.4,
+     "from_fork_m": -1500.0,
+     "from_fork_true_m": -1500.0,
+     "jump_m": 0.0,
+     "t": 0,
+     "screenshot": "J37-r1-000.png"
+    },
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 120.7,
+     "from_fork_m": -1400.0,
+     "from_fork_true_m": -1400.0,
+     "jump_m": 0.0,
+     "t": 5,
+     "screenshot": "J37-r1-005.png"
+    },
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.0,
+     "from_fork_m": -1320.0,
+     "from_fork_true_m": -1320.0,
+     "jump_m": 0.0,
+     "t": 9,
+     "screenshot": "J37-r1-009.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.0,
+     "from_fork_m": -1300.0,
+     "from_fork_true_m": -1300.0,
+     "jump_m": 0.0,
+     "t": 10,
+     "screenshot": "J37-r1-010.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.6,
+     "from_fork_m": -1100.0,
+     "from_fork_true_m": -1100.0,
+     "jump_m": 0.0,
+     "t": 20,
+     "screenshot": "J37-r1-020.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 110.5,
+     "from_fork_m": -900.0,
+     "from_fork_true_m": -900.0,
+     "jump_m": 0.0,
+     "t": 30,
+     "screenshot": "J37-r1-030.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 97.0,
+     "from_fork_m": -620.0,
+     "from_fork_true_m": -620.0,
+     "jump_m": 0.0,
+     "t": 44,
+     "screenshot": "J37-r1-044.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 98.4,
+     "from_fork_m": -563.2,
+     "from_fork_true_m": -600.0,
+     "jump_m": 36.8,
+     "t": 45,
+     "screenshot": "J37-r1-045.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 98.4,
+     "from_fork_m": -543.2,
+     "from_fork_true_m": -580.0,
+     "jump_m": 36.8,
+     "t": 46,
+     "screenshot": "J37-r1-046.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 100.5,
+     "from_fork_m": -503.2,
+     "from_fork_true_m": -540.0,
+     "jump_m": 36.8,
+     "t": 48,
+     "screenshot": "J37-r1-048.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 97.7,
+     "from_fork_m": -423.2,
+     "from_fork_true_m": -460.0,
+     "jump_m": 36.8,
+     "t": 52,
+     "screenshot": "J37-r1-052.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 66.2,
+     "from_fork_m": -283.2,
+     "from_fork_true_m": -320.0,
+     "jump_m": 36.8,
+     "t": 59,
+     "screenshot": "J37-r1-059.png"
+    }
+   ],
+   "family": "B (jump)",
+   "jump_m": 36.8,
+   "plain_t": [
+    0,
+    9
+   ],
+   "tunnel_t": [
+    10,
+    44
+   ],
+   "transition_t": 45,
+   "after_t": [
+    45,
+    59
+   ]
+  },
+  "J113-r1": {
+   "tag": "J113-r1",
+   "session": 2,
+   "question": "111 s case with a blanket chain-end release: the 113.3 m jump",
+   "duration_s": 60,
+   "frames": [
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 121.4,
+     "from_fork_m": -1500.0,
+     "from_fork_true_m": -1500.0,
+     "jump_m": 0.0,
+     "t": 0,
+     "screenshot": "J113-r1-000.png"
+    },
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 120.7,
+     "from_fork_m": -1400.0,
+     "from_fork_true_m": -1400.0,
+     "jump_m": 0.0,
+     "t": 5,
+     "screenshot": "J113-r1-005.png"
+    },
+    {
+     "phase": "plain",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.0,
+     "from_fork_m": -1320.0,
+     "from_fork_true_m": -1320.0,
+     "jump_m": 0.0,
+     "t": 9,
+     "screenshot": "J113-r1-009.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.0,
+     "from_fork_m": -1300.0,
+     "from_fork_true_m": -1300.0,
+     "jump_m": 0.0,
+     "t": 10,
+     "screenshot": "J113-r1-010.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 109.6,
+     "from_fork_m": -1100.0,
+     "from_fork_true_m": -1100.0,
+     "jump_m": 0.0,
+     "t": 20,
+     "screenshot": "J113-r1-020.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 110.5,
+     "from_fork_m": -900.0,
+     "from_fork_true_m": -900.0,
+     "jump_m": 0.0,
+     "t": 30,
+     "screenshot": "J113-r1-030.png"
+    },
+    {
+     "phase": "tunnel",
+     "accuracy_m": 25.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 97.0,
+     "from_fork_m": -620.0,
+     "from_fork_true_m": -620.0,
+     "jump_m": 0.0,
+     "t": 44,
+     "screenshot": "J113-r1-044.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 100.5,
+     "from_fork_m": -486.7,
+     "from_fork_true_m": -600.0,
+     "jump_m": 113.3,
+     "t": 45,
+     "screenshot": "J113-r1-045.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 100.5,
+     "from_fork_m": -466.7,
+     "from_fork_true_m": -580.0,
+     "jump_m": 113.3,
+     "t": 46,
+     "screenshot": "J113-r1-046.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 97.7,
+     "from_fork_m": -426.7,
+     "from_fork_true_m": -540.0,
+     "jump_m": 113.3,
+     "t": 48,
+     "screenshot": "J113-r1-048.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 93.8,
+     "from_fork_m": -346.7,
+     "from_fork_true_m": -460.0,
+     "jump_m": 113.3,
+     "t": 52,
+     "screenshot": "J113-r1-052.png"
+    },
+    {
+     "phase": "after",
+     "accuracy_m": 1.0,
+     "speed_sent_mps": 20.0,
+     "bearing_sent_deg": 72.9,
+     "from_fork_m": -206.7,
+     "from_fork_true_m": -320.0,
+     "jump_m": 113.3,
+     "t": 59,
+     "screenshot": "J113-r1-059.png"
+    }
+   ],
+   "family": "B (jump)",
+   "jump_m": 113.3,
+   "plain_t": [
+    0,
+    9
+   ],
+   "tunnel_t": [
+    10,
+    44
+   ],
+   "transition_t": 45,
+   "after_t": [
+    45,
+    59
+   ]
+  }
+ }
+}

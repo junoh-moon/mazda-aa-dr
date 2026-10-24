@@ -1,0 +1,3 @@
+tap 600 44
+sleep 2
+screenshot ../../../../experiment10/@TAG@-prep-search-2.png

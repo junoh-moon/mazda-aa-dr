@@ -1,0 +1,144 @@
+location 37.5280498 126.8964879 NAN NAN 0.000 292.4
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-000.png
+sleep 0.8
+location 37.5280498 126.8964879 NAN NAN 0.000 292.4
+sleep 1
+location 37.5280498 126.8964879 NAN NAN 0.000 292.4
+sleep 1
+location 37.5280498 126.8964879 NAN NAN 0.000 292.4
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-003.png
+sleep 0.8
+location 37.5280498 126.8964879 NAN NAN 0.000 292.4
+sleep 1
+location 37.5280498 126.8964879 NAN NAN 0.000 292.4
+sleep 1
+location 37.5280498 126.8964879 NAN NAN 0.000 292.4
+sleep 1
+location 37.5280498 126.8964879 NAN NAN 0.000 292.4
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-007.png
+sleep 0.8
+location 37.5280498 126.8964879 1.000 NAN 12.000 292.4
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-008.png
+sleep 0.8
+location 37.5279935 126.8966040 1.000 NAN 12.000 292.4
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-009.png
+sleep 0.8
+location 37.5279372 126.8967201 1.000 NAN 12.000 292.4
+sleep 1
+location 37.5278821 126.8968371 1.000 NAN 12.000 291.7
+sleep 1
+location 37.5278271 126.8969541 1.000 NAN 12.000 291.7
+sleep 1
+location 37.5277720 126.8970712 1.000 NAN 12.000 291.7
+sleep 1
+location 37.5277170 126.8971883 1.000 NAN 12.000 291.7
+sleep 1
+location 37.5276620 126.8973053 1.000 NAN 12.000 291.7
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-015.png
+sleep 0.8
+location 37.5276070 126.8974224 1.000 NAN 12.000 291.7
+sleep 1
+location 37.5275520 126.8975395 1.000 NAN 12.000 291.7
+sleep 1
+location 37.5275112 126.8976654 1.000 NAN 12.000 282.9
+sleep 1
+location 37.5274710 126.8977917 1.000 NAN 12.000 282.9
+sleep 1
+location 37.5274308 126.8979180 1.000 NAN 12.000 282.9
+sleep 1
+location 37.5273905 126.8980442 1.000 NAN 12.000 282.9
+sleep 1
+location 37.5273519 126.8981713 1.000 NAN 12.000 280.0
+sleep 1
+location 37.5273168 126.8982999 1.000 NAN 12.000 280.0
+sleep 1
+location 37.5272817 126.8984286 1.000 NAN 12.000 280.0
+sleep 1
+location 37.5272466 126.8985573 1.000 NAN 12.000 280.0
+sleep 1
+location 37.5272115 126.8986860 1.000 NAN 12.000 280.0
+sleep 1
+location 37.5271764 126.8988146 1.000 NAN 12.000 280.0
+sleep 1
+location 37.5271413 126.8989433 1.000 NAN 12.000 280.0
+sleep 1
+location 37.5271064 126.8990721 1.000 NAN 12.000 279.8
+sleep 1
+location 37.5270715 126.8992008 1.000 NAN 12.000 279.8
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-030.png
+sleep 0.8
+location 37.5270366 126.8993296 1.000 NAN 12.000 279.8
+sleep 1
+location 37.5270018 126.8994584 1.000 NAN 12.000 279.8
+sleep 1
+location 37.5269669 126.8995872 1.000 NAN 12.000 279.8
+sleep 1
+location 37.5269320 126.8997160 1.000 NAN 12.000 279.8
+sleep 1
+location 37.5268971 126.8998447 1.000 NAN 12.000 279.8
+sleep 1
+location 37.5268623 126.8999735 1.000 NAN 12.000 279.8
+sleep 1
+location 37.5268274 126.9001023 1.000 NAN 12.000 279.8
+sleep 1
+location 37.5267921 126.9002309 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5267559 126.9003591 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5267197 126.9004873 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5266836 126.9006155 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5266474 126.9007437 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5266112 126.9008719 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5265751 126.9010001 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5265389 126.9011283 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5265027 126.9012565 1.000 NAN 12.000 280.6
+sleep 1
+location 37.5264666 126.9013847 1.000 NAN 12.000 280.6
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-047.png
+sleep 0.8
+location 37.5264304 126.9015130 1.000 NAN 12.000 109.6
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-048.png
+sleep 0.8
+location 37.5263942 126.9016412 1.000 NAN 12.000 109.6
+sleep 1
+location 37.5263580 126.9017693 1.000 NAN 12.000 109.6
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-050.png
+sleep 0.8
+location 37.5263235 126.9018983 1.000 NAN 12.000 108.6
+sleep 1
+location 37.5262891 126.9020272 1.000 NAN 12.000 108.6
+sleep 1
+location 37.5262547 126.9021562 1.000 NAN 12.000 108.6
+sleep 1
+location 37.5262203 126.9022852 1.000 NAN 12.000 108.6
+sleep 1
+location 37.5261859 126.9024142 1.000 NAN 12.000 108.6
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-055.png
+sleep 0.8
+location 37.5261515 126.9025431 1.000 NAN 12.000 108.6
+sleep 1
+location 37.5261171 126.9026721 1.000 NAN 12.000 108.6
+sleep 1
+location 37.5260793 126.9027996 1.000 NAN 12.000 110.5
+sleep 1
+location 37.5260415 126.9029270 1.000 NAN 12.000 110.5
+sleep 0.2
+screenshot ../../../../experiment14/G171-r1-059.png
+sleep 0.8
