@@ -52,6 +52,13 @@
 //    the latch says reverse or becomes not valid after lost information.
 //    Residual: a car in reverse since before the product started (its
 //    0x118 change before the product ran) that reverses more than 20 m.
+//  * Garage NO_FIX: the same restored window may add its bearing to an
+//    independently valid wheel-speed overlay before this boot has any GPS
+//    fix. This uses a separate adapter slot/gate, never the speed slot. The
+//    older of the actual wheel/yaw timestamps leases it for at most 250 ms.
+//    The 60 s cap still starts at a moving FIX; NO_FIX is bounded by the
+//    existing 900 s window, uncertainty and continuity/fault gates. First-FIX
+//    age/position checks cannot protect sends before that first FIX.
 // MODEL evidence only: no qualified claim, no Domain::QUALIFIED.
 #include "adapter/adapter.h"
 #include "runtime/beta_controller.h"
@@ -100,6 +107,7 @@ static const uint64_t G3_SEND_COUNT_ROW_NS=10000000000ULL;
 static const double G3_SEND_PARKED_BREAK_M=0.01;
 // Candidate lease (the BETA profile lease and Options.max_snapshot_age_ns).
 static const uint64_t G3_SEND_LEASE_NS=500000000ULL;
+static const uint64_t G3_NOFIX_LEASE_NS=250000000ULL;
 // Garage carry (review C1): a latch that is not valid, without any lost 0x118
 // information, counts as forward only after this much wheel distance since
 // boot (a reverse out of a parking space is a few metres; a garage exit is
@@ -129,9 +137,11 @@ struct G3SendView {
 class G3Send {
 public:
     G3Send() { clear(); }
+    ~G3Send() { adapter::set_nofix_bearing(false); }
     // Worker start. enabled: the G3 tracker is active (BETA, no g3-off marker).
     // garage: the garage carry rules (no g3-garage-off marker).
     void start(bool enabled,bool garage=false) {
+        adapter::set_nofix_bearing(false);
         clear();phase_=enabled?G3_SEND_IDLE:G3_SEND_OFF;garage_=enabled && garage;
     }
     G3SendPhase phase() const { return phase_; }
@@ -150,6 +160,7 @@ public:
         if(o.kind!=adapter::Observation::POSITION || phase_==G3_SEND_OFF)return;
         have_position_=true;last_class_=o.position_class;last_generation_=o.prediction_generation;
         last_call_=o.call_sequence;
+        if(last_class_!=adapter::POSITION_NO_FIX_STALE)adapter::set_nofix_bearing(false);
         if(!active() || o.position_class!=adapter::POSITION_FIX)return;
         const adapter::PositionInput& p=o.position;
         const double kmh=p.velocity_kmh,course=p.heading_deg;
@@ -179,16 +190,17 @@ public:
     // send ends it (the adapter also sets its hold).
     template<class J> void send(J& j,const adapter::Observation& o,uint64_t now) {
         if(!active() || o.kind!=adapter::Observation::SEND || o.type!=1 || !o.has_payload)return;
-        if(o.choice==adapter::BETA_BEARING_OVERLAY) {
+        if(o.choice==adapter::BETA_BEARING_OVERLAY || o.choice==adapter::BETA_NOFIX_BEARING) {
             ++sent_;
             if(o.result)end(j,now,"fault","send_result",false,NAN,NAN,NAN);
         } else if(o.position_class==adapter::POSITION_FIX)++stock_;
     }
     // MODEL tick, after G3Tracker::tick (the propagated heading is current).
-    template<class J> void tick(J& j,const G3Tracker& g3,const G3Sample& s,const G3SendView& v) {
-        if(phase_==G3_SEND_OFF)return;
-        if(phase_==G3_SEND_ENDED) { withdraw(v);return; }
-        if(phase_==G3_SEND_IDLE && !try_open(j,g3,s,v))return;
+    template<class J> void tick(J& j,const G3Tracker& g3,const G3Sample& s,const G3SendView& v,
+                                bool nofix_speed_ready=false) {
+        if(phase_==G3_SEND_OFF) { adapter::set_nofix_bearing(false);return; }
+        if(phase_==G3_SEND_ENDED) { adapter::set_nofix_bearing(false);withdraw(v);return; }
+        if(phase_==G3_SEND_IDLE && !try_open(j,g3,s,v)) { adapter::set_nofix_bearing(false);return; }
         // ACTIVE: fail closed first, then the other ends, then publish.
         const bool parked=s.wheels_fresh && !s.wheels_moving && last_parked_ && std::isfinite(s.motion.distance_m) &&
             std::isfinite(last_m_) && fabs(s.motion.distance_m-last_m_)<G3_SEND_PARKED_BREAK_M;
@@ -224,10 +236,12 @@ public:
                 std::isfinite(s.motion.distance_m)?s.motion.distance_m:0.0);
         }
         publish(v);
+        publish_nofix(s,v,nofix_speed_ready);
     }
     // The worker cannot run the MODEL tick any more (journal failure, model
     // disabled, audit fault): end at once.
     template<class J> void fail(J& j,uint64_t now,const char* why) {
+        adapter::set_nofix_bearing(false);
         if(active())end(j,now,"fault",why,false,NAN,NAN,NAN);
     }
 
@@ -346,6 +360,7 @@ private:
                                double kmh,double d) {
         if(!active())return;
         adapter::set_bearing_overlay(false);
+        adapter::set_nofix_bearing(false);
         phase_=G3_SEND_ENDED;end_reason_=reason;end_why_=why;withdraw_pending_=published_;
         char crs[64];
         if(std::isfinite(course) && std::isfinite(kmh) && std::isfinite(d))
@@ -382,6 +397,31 @@ private:
         // No position, speed or accuracy claim; qualified flags stay false.
         c.ready=true;c.beta=true;c.bearing_only=true;
         if(adapter::publish_snapshot(c))published_=true;
+    }
+    void publish_nofix(const G3Sample& s,const G3SendView& v,bool speed_ready) {
+        const uint32_t generation=adapter::generation();
+        const uint64_t wheel=s.motion.last_speed_ns,yaw=s.motion.yaw_end_ns;
+        const uint64_t oldest=wheel<yaw?wheel:yaw;
+        if(!garage_ || !speed_ready || !have_position_ || last_class_!=adapter::POSITION_NO_FIX_STALE ||
+           last_generation_!=generation || v.session_epoch!=session_epoch_ || v.source_epoch!=source_epoch_ ||
+           !wheel || !yaw || wheel>v.now || yaw>v.now || v.now-oldest>G3_NOFIX_LEASE_NS ||
+           oldest>UINT64_MAX-G3_NOFIX_LEASE_NS) {
+            adapter::set_nofix_bearing(false);return;
+        }
+        adapter::DrSnapshot c=adapter::DrSnapshot();
+        c.prediction_generation=generation;c.source_epoch=source_epoch_;c.session_epoch=session_epoch_;
+        c.frontier_mono_ns=oldest;c.valid_until_mono_ns=oldest+G3_NOFIX_LEASE_NS;
+        // A lease published immediately before the window cap cannot cross it.
+        if(open_ns_<=UINT64_MAX-G3_SEND_STATIONARY_CAP_NS) {
+            const uint64_t cap=open_ns_+G3_SEND_STATIONARY_CAP_NS-1;
+            if(c.valid_until_mono_ns>cap)c.valid_until_mono_ns=cap;
+        }
+        if(motion_ns_ && motion_ns_<=UINT64_MAX-G3_SEND_MOTION_CAP_NS) {
+            const uint64_t cap=motion_ns_+G3_SEND_MOTION_CAP_NS-1;
+            if(c.valid_until_mono_ns>cap)c.valid_until_mono_ns=cap;
+        }
+        c.travel_bearing_deg=g3_wrap360(travel_);c.ready=c.beta=c.bearing_only=true;
+        adapter::set_nofix_bearing(adapter::publish_nofix_bearing(c));
     }
     template<class J> void row(J& j,const char* fmt,const char* kind,...) __attribute__((format(printf,3,5)));
 };

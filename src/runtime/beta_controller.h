@@ -215,7 +215,7 @@ public:
             (uint32_t(o.original[22])<<16)|(uint32_t(o.original[23])<<24))/1000.0:-1;
         if(o.choice==adapter::BETA_REPLACEMENT) {
             ++counters_.replaced_sends;if(o.result)++counters_.replaced_nonzero;
-        } else if(o.choice==adapter::BETA_SPEED_OVERLAY) {
+        } else if(o.choice==adapter::BETA_SPEED_OVERLAY || o.choice==adapter::BETA_NOFIX_BEARING) {
             ++counters_.speed_overlay_sends;if(o.result)++counters_.speed_overlay_nonzero;
         } else if(o.position_class==adapter::POSITION_NO_FIX_STALE)++counters_.original_nofix_sends;
         else if(o.original_mode==0)++counters_.original_mode0_sends;

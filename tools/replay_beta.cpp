@@ -699,7 +699,7 @@ void g3_turn(uint64_t now) {
         v.adapter_ok = !A::faulted() && A::mode() == A::BETA && !A::beta_held();
         v.source_epoch = shared.source_epoch.load(); v.session_epoch = shared.storage_epoch.load();
         v.cadence_fences = beta->cadence_fences();
-        g3send.tick(g3_journal, g3, sample, v);
+        g3send.tick(g3_journal, g3, sample, v, beta->state() == R::BETA_SPEED_ENGAGED);
     }
 }
 // One worker turn at the tick grid, in runtime order: pop observations,
@@ -878,9 +878,9 @@ bool start_product(uint64_t t) {
 //   FIX    mode 1/2 with utc_s > 0
 //   OTHER  mode 3, undecodable, anything else
 // What may change per class (the checker, independent of what the product
-// currently implements): LOST the BETA replacement fields; NO_FIX only the
-// speed (bytes 32..39, the planned speed overlay; position/accuracy/bearing
-// never); FIX and OTHER nothing.
+// currently implements): LOST the BETA replacement fields; NO_FIX the speed
+// fields and, only for choice 7, bearing; FIX only choice 6 bearing; OTHER
+// nothing. NO_FIX position, accuracy and timestamps always stay original.
 enum FixClass { CLASS_LOST = 0, CLASS_NO_FIX, CLASS_FIX, CLASS_OTHER, CLASS_COUNT };
 const char* class_name(int c) {
     static const char* const names[] = {"LOST", "NO_FIX", "FIX", "OTHER"};
@@ -893,7 +893,9 @@ int classify(int32_t mode, uint64_t utc) {
 }
 // change: 0 unchanged, 1 speed only (bytes 32..39), 2 replacement.
 // 3: bearing only (bytes 40, 44..47; the G3 bearing overlay, FIX class).
-enum Change { CHANGE_NONE = 0, CHANGE_SPEED = 1, CHANGE_REPLACED = 2, CHANGE_BEARING = 3 };
+// 4: choice-7 speed and bearing overlay, including byte-identical payloads.
+enum Change { CHANGE_NONE = 0, CHANGE_SPEED = 1, CHANGE_REPLACED = 2, CHANGE_BEARING = 3,
+              CHANGE_SPEED_BEARING = 4 };
 struct SendEval {
     int32_t window;
     double t_s, elapsed_s;
@@ -968,18 +970,29 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
     if (s.replaced && opt.corrupt == "payload") out[0] ^= 1;       // checker self-test only
     if (s.replaced && opt.corrupt == "accuracy") put32(out + 20, 41000);
     if (s.replaced && opt.corrupt == "mode") { s.mode = 1; s.cls = CLASS_FIX; }
-    bool speed_only = s.replaced;
+    // A selected speed can already equal the original; it still has to
+    // satisfy the speed overlay's class and fresh-wheel contract.
+    bool speed_only = s.replaced || r.choice == int32_t(A::BETA_SPEED_OVERLAY);
     for (unsigned i = 0; i < 48; ++i)
         if (out[i] != r.original[i] && (i < 32 || i > 39)) speed_only = false;
     bool bearing_only = s.replaced;
     for (unsigned i = 0; i < 48; ++i)
         if (out[i] != r.original[i] && i != 40 && (i < 44 || i > 47)) bearing_only = false;
-    s.change = !s.replaced ? CHANGE_NONE : speed_only ? CHANGE_SPEED : bearing_only ? CHANGE_BEARING :
-               CHANGE_REPLACED;
+    const bool nofix_bearing = r.choice == int32_t(A::BETA_NOFIX_BEARING);
+    bool speed_bearing = nofix_bearing;
+    for (unsigned i = 0; i < 48; ++i)
+        if (out[i] != r.original[i] && i != 32 && (i < 36 || i > 40) && (i < 44 || i > 47))
+            speed_bearing = false;
+    s.change = speed_bearing ? CHANGE_SPEED_BEARING : speed_only ? CHANGE_SPEED :
+               !s.replaced ? CHANGE_NONE : bearing_only ? CHANGE_BEARING : CHANGE_REPLACED;
     // Each change must report its own choice (BETA replacement / overlay).
     s.contract_ok = r.one_call && (s.change != CHANGE_REPLACED || r.choice == int32_t(A::BETA_REPLACEMENT)) &&
-                    (s.change != CHANGE_SPEED || r.choice == int32_t(A::BETA_SPEED_OVERLAY)) &&
+                    (s.change != CHANGE_SPEED ||
+                     (r.choice == int32_t(A::BETA_SPEED_OVERLAY) && s.cls == CLASS_NO_FIX)) &&
                     (s.change != CHANGE_BEARING || r.choice == int32_t(A::BETA_BEARING_OVERLAY)) &&
+                    (s.change != CHANGE_SPEED_BEARING ||
+                     (s.cls == CLASS_NO_FIX && r.reason == int32_t(A::PASS) && out[40] == 1 &&
+                      int32_t(get32(out + 44)) > 10000 && int32_t(get32(out + 44)) <= 359990000)) &&
                     // A bearing overlay may equal the stock bearing byte for byte.
                     (s.change != CHANGE_NONE || r.choice == int32_t(A::ORIGINAL) ||
                      r.choice == int32_t(A::BETA_BEARING_OVERLAY));
@@ -988,16 +1001,19 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
         if (out[i] == r.original[i]) continue;
         // FIX: only the G3 bearing overlay may change hasBearing/bearing.
         const bool allowed = s.cls == CLASS_LOST ? allowed_byte(i) :
-                             s.cls == CLASS_NO_FIX ? (i >= 32 && i <= 39) :
+                             s.cls == CLASS_NO_FIX ?
+                                 (i == 32 || (i >= 36 && i <= 39) ||
+                                  (nofix_bearing && (i == 40 || (i >= 44 && i <= 47)))) :
                              s.cls == CLASS_FIX && r.choice == int32_t(A::BETA_BEARING_OVERLAY) ?
                                  (i == 40 || (i >= 44 && i <= 47)) : false;
         if (!allowed) s.payload_ok = 0;
     }
     s.speed_ok = 1;
-    if (s.change == CHANGE_SPEED) {
+    if (s.change == CHANGE_SPEED || s.change == CHANGE_SPEED_BEARING) {
         s.accuracy_ok = 1;
         s.accuracy_m = s.error_m = s.bearing_deg = NAN;
-        s.speed_mps = int32_t(get32(out + 36)) / 1000.0;
+        s.speed_mps = out[32] ? int32_t(get32(out + 36)) / 1000.0 : NAN;
+        if (s.change == CHANGE_SPEED_BEARING) s.bearing_deg = int32_t(get32(out + 44)) / 1e6;
     } else if (!s.replaced || s.change == CHANGE_BEARING) {
         s.accuracy_ok = 1;
         s.accuracy_m = s.error_m = s.speed_mps = s.bearing_deg = NAN;
@@ -1031,9 +1047,10 @@ SendEval evaluate(const SendRecord& r, int window, uint64_t t0, uint64_t end_ns,
     }
     double w;
     if (wheel_at(r.t, &w)) { s.has_wheel = 1; s.wheel_mps = w; }
-    if (s.change == CHANGE_SPEED)
-        s.speed_ok = out[32] == 1 && s.has_wheel &&
-                     std::fabs(s.speed_mps - s.wheel_mps) <= std::max(0.5, 0.05 * s.wheel_mps);
+    if (s.change == CHANGE_SPEED || s.change == CHANGE_SPEED_BEARING)
+        s.speed_ok = s.has_wheel &&
+            ((out[32] == 1 && std::fabs(s.speed_mps - s.wheel_mps) <= std::max(0.5, 0.05 * s.wheel_mps)) ||
+             (s.change == CHANGE_SPEED_BEARING && !out[32] && s.wheel_mps == 0));
     return s;
 }
 
@@ -1501,7 +1518,7 @@ int main(int argc, char** argv) {
             p = semi + 1;
         }
     }
-    struct ClassCount { size_t sends, speed_only, replaced; };
+    struct ClassCount { size_t sends, speed_only, replaced, speed_bearing; };
     ClassCount classes[CLASS_COUNT] = {};
     std::vector<double> no_fix_speed_err;
     std::vector<SendEval> all = baseline;
@@ -1518,8 +1535,10 @@ int main(int argc, char** argv) {
             ClassCount& c = classes[s.cls];
             ++c.sends;
             if (s.change == CHANGE_SPEED) ++c.speed_only;
+            else if (s.change == CHANGE_SPEED_BEARING) ++c.speed_bearing;
             else if (s.change == CHANGE_REPLACED) ++c.replaced;
-            if (s.cls == CLASS_NO_FIX && s.change == CHANGE_SPEED && s.has_wheel)
+            if (s.cls == CLASS_NO_FIX && (s.change == CHANGE_SPEED || s.change == CHANGE_SPEED_BEARING) &&
+                s.has_wheel && std::isfinite(s.speed_mps))
                 no_fix_speed_err.push_back(std::fabs(s.speed_mps - s.wheel_mps));
         }
         if (s.change == CHANGE_REPLACED && s.cls != CLASS_LOST)
@@ -1657,10 +1676,14 @@ int main(int argc, char** argv) {
         first = false;
     }
     j += "},\"recorded_classes\":{";
-    for (int c = 0; c < CLASS_COUNT; ++c)
+    for (int c = 0; c < CLASS_COUNT; ++c) {
         j += std::string(c ? "," : "") + "\"" + class_name(c) + "\":{\"sends\":" + std::to_string(classes[c].sends) +
              ",\"speed_only\":" + std::to_string(classes[c].speed_only) + ",\"replaced\":" +
-             std::to_string(classes[c].replaced) + "}";
+             std::to_string(classes[c].replaced);
+        // Keep old reports byte-identical when no new overlay was selected.
+        if (classes[c].speed_bearing) j += ",\"speed_bearing\":" + std::to_string(classes[c].speed_bearing);
+        j += "}";
+    }
     j += "},\"no_fix_speed_error_vs_wheel_mps\":" + stat_json(stat(no_fix_speed_err));
     j += ",\"beta_transitions\":[";
     {

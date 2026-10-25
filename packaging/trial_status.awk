@@ -163,8 +163,8 @@ FILENAME ~ /\/collector\.[01]\.jsonl$/ && !/^\{"stream":"collector","collector_p
             beta_replaced++
             if (field("result")!="0") beta_replaced_nonzero++
         }
-        # NO_FIX wheel speed overlay (choice 4): only bytes 32, 36..39 change.
-        if (kind=="send" && /"choice":4,/) {
+        # NO_FIX wheel speed overlay (4), optionally with carried bearing (7).
+        if (kind=="send" && /"choice":(4|7),/) {
             beta_overlay++
             if (field("result")!="0") beta_overlay_nonzero++
         }

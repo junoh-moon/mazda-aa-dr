@@ -1056,6 +1056,18 @@ exec "$MX5DR_REAL_OD" "$@"
         r = self.run_status(trace)
         self.assertIn('BETA NO_FIX: 2 state rows', r.stdout)
 
+    def test_no_fix_carried_bearing_counts_with_speed_overlays(self):
+        trace = self.beta_trace()
+        for choice, result in ((4, 0), (7, 0), (7, -1), (6, 0), (6, -1)):
+            trace.append(dict(kind='send', call=9, generation=1, mono_ns=50000000000,
+                              mode=1, type=1, length=48, choice=choice, reason=0,
+                              result=result))
+        r = self.run_status(trace)
+        self.assertIn('beta_speed_engaged=0 beta_speed_overlay_sends=3 '
+                      'beta_speed_overlay_nonzero=1', r.stdout)
+        self.assertIn('beta_engaged=2 beta_replaced_sends=3 beta_replaced_nonzero=1',
+                      r.stdout)
+
     def test_shadow_boot_has_no_beta_count_line(self):
         r = self.run_status()
         self.assertIn('beta_requested=false', r.stdout)

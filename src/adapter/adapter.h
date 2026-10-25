@@ -20,8 +20,12 @@ enum Mode { OFF = 0, OBSERVE = 1, SCRUB_STALE = 2, ASSIST = 3, BETA = 4 };
 // BETA_BEARING_OVERLAY (validation/G3_SEND_2026-10-13.md, FIX only, while the
 // worker armed it): the original 48 bytes with only hasBearing (40) and
 // bearing_e6 (44..47) replaced by the carried G3 heading.
+// BETA_NOFIX_BEARING: NO_FIX's existing wheel-speed selection with an
+// independently published carried heading (40, 44..47) added. All remaining
+// bytes, including coordinates, accuracy and timestamp, stay original.
 enum Choice { ORIGINAL = 0, SCRUBBED = 1, DR_REPLACEMENT = 2, BETA_REPLACEMENT = 3,
-              BETA_SPEED_OVERLAY = 4, DIAG_SATELLITE_RETIRED = 5, BETA_BEARING_OVERLAY = 6 };
+              BETA_SPEED_OVERLAY = 4, DIAG_SATELLITE_RETIRED = 5, BETA_BEARING_OVERLAY = 6,
+              BETA_NOFIX_BEARING = 7 };
 // Diagnostic arms (one per GPS-lost episode, runtime/diag_arms.h). NONE: the
 // diagnostic marker is absent or no episode is open. Values 2 (A20) and 3
 // (S5) were the beta.12 arms; retired, never assigned (journal names only).
@@ -104,9 +108,9 @@ struct DrSnapshot {
     // candidate belongs to (0 when the diagnostic marker is absent). Read by
     // send_vehicle_data only while set_diag(true) is in effect.
     uint8_t diag_arm;
-    // G3 bearing overlay candidate (FIX class only): only travel_bearing_deg
-    // and the identity/lease fields are meaningful. Every other chooser
-    // rejects it; the bearing overlay accepts nothing else.
+    // G3 bearing candidate: only travel_bearing_deg and identity/lease fields
+    // are meaningful. publish_snapshot uses it for FIX; the separate
+    // publish_nofix_bearing slot uses it for NO_FIX. Other choosers reject it.
     bool bearing_only;
 };
 
@@ -232,6 +236,11 @@ bool faulted(); // Sticky observation/contract failure; never qualifies input.
 bool beta_held();
 // Worker-side only; copies values, never borrowed OEM pointers.
 bool publish_snapshot(const DrSnapshot& snapshot);
+// Worker-only NO_FIX heading slot, independent of speed and FIX candidates.
+// Publish before opening the gate; close on every terminal condition.
+// Selection also requires a valid current NO_FIX wheel-speed candidate.
+bool publish_nofix_bearing(const DrSnapshot& snapshot);
+void set_nofix_bearing(bool on);
 
 // Testable logic shared by the real ARM veneer and host fake OEM tests.
 void position_enter(void* manager, const void* oem_position);

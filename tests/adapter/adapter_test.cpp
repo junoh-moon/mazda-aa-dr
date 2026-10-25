@@ -12,13 +12,38 @@ using namespace mx5::adapter;
 // Test-only interposition: the adapter's hook path uses trylock, so a forced
 // EBUSY exercises its LOCK_BUSY branch without racing a worker thread.
 static bool force_lock_busy;
+static unsigned lock_calls;
+static bool nofix_lock_busy, nofix_unlock_pending;
+static unsigned nofix_interleave;
+static uint64_t nofix_clock_delay;
+static bool nofix_clock_revoke;
 extern "C" int pthread_mutex_trylock(pthread_mutex_t* m) {
+    ++lock_calls;
     if (force_lock_busy) return EBUSY;
+    if (nofix_lock_busy && lock_calls==2) return EBUSY;
     typedef int (*Real)(pthread_mutex_t*);
     static Real real = 0;
     if (!real) real = reinterpret_cast<Real>(dlsym(RTLD_NEXT, "pthread_mutex_trylock"));
     assert(real);
-    return real(m);
+    const int result=real(m);
+    if(!result && nofix_interleave && lock_calls==2)nofix_unlock_pending=true;
+    return result;
+}
+extern "C" int pthread_mutex_unlock(pthread_mutex_t* m) {
+    typedef int (*Real)(pthread_mutex_t*);
+    static Real real=0;
+    if(!real)real=reinterpret_cast<Real>(dlsym(RTLD_NEXT,"pthread_mutex_unlock"));
+    assert(real);
+    const int result=real(m);
+    if(nofix_unlock_pending) {
+        nofix_unlock_pending=false;
+        if(nofix_interleave==1) { set_nofix_bearing(false);set_nofix_bearing(true); }
+        else if(nofix_interleave==2)nofix_clock_delay=600000000ULL;
+        else if(nofix_interleave==3)nofix_clock_revoke=true;
+        else if(nofix_interleave==4)nofix_clock_delay=2000000ULL;
+        else if(nofix_interleave==5)nofix_clock_delay=UINT64_MAX;
+    }
+    return result;
 }
 
 static unsigned calls, events;
@@ -38,6 +63,8 @@ static unsigned trace_reads;
 static unsigned session_reads;
 // BETA-case knobs. Defaults leave every pre-existing case unchanged.
 static bool beta_fixture, speed_fixture, bearing_fixture;
+static bool nofix_bearing_fixture;
+static void (*mutate_nofix_bearing)(DrSnapshot&);
 static void (*mutate_snapshot)(DrSnapshot&);
 static Provenance::Domain provenance_domain = Provenance::Domain::NONE;
 static mx5::runtime::session_trace::Result beta_session_result = mx5::runtime::session_trace::OBSERVED;
@@ -115,9 +142,21 @@ static void sink(const Observation* e, void*) {
         (e->original_mode == 0 || (speed_fixture && e->position_class == POSITION_NO_FIX_STALE) ||
          (bearing_fixture && e->position_class == POSITION_FIX)))
         assert(publish_snapshot(fixture()));
+    if(e->kind==Observation::POSITION && nofix_bearing_fixture &&
+       e->position_class==POSITION_NO_FIX_STALE) {
+        void (*speed_mutator)(DrSnapshot&)=mutate_snapshot;mutate_snapshot=0;
+        DrSnapshot heading=fixture();mutate_snapshot=speed_mutator;
+        heading.speed_only=false;heading.bearing_only=true;
+        heading.travel_bearing_deg=123.456789;
+        if(mutate_nofix_bearing)mutate_nofix_bearing(heading);
+        assert(publish_nofix_bearing(heading));
+    }
     errno = EBUSY; // The shim must hide this side effect from OEM code.
 }
-static uint64_t clock_fn(void*) { errno = EAGAIN; return clock_ns; }
+static uint64_t clock_fn(void*) {
+    if(nofix_clock_revoke) { nofix_clock_revoke=false;invalidate(); }
+    errno=EAGAIN;return clock_ns+nofix_clock_delay;
+}
 static bool provenance(void*, const PositionContext&, Provenance* out, void*) {
     out->source_epoch = 11; out->session_epoch = 12;
     out->exact_request = out->verified_lds = out->legacy_receiver = true;
@@ -139,6 +178,7 @@ static uint32_t get32(const uint8_t* p) {
 static void run_send(VehicleData& data, bool original) {
     original_wrapper=&data; expect_original=original; errno=17;
     const unsigned before=calls;
+    lock_calls=0;
     assert(send_vehicle_data(expected_session,&data)==next_result);
     assert(calls==before+1); assert(errno==EDOM);
 }
@@ -179,6 +219,9 @@ static void m_lon_nan(DrSnapshot& s){s.longitude_deg=std::numeric_limits<double>
 static void m_speed_neg(DrSnapshot& s){s.speed_mps=-0.1;}
 static void m_speed_absurd(DrSnapshot& s){s.speed_mps=100.5;}
 static void m_speed_inf(DrSnapshot& s){s.speed_mps=std::numeric_limits<double>::infinity();}
+static void m_speed_nan(DrSnapshot& s){s.speed_mps=std::numeric_limits<double>::quiet_NaN();}
+static void m_speed_zero(DrSnapshot& s){s.speed_mps=0;}
+static void m_short_speed_lease(DrSnapshot& s){s.valid_until_mono_ns=clock_ns+1000000ULL;}
 static void m_bearing_360(DrSnapshot& s){s.travel_bearing_deg=360.0;}
 static void m_bearing_neg(DrSnapshot& s){s.travel_bearing_deg=-0.5;}
 static void m_bearing_nan(DrSnapshot& s){s.travel_bearing_deg=std::numeric_limits<double>::quiet_NaN();}
@@ -245,6 +288,29 @@ static void m_not_bearing(DrSnapshot& s){s.bearing_only=false;}
 static void m_bearing_speed(DrSnapshot& s){s.speed_only=true;}
 static void m_bearing_unqualified(DrSnapshot& s){s.beta=false;}
 static void m_bearing_value_nan(DrSnapshot& s){s.travel_bearing_deg=std::numeric_limits<double>::quiet_NaN();}
+static void nofix_bearing_send(void (*speed)(DrSnapshot&),void (*heading)(DrSnapshot&),
+                               Choice choice,Reason reason=PASS,double lat=STORED_LAT,
+                               int32_t mode_value=1,uint64_t utc=0) {
+    mutate_snapshot=speed;mutate_nofix_bearing=heading;
+    uint8_t position[72]={};put32(position,uint32_t(mode_value));
+    put32(position+8,uint32_t(utc));put32(position+12,uint32_t(utc>>32));
+    putd(position+16,lat);putd(position+24,STORED_LON);putd(position+40,335.0);putd(position+48,4.0);
+    putd(position+56,4.4);putd(position+64,9.7);
+    uint8_t before[48];std::memcpy(before,overlay_payload,48);
+    VehicleData data={1,overlay_payload,48};position_enter(0,position);
+    run_send(data,choice==ORIGINAL);position_leave();
+    mutate_snapshot=mutate_nofix_bearing=0;
+    assert(last_event.choice==choice && last_event.reason==reason);
+    assert(!std::memcmp(before,overlay_payload,48));
+    for(unsigned i=0;i<48;++i) {
+        const bool speed_byte=i==32 || (i>=36 && i<40);
+        const bool bearing_byte=i==40 || (i>=44 && i<48);
+        if(choice==ORIGINAL || (!speed_byte && !(choice==BETA_NOFIX_BEARING && bearing_byte)))
+            assert(sent[i]==before[i]);
+    }
+    if(choice==BETA_NOFIX_BEARING)assert(sent[40]==1 && get32(sent+44)==123456789);
+    assert(!std::memcmp(last_event.original,before,48) && !std::memcmp(last_event.outgoing,sent,48));
+}
 static void bearing_send(void (*mutate)(DrSnapshot&), Reason expected, double lat=STORED_LAT, int32_t mode=1) {
     mutate_snapshot=mutate;
     uint8_t position[72]={};put32(position,uint32_t(mode));
@@ -517,6 +583,81 @@ static int beta_main(const char* test) {
           o.speed_mps=-0.001;assert(!encode_speed_overlay(o,overlay_payload,out));
           o.speed_mps=std::numeric_limits<double>::quiet_NaN();assert(!encode_speed_overlay(o,overlay_payload,out));
           o.speed_mps=50;o.stopped=true;assert(encode_speed_overlay(o,overlay_payload,out) && get32(out+36)==0); }
+    } else if (!std::strcmp(test,"beta_nofix_bearing")) {
+        const Choice nofix_choice=BETA_NOFIX_BEARING;
+        speed_fixture=nofix_bearing_fixture=true;make_overlay_payload(1111);
+        // An independent heading publication must not overwrite wheel speed.
+        nofix_bearing_send(0,0,BETA_SPEED_OVERLAY);assert(get32(sent+36)==12346);
+        set_nofix_bearing(true);
+        nofix_bearing_send(0,0,nofix_choice);assert(get32(sent+36)==12346);
+        nofix_bearing_send(0,0,nofix_choice,PASS,STORED_LAT,2);
+        // Standing with no speed rewrite still carries a heading, retaining
+        // the original speed presence/value and all untouched bytes.
+        make_overlay_payload(0);overlay_payload[32]=0;
+        nofix_bearing_send(m_stopped_speed,0,nofix_choice);
+        assert(sent[32]==0 && get32(sent+36)==0);
+        nofix_bearing_send(m_speed_zero,0,nofix_choice);
+        assert(sent[32]==0 && get32(sent+36)==0);
+        // An invalid speed sample is not valid standing evidence, even when
+        // the legacy speed chooser returns OVERLAY_NOT_NEEDED for it.
+        nofix_bearing_send(m_speed_inf,0,ORIGINAL,BAD_ENCODING);
+        nofix_bearing_send(m_speed_nan,0,ORIGINAL,OVERLAY_NOT_NEEDED);
+        nofix_bearing_send(m_speed_neg,0,ORIGINAL,OVERLAY_NOT_NEEDED);
+        set_nofix_bearing(false);
+        nofix_bearing_send(m_speed_zero,0,ORIGINAL,OVERLAY_NOT_NEEDED);
+        set_nofix_bearing(true);
+        nofix_bearing_send(m_speed_zero,m_lease_over,ORIGINAL,OVERLAY_NOT_NEEDED);
+        make_overlay_payload(1111);
+        void (*bad_heading[])(DrSnapshot&)={m_not_ready,m_not_beta,m_not_bearing,m_bearing_speed,
+            m_source_epoch,m_session_epoch,m_future,m_lease_over,m_too_old,m_bearing_value_nan};
+        for(unsigned i=0;i<sizeof bad_heading/sizeof bad_heading[0];++i)
+            nofix_bearing_send(0,bad_heading[i],BETA_SPEED_OVERLAY);
+        nofix_lock_busy=true;nofix_bearing_send(0,0,BETA_SPEED_OVERLAY);nofix_lock_busy=false;
+        // No bearing can bypass any failed speed/provenance/identity gate.
+        nofix_bearing_send(m_not_ready,0,ORIGINAL,NOT_READY);
+        nofix_bearing_send(m_not_speed_only,0,ORIGINAL,NOT_READY);
+        nofix_bearing_send(m_future,0,ORIGINAL,EXPIRED);
+        nofix_bearing_send(m_source_epoch,0,ORIGINAL,EPOCH_MISMATCH);
+        nofix_bearing_send(m_speed_inf,0,ORIGINAL,BAD_ENCODING);
+        nofix_bearing_send(0,0,ORIGINAL,OVERLAY_MISMATCH,STORED_LAT+0.001);
+        force_lock_busy=true;nofix_bearing_send(0,0,ORIGINAL,LOCK_BUSY);force_lock_busy=false;
+        provenance_domain=Provenance::Domain::QUALIFIED;
+        nofix_bearing_send(0,0,ORIGINAL,BAD_PROVENANCE);provenance_domain=Provenance::Domain::BETA;
+        beta_session_result=mx5::runtime::session_trace::TRANSITION;
+        nofix_bearing_send(0,0,ORIGINAL,EPOCH_MISMATCH);
+        beta_session_result=mx5::runtime::session_trace::UNOBSERVED;
+        nofix_bearing_send(0,0,nofix_choice);
+        beta_session_result=mx5::runtime::session_trace::OBSERVED;
+        // A copied candidate cannot survive gate close/reopen, a suspended
+        // OEM call beyond its lease, or generation revocation.
+        for(nofix_interleave=1;nofix_interleave<=5;++nofix_interleave) {
+            const Choice fallback=nofix_interleave==1?BETA_SPEED_OVERLAY:ORIGINAL;
+            const Reason why=nofix_interleave==1?PASS:nofix_interleave==3?EPOCH_MISMATCH:EXPIRED;
+            nofix_bearing_send(nofix_interleave==4?m_short_speed_lease:0,0,fallback,why);
+            nofix_clock_delay=0;
+        }
+        // Rejecting only the heading cannot preserve an expired speed after
+        // a delayed copy, even when heading validation fails before its clock check.
+        nofix_interleave=2;
+        nofix_bearing_send(0,m_bearing_value_nan,ORIGINAL,EXPIRED);nofix_clock_delay=0;
+        nofix_interleave=0;
+        { DrSnapshot old=fixture();old.prediction_generation=generation()-1;
+          assert(!publish_nofix_bearing(old)); }
+        nofix_bearing_send(0,0,nofix_choice);
+        next_result=-3;nofix_bearing_send(0,0,nofix_choice);assert(beta_held());
+        next_result=0;nofix_bearing_send(0,0,ORIGINAL,HELD);assert(!beta_held());
+        nofix_bearing_send(0,0,nofix_choice);
+        set_nofix_bearing(false);nofix_bearing_send(0,0,BETA_SPEED_OVERLAY);
+        set_nofix_bearing(true);
+        assert(set_mode(OBSERVE));nofix_bearing_send(0,0,ORIGINAL,NOT_UNKNOWN);
+        assert(set_mode(BETA));nofix_bearing_send(0,0,nofix_choice);
+        nofix_bearing_send(0,0,ORIGINAL,NOT_UNKNOWN,STORED_LAT,1,1700000100);
+        nofix_bearing_send(0,0,ORIGINAL,NOT_UNKNOWN,STORED_LAT,3);
+        nofix_bearing_send(0,0,ORIGINAL,NOT_UNKNOWN,STORED_LAT,7);
+        // G3 FIX uses the original slot and gate even while NO_FIX is armed.
+        nofix_bearing_fixture=speed_fixture=false;bearing_fixture=true;
+        make_fix_payload();set_bearing_overlay(true);bearing_send(0,PASS);
+        set_bearing_overlay(false);bearing_send(0,NOT_UNKNOWN);
     } else if (!std::strcmp(test,"beta_bearing")) {
         // G3 bearing overlay (validation/G3_SEND_2026-10-13.md): FIX only,
         // only while the worker armed it, only hasBearing/bearing change.

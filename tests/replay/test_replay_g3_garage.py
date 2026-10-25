@@ -10,14 +10,15 @@ build/replay_beta runs the real Pipeline, BetaController, G3 tracker, G3 send
 window and adapter, with one store directory across both boots.
   --g3-garage on : boot A stores its final garage park (BETA replacing, no
                    fsync), boot B restores it as CARRIED/chain_depart and the
-                   first FIX LOCATIONs at the exit carry the integrated heading.
+                   NO_FIX LOCATIONs in the garage and the first FIX LOCATIONs
+                   at the exit carry the integrated heading.
   --g3-garage off: beta.16 rules (no store while BETA replaces; nothing carried,
                    no overlay). The --g3-send-out record holds only the send's
                    bytes 40 and 44..47 (stock and sent) and the decoded fields,
                    so this test shows that the off run sends the stock bearing
                    and that the on run changes the bearing only in overlaid
                    sends; that the OTHER payload bytes are unchanged is shown by
-                   the adapter test (test_adapter beta_bearing) and the worker
+                   replay --check, the adapter tests and the worker
                    payload comparison (tests/runtime/g3_send_identity.py).
 Synthetic receipt-time data only: not vehicle, phone or DHU evidence.
 """
@@ -186,7 +187,8 @@ class G3GarageChainReplay(unittest.TestCase):
                     [base.TOOL, "--trip", trip, "--real-only", "--report", prefix + ".json", "--csv", prefix + ".csv",
                      "--journal", prefix + ".jsonl", "--g3", "on", "--g3-store", store,
                      "--g3-garage", "off" if mode == "off" else "on",
-                     "--g3-send", "on", "--g3-out", prefix + ".g3.jsonl", "--g3-send-out", prefix + ".sends.jsonl"] +
+                     "--g3-send", "on", "--g3-out", prefix + ".g3.jsonl", "--g3-send-out", prefix + ".sends.jsonl",
+                     "--check"] +
                     (["--writer-lag-ms", "150"] if mode == "lag" else []),
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=600)
                 assert p.returncode == 0, p.stderr
@@ -300,8 +302,10 @@ class G3GarageChainReplay(unittest.TestCase):
         self.assertEqual(lag["b"]["store"].split()[4], "M")
         self.assertEqual(lag["b"]["sends"], on["b"]["sends"])
 
-    def test_sends_differ_only_in_the_bearing_of_overlaid_fixes(self):
-        # Bytes 40 and 44..47 only (the record holds no other payload byte).
+    def test_sends_differ_only_in_the_bearing_of_overlaid_locations(self):
+        # This diagnostic holds bytes 40 and 44..47 only. Every invocation
+        # also ran --check against the complete payload: choice 7 alone may
+        # combine NO_FIX speed fields 32/36..39 with bearing 40/44..47.
         for name in ("a", "b"):
             on, off = self.runs["on"][name], self.runs["off"][name]
             self.assertEqual(on["journal"], off["journal"])           # BETA rows unchanged
@@ -309,6 +313,12 @@ class G3GarageChainReplay(unittest.TestCase):
             for x, y in zip(on["sends"], off["sends"]):
                 self.assertEqual(x["orig"], y["orig"])
                 if x["choice"] == 6:
+                    self.assertGreater(x["utc"], 0)
+                    self.assertEqual(y["sent"], y["orig"])
+                elif x["choice"] == 7:
+                    self.assertIn(x["mode"], (1, 2))
+                    self.assertEqual(x["utc"], 0)
+                    self.assertIn(y["choice"], (0, 4))
                     self.assertEqual(y["sent"], y["orig"])
                 else:
                     self.assertEqual(x["sent"], y["sent"])

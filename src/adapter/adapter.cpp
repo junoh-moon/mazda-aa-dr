@@ -108,6 +108,11 @@ static const double BETA_MAX_SPEED_MPS = 100.0;
 static const double BETA_MAX_ACCURACY_M = 40.0;
 static pthread_mutex_t snapshot_mutex = PTHREAD_MUTEX_INITIALIZER;
 static DrSnapshot candidate = DrSnapshot();
+static pthread_mutex_t nofix_bearing_mutex = PTHREAD_MUTEX_INITIALIZER;
+static DrSnapshot nofix_bearing_candidate = DrSnapshot();
+// Odd means open. Closing/reopening changes identity so a suspended chooser
+// cannot use a copied candidate from the previous window.
+static std::atomic<unsigned> nofix_bearing_state(0);
 // Diagnostic build (validation/TUNNEL_REPORT_CAP_2026-10-12.md). diag_on is
 // written by the worker before BETA is enabled.
 static std::atomic<unsigned> diag_on(0);
@@ -309,7 +314,7 @@ Reason choose_beta(Context& ctx, uint64_t time,
 // LOCATION carries this POSITION's coordinates and there is speed to show.
 Reason choose_beta_speed(Context& ctx, uint64_t time,
                          const runtime::session_trace::Snapshot& session,
-                         const uint8_t original[48], uint8_t bytes[48]) {
+                         const uint8_t original[48], uint8_t bytes[48],DrSnapshot* selected=0) {
     if (beta_hold.load(std::memory_order_acquire)) return HELD;
     if (!options.allow_beta || !options.clock ||
         ctx.provenance.domain != Provenance::Domain::BETA) return BAD_PROVENANCE;
@@ -332,6 +337,7 @@ Reason choose_beta_speed(Context& ctx, uint64_t time,
     if (!s.ready || !s.beta || !s.speed_only || s.bearing_only) return NOT_READY;
     if (time < s.frontier_mono_ns || time > s.valid_until_mono_ns ||
         time - s.frontier_mono_ns > options.max_snapshot_age_ns) return EXPIRED;
+    if(selected)*selected=s;
     // Nothing to correct: the original shows no speed and the wheels stand.
     const bool original_speed = original[32] != 0 && int32_t(get32(original + 36)) > 0;
     if (!original_speed && (s.stopped || !(s.speed_mps > 0))) return OVERLAY_NOT_NEEDED;
@@ -339,6 +345,48 @@ Reason choose_beta_speed(Context& ctx, uint64_t time,
     if (prediction_generation.load(std::memory_order_acquire) != live_generation)
         return EPOCH_MISMATCH;
     return PASS;
+}
+// The existing NO_FIX speed chooser supplies the evidence for both a combined
+// overlay and its speed-only fallback. Recheck after the optional heading
+// path: preemption must not revive an expired or revoked speed candidate.
+Reason nofix_speed_current(const Context& ctx,uint64_t time,const DrSnapshot& speed,uint64_t committed) {
+    if(beta_hold.load(std::memory_order_acquire))return HELD;
+    if(fault.load(std::memory_order_acquire) || mode()!=BETA)return DISABLED;
+    const uint32_t live_generation=prediction_generation.load(std::memory_order_acquire);
+    if(ctx.generation!=live_generation || speed.prediction_generation!=live_generation)return EPOCH_MISMATCH;
+    if(committed<time || committed<speed.frontier_mono_ns || committed>speed.valid_until_mono_ns ||
+       committed-speed.frontier_mono_ns>options.max_snapshot_age_ns)return EXPIRED;
+    return PASS;
+}
+bool add_nofix_bearing(Context& ctx,uint64_t time,const DrSnapshot& speed,uint8_t bytes[48]) {
+    const unsigned token=nofix_bearing_state.load(std::memory_order_acquire);
+    if(!(token&1u) || ctx.position_class!=POSITION_NO_FIX_STALE ||
+       !std::isfinite(speed.speed_mps) || speed.speed_mps<0 || speed.speed_mps>BETA_MAX_SPEED_MPS)
+        return false;
+    if(pthread_mutex_trylock(&nofix_bearing_mutex)!=0)return false;
+    const DrSnapshot heading=nofix_bearing_candidate;
+    pthread_mutex_unlock(&nofix_bearing_mutex);
+    const uint32_t live_generation=prediction_generation.load(std::memory_order_acquire);
+    if(ctx.generation!=live_generation || speed.prediction_generation!=live_generation ||
+       heading.prediction_generation!=live_generation ||
+       heading.source_epoch!=ctx.provenance.source_epoch ||
+       heading.session_epoch!=ctx.provenance.session_epoch ||
+       !heading.ready || !heading.beta || !heading.bearing_only || heading.speed_only)return false;
+    if(time<heading.frontier_mono_ns || time>heading.valid_until_mono_ns ||
+       time-heading.frontier_mono_ns>options.max_snapshot_age_ns)return false;
+    uint8_t with_bearing[48];
+    if(!encode_bearing_overlay(heading,bytes,with_bearing))return false;
+    const uint64_t committed=now();
+    if(nofix_speed_current(ctx,time,speed,committed)!=PASS ||
+       committed<heading.frontier_mono_ns || committed>heading.valid_until_mono_ns ||
+       committed-heading.frontier_mono_ns>options.max_snapshot_age_ns)return false;
+    if(nofix_bearing_state.load(std::memory_order_acquire)!=token ||
+       prediction_generation.load(std::memory_order_acquire)!=live_generation ||
+       beta_hold.load(std::memory_order_acquire) || fault.load(std::memory_order_acquire) || mode()!=BETA)
+        return false;
+    bytes[40]=with_bearing[40];
+    std::memcpy(bytes+44,with_bearing+44,4);
+    return true;
 }
 // Mode::BETA, class FIX, only while the worker armed the G3 bearing overlay
 // (validation/G3_SEND_2026-10-13.md). The original position, accuracy, speed
@@ -469,6 +517,26 @@ bool publish_snapshot(const DrSnapshot& snapshot) {
     if (current) candidate = snapshot;
     pthread_mutex_unlock(&snapshot_mutex);
     return current;
+}
+bool publish_nofix_bearing(const DrSnapshot& snapshot) {
+    if(!configured || snapshot.prediction_generation!=generation() ||
+       fault.load(std::memory_order_acquire))return false;
+    pthread_mutex_lock(&nofix_bearing_mutex); // Worker only; OEM reads use trylock.
+    const bool current=snapshot.prediction_generation==generation();
+    if(current)nofix_bearing_candidate=snapshot;
+    pthread_mutex_unlock(&nofix_bearing_mutex);
+    return current;
+}
+void set_nofix_bearing(bool on) {
+    unsigned before=nofix_bearing_state.load(std::memory_order_relaxed);
+    for(;;) {
+        if((before&1u)==unsigned(on))return;
+        const unsigned terminal=std::numeric_limits<unsigned>::max()-1u;
+        if(before==terminal)return; // Exhaustion stays closed, never wraps.
+        const unsigned after=before>=terminal?terminal:before+1u;
+        if(nofix_bearing_state.compare_exchange_weak(before,after,std::memory_order_release,
+                                                    std::memory_order_relaxed))return;
+    }
 }
 bool decode_position(const void* raw, PositionInput* out) {
     if (!raw || !out) return false;
@@ -731,9 +799,23 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
                 if (fault.load(std::memory_order_acquire)) event.reason = DISABLED;
                 else {
                     event.mono_ns = now();
+                    const bool heading_on=(nofix_bearing_state.load(std::memory_order_acquire)&1u)!=0;
+                    DrSnapshot speed=DrSnapshot();
                     event.reason = choose_beta_speed(*ctx, event.mono_ns, event.send_session,
-                                                     event.original, replacement);
+                                                     event.original, replacement,heading_on?&speed:0);
                     if (event.reason == PASS) event.choice = BETA_SPEED_OVERLAY;
+                    if(heading_on && (event.reason==PASS || event.reason==OVERLAY_NOT_NEEDED)) {
+                        if(event.reason==OVERLAY_NOT_NEEDED)std::memcpy(replacement,event.original,48);
+                        if(add_nofix_bearing(*ctx,event.mono_ns,speed,replacement)) {
+                            event.choice=BETA_NOFIX_BEARING;event.reason=PASS;
+                        } else {
+                            // The heading path may have been preempted. Keep
+                            // choice 4 only while its copied speed evidence is
+                            // still usable; a revoked/expired speed is ORIGINAL.
+                            const Reason current_speed=nofix_speed_current(*ctx,event.mono_ns,speed,now());
+                            if(current_speed!=PASS) { event.choice=ORIGINAL;event.reason=current_speed; }
+                        }
+                    }
                 }
             }
             else if (current == BETA && ctx->position_class == POSITION_FIX &&
@@ -789,7 +871,7 @@ int32_t send_vehicle_data(void* session_storage, VehicleData* data) {
     // BETA hold (design S4): a failed replaced send withdraws BETA until the
     // OEM path itself is seen succeeding again with its own payload.
     if ((event.choice == BETA_REPLACEMENT || event.choice == BETA_SPEED_OVERLAY ||
-         event.choice == BETA_BEARING_OVERLAY) && result != 0) {
+         event.choice == BETA_BEARING_OVERLAY || event.choice == BETA_NOFIX_BEARING) && result != 0) {
         // Revoke first: the failed candidate is unselectable even after a
         // later ORIGINAL 0 clears the hold (BETA_DECISIONS 3.6).
         invalidate();

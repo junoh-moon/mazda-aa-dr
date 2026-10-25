@@ -79,6 +79,7 @@ static int frozen_ms=-1;
 // so the window must end by its own stock trust/conflict rule.
 static int drive_from_ms=-1;
 static double fix_course=0.0;
+static bool nofix_bearing_test=false;
 static double latitude(unsigned ms) {
     if(drive_from_ms>=0)return 35.0;
     return 35+kmh/3.6*((frozen_ms>=0?unsigned(frozen_ms):ms)/1000.0)/111320;
@@ -158,7 +159,13 @@ static bool oem_call(unsigned ms,int mode,bool stored=false) {
     memcpy(c.sent_bytes,sent,48);
     calls.push_back(c);
     if(bearing)return true;
-    if(overlay)assert(replaced_overlay(original));
+    if(overlay) {
+        if(nofix_bearing_test && sent[40]==1 && get32(sent+44)!=get32(original+44)) {
+            for(unsigned i=0;i<48;++i)
+                if(i!=32 && !(i>=36&&i<40) && i!=40 && !(i>=44&&i<48))assert(sent[i]==original[i]);
+            assert(sent[32]==1);
+        } else assert(replaced_overlay(original));
+    }
     else if(replaced) {
         // Never on a non-mode-0 call; copy-then-overwrite keeps 0..7, 24..31.
         assert(mode==0);
@@ -283,10 +290,12 @@ int main(int argc,char** argv) {
     // the product 25 m ceiling on every replaced send).
     const bool stale_diag=std::string(argv[1])=="budget_stale_diag";
     const std::string scenario=no_reverse?std::string("main"):(cap_off||stale_diag)?std::string("budget"):std::string(argv[1]);
+    const bool nofix_bearing_case=scenario=="g3_nofix" || scenario=="g3_nofix_off";
+    nofix_bearing_test=nofix_bearing_case;
     assert(scenario=="main"||scenario=="silence"||scenario=="disable"||scenario=="budget"||
            scenario=="fault"||scenario=="no_anchor"||scenario=="nofix"||scenario=="withdrawn_class"||
            scenario=="nofix_rearm"||scenario=="cadence_gap"||scenario=="cadence_gap_speed"||
-           scenario=="contradict"||g3_scenario(scenario)||g3_send_scenario(scenario)||token_scenario(scenario));
+           scenario=="contradict"||g3_scenario(scenario)||g3_send_scenario(scenario)||token_scenario(scenario)||nofix_bearing_case);
     // contradict (rule F v3): no REVERSE message at boot (the BETA seed comes
     // from the assumed forward state), GPS lost from t 3.2 s (ENGAGED), then a
     // real reverse 1 at t 4.4 s: the episode is withdrawn for the contradiction
@@ -310,7 +319,7 @@ int main(int argc,char** argv) {
     }
     // The beta.16 store scenarios run with the garage carry switched off
     // (g3-garage-off); g3_garage runs the product default (garage on).
-    const bool garage_off=g3_scenario(scenario) && scenario!="g3_garage";
+    const bool garage_off=(g3_scenario(scenario) && scenario!="g3_garage") || scenario=="g3_nofix_off";
     if(garage_off) {
         const int fd=open((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
         assert(fd>=0);close(fd);
@@ -326,7 +335,7 @@ int main(int argc,char** argv) {
     char own_boot[37];mx5::runtime::read_boot_id(own_boot);
     const bool real_boot=strlen(own_boot)==36;
     static const char EARLIER[]="cccccccc-1111-2222-3333-444444444444";
-    if(token_case) {
+    if(token_case || nofix_bearing_case) {
         // The earlier boot (cccc...) drove, parked and swapped the token: its
         // garage S record (flag 7) and its token are on disk.
         mx5::runtime::G3Record r=mx5::runtime::g3_record();
@@ -422,6 +431,56 @@ int main(int argc,char** argv) {
     }
     assert(A::mode()==A::BETA);
     N::MotionSender sender;assert(sender.open_channel(motion_channel));uint64_t sequence=0;
+    if(nofix_bearing_case) {
+        // A prior boot's valid garage record, but NO GPS at any time in this
+        // boot. Stand first, then turn while moving, then select reverse.
+        // The real worker must preserve wheel speed after bearing withdraws.
+        const uint64_t start=clock_ns(0);
+        for(unsigned ms=0;ms<=9000;ms+=20) {
+            until(start+uint64_t(ms)*1000000ULL);
+            for(unsigned kind=1;kind<=3;++kind) {
+                if(kind==N::YAW && ms%100)continue;
+                if(kind==N::REVERSE && ms!=200 && ms!=6500)continue;
+                N::RawEvent r=N::RawEvent();r.kind=static_cast<N::SensorKind>(kind);
+                r.epoch=1;r.receive_seq=++sequence;r.received_ns=clock_ns(0);r.count=1;r.reverse=ms==6500?1:0;
+                for(unsigned i=0;i<4;++i)r.raw[i]=kind==N::WHEELS?uint16_t(ms<1000?10000:11800):uint16_t(ms<1000?2048:1900);
+                assert(sender.send_event(r));
+            }
+            if(ms%200==0)oem_call(ms,1,true);
+        }
+        assert(!mkdir((logs+"/capture.stop").c_str(),0700));assert(!pthread_join(worker_thread,0));
+        unsigned bearing=0,speed_after=0;uint32_t early=0,late=0;
+        for(size_t i=0;i<calls.size();++i) {
+            const Call& c=calls[i];assert(c.mode==1 && !c.replaced);
+            if(c.overlay && c.bearing_e6!=335000000u) {
+                ++bearing;assert(c.ms<7000 && c.bearing_e6>10000 && c.bearing_e6<=359990000u);
+                if(c.ms>=2000 && c.ms<=3000)early=c.bearing_e6;
+                if(c.ms>=5000 && c.ms<=6000)late=c.bearing_e6;
+            }
+            if(c.ms>=1600 && c.overlay)assert(c.speed_e3==5000);
+            if(c.ms>=7000) { assert(c.bearing_e6==335000000u);if(c.overlay && c.speed_e3==5000)++speed_after; }
+        }
+        const Rows rows=read_rows(logs);unsigned choice7=0,seeds=0;bool restored=false,ended=false;
+        for(size_t i=0;i<rows.lines.size();++i) {
+            const std::string& l=rows.lines[i];
+            if(l.find("\"kind\":\"send\"")!=std::string::npos && l.find("\"choice\":7,")!=std::string::npos)++choice7;
+            if(l.find("\"kind\":\"beta_anchor\"")!=std::string::npos && l.find("\"gate\":\"accepted\"")!=std::string::npos)++seeds;
+            if(l.find("\"reason\":\"chain_depart\"")!=std::string::npos)restored=true;
+            if(l.find("\"kind\":\"g3_send\"")!=std::string::npos && l.find("\"reason\":\"latch\",\"why\":\"reverse\"")!=std::string::npos)ended=true;
+        }
+        printf("%s: bearing=%u choice7=%u early=%u late=%u speed_after=%u seeds=%u\n",scenario.c_str(),bearing,choice7,early,late,speed_after,seeds);
+        assert(!seeds && speed_after>=5);
+        if(garage_off)assert(!bearing && !choice7);
+        else assert(restored && ended && bearing>=10 && choice7==bearing && early && late>early+10000000u);
+        unlink((logs+"/capture.done").c_str());rmdir((logs+"/capture.stop").c_str());
+        for(unsigned i=0;i<3;++i)unlink((logs+"/trace."+char('0'+i)+".jsonl").c_str());
+        unlink((logs+"/"+mx5::runtime::G3_STORE_NAME).c_str());
+        unlink((logs+"/"+mx5::runtime::G3_LAST_START_NAME).c_str());
+        unlink((logs+"/"+mx5::runtime::G3_LAST_START_TEMP).c_str());
+        unlink((logs+"/"+mx5::runtime::G3_WORKER_BOOT_NAME).c_str());
+        if(garage_off)unlink((std::string(root)+"/"+mx5::runtime::G3_GARAGE_OFF_NAME).c_str());
+        assert(!rmdir(logs.c_str())&&!rmdir(root));alarm(0);puts("BETA NO_FIX garage bearing checks passed");return 0;
+    }
     if(token_case) {
         const std::string token_file=logs+"/"+mx5::runtime::G3_LAST_START_NAME;
         const std::string earlier_token(PREV_TOKEN),own_token=std::string("mx5g3start 1 ")+own_boot+"\n";

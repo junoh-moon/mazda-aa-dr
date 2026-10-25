@@ -1699,7 +1699,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
   // renames after this point (it re-checks the flag before the rename).
   // The G3 bearing overlay gate never outlives this worker.
   struct G3StopOnExit { ~G3StopOnExit() { g3_mailbox.stop.store(1,std::memory_order_release);
-                                          A::set_bearing_overlay(false); } } g3_stop_on_exit;
+                                          A::set_bearing_overlay(false);A::set_nofix_bearing(false); } } g3_stop_on_exit;
   (void)g3_stop_on_exit;
   if(beta_requested) {
     const bool g3_on=beta_core && mx5::runtime::g3_switch_on(root);
@@ -2022,7 +2022,7 @@ void* run_worker_association(const char* root,const char* motion_channel,const c
       view.source_epoch=beta_shared.source_epoch.load(std::memory_order_acquire);
       view.session_epoch=beta_shared.storage_epoch.load(std::memory_order_acquire);
       view.cadence_fences=beta.cadence_fences();
-      g3_send.tick(j,g3,g3_sample_now,view);
+      g3_send.tick(j,g3,g3_sample_now,view,beta.state()==mx5::runtime::BETA_SPEED_ENGAGED);
     }
     // The MODEL tick above no longer runs: the bearing overlay ends at once.
     if(g3_send.active() && (j.failed || !shadow || __sync_fetch_and_add(&audit_fault,0)))

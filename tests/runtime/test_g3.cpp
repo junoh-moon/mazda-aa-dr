@@ -1252,9 +1252,13 @@ static void g3_send_rules() {
 static uint64_t adapter_now=100*S;
 static uint8_t oem_sent[48];
 static adapter::Observation last_position_obs;
+static adapter::Observation last_send_obs;
 static uint64_t oem_clock(void*) { return adapter_now; }
 static int32_t oem_next(void*,adapter::VehicleData* d) { if(d && d->payload && d->length==48)memcpy(oem_sent,d->payload,48);return 0; }
-static void oem_sink(const adapter::Observation* o,void*) { if(o->kind==adapter::Observation::POSITION)last_position_obs=*o; }
+static void oem_sink(const adapter::Observation* o,void*) {
+    if(o->kind==adapter::Observation::POSITION)last_position_obs=*o;
+    if(o->kind==adapter::Observation::SEND)last_send_obs=*o;
+}
 static bool oem_provenance(void*,const adapter::PositionContext&,adapter::Provenance* out,void*) {
     *out=adapter::Provenance();out->source_epoch=11;out->session_epoch=12;
     out->domain=adapter::Provenance::Domain::BETA;return true;
@@ -1278,6 +1282,31 @@ static long oem_fix(uint64_t utc) {
     for(unsigned i=0;i<48;++i)if(i!=40 && !(i>=44 && i<48))CHECK(oem_sent[i]==original[i]);
     return long(oem_sent[44]|(oem_sent[45]<<8)|(oem_sent[46]<<16)|(uint32_t(oem_sent[47])<<24));
 }
+// Real NO_FIX callback + LOCATION: the carried heading has never seen GPS in
+// this boot, and an independently published wheel-speed candidate must survive.
+static uint32_t get32le(const uint8_t* p) {
+    return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);
+}
+static void oem_nofix() {
+    uint8_t position[72]={};put32le(position,1);
+    const double lat=35.5,lon=139.5;uint64_t b;
+    memcpy(&b,&lat,8);put32le(position+16,uint32_t(b));put32le(position+20,uint32_t(b>>32));
+    memcpy(&b,&lon,8);put32le(position+24,uint32_t(b));put32le(position+28,uint32_t(b>>32));
+    uint8_t original[48]={};put32le(original+8,355000000u);put32le(original+12,1395000000u);
+    original[32]=original[40]=1;put32le(original+36,1111);put32le(original+44,335000000u);
+    adapter::VehicleData data={1,original,48};
+    adapter::position_enter(0,position);adapter::send_vehicle_data(0,&data);adapter::position_leave();
+    for(unsigned i=0;i<48;++i)
+        if(i!=32 && !(i>=36&&i<40) && i!=40 && !(i>=44&&i<48))CHECK(oem_sent[i]==original[i]);
+}
+static void speed_candidate() {
+    adapter::DrSnapshot s=adapter::DrSnapshot();
+    s.prediction_generation=adapter::generation();s.source_epoch=11;s.session_epoch=12;
+    s.frontier_mono_ns=adapter_now;s.valid_until_mono_ns=adapter_now+500000000ULL;
+    s.ready=s.beta=s.speed_only=true;s.speed_mps=2.5;
+    CHECK(adapter::publish_snapshot(s));
+}
+
 static void g3_send_adapter() {
     adapter::Options o=adapter::Options();
     o.sink=oem_sink;o.clock=oem_clock;o.provenance=oem_provenance;o.max_snapshot_age_ns=500000000ULL;
@@ -2420,8 +2449,149 @@ static void token_fifth() {
       CHECK(t.take_request(b,sizeof b,&n,&q,0,&target) && target==G3_TARGET_TOKEN && same(t.token_why(),"moved")); }
 }
 
+static void garage_nofix_adapter() {
+    G3Record stored=depart_record();stored.heading_cdeg=19700;
+    G3Tracker t=started_garage(stored);G3Send g;g.start(true,true);Rows j;
+    adapter_now=200*S;t.send(location(adapter_now,true,335,1.111));
+    oem_nofix();CHECK(last_position_obs.position_class==adapter::POSITION_NO_FIX_STALE);
+    g.position(j,last_position_obs,2.5,adapter_now);
+    G3SendView v=view(adapter_now);v.beta_armed=false;
+    G3Sample s=garage_sample(adapter_now,0,false,0);s.heading_valid=false;
+    s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+    speed_candidate();t.tick(j,s,0,0);g.tick(j,t,s,v,true);oem_nofix();
+    CHECK(g.active() && get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==197000000u);
+    CHECK(last_send_obs.choice==adapter::BETA_NOFIX_BEARING);
+    g.send(j,last_send_obs,adapter_now);CHECK(g.overlaid()==1);
+    // No BETA GPS seed in this boot: the old parked body plus current yaw
+    // changes the outgoing direction while the speed slot stays untouched.
+    adapter_now+=100000000ULL;v.now=adapter_now;s.now=adapter_now;
+    s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+    s.motion.turn_rad=s.motion.abs_turn_rad=30*G3_PI/180;
+    speed_candidate();t.tick(j,s,0,0);g.tick(j,t,s,v,true);oem_nofix();
+    CHECK(get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==227000000u);
+    // The oldest actual evidence expires at 250 ms even if the speed slot
+    // and the worker clock are fresh. Re-ticking cannot renew old evidence.
+    adapter_now+=250000000ULL;v.now=adapter_now;
+    speed_candidate();g.tick(j,t,s,v,true);oem_nofix();
+    CHECK(get32le(oem_sent+44)==227000000u);
+    ++adapter_now;v.now=adapter_now;speed_candidate();g.tick(j,t,s,v,true);oem_nofix();
+    CHECK(get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+    // Missing/future yaw or wheel evidence never opens a bearing lease.
+    for(unsigned k=0;k<4;++k) {
+        s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+        if(k==0)s.motion.yaw_end_ns=0;
+        if(k==1)s.motion.yaw_end_ns=adapter_now+1;
+        if(k==2)s.motion.last_speed_ns=0;
+        if(k==3)s.motion.last_speed_ns=adapter_now+1;
+        g.tick(j,t,s,v,true);oem_nofix();CHECK(get32le(oem_sent+44)==335000000u);
+    }
+    s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+    g.tick(j,t,s,v,true);oem_nofix();CHECK(get32le(oem_sent+44)==227000000u);
+    // Withdraw only this gate; the independently valid speed stays usable.
+    g.tick(j,t,s,v,false);oem_nofix();
+    CHECK(get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+    g.tick(j,t,s,v,true);oem_nofix();CHECK(get32le(oem_sent+44)==227000000u);
+    // A non-NO_FIX POSITION closes immediately, without waiting for a tick.
+    adapter::Observation other=last_position_obs;other.position_class=adapter::POSITION_FIX;
+    g.position(j,other,0,adapter_now);oem_nofix();CHECK(get32le(oem_sent+44)==335000000u);
+    g.position(j,last_position_obs,0,adapter_now);g.tick(j,t,s,v,true);oem_nofix();
+    CHECK(get32le(oem_sent+44)==227000000u);
+    // A generation change requires a current POSITION observed by G3.
+    adapter::invalidate();speed_candidate();g.tick(j,t,s,v,true);oem_nofix();
+    CHECK(get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+    g.position(j,last_position_obs,0,adapter_now);g.tick(j,t,s,v,true);oem_nofix();
+    CHECK(get32le(oem_sent+44)==227000000u);
+    // Reverse permanently ends this window; no repeated tick reopens it.
+    s.reverse=1;g.tick(j,t,s,v,true);oem_nofix();
+    CHECK(!g.active() && get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+    s.reverse=0;g.tick(j,t,s,v,true);oem_nofix();CHECK(get32le(oem_sent+44)==335000000u);
+    // A regular chain_ok window without the garage switch cannot add NO_FIX
+    // bearing, even with otherwise valid restore, speed and motion evidence.
+    G3Tracker regular=started(good_record());G3Send off;off.start(true,false);
+    regular.send(location(adapter_now,true,335,1.111));off.position(j,last_position_obs,2.5,adapter_now);
+    regular.tick(j,s,0,0);off.tick(j,regular,s,v,true);oem_nofix();
+    CHECK(off.active() && get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+}
+static void garage_nofix_ends() {
+    for(unsigned k=0;k<13;++k) {
+        adapter_now+=2*S;
+        G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+        t.send(location(adapter_now,true,335,1.111));oem_nofix();
+        g.position(j,last_position_obs,2.5,adapter_now);
+        G3SendView v=view(adapter_now);v.beta_armed=false;
+        G3Sample s=garage_sample(adapter_now,0,false,0);s.heading_valid=false;
+        s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+        speed_candidate();t.tick(j,s,0,0);g.tick(j,t,s,v,true);oem_nofix();
+        CHECK(g.active() && get32le(oem_sent+44)==163600000u);
+        if(k==0) { s.reverse=-1;s.motion.reverse_unsure=1; }
+        if(k==1) { ++s.motion.breaks;s.wheels_moving=true; }
+        if(k==2)v.journal_ok=false;
+        if(k==3)v.journal_current=false;
+        if(k==4)v.beta_live=false;
+        if(k==5)v.adapter_ok=false;
+        if(k==6)++v.session_epoch;
+        if(k==7)++v.source_epoch;
+        if(k==8)++v.cadence_fences;
+        if(k==9) {
+            // No GPS has reported movement: 60 s does not close NO_FIX.
+            // Even a last valid publication cannot lease past the 900 s cap.
+            const uint64_t opened=adapter_now;
+            adapter_now+=61*S;v.now=adapter_now;
+            s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+            speed_candidate();g.tick(j,t,s,v,true);oem_nofix();
+            CHECK(g.active() && get32le(oem_sent+44)==163600000u);
+            adapter_now=opened+900*S-1;v.now=adapter_now;
+            s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+            speed_candidate();g.tick(j,t,s,v,true);oem_nofix();CHECK(get32le(oem_sent+44)==163600000u);
+            ++adapter_now;v.now=adapter_now;oem_nofix();CHECK(get32le(oem_sent+44)==335000000u);
+        }
+        if(k==10)g.fail(j,adapter_now,"model_disabled");
+        if(k==11) {
+            adapter::Observation failed=last_send_obs;failed.result=-1;
+            BetaShared shared;BetaController beta(shared);beta.send(failed);
+            CHECK(beta.counters().speed_overlay_sends==1 && beta.counters().speed_overlay_nonzero==1 &&
+                  beta.counters().original_nofix_sends==0);
+            g.send(j,failed,adapter_now);CHECK(g.overlaid()==1);
+        }
+        if(k==12) {
+            // A moving FIX starts the existing 60 s cap. Returning to
+            // NO_FIX must not lease its last heading across that boundary.
+            adapter::Observation moving=last_position_obs;
+            moving.position_class=adapter::POSITION_FIX;moving.position.velocity_kmh=3.6;
+            moving.position.heading_deg=163.6;g.position(j,moving,1.0,adapter_now);
+            g.position(j,last_position_obs,2.5,adapter_now);
+            adapter_now+=60*S-1;v.now=adapter_now;
+            s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+            speed_candidate();g.tick(j,t,s,v,true);oem_nofix();
+            CHECK(g.active() && get32le(oem_sent+44)==163600000u);
+            ++adapter_now;v.now=adapter_now;oem_nofix();
+            CHECK(get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+        }
+        g.tick(j,t,s,v,true);oem_nofix();
+        CHECK(!g.active() && get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+    }
+    // Destruction closes the independent gate without touching speed.
+    adapter_now+=2*S;
+    {
+        G3Tracker t=started_garage(depart_record());G3Send g;g.start(true,true);Rows j;
+        t.send(location(adapter_now,true,335,1.111));oem_nofix();g.position(j,last_position_obs,2.5,adapter_now);
+        G3SendView v=view(adapter_now);v.beta_armed=false;
+        G3Sample s=garage_sample(adapter_now,0,false,0);s.heading_valid=false;
+        s.motion.last_speed_ns=s.motion.yaw_end_ns=adapter_now;
+        speed_candidate();t.tick(j,s,0,0);g.tick(j,t,s,v,true);oem_nofix();CHECK(get32le(oem_sent+44)==163600000u);
+        g.start(false);oem_nofix();CHECK(get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+        g.start(true,true);g.position(j,last_position_obs,2.5,adapter_now);
+        g.tick(j,t,s,v,true);oem_nofix();CHECK(get32le(oem_sent+44)==163600000u);
+    }
+    oem_nofix();CHECK(get32le(oem_sent+36)==2500 && get32le(oem_sent+44)==335000000u);
+}
+
 int main(int argc,char** argv) {
     if(argc==3 && !strcmp(argv[1],"--two-boot"))return two_boot(argv[2]);
+    if(argc==2 && !strcmp(argv[1],"--nofix-send")) {
+        g3_send_adapter();garage_nofix_adapter();garage_nofix_ends();
+        std::printf("test_g3 NO_FIX: %u checks passed\n",checks);return 0;
+    }
     codec();
     file_io();
     chain_and_switch();
@@ -2456,6 +2626,8 @@ int main(int argc,char** argv) {
     token_gate();
     token_fifth();
     g3_send_adapter();   // configures the process-global adapter: last
+    garage_nofix_adapter();
+    garage_nofix_ends();
     std::printf("test_g3: %u checks passed\n",checks);
     return 0;
 }
