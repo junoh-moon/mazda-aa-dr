@@ -1,5 +1,5 @@
 """The one-page install guide shipped in the ZIP (packaging/USB_START_KO.md ->
-INSTALL_KO.md) matches the menu it describes (v1.0 stable).
+INSTALL_KO.md) matches the current two-page menu it describes.
 
 The owner's keyboard has no Shift: every command the guide asks to type is
 lowercase letters, digits, spaces and slashes; every key sequence is digits.
@@ -42,12 +42,15 @@ class InstallGuideTests(unittest.TestCase):
         numbers = set()
         for key in rows:
             numbers |= {n.strip() for n in key.split(',')}
-        self.assertEqual(numbers, {'0', '1', '2', '3', '4', '5', '6', '7', '8', '10', '11', '12'})
+        self.assertEqual(numbers, {'0', '1', '2', '3', '4', '5', '6', '7', '8', '10', '11', '12',
+                                   '13', '99'})
         self.assertIn('9번은 없습니다', GUIDE)
         self.assertIn('꺼짐', rows['11'])
         self.assertIn('꺼짐', rows['12'])
+        self.assertIn('기본 켜짐', rows['13'])
+        self.assertIn('고급', rows['99'])
         self.assertIn('`5`', rows['3'])
-        for n in ('0', '1', '2', '3', '4', '5', '6', '7', '8', '10', '11', '12'):
+        for n in ('0', '1', '2', '3', '4', '5', '6', '7', '8', '10', '11', '12', '13', '99'):
             self.assertRegex(SCRIPTS, r"\n\s+%s\) " % n)
         self.assertNotRegex(SCRIPTS, r"\n\s+9\) ")
 
