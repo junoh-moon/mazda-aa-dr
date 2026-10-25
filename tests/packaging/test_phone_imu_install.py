@@ -372,9 +372,13 @@ class MenuEleven(unittest.TestCase):
     def test_menu_eleven_turns_the_phone_channel_on_and_off(self):
         t = self.t
         marker = t.base / 'bt-off'
-        result = t.menu('11\n0\n')
+        main = t.menu('0\n')
+        self.assertIn('99 Advanced switches', main.stdout)
+        self.assertNotIn('11 Phone Bluetooth', main.stdout)
+        result = t.menu('99\n11\n0\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('11 Phone Bluetooth: turn on/off (experimental, default OFF)', result.stdout)
+        self.assertIn('11 Phone Bluetooth on/off', result.stdout)
+        self.assertIn('11/12 experimental; default OFF.', result.stdout)
         self.assertIn('Phone Bluetooth: package not installed;', result.stdout)
         self.bluetooth_tree()
         result = t.menu('1\n0\n')
@@ -385,13 +389,13 @@ class MenuEleven(unittest.TestCase):
         self.assertIn('bt_marker=present', status.stdout)
         self.assertIn('EXP none (11, 12 off)', status.stdout)
         self.assertNotIn('BT phone IMU OFF', status.stdout)
-        for keys in ('11\n0\n', '11\n\n0\n', '11\n1\n0\n', '11\n110\n0\n', '11\n12\n0\n'):
+        for keys in ('99\n11\n0\n0\n0\n', '11\n0\n', '11\n\n0\n', '11\n1\n0\n', '11\n110\n0\n', '11\n12\n0\n'):
             result = t.menu(keys)
             self.assertIn('Phone Bluetooth now:\n  OFF 꺼짐', result.stdout)
             self.assertIn('Enter 11 again to turn it ON,', result.stdout)
             self.assertIn('Cancelled; nothing changed.', result.stdout)
             self.assertTrue(marker.exists())
-        result = t.menu('11\n11\n0\n')
+        result = t.menu('99\n11\n11\n0\n0\n')
         self.assertIn('Phone Bluetooth turned ON 켜짐(실험).', result.stdout)
         self.assertFalse(marker.exists())
         self.assertEqual((t.base / 'mx5dr.conf').read_bytes(), config)
