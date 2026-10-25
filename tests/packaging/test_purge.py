@@ -16,7 +16,7 @@ import unittest
 import test_synthetic_install
 
 BOOT = '12345678-1234-1234-1234-123456789abc\n'
-MENU6 = '6 Delete everything this package left on the CMU (run 4, then 5, first)'
+MENU6 = '6 Delete all (after 4, then 5)'
 CONFIRM = ('Menu 6 deletes the collected logs too.\nRun 3 first to save them to this USB.\n'
            'Enter 6 again to delete everything,\nanything else cancels.\n')
 

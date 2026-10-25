@@ -320,7 +320,7 @@ def lifecycle(run, reference, upgrade):
     run.check('guard/persist present after install', (run.base / 'guard/persist').is_file())
     rc, screen = run.menu('0\n', 'first screen')
     run.check('first screen lists menu 6',
-              '6 Delete everything this package left on the CMU (run 4, then 5, first)' in screen)
+              '6 Delete all (after 4, then 5)' in screen)
     refusal(run, 3, 'guard/persist present', 'menu 6 while installed')
     for n, var in enumerate(('SMCFG_NORMALMODE', 'SMCFG_WCPMODE', 'SMCFG_NORMALMODE', 'SMCFG_NORMALMODE')):
         chosen = run.autostart_boot('product', var)

@@ -65,6 +65,102 @@ class TrialMenuTests(unittest.TestCase):
                          'retained raw evidence\n')
         return (self.usb / 'trial-result.txt').read_text()
 
+    def test_first_screen_fits_small_terminal_and_hides_feature_switches(self):
+        for mode in ('BETA', 'SHADOW', 'OBSERVE'):
+            with self.subTest(mode=mode):
+                (self.usb / 'bundle-default-mode').write_text(mode + '\n')
+                result = self.menu('0\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = result.stdout.splitlines()
+                numbers = [line.split()[0] for line in lines
+                           if line.split() and line.split()[0].isdigit()]
+                self.assertEqual(numbers, ['1', '2', '3', '4', '5', '6', '99', '0'])
+                self.assertLessEqual(len(lines), 14, result.stdout)
+                for line in lines:
+                    self.assertLessEqual(len(line), 40, line)
+                self.assertIn('99 Advanced switches', result.stdout)
+                self.assertIn('engine RUNNING', result.stdout)
+                self.assertIn('Not ACC', result.stdout)
+                self.assertFalse(self.base.exists())
+                self.assertEqual(self.fixture.autostart.read_bytes(), self.fixture.original_autostart)
+
+    def test_advanced_page_keeps_numbers_and_zero_returns_without_changes(self):
+        for mode in ('BETA', 'SHADOW'):
+            with self.subTest(mode=mode):
+                (self.usb / 'bundle-default-mode').write_text(mode + '\n')
+                result = self.menu('99\n0\n0\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                pages = result.stdout.split('Number, then Enter: ')
+                self.assertEqual(len(pages), 4, result.stdout)
+                self.assertIn('Advanced switches (' + mode + ')', pages[1])
+                lines = pages[1].splitlines()
+                numbers = [line.split()[0] for line in lines
+                           if line.split() and line.split()[0].isdigit()]
+                self.assertEqual(numbers, ['7', '8', '10', '11', '12'] +
+                                 (['13'] if mode == 'BETA' else []) + ['0'])
+                self.assertIn('0 Back', pages[1])
+                self.assertIn('Parked USB trial menu', pages[2])
+                self.assertLessEqual(len(lines), 12, pages[1])
+                for line in lines:
+                    self.assertLessEqual(len(line), 40, line)
+                self.assertFalse(self.base.exists())
+
+    def test_advanced_toggle_still_requires_its_own_numeric_confirmation(self):
+        self.fixture.run_script('install.sh')
+        config = (self.base / 'mx5dr.conf').read_bytes()
+        marker = self.base / 'vimchan-off'
+        cancelled = self.menu('99\n7\n0\n0\n0\n')
+        self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+        self.assertIn('Cancelled; nothing changed.', cancelled.stdout)
+        self.assertFalse(marker.exists())
+        changed = self.menu('99\n7\n7\n0\n0\n')
+        self.assertEqual(changed.returncode, 0, changed.stderr)
+        self.assertEqual(marker.read_text(), 'off\n')
+        self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+        self.assertEqual(changed.stdout.count('Parked USB trial menu'), 2)
+
+    def test_all_advanced_switches_keep_their_original_marker_and_confirmation(self):
+        (self.usb / 'bundle-default-mode').write_text('BETA\n')
+        self.fixture.run_script('install.sh')
+        # The menu requires a prepared XML before it offers BT enablement.
+        # This test-only placeholder is never passed to a radio or daemon.
+        (self.base / 'bt').mkdir(exist_ok=True)
+        (self.base / 'bt/BdsConfiguration.xml').write_text('<synthetic-fixture/>\n')
+        config = (self.base / 'mx5dr.conf').read_bytes()
+        for number, name in (('7', 'vimchan-off'), ('8', 'g3-off'), ('10', 'acc-cap-off'),
+                             ('11', 'bt-off'), ('12', 'g3-garage-off'), ('13', 'tunnelmap-off')):
+            with self.subTest(number=number):
+                marker = self.base / name
+                before = marker.exists()
+                cancelled = self.menu(f'99\n{number}\n0\n0\n0\n')
+                self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+                self.assertEqual(marker.exists(), before)
+                self.assertIn('Cancelled; nothing changed.', cancelled.stdout)
+                changed = self.menu(f'99\n{number}\n{number}\n0\n0\n')
+                self.assertEqual(changed.returncode, 0, changed.stderr)
+                self.assertEqual(marker.exists(), not before)
+                self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
+
+    def test_advanced_eof_and_removed_number_nine_do_not_change_state(self):
+        self.fixture.run_script('install.sh')
+        before = sorted(p.name for p in self.base.iterdir())
+        for keys in ('99\n', '99\nbad\n', '99\n9\n', '99\n7\n'):
+            with self.subTest(keys=keys):
+                result = self.menu(keys)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(sorted(p.name for p in self.base.iterdir()), before)
+                self.assertNotIn('\n9 ', result.stdout)
+
+    def test_advanced_status_preserves_the_verdict_with_a_short_back_prompt(self):
+        self.prepare_logs()
+        result = self.menu('99\n2\n0\n0\n')
+        tail = result.stdout.split('---- GO / NO-GO ----', 1)[1]
+        before_main = tail.split('Parked USB trial menu', 1)[0]
+        self.assertIn('0 Back (99 shows switches again)', before_main)
+        self.assertNotIn('Advanced switches (', before_main)
+        for line in before_main.splitlines():
+            self.assertLessEqual(len(line), 40, line)
+
     def test_eof_blank_and_invalid_input_never_install(self):
         for keys in ('', '\n0\n', 'bad\n0\n', '$(touch unexpected)\n0\n'):
             result = self.menu(keys)
@@ -89,7 +185,7 @@ class TrialMenuTests(unittest.TestCase):
                 self.assertFalse(ran.exists())
         cancelled = self.menu('6\n1x\n0\n')
         # A cancel returns to the menu (the full list is shown again).
-        self.assertEqual(cancelled.stdout.count('6 Delete everything this package left on the CMU'), 2)
+        self.assertEqual(cancelled.stdout.count('6 Delete all (after 4, then 5)'), 2)
         result = self.menu('6\n6\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(ran.exists())
@@ -102,7 +198,6 @@ class TrialMenuTests(unittest.TestCase):
         marker = self.base / 'vimchan-off'
         result = self.menu('7\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('7 VIM side-channel log on/off (log only)', result.stdout)
         self.assertIn('package not installed; nothing changed.', result.stdout)
         self.assertFalse(self.base.exists())
         self.fixture.run_script('install.sh')
@@ -125,8 +220,8 @@ class TrialMenuTests(unittest.TestCase):
         self.assertEqual(marker.read_text(), 'off\n')
         self.assertFalse(list(self.base.glob('vimchan-off.new.*')))
         self.assertEqual((self.base / 'mx5dr.conf').read_bytes(), config)
-        # The menu returns to the full list (all seven items) after the toggle.
-        self.assertEqual(result.stdout.count('6 Delete everything this package left on the CMU'), 2)
+        # Direct legacy switch numbers return to the compact main screen.
+        self.assertEqual(result.stdout.count('6 Delete all (after 4, then 5)'), 2)
         result = self.menu('7\n7\n0\n')
         self.assertIn('VIM side-channel log now: OFF', result.stdout)
         self.assertIn('VIM side-channel log set to ON.', result.stdout)
@@ -151,7 +246,6 @@ class TrialMenuTests(unittest.TestCase):
         marker = self.base / 'g3-off'
         result = self.menu('8\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('8 Heading (G3) log and start bearing on/off', result.stdout)
         self.assertIn('Heading log: package not installed;', result.stdout)
         self.assertFalse(self.base.exists())
         self.fixture.run_script('install.sh')
@@ -230,11 +324,10 @@ class TrialMenuTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         listed = [line.split(' ', 1)[0] for line in result.stdout.splitlines()
                   if line[:1].isdigit() and ' ' in line and line.split(' ', 1)[0].isdigit()]
-        # The fixture bundle is not BETA, so the BETA-only tunnel-map menu is
-        # not listed. BETA is covered by its own test below.
-        self.assertEqual(listed[:12], ['1', '2', '3', '4', '5', '6', '7', '8', '10', '11', '12', '0'])
+        # Feature switches live under 99; removed menu 9 stays absent.
+        self.assertEqual(listed[:8], ['1', '2', '3', '4', '5', '6', '99', '0'])
         status = self.menu('2\n0\n')
-        self.assertIn('0 Exit (1-8, 10-12 as listed before)', status.stdout)
+        self.assertIn('0 Exit (1-6, 99 more)', status.stdout)
         self.assertNotIn('1-11', status.stdout)
         self.assertNotIn('diag_marker', status.stdout)
         self.assertNotIn('TEST ', status.stdout)
@@ -256,7 +349,6 @@ class TrialMenuTests(unittest.TestCase):
         marker = self.base / 'acc-cap-off'
         result = self.menu('10\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('10 Tunnel 25 m cap on/off (BETA)', result.stdout)
         self.assertIn('Tunnel 25 m cap: package not installed;', result.stdout)
         self.assertFalse(self.base.exists())
         self.fixture.run_script('install.sh')
@@ -339,7 +431,6 @@ class TrialMenuTests(unittest.TestCase):
         marker = self.base / 'g3-garage-off'
         result = self.menu('12\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('12 Garage heading: turn on/off (experimental, default OFF)', result.stdout)
         self.assertIn('Garage heading: package not installed;', result.stdout)
         result = self.menu('1\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -428,7 +519,6 @@ class TrialMenuTests(unittest.TestCase):
         marker = self.base / 'tunnelmap-off'
         result = self.menu('13\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('13 Tunnel map constraint on/off (BETA)', result.stdout)
         self.assertIn('Tunnel map constraint: package not installed;', result.stdout)
         result = self.menu('1\n0\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -617,7 +707,7 @@ class TrialMenuTests(unittest.TestCase):
         result = self.menu('2\n0\n')
         self.assertEqual(result.stdout.count('Parked USB trial menu'), 1)
         out = result.stdout
-        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-8, 10-12 as listed before)'))
+        self.assertLess(out.index('---- GO / NO-GO ----'), out.index('0 Exit (1-6, 99 more)'))
         self.assertIn('Startup check saved', out[:out.index('---- GO / NO-GO ----')])
         for line in out[out.index('---- GO / NO-GO ----'):].splitlines():
             self.assertLessEqual(len(line), 40, line)
@@ -701,7 +791,8 @@ class TrialMenuTests(unittest.TestCase):
         (self.usb / 'bundle-default-mode').write_text('BETA\n')
         result = self.menu('1\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('This USB installs mode BETA: BETA = SHADOW capture', result.stdout)
+        self.assertIn('Parked USB trial menu (BETA)', result.stdout)
+        self.assertIn('GPS loss: BETA LOCATION replacement.', result.stdout)
         # BETA is the persistent v1.0 product: one key installs it for every boot.
         self.assertIn('1 Install or re-enable BETA, every boot', result.stdout)
         self.assertNotIn('for the next boot', result.stdout)
@@ -717,8 +808,8 @@ class TrialMenuTests(unittest.TestCase):
     def test_shadow_bundle_menu_says_location_is_never_replaced(self):
         (self.usb / 'bundle-default-mode').write_text('SHADOW\n')
         result = self.menu('0\n')
-        self.assertIn('This USB installs mode SHADOW: SHADOW = capture only; LOCATION is never replaced',
-                      result.stdout)
+        self.assertIn('Parked USB trial menu (SHADOW)', result.stdout)
+        self.assertIn('Capture only; LOCATION never replaced.', result.stdout)
         self.assertIn('1 Install SHADOW for the next boot', result.stdout)
 
     GO = ('reboot_check=new_boot_observed (boot ID comparison)\n'
