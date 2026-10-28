@@ -438,6 +438,9 @@ struct Options {
     // store request), so the third-review C1 case can be replayed.
     uint64_t writer_lag_ns;
     std::string g3_send_out;
+    // --g3-request-out FILE: one JSON line per store request at its request
+    // tick (seed state, break causes, anchor gates; see g3_request_record).
+    std::string g3_request_out;
     // --g3-rt S: the CLOCK_REALTIME seconds the tracker sees at worker start
     // (the product reads it; default 0 = unknown, the record-only replays).
     uint64_t g3_rt;
@@ -632,6 +635,104 @@ void g3_send_record(const Fix& f, uint64_t t, const SendRecord& r) {
         g3send.heading());
     g3_send_lines.push_back(line);
 }
+// --g3-request-out (validation/G3_REQUEST_TRACE_2026-10-28.md): one line per
+// store request the tracker hands out, written at the request tick (the G3
+// journal shows the request snapshot only at the completion tick). Watched
+// every G3 turn: when the G3 sample's BETA heading becomes valid/invalid,
+// every yaw-chain break with its cause (a pipeline reset, a rule F taint end,
+// otherwise a yaw window lost while moving) and the BETA anchor gate counts.
+// Replay-only observation: it reads the pipeline and the tracker and changes
+// no decision (parent only).
+struct G3RequestWatch {
+    bool ok;
+    uint64_t first_ok_ns, last_ok_ns, last_lost_ns;
+    const char* last_lost_cause;
+    uint32_t breaks, discards, lost;
+    uint64_t resets, anchor_seen, anchors_missed;
+    unsigned causes[3];   // reset, rule_f, yaw_gap
+    uint64_t last_break_ns;
+    const char* last_break_cause;
+    unsigned gates[32];
+} g3_req;
+std::vector<std::string> g3_request_lines;
+const char* const G3_BREAK_CAUSES[] = {"reset", "rule_f", "yaw_gap"};
+void g3_request_watch(uint64_t now, const R::G3Sample& s) {
+    G3RequestWatch& w = g3_req;
+    const uint64_t resets = nav.status().resets;
+    const N::G3Motion& m = s.motion;
+    const bool reset = resets != w.resets, taint = m.discards != w.discards;
+    if (m.breaks != w.breaks) {
+        const unsigned c = reset ? 0 : taint ? 1 : 2;
+        w.causes[c] += m.breaks > w.breaks ? m.breaks - w.breaks : 1;
+        w.last_break_ns = now; w.last_break_cause = G3_BREAK_CAUSES[c];
+    }
+    if (s.heading_valid && !w.ok) { if (!w.first_ok_ns) w.first_ok_ns = now; }
+    if (!s.heading_valid && w.ok) {
+        ++w.lost; w.last_lost_ns = now;
+        w.last_lost_cause = reset ? "reset" : !nav.beta_seeded() ? "unseeded" :
+                            nav.beta_estimate().reason != MX5_DR_OK ? "core_reason" : "budget";
+    }
+    if (s.heading_valid) w.last_ok_ns = now;
+    w.ok = s.heading_valid; w.resets = resets; w.breaks = m.breaks; w.discards = m.discards;
+    const uint64_t latest = nav.beta_anchor_sequence();
+    if (latest < w.anchor_seen) w.anchor_seen = 0;
+    for (uint64_t seq = w.anchor_seen + 1; seq <= latest; ++seq) {
+        N::BetaAnchorRecord r;
+        if (!nav.beta_anchor_record(seq, &r)) { ++w.anchors_missed; continue; }
+        if (unsigned(r.gate) < 32) ++w.gates[r.gate];
+    }
+    w.anchor_seen = latest;
+}
+void g3_request_record(uint64_t now, const R::G3Sample& s) {
+    if (!count_latch) return;
+    const G3RequestWatch& w = g3_req;
+    std::string line;
+    char b[256];
+    auto sec = [](uint64_t ns) {
+        char t[32];
+        if (ns) snprintf(t, sizeof t, "%.2f", ns / 1e9);
+        else strcpy(t, "null");
+        return std::string(t);
+    };
+    char st = 0; unsigned hv = 0;
+    if (g3_job.target == R::G3_TARGET_STORE) {
+        R::G3Record rec;
+        if (R::g3_decode(g3_job.line, g3_job.n, &rec) == R::G3_LOAD_OK) {
+            st = rec.state; hv = (rec.flags & R::G3_FLAG_HEADING) ? 1 : 0;
+        }
+    }
+    snprintf(b, sizeof b, "{\"t_s\":%.2f,\"seq\":%lu,\"target\":\"%s\",\"sync\":%s,\"st\":", now / 1e9,
+             (unsigned long)g3_job.seq, g3_job.target == R::G3_TARGET_TOKEN ? "token" : "store",
+             g3_job.sync ? "true" : "false");
+    line += b;
+    if (st) { snprintf(b, sizeof b, "\"%c\",\"hv\":%u", st, hv); line += b; }
+    else line += "null,\"hv\":null";
+    snprintf(b, sizeof b, ",\"beta_ok\":%s,\"seeded\":%s,\"seed_first_s\":%s,\"seed_last_s\":%s,\"lost\":%u,"
+             "\"last_lost_s\":%s,\"last_lost\":", s.heading_valid ? "true" : "false",
+             nav.beta_seeded() ? "true" : "false", sec(w.first_ok_ns).c_str(), sec(w.last_ok_ns).c_str(),
+             w.lost, sec(w.last_lost_ns).c_str());
+    line += b;
+    line += w.last_lost_cause ? std::string("\"") + w.last_lost_cause + "\"" : "null";
+    snprintf(b, sizeof b, ",\"breaks\":%u,\"causes\":{\"reset\":%u,\"rule_f\":%u,\"yaw_gap\":%u},"
+             "\"last_break_s\":%s,\"last_break\":", s.motion.breaks, w.causes[0], w.causes[1], w.causes[2],
+             sec(w.last_break_ns).c_str());
+    line += b;
+    line += w.last_break_cause ? std::string("\"") + w.last_break_cause + "\"" : "null";
+    snprintf(b, sizeof b, ",\"moving_s\":%.1f,\"distance_m\":%.1f,\"anchors_missed\":%llu,\"gates\":{",
+             std::isfinite(s.motion.moving_s) ? s.motion.moving_s : 0.0,
+             std::isfinite(s.motion.distance_m) ? s.motion.distance_m : 0.0,
+             (unsigned long long)w.anchors_missed);
+    line += b;
+    bool first = true;
+    for (unsigned g = 0; g < 32; ++g) {
+        if (!w.gates[g]) continue;
+        snprintf(b, sizeof b, "%s\"%s\":%u", first ? "" : ",", N::beta_anchor_gate_name(N::BetaAnchorGate(g)),
+                 w.gates[g]);
+        line += b; first = false;
+    }
+    line += "}}";
+    g3_request_lines.push_back(line);
+}
 // --record-out: the drive data rows in their own file (no gate: every row
 // is written).
 R::DriveRecordLog record;
@@ -649,6 +750,7 @@ void g3_turn(uint64_t now) {
     sample.beta_replacing = g3_replacing(beta->state());
     sample.writer_lag_ns = opt.writer_lag_ns;
     if (g3.token_wanted()) sample.token_why = g3_watch.check(now);
+    if (!opt.g3_request_out.empty()) g3_request_watch(now, sample);
     // --g3-garage on: the runtime's garage idle rule (a write without fsync
     // may run while BETA replaces; the tracker requests no fsync then).
     // The runtime's g3_io_block with a store thread, a current journal, a
@@ -690,6 +792,7 @@ void g3_turn(uint64_t now) {
                                           &g3_job.target)) {
         g3_job.active = true;
         g3_job.due = now + (opt.g3 == "slow" ? 3000000000ULL : 0);
+        if (!opt.g3_request_out.empty()) g3_request_record(now, sample);
     }
     // runtime.cpp: the bearing send after the tracker (journal always current here).
     if (opt.g3_send) {
@@ -1318,6 +1421,7 @@ void usage() {
         "                   [--journal FILE] [--self-test-corrupt payload|accuracy|mode]\n"
         "                   [--g3 off|on|slow] [--g3-store DIR] [--g3-out FILE]\n"
         "                   [--g3-send off|on] [--g3-send-out FILE] [--g3-rt S] [--g3-garage off|on]\n"
+        "                   [--g3-request-out FILE]\n"
         "                   [--writer-lag-ms N]\n"
         "                   [--stopped-accuracy-m A] [--stopped-honest-max-m H] [--crawl-speed-mps V]\n"
         "                   [--assume-forward on|off] [--seed-report] [--reverse-fence feed|runtime]\n"
@@ -1386,6 +1490,7 @@ int main(int argc, char** argv) {
             opt.g3_send = v == "on";
         }
         else if (a == "--g3-send-out" && more) opt.g3_send_out = argv[++i];
+        else if (a == "--g3-request-out" && more) opt.g3_request_out = argv[++i];
         else if (a == "--g3-garage" && more) {
             const std::string v = argv[++i];
             if (v != "on" && v != "off") { usage(); return 2; }
@@ -1754,6 +1859,12 @@ int main(int argc, char** argv) {
         if (!f) { perror(opt.g3_send_out.c_str()); return 2; }
         for (size_t i = 0; i < g3_send_lines.size(); ++i) fprintf(f, "%s\n", g3_send_lines[i].c_str());
         if (fclose(f)) { perror(opt.g3_send_out.c_str()); return 2; }
+    }
+    if (!opt.g3_request_out.empty()) {
+        FILE* f = fopen(opt.g3_request_out.c_str(), "w");
+        if (!f) { perror(opt.g3_request_out.c_str()); return 2; }
+        for (size_t i = 0; i < g3_request_lines.size(); ++i) fprintf(f, "%s\n", g3_request_lines[i].c_str());
+        if (fclose(f)) { perror(opt.g3_request_out.c_str()); return 2; }
     }
     if (!opt.record_out.empty()) {
         FILE* f = fopen(opt.record_out.c_str(), "w");
