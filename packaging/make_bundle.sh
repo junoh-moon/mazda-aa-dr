@@ -35,7 +35,14 @@ if [ "$SHELL_ONLY" = 1 ]; then
 else
   cp -R "$HERE/usb-entry/mp3" "$HERE/usb-entry/js" "$dest/"
   cp "$HERE/usb-entry/NOTICE.md" "$dest/USB_ENTRY_NOTICE.md"
-  cp "$HERE/USB_START_KO.md" "$dest/INSTALL_KO.md"
+  # Touch route (no keyboard): the CMU update scanner starts touch.sh through
+  # the .up entry. The numeric shell route stays available with the same trial menu.
+  cp "$HERE/touch/touch.sh" "$dest/touch.sh"
+  cp "$HERE/touch/MX5DR-TOUCH.ID" "$dest/MX5DR-TOUCH.ID"
+  : > "$dest/jci-autoupdate"
+  python3 "$HERE/touch/make_entry.py" "$dest"
+  cp "$HERE/TOUCH_START_KO.md" "$dest/INSTALL_KO.md"
+  cp "$HERE/USB_START_KO.md" "$dest/SHELL_INSTALL_KO.md"
 fi
 (cd "$dest" && sha256sum mx5dr-sha256 > mx5dr-sha256.sha256)
 (cd "$dest" && sha256sum mx5dr-collector > mx5dr-collector.sha256)
