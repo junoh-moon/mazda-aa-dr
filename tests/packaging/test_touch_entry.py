@@ -109,27 +109,27 @@ class TouchRouteTests(unittest.TestCase):
 
     # Fresh stick: the install-or-cancel dialog comes first.
     def test_fresh_cancel_changes_nothing(self):
-        run = self.run_touch([1])
+        run = self.run_touch([0])
         self.assertEqual(run.trial_calls, [])
         self.assertEqual(len(run.blocking), 1)
-        self.assertIn('--ok-label=INSTALL', run.blocking[0])
+        self.assertIn('--cancel-label=INSTALL', run.blocking[0])
 
     def test_fresh_install_then_restart_feeds_one_and_five(self):
-        run = self.run_touch([0, 0], outputs={'1': INSTALL_OK})
+        run = self.run_touch([1, 1], outputs={'1': INSTALL_OK})
         self.assertEqual(run.trial_calls, ['1 0', '5'])
-        self.assertIn('--ok-label=RESTART', run.blocking[1])
+        self.assertIn('--cancel-label=RESTART', run.blocking[1])
 
     def test_fresh_install_later_does_not_reboot(self):
-        run = self.run_touch([0, 1], outputs={'1': INSTALL_OK})
+        run = self.run_touch([1, 0], outputs={'1': INSTALL_OK})
         self.assertEqual(run.trial_calls, ['1 0'])
 
     def test_install_failure_offers_no_restart(self):
-        run = self.run_touch([0, 0], codes={'1': 1})
+        run = self.run_touch([1, 0], codes={'1': 1})
         self.assertEqual(run.trial_calls, ['1 0'])
         self.assertIn('Install did not finish', run.blocking[1])
 
     def test_missing_installed_line_counts_as_failure(self):
-        run = self.run_touch([0, 0], outputs={'1': 'mx5dr: no space\n'})
+        run = self.run_touch([1, 0], outputs={'1': 'mx5dr: no space\n'})
         self.assertEqual(run.trial_calls, ['1 0'])
 
     # Installed stick: CHECK, REMOVE or MORE.
@@ -145,46 +145,46 @@ class TouchRouteTests(unittest.TestCase):
         self.assertIn('Not GO', run.blocking[1])
 
     def test_remove_then_restart_feeds_four_and_five(self):
-        run = self.run_touch([1, 0, 0], installed=True)
+        run = self.run_touch([1, 1, 1], installed=True)
         self.assertEqual(run.trial_calls, ['4', '5'])
 
     def test_remove_cancel_changes_nothing(self):
-        run = self.run_touch([1, 1], installed=True)
+        run = self.run_touch([1, 0], installed=True)
         self.assertEqual(run.trial_calls, [])
         self.assertEqual(len(run.blocking), 2)
 
     def test_remove_later_keeps_the_stick_until_restart(self):
-        run = self.run_touch([1, 0, 1], installed=True)
+        run = self.run_touch([1, 1, 0], installed=True)
         self.assertEqual(run.trial_calls, ['4'])
 
     def test_more_save_logs_feeds_three(self):
-        run = self.run_touch([2, 0, 0, 0], installed=True)
+        run = self.run_touch([2, 0, 1, 0], installed=True)
         self.assertEqual(run.trial_calls, ['3'])
         self.assertIn('Save logs to the USB?', run.blocking[2])
 
     def test_more_save_cancel_changes_nothing(self):
-        run = self.run_touch([2, 0, 1], installed=True)
+        run = self.run_touch([2, 0, 0], installed=True)
         self.assertEqual(run.trial_calls, [])
 
     def test_more_restart_needs_a_second_confirm(self):
-        run = self.run_touch([2, 1, 0], installed=True)
-        self.assertEqual(run.trial_calls, ['5'])
         run = self.run_touch([2, 1, 1], installed=True)
+        self.assertEqual(run.trial_calls, ['5'])
+        run = self.run_touch([2, 1, 0], installed=True)
         self.assertEqual(run.trial_calls, [])
 
     def test_delete_needs_two_confirms_then_feeds_six_six(self):
-        run = self.run_touch([2, 2, 0, 0, 0], installed=True)
+        run = self.run_touch([2, 2, 1, 1, 0], installed=True)
         self.assertEqual(run.trial_calls, ['6 6'])
         self.assertIn('Really delete everything?', run.blocking[3])
 
     def test_delete_cancelled_at_either_confirm_changes_nothing(self):
-        run = self.run_touch([2, 2, 1], installed=True)
+        run = self.run_touch([2, 2, 0], installed=True)
         self.assertEqual(run.trial_calls, [])
-        run = self.run_touch([2, 2, 0, 1], installed=True)
+        run = self.run_touch([2, 2, 1, 0], installed=True)
         self.assertEqual(run.trial_calls, [])
 
     def test_delete_refused_by_the_trial_is_reported(self):
-        run = self.run_touch([2, 2, 0, 0, 0], installed=True, codes={'6': 1})
+        run = self.run_touch([2, 2, 1, 1, 0], installed=True, codes={'6': 1})
         self.assertEqual(run.trial_calls, ['6 6'])
         self.assertIn('Delete did not run', run.blocking[-1])
 
@@ -204,6 +204,16 @@ class TouchRouteTests(unittest.TestCase):
             code = line.split('#', 1)[0]
             self.assertIsNone(re.search(r'(^|[\s;&|(])read(\s|$)', code), line)
         self.assertNotIn('/dev/tty', TOUCH_SH)
+
+    def test_destructive_buttons_sit_on_the_right_of_every_confirm(self):
+        # The left half returns 0; a stray tap there must never start an action.
+        destructive = {'INSTALL', 'REMOVE', 'RESTART', 'SAVE', 'DELETE'}
+        calls = re.findall(r"ask_two '[^']*' (\S+) (\S+) \|\|", TOUCH_SH)
+        self.assertTrue(calls)
+        for left, right in calls:
+            if right in destructive:
+                self.assertIn(left, {'CANCEL', 'LATER'}, (left, right))
+            self.assertNotIn(left, destructive, (left, right))
 
     def test_touch_route_takes_no_arguments(self):
         result = subprocess.run(['sh', str(self.usb / 'touch.sh'), 'extra'], env=self.env,

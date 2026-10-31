@@ -34,8 +34,10 @@ show_progress() {
     "$DIALOG" --info --title="$TITLE" --text="$1" --no-cancel >/dev/null 2>&1 &
 }
 
-# Blocking dialog with two buttons: 0 first label, 1 second label, any other
-# status is a dialog failure. Callers act only on the code they expect.
+# Blocking dialog with two buttons. The left button returns 0 and is always the
+# safe choice: a stray tap in the left half is the likely accident, so every
+# destructive action sits on the right and returns 1. Any other status is a dialog
+# failure; callers act only on the code they expect.
 ask_two() {
     dismiss_popups
     answer=0
@@ -75,8 +77,8 @@ do_install() {
     rc=0; run_trial 1 0 || rc=$?
     if [ "$rc" = 0 ] && grep -q '^Installation finished' "$OUT"; then
         answer=0
-        ask_two 'Installed.\n\nRestart the CMU to start BETA.\nKeep the engine running.' RESTART LATER || answer=$?
-        if [ "$answer" = 0 ]; then do_restart; fi
+        ask_two 'Installed.\n\nRestart the CMU to start BETA.\nKeep the engine running.' LATER RESTART || answer=$?
+        if [ "$answer" = 1 ]; then do_restart; fi
     else
         ask_two 'Install did not finish.\n\nRead touch-log.txt on the USB.\nNo restart was requested.' OK CLOSE || :
     fi
@@ -97,8 +99,8 @@ do_check() {
 
 do_remove() {
     answer=0
-    ask_two 'Remove MX5 AA DR?\n\nLogs stay on the USB.\nStock returns after a restart.' REMOVE CANCEL || answer=$?
-    [ "$answer" = 0 ] || return 0
+    ask_two 'Remove MX5 AA DR?\n\nLogs stay on the USB.\nStock returns after a restart.' CANCEL REMOVE || answer=$?
+    [ "$answer" = 1 ] || return 0
     show_progress 'Removing MX5 AA DR.\n\nKeep the engine running and the USB connected.'
     rc=0; run_trial 4 || rc=$?
     if [ "$rc" != 0 ]; then
@@ -106,14 +108,14 @@ do_remove() {
         return 0
     fi
     answer=0
-    ask_two 'Removed.\n\nRestart the CMU to return to stock.\nKeep the engine running.' RESTART LATER || answer=$?
-    if [ "$answer" = 0 ]; then do_restart; fi
+    ask_two 'Removed.\n\nRestart the CMU to return to stock.\nKeep the engine running.' LATER RESTART || answer=$?
+    if [ "$answer" = 1 ]; then do_restart; fi
 }
 
 do_save() {
     answer=0
-    ask_two 'Save logs to the USB?\n\nThis stops the product for this boot.\nThe next boot starts it again.' SAVE CANCEL || answer=$?
-    [ "$answer" = 0 ] || return 0
+    ask_two 'Save logs to the USB?\n\nThis stops the product for this boot.\nThe next boot starts it again.' CANCEL SAVE || answer=$?
+    [ "$answer" = 1 ] || return 0
     show_progress 'Saving logs.\n\nKeep the USB connected until done.'
     rc=0; run_trial 3 || rc=$?
     if [ "$rc" = 0 ]; then
@@ -125,11 +127,11 @@ do_save() {
 
 do_delete() {
     answer=0
-    ask_two 'Delete MX5 AA DR completely?\n\nLogs are deleted too.\nRemove and restart first.' DELETE CANCEL || answer=$?
-    [ "$answer" = 0 ] || return 0
+    ask_two 'Delete MX5 AA DR completely?\n\nLogs are deleted too.\nRemove and restart first.' CANCEL DELETE || answer=$?
+    [ "$answer" = 1 ] || return 0
     answer=0
-    ask_two 'Really delete everything?\n\nThis cannot be undone.' DELETE CANCEL || answer=$?
-    [ "$answer" = 0 ] || return 0
+    ask_two 'Really delete everything?\n\nThis cannot be undone.' CANCEL DELETE || answer=$?
+    [ "$answer" = 1 ] || return 0
     show_progress 'Deleting MX5 AA DR.\n\nKeep the USB connected.'
     rc=0; run_trial 6 6 || rc=$?
     if [ "$rc" = 0 ]; then
@@ -147,8 +149,8 @@ do_more() {
         0) do_save ;;
         1)
             answer=0
-            ask_two 'Restart the CMU now?\n\nKeep the engine running.' RESTART CANCEL || answer=$?
-            if [ "$answer" = 0 ]; then do_restart; fi
+            ask_two 'Restart the CMU now?\n\nKeep the engine running.' CANCEL RESTART || answer=$?
+            if [ "$answer" = 1 ]; then do_restart; fi
             ;;
         2) do_delete ;;
     esac
@@ -157,8 +159,8 @@ do_more() {
 # Fresh USB state: the install lock and the installed marker decide the menu.
 menu_fresh() {
     answer=0
-    ask_two 'Install MX5 AA DR (BETA)?\n\nPark, engine running, USB connected.\nDo not press the start button.' INSTALL CANCEL || answer=$?
-    if [ "$answer" = 0 ]; then do_install; else log_line 'install cancelled; nothing changed'; fi
+    ask_two 'Install MX5 AA DR (BETA)?\n\nPark, engine running, USB connected.\nDo not press the start button.' CANCEL INSTALL || answer=$?
+    if [ "$answer" = 1 ]; then do_install; else log_line 'install cancelled; nothing changed'; fi
 }
 
 menu_installed() {
