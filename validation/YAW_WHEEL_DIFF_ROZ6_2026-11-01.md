@@ -54,18 +54,16 @@ pooled estimate below the old-alone SEM (0.027 % → 0.069 %), because roz6's
 segments carry much higher variance. roz6 is lower-quality for ε estimation than
 the old trio.
 
-## 2. Bias-observer / complementary-filter fusion vs oracle on roz6
+## 2. (Superseded) Map-tangent fusion path — not the right oracle
 
-**Could not be computed on roz6.** The map-tangent oracle metric (the prior
-~2.1–2.6° vs stock ~8°) needs a GPS-loss episode that uniquely matches one OSM
-tunnel centreline. roz6 had only 6 qualifying GPS-loss episodes (50–600 s), and
-**none produced even a single OSM candidate** (`osm_cand ≥ 1 = 0` for every
-boot). The roz6 drive's tunnels are outside the coverage of the tunnel DB built
-for the old drives' region. So ε = 0 / roz6-ε / pooled-ε fusion scoring yields
-**0 clean tunnels** — no independent confirmation (and no refutation) of "ε is
-the lever / fusion reaches oracle" from this drive.
+An initial attempt scored fusion against the OSM map-tangent oracle and found 0
+uniquely-matched tunnels in roz6 (its region is outside the tunnel DB), and I
+wrongly reported "fusion could not be computed." That conflated two oracles. The
+prior ~2.17°/~8° result rests on the **GPS-free integration-zero oracle**, which
+needs no map. The correct, map-free computation is in the Measured-fusion section
+below; the OSM path is dropped. (Kept as a note so the correction is traceable.)
 
-## 3. Verdict: NEUTRAL, leaning slightly to WEAKENING. Not enough for a product change.
+## 3. Verdict (superseded by the measured verdict at the end).
 
 - **Confirms** the prior precision crux: even pooling roz6 with the old three
   trips leaves ε uncertain at ±0.069 %, an order of magnitude above the ±0.01 %
@@ -76,16 +74,79 @@ the lever / fusion reaches oracle" from this drive.
   roz6's large SEM. If per-drive ε truly varies this much, a single fixed global
   ε is riskier than the old trio implied — directly relevant to "wrong ε is
   worse than none."
-- **Fusion lever not re-tested:** no OSM-matched tunnel in roz6, so the headline
-  fusion-vs-oracle result got neither independent support nor contradiction here.
+- **Fusion lever:** see the measured section below (map-free). The ε-precision
+  and ε-stability bullets above stand regardless.
 
-**No product change is justified.** The pre-registered-safety-gate bar is not
-met: ε precision is still short by ~7×, per-drive ε stability is now in mild
-question, and the fusion benefit is unconfirmed on independent data. roz6
-reinforces "do not ship a fixed ε yet; keep accumulating clean highway-straight
-segments across drives, and add the per-drive ε-stability spread to the guard
-criteria." A future export from a region the tunnel DB covers would be needed to
-re-test the fusion-vs-oracle metric on independent data.
-
-(Results file: scratchpad/roz6-eps-results.json; script: scratchpad/roz6_yaw.py.
+(§1 results file: scratchpad/roz6-eps-results.json; script: scratchpad/roz6_yaw.py.
 Data stayed in the isolated roz6 dir; nothing committed or pushed.)
+
+---
+
+## § Measured fusion (GPS-free yaw-zero oracle + GPS-return differential)
+
+Map-free, as the original study intended. Same observer (bias observer /
+complementary filter, τ = 10 s), SLOPE_FRONT = −41.66, K = 0.03773585982400871.
+GPS course / GPS re-acquisition is the held-out differential reference only,
+never accuracy ground truth. ε cases: ε0 = 0, roz6-ε = 0.0766 %
+(sample-weighted over roz6 straight samples), pooled-ε = 0.0601 % (roz6 + old).
+(Script: scratchpad/roz6_fusion.py; results: scratchpad/roz6-fusion-results.json.)
+
+### A. Yaw-zero vs the integration-zero oracle — the ~8° regime is ABSENT in roz6
+
+Over roz6's short driving windows the **fixed z = 2048 baseline is already
+~1.9–2.8° median** heading RMS vs GPS course, with the per-window integration-zero
+oracle at ~0.6–2°. There is essentially **no ~8° gap for ε to close**. Reason:
+the prior ~2.17° vs ~8° contrast arises only over a **long, steady GPS-lost DR
+window** where a drifted zero integrates into large heading error. roz6 contains
+no such window — its longest GPS loss is 36 s (most 2–18 s). The product's own
+166 driving zero-fits do show the zero wandering ~2040–2058 counts
+(≈ ±0.38 deg/s), so the *potential* for an ~8° error over a 60 s tunnel exists
+(≈ K·10·60 ≈ 23° peak / ~8° RMS), but roz6 never realises it. A clean constant-
+zero fit is also hard to isolate on roz6's windows (gentle windows leave the zero
+unobservable; sharp-turn windows carry lane-change / integer-course noise), so the
+RMS-vs-oracle number itself is not cleanly reproducible here — not because of
+OSM, but because the drive lacks the steady-DR regime the metric needs.
+
+### B. GPS-return DR differential — ε benefit is MIXED / not robust
+
+Replayed DR over the product's 5 real GPS-loss intervals (gps_lost → gps_returned),
+anchored at the last pre-loss valid fix, endpoint vs the first re-acquired fix.
+Delta = |DR endpoint − GPS re-acquisition| (m); ε enters only through the fused
+heading. (This replay uses mean wheel speed + the observer heading, a cruder DR
+than the product core, so absolute metres run larger than the product's own
+as-shipped 6–20 m; the **relative** ε comparison is the signal.)
+
+| loss (s) | covered (m) | ε0 | roz6-ε | pooled-ε |
+|---------:|------------:|----:|-------:|---------:|
+| 7  | 123 | 12.9 | 8.2  | 9.3  |
+| 36 | 664 | 89.1 | 28.7 | **4.8** |
+| 3 (17 s anchor) | 290 | 6.7 | 36.4 | 28.8 |
+| 18 | 374 | 11.5 | 47.5 | 39.6 |
+| 14 | 323 | 29.2 | 11.1 | 13.6 |
+| **median** | | **12.9** | 28.7 | 13.6 |
+| **mean** | | 29.9 | 26.4 | 19.2 |
+
+- ε-calibration **helps 3 of 5** intervals and **dramatically helps the single
+  longest dropout** (36 s / 664 m: 89 → 5 m with pooled-ε), but **hurts two
+  shorter ones** (18 s: 11.5 → 47.5; 3 s/17 s: 6.7 → 36.4).
+- **Median delta does not improve** (ε0 12.9 → roz6-ε 28.7 / pooled-ε 13.6);
+  the mean only improves because the one long-dropout outlier shrinks. Net
+  benefit is **not robust** — the measured "wrong ε is worse than none"
+  signature, now on independent data.
+
+### Measured verdict: NEUTRAL → WEAKENING. No product change.
+
+On this independent, measured drive ε is **not** demonstrated as a reliable
+lever. The yaw-zero fusion benefit (the ~2.17°/~8° headline) **cannot be
+exhibited on roz6 because the long-steady-DR regime that produces the 8° stock
+error never occurs** — over roz6's short losses the uncalibrated fixed zero is
+already ~2°. Where ε could be tested at all — the measured GPS-returns — its
+effect is **mixed and net-unhelpful on the median**, helping only the longest
+dropout and worsening shorter ones. Combined with §1 (per-drive ε noisy, pooled
+precision still ~7× short of the needed ±0.01 %, central value ~3× the old
+estimate), roz6 **weakens** confidence in shipping a fixed ε and provides **no**
+basis for a product change. The pre-registered-safety-gate bar is not met.
+Standing guidance: keep accumulating clean highway-straight segments across
+drives; add the per-drive ε-stability spread to the guard criteria; and a future
+export containing a genuine long GPS-lost tunnel is needed to test the
+fusion-vs-oracle benefit directly.
