@@ -288,7 +288,8 @@ def bundle_with_checkout(args):
     for name in HELPERS:
         shutil.copy2(REPO / 'packaging' / name, dest / name)
     shutil.copy2(REPO / 'packaging/USB_START_KO.md', dest / 'INSTALL_KO.md')
-    files = sorted(p for p in dest.rglob('*') if p.is_file() and p.name != 'SHA256SUMS')
+    files = sorted(p for p in dest.rglob('*') if p.is_file() and p.name != 'SHA256SUMS'
+                   and re.fullmatch(r'[A-Za-z0-9_./-]+', p.relative_to(dest).as_posix()))
     (dest / 'SHA256SUMS').write_text(''.join(
         hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(dest).as_posix() + '\n'
         for p in files))

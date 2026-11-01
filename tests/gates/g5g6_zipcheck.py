@@ -81,7 +81,10 @@ def main():
         check('SHA256SUMS verifies', sums.returncode == 0 and not bad, '; '.join(bad[:3]))
         listed = {line.split(None, 1)[1].lstrip('*').strip() for line in (u / 'SHA256SUMS').read_text().splitlines() if line.strip()}
         files = {p.relative_to(u).as_posix() for p in u.rglob('*') if p.is_file()} - {'SHA256SUMS'}
-        check('SHA256SUMS lists every file', files == listed, f'unlisted={sorted(files - listed)[:3]} missing={sorted(listed - files)[:3]}')
+        safe = {f for f in files if re.fullmatch(r'[A-Za-z0-9_./-]+', f)}
+        check('SHA256SUMS lists every installer-safe file', safe == listed, f'unlisted={sorted(safe - listed)[:3]} extra={sorted(listed - safe)[:3]}')
+        entry = files - safe
+        check('scanner-entry file present and intentionally unlisted', bool(entry) and not (entry & listed), str(sorted(entry))[:80])
         mp3 = sorted(p.name for p in (u / 'mp3').glob('*.mp3')) if (u / 'mp3').is_dir() else []
         check('mp3/ has exactly 4 entry files', len(mp3) == 4, str(mp3))
         check('js/run.js present', (u / 'js/run.js').is_file())
