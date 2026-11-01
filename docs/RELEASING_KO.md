@@ -12,6 +12,7 @@
 - **설치 ZIP은 그 자체로 완결적이어야 합니다(2026-10-04, 소유자 지시).** 새 공개 묶음에는 `mp3/`(4개)와 `js/run.js`의 셸 진입 파일과 `USB_ENTRY_NOTICE.md`를 **항상 포함합니다**(`make_usb_zip.py`를 `--shell-only` 없이 실행). 진입 파일이 빠진 셸 전용 ZIP(`v0.3.11-shadow.2`, `v0.3.12-shadow.1`·`.2`)은 이 기준을 충족하지 못했습니다. `--shell-only`는 소유자가 명시적으로 요청할 때만 씁니다. 진입 파일의 출처와 라이선스 상태는 `USB_ENTRY_NOTICE.md`에 있는 그대로 보존합니다. `tests/gates/g5g6_zipcheck.py`가 이를 검사합니다.
 - **커밋을 고정합니다.** 분리된 새 체크아웃에서 40자리 커밋으로 빌드하고 `source_modified=false`여야 합니다. 한 작업 디렉터리에서 다른 커밋으로 전환하거나 빌드 결과를 재사용하지 않습니다.
 - **게시된 ZIP을 다시 받아 검증합니다**(`verify.sh`, G18). 다운로드 파일이 빌드한 ZIP과 바이트 동일하지 않으면 완료로 보고하지 않습니다.
+- **버전 표시(연동 계약, [INTEROP_KO.md](INTEROP_KO.md))**: 태그를 정하면 `packaging/bundle-version`을 `v`를 뺀 같은 값(예: `v1.0.4` → `1.0.4`)으로 커밋한 뒤 그 커밋을 고정합니다. `zip.sh`가 `g5g6_zipcheck.py --version`으로 묶음의 `bundle-version`·build-info `version`·태그가 같은지 검사합니다. ZIP 이름 `mazda-aa-dr-v<버전>.zip`도 다른 도구가 기대므로 바꾸지 않습니다.
 - 버전 이름: 태그에 `-`가 붙으면(`-beta.N`, `-rc.N`) pre-release로, 붙지 않은 `vX.Y.Z`는 정식(latest)으로 게시합니다(`REL_PRERELEASE`로 바꿀 수 있음). 실차 미검증 기능은 정식 릴리즈에서도 노트의 검증 상태 절에 그대로 적습니다(결정 기록의 라벨 규칙). 빌드·호스트·QEMU 성공을 실제 차량 복구, 위치 정확도, 폰/지도 앱 수용 검증으로 표현하지 않습니다.
 - 예전 태그를 재현할 때는 그 태그의 Makefile·packaging·스크립트를 사용하며 현재 스크립트나 바이너리를 섞지 않습니다.
 

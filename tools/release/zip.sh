@@ -15,7 +15,7 @@ unzip -tq "$WORK/dist/$NAME.zip"
 rm -rf "$WORK/unpacked"; mkdir "$WORK/unpacked"; unzip -q "$WORK/dist/$NAME.zip" -d "$WORK/unpacked"
 (cd "$WORK/unpacked" && sha256sum -c --quiet SHA256SUMS)
 cat "$WORK/dist/$NAME.zip.sha256"
-python3 "$GATES"/g5g6_zipcheck.py --zip "$WORK/dist/$NAME.zip" --commit "$COMMIT" --mode "${REL_MODE:-BETA}" \
+python3 "$GATES"/g5g6_zipcheck.py --zip "$WORK/dist/$NAME.zip" --commit "$COMMIT" --mode "${REL_MODE:-BETA}" --version "${TAG#v}" \
     --readelf "$SRC/tools/m3-toolchain/bin/arm-cortexa9_neon-linux-gnueabi-readelf" > "$WORK/evidence/zipcheck.txt" 2>&1 ||
     { tail -20 "$WORK/evidence/zipcheck.txt"; exit 1; }
 tail -1 "$WORK/evidence/zipcheck.txt"

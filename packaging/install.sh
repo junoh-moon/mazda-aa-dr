@@ -41,6 +41,14 @@ if [ "$MODE" != OFF ]; then prepare_arm_boot; fi
 if [ -e "$HERE/SHA256SUMS" ] || [ -L "$HERE/SHA256SUMS" ]; then
     verify_bundle_manifest
 fi
+# Release identity (one line, X.Y.Z or X.Y.Z-tag.N); optional for developer bundles.
+VERSION=''
+if [ -e "$HERE/bundle-version" ] || [ -L "$HERE/bundle-version" ]; then
+    regular "$HERE/bundle-version"
+    [ "$(wc -c < "$HERE/bundle-version")" -le 32 ] || fail 'Invalid bundle version'
+    VERSION=$(awk 'NR==1 && /^[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?$/ {v=$0} END {if(NR!=1 || v=="") exit 1; print v}' "$HERE/bundle-version") ||
+        fail 'Invalid bundle version'
+fi
 regular "$HERE/mx5dr-sha256"
 regular "$HERE/mx5dr-sha256.sha256"
 [ "$(hash "$HERE/mx5dr-sha256")" = "$(awk 'NR==1{print $1}' "$HERE/mx5dr-sha256.sha256")" ] || fail 'Hash helper checksum mismatch'
@@ -257,7 +265,7 @@ set_config
 mkdir -p "$BASE/tools"
 chmod 0755 "$BASE/tools"
 if [ -z "$ROOT" ]; then chown 0 "$BASE/tools"; fi
-for name in common.sh edit_service.awk edit_autostart.awk edit_bds.awk bt.sha256 arm.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk startup_diagnostics.sh firmware.sha256 mx5dr-sha256; do
+for name in common.sh edit_service.awk edit_autostart.awk edit_bds.awk bt.sha256 arm.sh rebaseline.sh uninstall.sh export_logs.sh start_collector.sh stop_collector.sh finish_capture.sh trial_status.sh trial_status.awk startup_diagnostics.sh firmware.sha256 mx5dr-sha256; do
     cp "$HERE/$name" "$BASE/tools/$name.new.$$"
     chmod 0644 "$BASE/tools/$name.new.$$"
     if [ -z "$ROOT" ]; then chown 0 "$BASE/tools/$name.new.$$"; fi
@@ -284,6 +292,9 @@ file=$ROOT/usr/bin/autostart
 mv -f "$file.mx5dr-new.$$" "$file"
 # Templates bind the current preserved touch settings; later changes decline a trial.
 printf 'mode=%s\npolicy=%s\nbackup=%s\npayload_sha256=%s\ntap_sha256=%s\nlds_tap_sha256=%s\n' "$MODE" "$POLICY" "$TX" "$want" "$tap_want" "$lds_want" > "$BASE/installed.txt.new.$$"
+# Installed release (docs/INTEROP_KO.md): other tools compare it with a USB
+# bundle-version before offering an update. Absent for development bundles.
+if [ -n "$VERSION" ]; then printf 'version=%s\n' "$VERSION" >> "$BASE/installed.txt.new.$$"; fi
 mv -f "$BASE/installed.txt.new.$$" "$BASE/installed.txt"
 rm -f "$BASE/pending"
 sync

@@ -9,7 +9,8 @@ SHA256SUMS verifies and lists every other file; self-contained entry files
 (mp3/ with exactly 4 .mp3, js/run.js, USB_ENTRY_NOTICE.md); build-info.json:
 default_mode == --mode, install_policy == persistent, source_modified false,
 source_commit 40 hex (== --commit when given), artifacts hashes == the files;
-bundle-default-mode == --mode; the outer .sha256 sidecar (next to the ZIP or
+bundle-default-mode == --mode; rebaseline.sh present; bundle-version one
+X.Y.Z[-tag.N] line == build-info version (== --version when given); the outer .sha256 sidecar (next to the ZIP or
 --sha256) matches; INSTALL_KO.md present.
 G5 (ELF) for libmx5dr.so, libmx5dr-vimtap.so, libmx5dr-ldstap.so,
 mx5dr-collector, mx5dr-guard, mx5dr-sha256: ELF32 ARM EABI5, softfp (no
@@ -51,6 +52,7 @@ def readelf(tool, flags, path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--zip', required=True)
+    ap.add_argument('--version', help='release version without v (tag v<version>); checks bundle-version and build-info')
     ap.add_argument('--commit')
     ap.add_argument('--sha256')
     ap.add_argument('--mode', default='BETA')
@@ -99,6 +101,14 @@ def main():
         if a.commit:
             check('build-info source_commit == pinned commit', commit == a.commit, f'{commit} vs {a.commit}')
         check(f'bundle-default-mode {a.mode}', (u / 'bundle-default-mode').read_text().strip() == a.mode)
+        # Interop contract 1 (docs/INTEROP_KO.md): the installed rebaseline
+        # command and a one-line release identity that other tools compare.
+        check('rebaseline.sh present', (u / 'rebaseline.sh').is_file())
+        bv = (u / 'bundle-version').read_text() if (u / 'bundle-version').is_file() else ''
+        check('bundle-version is one X.Y.Z[-tag.N] line', re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?\n', bv) is not None, repr(bv[:40]))
+        check('build-info version == bundle-version', info.get('version') == bv.strip(), f"{info.get('version')} vs {bv.strip()}")
+        if a.version:
+            check('bundle-version == release version', bv.strip() == a.version, f'{bv.strip()} vs {a.version}')
         arts = info.get('artifacts', {})
         for b in BINARIES:
             p = u / b

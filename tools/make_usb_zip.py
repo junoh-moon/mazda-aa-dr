@@ -149,6 +149,7 @@ def main():
                     source_tree_sha256=source_digest,
                     toolchain_commit=build_record['toolchain']['commit'],
                     arm_build=build_record,
+                    version=(REPO / 'packaging/bundle-version').read_text().strip(),
                     target='NA 74.00.324A', default_mode=args.default_mode,
                     install_policy='persistent' if args.default_mode == 'BETA' else 'one-boot',
                     artifacts={name: digest(bundle / name) for name in ARTIFACTS})
