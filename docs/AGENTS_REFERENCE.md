@@ -2,8 +2,11 @@
 
 Moved verbatim from `AGENTS.md` on 2026-11-01 so that `AGENTS.md` stays a short
 rule file. The text below is unchanged; it keeps its original scope and labels.
-`AGENTS.md` summarizes it and points here. If the two ever disagree, this file
-holds the full wording and the dated `validation/` records hold the evidence.
+`AGENTS.md` summarizes it and points here. For the current state (which release
+is latest, what is on master) `AGENTS.md` wins; for the detailed contract of a
+feature this file holds the full wording; the dated `validation/` records hold
+the evidence. Relative words inside the moved bullets ("above", "below")
+refer to their old positions in `AGENTS.md`, not to this file's order.
 
 ## Stable baseline v1.0.0 and its BETA exceptions (full contract text)
 
