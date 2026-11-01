@@ -332,3 +332,79 @@ Fusion+ε would earn its place only for drives with **long stop-free stretches A
 a genuinely drifting zero** (e.g. a trip3-like session through a long tunnel) —
 a combination none of the current exports contain. Recommend: Step 2 = evaluate
 ZUPT re-anchoring drift coverage, not a fusion gate.
+
+---
+
+## § ZUPT re-anchor coverage (ε-free lever)
+
+Characterizes whether holding the last standstill zero (ε-free) beats fixed-2048.
+Per stop-to-stop driving segment, three estimators are seeded at the segment-start
+GPS course and integrated, then scored by heading error vs the held-out GPS course
+(reference only, not ground truth): **A** fixed-2048, **B** ZUPT (hold last
+standstill zero), **C** ZUPT + linear drift extrapolation (project the zero by the
+recent stop-to-stop rate). Oracle = best constant zero fit to the course
+(lower bound). Zeros come from wheel+yaw standstills only — no GPS, no ε, no
+wheel-diff. Script: scratchpad/roz6_zupt.py.
+
+### Scorability — the decisive data gap
+
+Only **5 stop-to-stop segments across all exports are scorable**, and **all are
+near-nominal-zero** (trip2 ×4, roz6 ×1). Critically, **trip3 — the one drifted-
+zero drive, with the long stop-free segments (51, 100, 200 s) this test most
+needs — has ZERO valid GPS course** (fixes never qualify), so it cannot be scored
+at all. The regime where ZUPT (or fusion) is supposed to help is therefore
+**unmeasurable on existing data**, same blocker as the holdout section.
+
+### Results on the scorable (near-nominal) segments
+
+Pooled heading RMS (n = 5): **A 2.2° = oracle 2.2°**, **B 6.8°**, **C 7.4°**.
+Fixed-2048 already equals the oracle; ZUPT and drift-extrapolation are markedly
+**worse**.
+
+Heading error vs time since last stop (median deg; n_fixes per bucket 52–61):
+
+| bucket | A fixed | B ZUPT | C ZUPT+drift | oracle |
+|--------|--------:|-------:|-------------:|-------:|
+| 0–15 s | 1.0 | 1.9 | 2.0 | 1.4 |
+| 15–30 s | 1.6 | 3.1 | 3.4 | 1.9 |
+| 30–60 s | 2.3 | 5.2 | 5.7 | 0.7 |
+| >60 s | 3.0 | **9.6** | 11.1 | 1.3 |
+
+A (fixed) degrades slowly with time (1.0 → 3.0°, the small near-nominal offset
+integrating); **B (ZUPT) degrades fast (1.9 → 9.6°)** and C worse. Coverage:
+fraction of segments under 3°/5° — A 0.60/0.60, B 0.40/0.40, C 0.20/0.40.
+**B is worse than A in 80 % of segments** (by >2° in 20 %). Long segments (>60 s,
+n = 2, near-nominal): A 4.2° vs B 7.2° vs oracle 3.4°.
+
+### Why ZUPT hurts here, and what it means
+
+On a near-nominal drive the oracle driving-zero ≈ 2048 (which A uses), but the
+**stationary standstill zero is a noisier, biased estimate of the driving zero**
+(stop-specific settling/vibration/temperature + ~0.6 c measurement noise). Holding
+it (B) injects that error, integrating worse the longer the stop-free interval —
+the opposite of the intended benefit. ZUPT's core assumption (stationary zero =
+driving zero) is violated on these drives. (Bad-anchor outliers flagged in Step 1
+sat in trip3/trip4, which were unscorable here, so the bad-anchor damage could not
+be quantified against a reference; n = 0 scorable bad-anchor segments.)
+
+### Verdict: ZUPT is NOT a safe unconditional ε-free win; it does NOT shrink the fusion case — both are blocked on the same missing data
+
+- **Is B/C a worthwhile low-risk improvement over fixed-2048?** On existing
+  (near-nominal) data, **no** — B and C are worse than fixed-2048 and degrade with
+  time-since-stop, because the stationary zero mis-estimates the driving zero.
+  Like fusion, ZUPT needs a **drifted-zero gate**; applied unconditionally it
+  degrades the common case. Its only structural advantage over fusion remains that
+  it is ε-free and simpler **if** such a gate is built.
+- **Does ZUPT capture most of the achievable benefit ε-free, shrinking the fusion
+  case to near-nothing?** Cannot be shown — the drifted, long-stop-free regime
+  (trip3) has no heading reference, so neither ZUPT's benefit nor the fusion-only
+  residual is measurable. The fusion case is not shrunk; it is simply **undecided
+  on the same grounds** as ZUPT.
+- **Net:** neither the ε-free ZUPT lever nor fusion+ε is justified on current
+  evidence, and both face the identical blocker. The real prerequisite for
+  deciding *either* is a single export that contains **a genuinely drifted gyro
+  zero AND a usable held-out heading reference across long stop-free driving**
+  (a trip3-like drifted session, but with valid GPS course, or another GPS-free
+  truth). Until such data exists, the honest recommendation is **no correction
+  shipped** (fixed-2048 stays best-or-tied on every scorable segment) and the next
+  step is **targeted data capture**, not further estimator design.
