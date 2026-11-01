@@ -86,7 +86,7 @@ ZIP에 동봉한 [전원 상태·설치·재부팅·USB 교체·회수 안내](p
 후속 [GPS 기준점 검사와 휠 거리 보정](docs/GPS_WHEEL_MODEL_KO.md)은 GPS와 차량 입력의 불일치를 검사하고, 충분한 전진 직진 구간에서만 ±5% 이내의 MODEL 보정을 적용한다.
 
 0. [실현 가능성 평가(2026-10-03)](docs/FEASIBILITY_2026-10-03_KO.md): 오프라인 분석으로 좁힌 go/no-go. 차→폰 송신·수용은 지지되고 네이버 수용만 미확인이다.
-1. [현재 상태와 인계](docs/STATUS_KO.md): 목표, 증거 수준, 구현 범위, 남은 일.
+1. [현재 상태와 인계](docs/STATUS_KO.md): 최신 발행판, 기능별 증거 수준, 미발행 후보. 2026-10-05 이전의 구현 범위·당시 남은 일은 [상태 기록 이력](docs/STATUS_HISTORY_KO.md).
 2. [2026-09-28 리뷰와 해결 조건](docs/REVIEW_2026-09-28_KO.md): 실제 결함과 가설의 구분.
 3. [구현 설명](docs/IMPLEMENTATION_REVIEW_KO.md) 및 `src/`: 현재 코드의 데이터 계약.
 4. [과거 상세 설계](docs/archive/DESIGN_V1_KO.md): 설계 배경. 현재 상태 문서가 우선한다.
