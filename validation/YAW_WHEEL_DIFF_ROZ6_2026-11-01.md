@@ -244,3 +244,91 @@ shipping it unconditionally risks degrading the common near-nominal case, and a
 wrong/averaged ε clearly worsens it. To decide for real we need a drive that
 contains BOTH a genuinely drifted zero AND long continuous windows — neither
 roz6 nor the 20261010 exports provide that combination.
+
+---
+
+## § Gyro-zero drift characterization (gate feasibility)
+
+Does the gyro zero drift enough, often enough, to justify designing a "fuse only
+when the zero is drifted" gate? GPS-free throughout: standstill (ZUPT) zeros and
+wheel/yaw only. roz6 uses the product's 151 `yaw_stop` digests (offset counts =
+`ys/yn`, matches the human-readable table); the old exports (no `yaw_stop`) use a
+uniform Grid ZUPT scan (all-wheel-zero 2 s windows, `ptp≤4`, `var≤1`,
+zero = mean raw − 2048). Conversion: **K = 0.037736 deg/s per count**, so the
+uncorrected integrated heading error over T s = K·|offset|·T; the "drifted"
+threshold |offset| for 3°/60 s is **1.32 counts**, for 5°/60 s **2.21 counts**.
+Script: scratchpad/roz6_drift.py.
+
+### 1. Standstill-zero distribution (offset from 2048, counts)
+
+| drive | n stops | median | mean | std | p10/p90 | >3c | >5c | >10c |
+|-------|--------:|-------:|-----:|----:|---------|----:|----:|-----:|
+| roz6 | 151 | −0.92 | −0.28 | 2.71 | −3.1 / +3.5 | 36 (24%) | 11 (7%) | 0 |
+| trip2 | 461 | +0.64 | +0.18 | 1.20 | −2.7 / +0.9 | 0 | 0 | 0 |
+| trip3 | 157 | +2.0 | −2.7 | 6.29 | −10.4 / +2.7 | 79 | 71 | **62** |
+| trip4 | 96 | −1.05 | +0.9 | 2.45 | −1.4 / +3.8 | 41 | 0 | 0 |
+
+Uncorrected heading error if you trust fixed 2048 (roz6): from the median-abs
+offset (1.31 c) **1.5 / 3.0 / 4.5°** at 30/60/90 s; from the p90-abs offset
+(4.06 c) **4.6 / 9.2 / 13.8°**. So the stock zero is typically only ~3°/60 s off,
+reaching the ~8–9° regime only at the p90 tail.
+
+**The zero is near-nominal on 3 of 4 drives (roz6, trip2, trip4: std ≤2.7 c, no
+stop beyond ~5 c) and strongly drifted on exactly one (trip3: 62 stops beyond 10
+counts, p10 −10.4 c ≈ 24°/60 s).** The badly-drifted regime is real but
+occasional — a per-drive condition, not the norm.
+
+### 2. Within-drive drift (stop-to-stop, roz6, 144 consecutive pairs)
+
+- Zero movement between consecutive stops: **median |jump| 1.79 c, p90 5.55 c**;
+  drift rate **median 1.24 c/min, p90 5.45 c/min** (≈ 2.8°/60 s typical, 12°/60 s
+  at the p90 on a stop-free stretch).
+- 103/144 pairs (72 %) jump more than the 3°/60 s threshold (1.32 c), 61/144
+  (42 %) more than the 5°/60 s threshold — but each standstill carries ~0.6 c
+  measurement noise (≈0.85 c per difference), which inflates the small-jump end.
+- Takeaway: **the zero does move during a drive, not just boot-to-boot** — so a
+  one-time standstill zero goes stale over minutes. On roz6, though, stops are
+  frequent (151), so the zero is re-anchored often and staleness stays small
+  unless a stretch is long and stop-free.
+
+### 3. Base rate of the drifted regime
+
+By the (small) 3°/60 s criterion, **50 % of roz6 standstills and 72 % of
+stop-to-stop pairs** qualify — but that threshold is only ~1.3 counts, near the
+measurement noise. By a more meaningful **5°/60 s** bar, **38 %** of standstills
+and 42 % of pairs; by |offset| > 10 c (≈23°/60 s, the genuine "stock fails"
+regime), **0 %** of roz6 and trip2/trip4 stops, versus **40 %** of trip3's. So:
+occasional at the 5° level, essentially absent at the 10° level except on one
+drive.
+
+### 4. Worth-it read: a fusion gate is MARGINAL — try ZUPT correction first
+
+- **(a) Does it drift enough, often enough?** Modestly and occasionally. The
+  big-drift regime where fusion clearly wins (≥10 c, ~20°+/60 s) appeared in 1 of
+  4 drives (trip3) and 0 % of roz6/trip2/trip4 stops. Typical uncorrected error
+  is ~3°/60 s, tail ~9°/60 s.
+- **(b) Detectable from the standstill zero alone?** Partly. The zero moves
+  mid-drive (median 1.2 c/min), so a stale standstill zero drifts ~2.8°/60 s on a
+  stop-free minute; tracking that mid-drive needs a running residual (the fusion).
+  But stops are frequent, so periodic **ZUPT re-anchoring** (use the last
+  standstill zero, GPS-free, **no ε, no wheel-diff**) already removes the per-boot
+  offset and most slow drift — the part fusion adds is only the between-stop
+  residual on long stop-free stretches.
+- **(c) Confounds:** standstill noise (~0.6 c) inflates small jumps; a cold-start
+  warm-up trend is not separated from genuine drift (trip3's spread may be a
+  warm-up transient or a single drifted session — unresolved); the "offset from
+  2048" mixes a stable per-boot bias (cheaply correctable by ZUPT) with real
+  drift. Standstill-zero reliability itself depends on true zero-speed (crawl
+  contaminates it).
+
+**Read: a drifted-zero-gated fusion is not clearly worth designing yet.** The
+drift that fusion *uniquely* addresses (mid-drive, between stops) is small
+(~2.8°/60 s typical), the ≥10 c regime is rare (1/4 drives), and fusion's benefit
+is gated behind an ε we cannot calibrate to the needed ±0.01 % and which actively
+harms the common near-nominal case (§ holdout). The cheaper, ε-free lever —
+**ZUPT standstill-zero correction** — already covers the per-boot offset and slow
+drift because stops are frequent; it should be characterized/evaluated first.
+Fusion+ε would earn its place only for drives with **long stop-free stretches AND
+a genuinely drifting zero** (e.g. a trip3-like session through a long tunnel) —
+a combination none of the current exports contain. Recommend: Step 2 = evaluate
+ZUPT re-anchoring drift coverage, not a fusion gate.
