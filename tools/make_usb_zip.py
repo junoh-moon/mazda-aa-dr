@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -168,6 +169,7 @@ def main():
                     source_tree_sha256=source_digest,
                     toolchain_commit=build_record['toolchain']['commit'],
                     arm_build=build_record,
+                    version=(REPO / 'packaging/bundle-version').read_text().strip(),
                     target='NA 74.00.324A', default_mode=args.default_mode,
                     install_policy='persistent' if args.default_mode == 'BETA' else 'one-boot',
                     artifacts={name: digest(bundle / name) for name in ARTIFACTS})
@@ -180,7 +182,15 @@ def main():
         verify_build(REPO, args.build_dir.resolve())
         (bundle / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
         files = sorted(p for p in bundle.rglob('*') if p.is_file())
-        manifest = ''.join(digest(p) + '  ' + p.relative_to(bundle).as_posix() + '\n' for p in files)
+        # Scanner-entry launcher ('$(...).up') has a shell-expression name
+        # the installer manifest guard rejects (common.sh
+        # verify_bundle_manifest, [A-Za-z0-9_./-]); not an installer input,
+        # so list only installer-safe names. ZIP+sidecars still cover it.
+        safe = re.compile(r'\A[A-Za-z0-9_./-]+\Z')
+        manifest = ''.join(digest(p) + '  ' + rel + '\n'
+                           for p in files
+                           for rel in (p.relative_to(bundle).as_posix(),)
+                           if safe.match(rel))
         (bundle / 'SHA256SUMS').write_text(manifest)
         checksum_line = write_verified_zip(bundle, output, sidecar, args.shell_only,
                                            beta=args.default_mode == 'BETA',

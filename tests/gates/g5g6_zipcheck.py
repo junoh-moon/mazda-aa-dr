@@ -9,7 +9,8 @@ SHA256SUMS verifies and lists every other file; self-contained entry files
 (mp3/ with exactly 4 .mp3, js/run.js, USB_ENTRY_NOTICE.md); build-info.json:
 default_mode == --mode, install_policy == persistent, source_modified false,
 source_commit 40 hex (== --commit when given), artifacts hashes == the files;
-bundle-default-mode == --mode; the outer .sha256 sidecar (next to the ZIP or
+bundle-default-mode == --mode; rebaseline.sh present; bundle-version one
+X.Y.Z[-tag.N] line == build-info version (== --version when given); the outer .sha256 sidecar (next to the ZIP or
 --sha256) matches; INSTALL_KO.md present.
 G5 (ELF) for libmx5dr.so, libmx5dr-vimtap.so, libmx5dr-ldstap.so,
 mx5dr-collector, mx5dr-guard, mx5dr-sha256: ELF32 ARM EABI5, softfp (no
@@ -51,6 +52,7 @@ def readelf(tool, flags, path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--zip', required=True)
+    ap.add_argument('--version', help='release version without v (tag v<version>); checks bundle-version and build-info')
     ap.add_argument('--commit')
     ap.add_argument('--sha256')
     ap.add_argument('--mode', default='BETA')
@@ -83,7 +85,10 @@ def main():
         check('SHA256SUMS verifies', sums.returncode == 0 and not bad, '; '.join(bad[:3]))
         listed = {line.split(None, 1)[1].lstrip('*').strip() for line in (u / 'SHA256SUMS').read_text().splitlines() if line.strip()}
         files = {p.relative_to(u).as_posix() for p in u.rglob('*') if p.is_file()} - {'SHA256SUMS'}
-        check('SHA256SUMS lists every file', files == listed, f'unlisted={sorted(files - listed)[:3]} missing={sorted(listed - files)[:3]}')
+        safe = {f for f in files if re.fullmatch(r'[A-Za-z0-9_./-]+', f)}
+        check('SHA256SUMS lists every installer-safe file', safe == listed, f'unlisted={sorted(safe - listed)[:3]} extra={sorted(listed - safe)[:3]}')
+        entry = files - safe
+        check('scanner-entry file present and intentionally unlisted', bool(entry) and not (entry & listed), str(sorted(entry))[:80])
         mp3 = sorted(p.name for p in (u / 'mp3').glob('*.mp3')) if (u / 'mp3').is_dir() else []
         check('mp3/ has exactly 4 entry files', len(mp3) == 4, str(mp3))
         check('js/run.js present', (u / 'js/run.js').is_file())
@@ -110,6 +115,14 @@ def main():
                           a.tunnel_md5)
             check('tunnels-v1.manifest.json present', (u / 'tunnels-v1.manifest.json').is_file())
             check('MAP_DATA_NOTICE.md present', (u / 'MAP_DATA_NOTICE.md').is_file())
+        # Interop contract 1 (docs/INTEROP_KO.md): the installed rebaseline
+        # command and a one-line release identity that other tools compare.
+        check('rebaseline.sh present', (u / 'rebaseline.sh').is_file())
+        bv = (u / 'bundle-version').read_text() if (u / 'bundle-version').is_file() else ''
+        check('bundle-version is one X.Y.Z[-tag.N] line', re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?\n', bv) is not None, repr(bv[:40]))
+        check('build-info version == bundle-version', info.get('version') == bv.strip(), f"{info.get('version')} vs {bv.strip()}")
+        if a.version:
+            check('bundle-version == release version', bv.strip() == a.version, f'{bv.strip()} vs {a.version}')
         arts = info.get('artifacts', {})
         for b in BINARIES:
             p = u / b

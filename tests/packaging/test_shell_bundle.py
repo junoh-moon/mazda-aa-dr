@@ -20,7 +20,7 @@ PRODUCTS = ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so',
 HELPERS = ('trial install.sh uninstall.sh purge.sh export_logs.sh common.sh edit_service.awk edit_bds.awk bt.sha256 '
            'edit_autostart.awk arm.sh start_collector.sh stop_collector.sh '
            'finish_capture.sh trial_status.sh trial_status.awk startup_diagnostics.sh '
-           'reboot_cmu.sh firmware.sha256 mx5dr.conf').split()
+           'reboot_cmu.sh firmware.sha256 mx5dr.conf rebaseline.sh bundle-version').split()
 
 
 class ShellBundle(unittest.TestCase):
