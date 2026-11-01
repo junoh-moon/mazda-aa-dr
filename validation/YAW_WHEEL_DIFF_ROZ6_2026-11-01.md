@@ -150,3 +150,97 @@ Standing guidance: keep accumulating clean highway-straight segments across
 drives; add the per-drive ε-stability spread to the guard criteria; and a future
 export containing a genuine long GPS-lost tunnel is needed to test the
 fusion-vs-oracle benefit directly.
+
+---
+
+## § GPS-holdout long-DR drift (no tunnel needed)
+
+Manufacture the long-DR regime: take long CONTINUOUS GPS-valid driving windows,
+withhold GPS from the DR, dead-reckon across the window, and compare to the
+HELD-OUT GPS track (standard SHADOW-calibration holdout; GPS is a held-out
+differential reference only, never accuracy ground truth). Heading error is the
+clean ε-sensitive metric; position endpoint is reported too but is confounded by
+wheel-speed scale (common-mode across variants) and turn geometry. Observer runs
+GPS-free over the whole boot (warm), seed heading/position from the window-start
+fix. Variants: fixed2048 (no fusion), fused ε0 / roz6-ε / pooled-ε, oracle
+(best constant zero fit to the held-out course = lower bound). Script:
+scratchpad/roz6_holdout.py.
+
+### 1. Window census — the long regime barely exists on these drives
+
+GPS fix rate ~1 Hz, heading integer degrees (≈0.5–1° truth-resolution floor).
+Continuous GPS-valid highway windows (valid fixes ≥15 km/h, gaps ≤2.5 s, grid
+good ≥0.9):
+
+| drive | ≥30 s | ≥60 s | ≥90 s | curve ≥60 s (ptp≥20°) |
+|-------|------:|------:|------:|----------------------:|
+| roz6 (all boots) | 3 | **0** | 0 | 0 |
+| old trip2 | 3 | 1 | 0 | — |
+| old trip4 | 0 | 0 | 0 | — |
+
+roz6 has **no** continuous GPS-valid window ≥60 s (longest 54 s); even the old
+exports yield only one (trip2). These drives are city/mixed, not sustained
+highway, so the 60 s / 90 s horizons are essentially unreachable — a real
+selection limit, not a tuning choice. The 3 roz6 windows that qualify are curvy
+(course span 34–70°: ramps/interchanges), straining the constant-zero assumption.
+
+### 2. Holdout DR drift (heading error, the clean metric)
+
+roz6, 30 s horizon (n = 3 windows; median deg):
+
+| variant | heading err (deg) | note |
+|---------|------------------:|------|
+| oracle (best constant zero) | 0.8 | lower bound |
+| **fixed 2048 (no fusion)** | **2.3** | already good |
+| fused pooled-ε (0.060 %) | 4.1 | |
+| fused roz6-ε (0.077 %) | 6.6 | |
+| fused ε0 (uncalibrated) | 7.8 | worst |
+
+old trip2, the single 60 s window (n = 1; median deg): oracle 1.2, **fixed 2048
+1.2**, fused pooled-ε 1.6, fused roz6-ε 5.6, fused ε0 **12.9**.
+
+(Endpoint position, roz6 n=3 median m — confounded, directional only: fixed 17.0,
+oracle 35.6, fused ε0 66.6, roz6-ε 75.1, pooled-ε 62.4.)
+
+### 3. What this shows
+
+- **ε is strongly confirmed as the lever ON THE FUSION.** Uncalibrated fusion is
+  badly wrong (ε0 heading 7.8°@30 s on roz6, 12.9°@60 s on trip2); ε-calibration
+  cuts that to 4.1°/1.6° (pooled-ε), approaching the oracle. More ε (within the
+  fitted range) monotonically reduced the fusion's heading error. This is the
+  clearest independent evidence yet that ε drives fusion accuracy.
+- **But fusion did not beat the no-fusion fixed-2048 baseline on any window
+  here.** Every qualifying window happened to have a **near-nominal gyro zero**
+  (oracle zeros 2042.6 / 2050.6 / 2050.7 on roz6, 2049.1 on trip2 — within ~1–3
+  counts of 2048), so fixed-2048 was already ~1–2° and the wheel reference's own
+  residual error (ε miscalibration + noise) exceeded the tiny gyro offset it was
+  meant to correct. The ~8° stock regime (badly drifted zero), where fusion/ε
+  previously reached oracle, **is not represented in any long GPS-valid window
+  of either dataset.**
+
+### 4. Caveats
+
+Tiny n (roz6 3 windows @30 s, trip2 1 @60 s; 0 @90 s anywhere) — directional
+only. 1 Hz / integer-degree GPS caps resolution and makes 90 s unreachable from
+the short continuous stretches. Selection bias: only curvy ramp/interchange
+windows qualify (the steady highway that would give a clean constant zero is also
+where turning is least, so the zero is weakly observable there). Position
+endpoint is wheel-speed-scale-confounded. All qualifying windows had near-nominal
+zeros, so this cannot test the drifted-zero regime where fusion is supposed to
+win.
+
+### Holdout verdict: ε-lever STRENGTHENED; fusion-as-product WEAKENED.
+
+The holdout confirms **ε is the dominant lever on fusion heading accuracy**
+(ε0 → ε-calibrated cuts fusion error ~3–8×, toward oracle) — the strongest
+independent support so far for that specific claim. But it simultaneously shows
+**fusion is not worth shipping unconditionally**: on every long GPS-valid window
+available (roz6 + old), the gyro zero was near-nominal, fixed-2048 already
+achieved ~1–2°, and fusion — even with the best ε — only matched it at best and
+underperformed at worst, while uncalibrated fusion was far worse. Net for a
+product decision: **no change.** Fusion+ε pays off only when the zero is badly
+drifted (the earlier tunnel regime), a state absent from all long windows here;
+shipping it unconditionally risks degrading the common near-nominal case, and a
+wrong/averaged ε clearly worsens it. To decide for real we need a drive that
+contains BOTH a genuinely drifted zero AND long continuous windows — neither
+roz6 nor the 20261010 exports provide that combination.
