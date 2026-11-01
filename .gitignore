@@ -35,3 +35,9 @@ __pycache__/
 /validation/V100_LIMITS_REVIEW_2026-10-20*
 /validation/BETA3_RUNTIME_REVIEW_2026-10-07.md
 /validation/YAW_DECODE_2026-10-10/
+
+# Local Graphify graph, reports, and extraction cache.
+/graphify-out/
+
+# Claude Code agent worktrees (full repository copies).
+/.claude/worktrees/

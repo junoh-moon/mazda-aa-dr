@@ -34,3 +34,19 @@ For release work, read `docs/RELEASING_KO.md`. **Release ZIPs must be self-conta
 - Use `make test` for host checks when dependencies are available. Exact-ARM checks use the pinned toolchain; see `docs/toolchain.md`. QEMU/synthetic success is not vehicle validation.
 - Preserve the imported baseline provenance. Do not edit historical test counts into new test results. New verification belongs in a dated record.
 - Do not claim Claude or a physical vehicle was used without actual execution evidence. Independent agent review is useful but does not replace target tests.
+
+## Graphify (project-local: Codex CLI, Claude Code, OpenCode)
+
+- Use `./tools/graphify` for this repository; it runs the official `graphifyy`
+  package in uv's isolated tool environment, without a user-global CLI or skill
+  installation. Upgrades are permitted; see `docs/GRAPHIFY_KO.md`.
+- Follow `.agents/skills/graphify/SKILL.md` (shared workflow; native entrypoints
+  also exist under `.claude/skills/` and `.opencode/skills/`).
+- For code relationships, query an existing `graphify-out/graph.json` before
+  broad source searches. Verify findings in source and keep the required
+  current status/review document reads. If the graph is missing, stale, or
+  incomplete, use bounded source searches rather than blocking the task.
+- Refresh with `./tools/graphify extract . --code-only --max-workers 2` after
+  relevant code changes. Keep the ignore rules and their depth-eight bound.
+  The graph is local, Git-ignored, code-only navigation evidence; it does not
+  qualify behavior, physical sensors, or vehicle/phone acceptance.

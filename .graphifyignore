@@ -1,0 +1,30 @@
+# Scan only project-owned source and documentation directories.
+/*
+!/src/
+!/tests/
+!/packaging/
+!/tools/
+!/phone/
+!/docs/
+!/validation/
+
+# Also honor .gitignore. Keep private inputs excluded even if it later changes.
+/tools/m3-toolchain/
+/tools/aa-dex/
+/tools/phone-imu-study/
+*.apk
+*.dex
+*.so
+*.so.*
+*.bin
+*.jsonl
+*.zip
+*.tar
+*.tar.gz
+*-jadx.log
+.env
+.env.*
+
+# Maximum scan depth: eight path components relative to the project root.
+# Prune directories at depth nine as well as individual files at that depth.
+/*/*/*/*/*/*/*/*/*

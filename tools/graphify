@@ -1,0 +1,12 @@
+#!/bin/sh
+# Run Graphify in uv's tool environment without a global CLI installation.
+set -eu
+
+graphify_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$graphify_root"
+
+# Keep automatic backend discovery and user-global query logs out of this setup.
+export GRAPHIFY_BACKEND=none
+export GRAPHIFY_QUERY_LOG_DISABLE=1
+
+exec uv tool run --isolated --from graphifyy graphify "$@"
