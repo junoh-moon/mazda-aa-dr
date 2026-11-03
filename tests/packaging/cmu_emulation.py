@@ -852,10 +852,17 @@ def main():
         (base / 'logs/capture.done').write_text(current_boot + '\n')
         journal.write_bytes(original_collector)
         command_baselines = export_command_baselines(root)
+        exported_trace = (base / 'logs/trace.0.jsonl').read_bytes()
         run("printf '3\\n' | sh /tmp/mnt/sda1/trial")
         report = (usb / 'trial-result.txt').read_text()
         require('finish_exit=0' in report and 'export_exit=0' in report,
                 'USB menu did not preserve separate finish/export outcomes')
+        # v1.0.5 (validation/PRUNE_EXPORTED_LOGS_2026-11-03.md): an acknowledged
+        # freeze plus a complete export deletes the exported journals.
+        require('prune=done' in report and 'prune_exit=0' in report and
+                not (base / 'logs/trace.0.jsonl').exists() and
+                (base / 'installed.txt').exists() and (base / 'guard').is_dir(),
+                'Menu 3 did not delete exactly the exported journals')
         archive = next(usb.glob('mx5dr-logs-*.tar'))
         require(archive.with_suffix('.tar.sha256').read_text().split()[0] ==
                 hashlib.sha256(archive.read_bytes()).hexdigest(), 'Export checksum mismatch')
@@ -864,6 +871,8 @@ def main():
                 ['-o remount,rw /tmp/mnt/sda1', '-o remount,ro /tmp/mnt/sda1'], 'USB mount not restored')
         # Authored rebooted USB return: no menu2, reinstall or arm. Previous
         # receipt times exceed the new uptime and must never become current.
+        # The same rows stand in for a journal written after the pruned export.
+        (base / 'logs/trace.0.jsonl').write_bytes(exported_trace)
         raw = (base / 'logs/trace.0.jsonl').read_bytes()
         startup = (root / 'usr/bin/autostart').read_bytes()
         config = (base / 'mx5dr.conf').read_bytes()

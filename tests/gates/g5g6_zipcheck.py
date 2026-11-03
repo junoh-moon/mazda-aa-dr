@@ -104,6 +104,7 @@ def main():
         # Interop contract 1 (docs/INTEROP_KO.md): the installed rebaseline
         # command and a one-line release identity that other tools compare.
         check('rebaseline.sh present', (u / 'rebaseline.sh').is_file())
+        check('prune_logs.sh present', (u / 'prune_logs.sh').is_file())
         bv = (u / 'bundle-version').read_text() if (u / 'bundle-version').is_file() else ''
         check('bundle-version is one X.Y.Z[-tag.N] line', re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?\n', bv) is not None, repr(bv[:40]))
         check('build-info version == bundle-version', info.get('version') == bv.strip(), f"{info.get('version')} vs {bv.strip()}")

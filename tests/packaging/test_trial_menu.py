@@ -61,9 +61,15 @@ class TrialMenuTests(unittest.TestCase):
                        if m.name.endswith('/mx5-aa-dr/logs/trace.0.jsonl')]
             self.assertEqual(tar.extractfile(member).read(),
                              b'retained raw evidence\n')
-        self.assertEqual((self.logs / 'trace.0.jsonl').read_text(),
-                         'retained raw evidence\n')
-        return (self.usb / 'trial-result.txt').read_text()
+        report = (self.usb / 'trial-result.txt').read_text()
+        # v1.0.5: an acknowledged freeze plus a complete export deletes the
+        # exported journals from the CMU (prune_logs.sh); otherwise they stay.
+        if 'prune=done' in report:
+            self.assertFalse((self.logs / 'trace.0.jsonl').exists())
+        else:
+            self.assertEqual((self.logs / 'trace.0.jsonl').read_text(),
+                             'retained raw evidence\n')
+        return report
 
     def test_eof_blank_and_invalid_input_never_install(self):
         for keys in ('', '\n0\n', 'bad\n0\n', '$(touch unexpected)\n0\n'):
@@ -771,6 +777,100 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('finish_exit=0', report)
         self.assertIn('export_exit=0', report)
         self.assertTrue((self.logs / 'capture.stop').is_dir())
+
+    # ---- v1.0.5: delete exported journals (validation/PRUNE_EXPORTED_LOGS_2026-11-03.md) ----
+    def journals(self):
+        names = ('trace.0.jsonl', 'trace.1.jsonl', 'collector.0.jsonl', 'collector.1.jsonl', 'pimu.0.jsonl')
+        for name in names[1:]:
+            (self.logs / name).write_text(name + ' rows\n')
+        kept = {'g3-heading.v1': 'heading\n', 'g3-last-start': 'token\n'}
+        for name, text in kept.items():
+            (self.logs / name).write_text(text)
+        return names, kept
+
+    def prune(self, archive):
+        return subprocess.run(['sh', str(self.usb / 'prune_logs.sh'), str(archive)],
+                              text=True, capture_output=True, env=self.env, cwd=self.root, timeout=20)
+
+    def test_finish_deletes_only_the_exported_journals(self):
+        self.prepare_logs()
+        names, kept = self.journals()
+        result = self.menu('3\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = self.assert_export()
+        self.assertIn('prune=done files=5', report)
+        self.assertIn('prune_exit=0', report)
+        self.assertIn('prune=done', result.stdout)
+        archive, = self.usb.glob('mx5dr-logs-*.tar')
+        with tarfile.open(archive) as tar:
+            exported = {m.name.rsplit('/', 1)[-1] for m in tar.getmembers() if '/mx5-aa-dr/logs/' in m.name}
+        for name in names:
+            self.assertIn(name, exported)
+            self.assertFalse((self.logs / name).exists(), name)
+        for name, text in kept.items():
+            self.assertEqual((self.logs / name).read_text(), text)
+        self.assertTrue((self.logs / 'capture.done').exists())
+        self.assertTrue((self.base / 'installed.txt').exists())
+        self.assertTrue((self.base / 'guard').is_dir())
+
+    def test_unacknowledged_finish_keeps_every_journal(self):
+        self.prepare_logs(acknowledged=False)
+        names, _ = self.journals()
+        result = self.menu('3\n')
+        report = self.assert_export()
+        self.assertIn('prune=skipped', report)
+        self.assertIn('prune_exit=skipped', report)
+        for name in names:
+            self.assertTrue((self.logs / name).exists(), name)
+
+    def exported_without_prune(self):
+        self.prepare_logs(acknowledged=False)
+        names, _ = self.journals()
+        self.menu('3\n')
+        archive, = self.usb.glob('mx5dr-logs-*.tar')
+        (self.logs / 'capture.done').write_text(BOOT)
+        return names, archive
+
+    def assert_nothing_deleted(self, result, names, why):
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(why, result.stderr)
+        self.assertIn('nothing deleted', result.stderr)
+        for name in names:
+            self.assertTrue((self.logs / name).exists(), name)
+
+    def test_prune_refuses_a_checksum_mismatch(self):
+        names, archive = self.exported_without_prune()
+        sums = archive.with_suffix('.tar.sha256')
+        sums.write_text('0' * 64 + sums.read_text()[64:])
+        self.assert_nothing_deleted(self.prune(archive), names, 'checksum does not match')
+
+    def test_prune_refuses_a_journal_that_changed_after_export(self):
+        names, archive = self.exported_without_prune()
+        with open(self.logs / 'collector.0.jsonl', 'a') as grown:
+            grown.write('row written after the export\n')
+        self.assert_nothing_deleted(self.prune(archive), names, 'not in the archive with its current size')
+
+    def test_prune_refuses_a_journal_missing_from_the_archive(self):
+        names, archive = self.exported_without_prune()
+        (self.logs / 'pimu.1.jsonl').write_text('new journal\n')
+        self.assert_nothing_deleted(self.prune(archive), names, 'pimu.1.jsonl is not in the archive')
+
+    def test_prune_refuses_a_running_collector_or_another_boot(self):
+        names, archive = self.exported_without_prune()
+        (self.logs / 'collector.pid').write_text('266\n')
+        self.assert_nothing_deleted(self.prune(archive), names, 'Collector PID marker present')
+        (self.logs / 'collector.pid').unlink()
+        (self.logs / 'capture.done').write_text('87654321-1234-1234-1234-123456789abc\n')
+        self.assert_nothing_deleted(self.prune(archive), names, 'not from this boot')
+        (self.logs / 'capture.done').unlink()
+        self.assert_nothing_deleted(self.prune(archive), names, 'No capture freeze acknowledgement')
+
+    def test_prune_refuses_an_archive_inside_persistent_storage(self):
+        names, archive = self.exported_without_prune()
+        inside = self.base / 'backups' / archive.name
+        shutil.copy(archive, inside)
+        shutil.copy(archive.with_suffix('.tar.sha256'), inside.with_suffix('.tar.sha256'))
+        self.assert_nothing_deleted(self.prune(inside), names, 'inside persistent storage')
 
     def test_regular_mount_table_remains_compatible(self):
         mounts_alias = self.root / 'proc/mounts'
