@@ -11,7 +11,7 @@ guard는 설치할 때 두 파일의 원본 해시(`guard/normal.source.sha256`,
 - 경로: `/data_persist/mx5-aa-dr/tools/rebaseline.sh`. 메뉴 1(설치)이 함께 설치합니다. 이 파일이 없으면 rebaseline 이전 판(v1.0.3 이하)입니다.
 - 실행: `sh /data_persist/mx5-aa-dr/tools/rebaseline.sh [--check|--version]`. root 권한이 필요합니다. 인자 없이 비대화식으로 돌고 stdin을 읽지 않습니다.
 - 주차 중에만 실행합니다. CMU를 재시작하지 않습니다. OEM 파일(`sm.conf`, `sm_WCP.conf`, `autostart`)을 바꾸지 않습니다.
-- 바꾸는 것: trial 템플릿 두 개와 원본 해시 두 개, 그리고 guard `enable`이 새로 쓰는 `persist`와 `persist-state`. 그래서 다음 부팅은 메뉴 1 직후와 같이 **probation 부팅**(첫 부팅 확인)이 됩니다.
+- 바꾸는 것: trial 템플릿 두 개와 원본 해시 두 개, 그리고 guard `enable`이 새로 쓰는 `persist`와 `persist-state`. 그래서 다음 부팅은 메뉴 1 직후와 같이 **probation 부팅**(첫 부팅 확인)이 됩니다. v1.0.5부터 probation 부팅이 확인 전에 끝나도(짧은 시동, 곧바른 재부팅) 차단되지 않고 다음 부팅이 다시 probation입니다. 확인되지 않은 probation 부팅 뒤 SM 리셋 보고가 생길 때만 `tripped:probation`이 됩니다. 계약(경로, 종료 코드, `result=` 줄)은 바뀌지 않으며 contract는 1 그대로입니다.
 - 바꾸지 않는 것: guard trip, 런타임 중지 요청(`logs/disable-next-start`), 소유자 스위치 표식(`*-off`), 휴대폰 채널 설정. 메뉴 1이 설치한 것과 다른 preload 바이트(`installed.txt`의 해시)나 설정(`mx5dr.conf`)은 승인하지 않습니다.
 - 잠금: mount lock `/tmp/.mx5dr-mount.lock`(`flock -n`)과 설치 lock(`/data_persist/.mx5dr-install-lock`)을 쓰며 기다리지 않습니다. 이미 잡혀 있으면 바로 `precheck_failed:locked`로 끝납니다. **호출하는 쪽은 mount lock을 쥔 채 부르면 안 됩니다.**
 - 실행 시간: 셸 처리, 해시 몇 번, guard 호출 4회(guard 한 번은 10 s 상한)입니다. 별도 타이머는 없습니다.

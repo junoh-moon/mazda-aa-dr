@@ -129,7 +129,7 @@ startup_verdict() {
                 for (i=1;i<=NR;i++) if (index(line[i],"persist_verify_message: ")==1) fold40(substr(line[i],25))
             # Counters only from a state the guard accepted.
             if (p=="enabled" || p=="tripped") {
-                print "fail count " field("persist_fail_count=") " of 2, unconfirmed " field("persist_unconfirmed_count=") " of 3"
+                print "fail count " field("persist_fail_count=") " of 2, unconfirmed " field("persist_unconfirmed_count=") " (info)"
                 v=field("persist_recent=")
                 print substr("recent boots " (v=="-"?"none":v),1,40)
                 print substr("attempts since healthy " field("persist_attempts_since_healthy=") " (rule " field("persist_healthy_rule=") ")",1,40)
@@ -288,6 +288,16 @@ finish_and_export() {
     require_usb
     if export_output=$(sh "$HERE/export_logs.sh" "$HERE" 2>&1); then export_rc=0; else export_rc=$?; fi
     printf 'export_scope=all_retained_boots\n%s\nexport_exit=%s\n' "$export_output" "$export_rc"
+    # Delete the exported journals from the CMU only after this boot's freeze
+    # was acknowledged and the export completed (prune_logs.sh checks again).
+    prune_output='prune=skipped (capture finish or export incomplete; logs kept on the CMU)'
+    prune_rc=skipped
+    if [ "$finish_rc" = 0 ] && [ "$export_rc" = 0 ]; then
+        archive=$(printf '%s\n' "$export_output" | awk '/^\// && /\.tar$/ {a=$0} END{print a}')
+        require_usb
+        if prune_output=$(sh "$HERE/prune_logs.sh" "$archive" 2>&1); then prune_rc=0; else prune_rc=$?; fi
+    fi
+    printf 'prune_scope=exported_journals\n%s\nprune_exit=%s\n' "$prune_output" "$prune_rc"
     require_usb
     # Fixed, small report on the USB, never an accumulating log on the CMU.
     # Acquire the remount lock only after child helpers release theirs.
@@ -297,10 +307,10 @@ finish_and_export() {
     require_usb
     report=$HERE/trial-result.txt
     if [ -e "$report" ] || [ -L "$report" ]; then regular "$report"; fi
-    printf '%s\ndiagnostics_scope=current_recovery_boot\n%s\ndiagnostics_exit=%s\nstatus_scope=current_boot\n%s\nstatus_exit=%s\nfinish_scope=current_boot\n%s\nfinish_exit=%s\nexport_scope=all_retained_boots\n%s\nexport_exit=%s\n' \
+    printf '%s\ndiagnostics_scope=current_recovery_boot\n%s\ndiagnostics_exit=%s\nstatus_scope=current_boot\n%s\nstatus_exit=%s\nfinish_scope=current_boot\n%s\nfinish_exit=%s\nexport_scope=all_retained_boots\n%s\nexport_exit=%s\nprune_scope=exported_journals\n%s\nprune_exit=%s\n' \
         "$scope_notice" "$diagnostics_output" "$diagnostics_rc" \
         "$status_output" "$status_rc" "$finish_output" "$finish_rc" \
-        "$export_output" "$export_rc" > trial-result.txt || fail 'Cannot save USB report; retain the displayed result.'
+        "$export_output" "$export_rc" "$prune_output" "$prune_rc" > trial-result.txt || fail 'Cannot save USB report; retain the displayed result.'
     sync
     echo "Result saved: $report"
     [ "$export_rc" = 0 ] || return "$export_rc"

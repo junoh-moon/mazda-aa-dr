@@ -12,8 +12,9 @@ path). No OEM PID 1, SM, AA or VBS process is executed.
 Scenarios: install (menu 1) and the fenced installing boot; confirmed product
 boots; same-boot double selection refused; two consecutive SM resets trip to
 stock; menu 3 export keeps the tripped state, menu 1 keeps the evidence and
-re-enables; probation trip when SM never runs the trial; three unconfirmed
-short boots trip; a binding edited by another tool is visible and the next
+re-enables; since v1.0.5 an unconfirmed probation boot (SM never runs the
+trial, or ignition off first) keeps probation and does not trip, and short
+unconfirmed boots never trip (validation/UNCONFIRMED_RULE_2026-11-03.md); a binding edited by another tool is visible and the next
 boot is stock with the reason; a hanging guard cannot block SM (stock
 `timeout -t 15 -s KILL`); menu 4 restores the autostart byte for byte.
 Exit 0 pass, 1 fail, 77 skip."""
@@ -137,26 +138,28 @@ def main():
     r.check('re-enable: tripped no, probation yes, fenced', (st.get('tripped'), st.get('probation'), st.get('enabled_boot'))
             == ('no', 'yes', B(r.boot_number)), str(st))
 
-    r.emit('\n#### 5. Probation: SM rejects the trial (no report, no confirm) -> one product boot only')
+    r.emit('\n#### 5. Probation: unconfirmed first boot (no report) keeps probation, no trip (v1.0.5)')
     chosen = r.autostart_boot('SM never runs with the trial', sm_runs=False)
     r.check('probation: product selected (first attempt)', r.selected(chosen), chosen)
     r.check('probation: not confirmed', r.persist_state().get('confirmed_boot') == 'none')
     chosen = r.autostart_boot('after an unconfirmed probation boot')
-    r.check('probation trip: stock', chosen == '/jci/sm/sm.conf', chosen)
-    r.check('tripped=probation', r.persist_state().get('tripped') == 'probation', str(r.persist_state()))
+    st = r.persist_state()
+    r.check('no trip: product again, still probation', r.selected(chosen) and
+            (st.get('tripped'), st.get('probation')) == ('no', 'yes'), str(st))
 
-    r.emit('\n#### 6. Short boots without confirmation: 3 in a row trip')
+    r.emit('\n#### 6. Short boots without confirmation never trip (v1.0.5)')
     r.menu('1\n0\n', 'menu 1 re-enable')
     chosen = r.autostart_boot('confirmed first boot')
     r.check('confirmed first boot: product and confirmed', r.selected(chosen) and
             r.persist_state().get('confirmed_boot') == B(r.boot_number))
-    picks = [r.selected(r.autostart_boot('ignition off before the confirmation', sm_runs=False)) for _ in range(3)]
-    r.check('three unconfirmed boots: product each time', picks == [True, True, True], str(picks))
-    chosen = r.autostart_boot('after three unconfirmed boots')
-    r.check('then stock, tripped=unconfirmed', chosen == '/jci/sm/sm.conf' and
-            r.persist_state().get('tripped') == 'unconfirmed', str(r.persist_state()))
-    screen, block = r.status('tripped unconfirmed')
-    r.check('PERSIST tripped (unconfirmed)', 'PERSIST tripped (unconfirmed)' in block)
+    picks = [r.selected(r.autostart_boot('ignition off before the confirmation', sm_runs=False)) for _ in range(4)]
+    r.check('four unconfirmed boots: product each time', picks == [True] * 4, str(picks))
+    chosen = r.autostart_boot('after four unconfirmed boots')
+    st = r.persist_state()
+    r.check('still product, tripped=no, counter saturated', r.selected(chosen) and
+            (st.get('tripped'), st.get('unconfirmed_count')) == ('no', '3'), str(st))
+    screen, block = r.status('after short boots')
+    r.check('PERSIST enabled (every boot)', 'PERSIST enabled (every boot)' in block)
 
     r.emit('\n#### 7. Bindings changed by another tool are visible; next boot says why')
     r.menu('1\n0\n', 'menu 1 re-enable')
