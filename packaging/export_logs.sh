@@ -269,4 +269,4 @@ sync
 echo "$dest/$name"
 echo "diagnostic_partial=$diagnostic_partial (missing/truncated inputs are listed inside collection.txt)"
 echo 'Archive includes the whole installation, actual startup/SM files and bounded current-boot diagnostics. Keep it private.'
-echo 'Live writer may have rotated during export; partial final JSONL records are possible. Originals retained.'
+echo 'Live writer may have rotated during export; partial final JSONL records are possible. Originals retained by this export; menu 3 may then delete the exported journals (prune_logs.sh).'

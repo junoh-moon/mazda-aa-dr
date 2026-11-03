@@ -189,7 +189,13 @@ const unsigned HEALTHY_RULE_ATTEMPTS=3;  // attempts since the last healthy mark
 // Guard-owned confirmation (no runtime cooperation): the owned autostart
 // block runs `confirm` CONFIRM_DELAY_S after a selection; it records the boot
 // only while the SM still runs with that boot's trial configuration.
-const unsigned UNCONFIRMED_TRIP=3;       // consecutive unconfirmed attempts
+// v1.0.5 (owner decision 2026-11-03, validation/UNCONFIRMED_RULE_2026-11-03.md):
+// an unconfirmed attempt never trips, also not in probation. A short drive or
+// a parking manoeuvre ends a boot before the confirmation, so the old
+// three-unconfirmed and probation-unconfirmed trips switched the product off
+// in ordinary use. Only the SM reset-report rules trip. The consecutive
+// counter is kept (saturating) for diagnostics.
+const unsigned UNCONFIRMED_CAP=3;        // saturation of the diagnostic counter
 const unsigned RECENT_WINDOW=10;         // attempts kept in `recent`
 const unsigned RECENT_RESET_TRIP=3;      // failed_reset attempts within the window
 const unsigned MAX_COUNT=999999;
@@ -239,15 +245,17 @@ bool parse_state(const std::string&raw,State&s){
  s.previous=v[10];s.healthy_previous=v[11];s.tripped=v[12];
  if(!uuid36(s.enabled_boot)||(s.probation!="yes"&&s.probation!="no"))return false;
  if(!number(v[2],s.fail_count)||!number(v[3],s.unconfirmed)||!number(v[5],s.attempts))return false;
- if(s.fail_count>TRIP_FAILURES||s.unconfirmed>UNCONFIRMED_TRIP)return false;
+ if(s.fail_count>TRIP_FAILURES||s.unconfirmed>UNCONFIRMED_CAP)return false;
  if(s.recent!="-"&&(s.recent.empty()||s.recent.size()>RECENT_WINDOW||s.recent.find_first_not_of("RUCB")!=std::string::npos))return false;
  bool none=s.attempt_boot=="none";
  if(none!=(s.attempt_reports=="none")||none!=(s.attempt_trial=="none"))return false;
  if(!none&&(!uuid36(s.attempt_boot)||!hex64(s.attempt_reports)||!trial_path(s.attempt_trial)))return false;
  if(s.confirmed_boot!="none"&&s.confirmed_boot!=s.attempt_boot)return false;
  if(!one_of(s.previous,previous_values)||!one_of(s.healthy_previous,healthy_values)||!one_of(s.tripped,tripped_values))return false;
- // A tripped state never carries an open attempt; an active one is below every cap.
- if(s.tripped!="no"?!none:(s.fail_count>=TRIP_FAILURES||s.unconfirmed>=UNCONFIRMED_TRIP||
+ // A tripped state never carries an open attempt; an active one is below every
+ // trip cap. (A state tripped `unconfirmed` or `probation` by an earlier build
+ // stays tripped until menu 1.)
+ if(s.tripped!="no"?!none:(s.fail_count>=TRIP_FAILURES||
     recent_resets(s.recent)>=RECENT_RESET_TRIP))return false;
  return state_text(s)==raw;
 }
@@ -329,8 +337,9 @@ bool report_fingerprint(std::string&out){
 //   R failed_reset: the SM reset reports changed since that selection.
 //   B failed_bootloop: healthy rule only (off in this build).
 //   C confirmed (or healthy): `confirm` recorded that boot.
-//   U unconfirmed: neither a new report nor a confirmation.
-// Only a confirmed attempt resets the consecutive counters and ends probation.
+//   U unconfirmed: neither a new report nor a confirmation (never trips).
+// Only a confirmed attempt resets the consecutive counters and ends probation;
+// probation trips only on an unconfirmed failed attempt (R or B), not on U.
 void evaluate(State&s,const std::string&reports){
  if(s.attempt_boot=="none"){s.previous="none";s.healthy_previous="none";return;}
  bool reset=s.attempt_reports!=reports;
@@ -342,16 +351,15 @@ void evaluate(State&s,const std::string&reports){
  if(reset){mark='R';s.previous="failed_reset";if(s.fail_count<TRIP_FAILURES)s.fail_count++;}
  else if(healthy_rule&&!healthy&&s.attempts>=HEALTHY_RULE_ATTEMPTS){mark='B';s.previous="failed_bootloop";if(s.fail_count<TRIP_FAILURES)s.fail_count++;}
  else if(confirmed){mark='C';s.previous=healthy?"healthy":"confirmed";if(healthy||!healthy_rule)s.fail_count=0;}
- else{mark='U';s.previous="unconfirmed";if(s.unconfirmed<UNCONFIRMED_TRIP)s.unconfirmed++;}
+ else{mark='U';s.previous="unconfirmed";if(s.unconfirmed<UNCONFIRMED_CAP)s.unconfirmed++;}
  if(confirmed)s.unconfirmed=0;
  s.recent=(s.recent=="-"?std::string():s.recent)+mark;
  if(s.recent.size()>RECENT_WINDOW)s.recent.erase(0,s.recent.size()-RECENT_WINDOW);
- bool probation_failed=s.probation=="yes"&&!confirmed;
+ bool probation_failed=s.probation=="yes"&&!confirmed&&(mark=='R'||mark=='B');
  if(confirmed)s.probation="no";
  if(probation_failed)s.tripped="probation";
  else if(s.fail_count>=TRIP_FAILURES)s.tripped=mark=='B'?"boot_loop":"reset_reports";
  else if(recent_resets(s.recent)>=RECENT_RESET_TRIP)s.tripped="reset_reports_repeated";
- else if(s.unconfirmed>=UNCONFIRMED_TRIP)s.tripped="unconfirmed";
 }
 // The SM of this boot still runs with the published trial: argv is
 // "/jci/sm/sm -f <trial> ..." (vehicle ps 2026-10-04 shows exactly this form).

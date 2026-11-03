@@ -172,7 +172,7 @@ class PersistentBetaTests(unittest.TestCase):
             self.assertIn('one_boot=persistent_this_boot', text)
             self.assertIn('guard_config_binding=matched', text)
             self.assertEqual(verdict[1:8], ['PERSIST enabled (every boot)',
-                                            'fail count 0 of 2, unconfirmed 0 of 3',
+                                            'fail count 0 of 2, unconfirmed 0 (info)',
                                             'recent boots ' + ('none' if n == 1 else 'C' * (n - 1)),
                                             'attempts since healthy %d (rule off)' % n,
                                             'healthy previous boot ' + ('none' if n == 1 else 'no'),
@@ -189,7 +189,7 @@ class PersistentBetaTests(unittest.TestCase):
         text, verdict = self.status()
         self.assertIn('persist_fail_count=1', text)
         self.assertIn('persist_previous=failed_reset', text)
-        self.assertIn('fail count 1 of 2, unconfirmed 0 of 3', verdict)
+        self.assertIn('fail count 1 of 2, unconfirmed 0 (info)', verdict)
         # Boot 4 also resets: two in a row trip to stock.
         (self.root / 'data/thread_info.out').write_text('stacks during boot 4\n')
         self.set_boot(5)
@@ -239,7 +239,7 @@ class PersistentBetaTests(unittest.TestCase):
         good = state.read_text()
         variants = {
             'noncanonical count': good.replace('fail_count=0', 'fail_count=00'),
-            'count above cap': good.replace('unconfirmed_count=0', 'unconfirmed_count=3'),
+            'count above cap': good.replace('unconfirmed_count=0', 'unconfirmed_count=4'),
             'unknown trip': good.replace('tripped=no', 'tripped=maybe'),
             'old schema': good.replace('mx5dr-persist-state-v2', 'mx5dr-persist-state-v1'),
             'extra line': good + 'x=1\n',

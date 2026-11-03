@@ -503,13 +503,13 @@ class PersistentRuleOff(Fixture):
         self.assertEqual(r.returncode, 3)
         self.assertIn('unable to confirm durable rollback', r.stderr)
         self.assertFalse((self.root / BASE / 'guard/last-boot').exists())
-        # The undelivered attempts never ran the product, but each one counts
-        # as unconfirmed (it can never be confirmed): the third trips to stock.
+        # The undelivered attempts never ran the product; each one counts as
+        # unconfirmed (it can never be confirmed). Since v1.0.5 that never trips.
         st = self.state()
         self.assertEqual((st['unconfirmed_count'], st['recent']), ('2', 'CUU'))
-        self.product_boot(n + 1, expect=False)
+        self.product_boot(n + 1)
         st = self.state()
-        self.assertEqual((st['tripped'], st['unconfirmed_count'], st['recent']), ('unconfirmed', '3', 'CUUU'))
+        self.assertEqual((st['tripped'], st['unconfirmed_count'], st['recent']), ('no', '3', 'CUUU'))
 
     def test_stale_temporaries_are_removed_under_the_lock(self):
         self.enable()
@@ -572,32 +572,64 @@ class PersistentRuleOff(Fixture):
         self.product_boot(6)
 
     # ---- guard-owned confirmation, probation and caps (2026-10-06 G2) ----
-    def test_probation_first_attempt_unconfirmed_trips_immediately(self):
-        """A deterministic fault without an SM report (SM rejects the trial,
-        panic, power cut) is bounded to ONE product boot after menu 1."""
+    def test_probation_unconfirmed_attempt_keeps_probation(self):
+        """v1.0.5 (validation/UNCONFIRMED_RULE_2026-11-03.md): a probation boot
+        that ends before the confirmation (short drive, parking) does not trip;
+        the next product boot is again a probation boot."""
         self.enable()
         self.assertEqual(self.state()['probation'], 'yes')
         self.product_boot(1, confirm=False)
+        self.product_boot(2, confirm=False)
+        st = self.state()
+        self.assertEqual((st['tripped'], st['probation'], st['previous'], st['recent']), ('no', 'yes', 'unconfirmed', 'U'))
+        self.product_boot(3)
+        self.product_boot(4)
+        st = self.state()
+        self.assertEqual((st['tripped'], st['probation'], st['recent']), ('no', 'no', 'UUC'))
+
+    def test_probation_reset_trips_immediately(self):
+        """A probation attempt followed by an SM reset report trips at once."""
+        self.enable()
+        self.product_boot(1, confirm=False)
+        self.reset_during('boot 1')
         self.product_boot(2, expect=False)
         st = self.state()
-        self.assertEqual((st['tripped'], st['previous'], st['recent']), ('probation', 'unconfirmed', 'U'))
-        for n in range(3, 7):
+        self.assertEqual((st['tripped'], st['previous'], st['recent']), ('probation', 'failed_reset', 'R'))
+        for n in range(3, 6):
             self.product_boot(n, expect=False)
         self.enable()
+        self.product_boot(6)
         self.product_boot(7)
-        self.product_boot(8)
         self.assertEqual(self.state()['probation'], 'no')
 
-    def test_no_report_loop_stops_after_three_unconfirmed_attempts(self):
+    def test_unconfirmed_attempts_never_trip(self):
         self.enable()
         self.product_boot(1)  # probation passed
-        selected = []
-        for n in range(2, 12):
-            r = self.product_boot(n, expect=(n <= 4), confirm=False)
-            selected.append(r.returncode == 0)
-        self.assertEqual(selected, [True, True, True] + [False] * 7)
+        for n in range(2, 14):
+            self.product_boot(n, confirm=False)
         st = self.state()
-        self.assertEqual((st['tripped'], st['unconfirmed_count'], st['recent']), ('unconfirmed', '3', 'CUUU'))
+        self.assertEqual((st['tripped'], st['unconfirmed_count'], st['recent']), ('no', '3', 'UUUUUUUUUU'))
+        self.product_boot(14)
+        self.product_boot(15)
+        self.assertEqual(self.state()['unconfirmed_count'], '0')
+
+    def test_earlier_unconfirmed_trip_stays_until_menu_1(self):
+        """A state tripped `unconfirmed` by v1.0.4 or earlier stays stock."""
+        self.enable()
+        self.product_boot(1)
+        path = self.root / BASE / 'guard/persist-state'
+        st = self.state()
+        text = path.read_text()
+        text = text.replace('attempt_boot=%s' % st['attempt_boot'], 'attempt_boot=none')
+        text = text.replace('attempt_reports=%s' % st['attempt_reports'], 'attempt_reports=none')
+        text = text.replace('attempt_trial=%s' % st['attempt_trial'], 'attempt_trial=none')
+        text = text.replace('confirmed_boot=%s' % st['confirmed_boot'], 'confirmed_boot=none')
+        text = text.replace('unconfirmed_count=0', 'unconfirmed_count=3').replace('tripped=no', 'tripped=unconfirmed')
+        path.write_text(text)
+        self.product_boot(2, expect=False)
+        self.assertEqual(self.state()['tripped'], 'unconfirmed')
+        self.enable()
+        self.product_boot(3)
 
     def test_only_a_confirmed_attempt_resets_the_unconfirmed_counter(self):
         self.enable()
@@ -615,8 +647,8 @@ class PersistentRuleOff(Fixture):
         self.assertEqual((st['previous'], st['unconfirmed_count'], st['fail_count']), ('failed_reset', '1', '1'))
         self.product_boot(8, confirm=False)  # judges 7: 2; fail_count not reset by unconfirmed
         self.assertEqual((self.state()['unconfirmed_count'], self.state()['fail_count']), ('2', '1'))
-        self.product_boot(9, expect=False)  # judges 8: 3
-        self.assertEqual(self.state()['tripped'], 'unconfirmed')
+        self.product_boot(9)  # judges 8: 3, no trip since v1.0.5
+        self.assertEqual((self.state()['tripped'], self.state()['unconfirmed_count']), ('no', '3'))
 
     def test_alternating_reset_and_good_boots_hit_the_cumulative_cap(self):
         self.enable()

@@ -219,7 +219,7 @@ if [ -e "$BASE/guard/persist" ] || [ -L "$BASE/guard/persist" ]; then
         persist_verify=$(guard_status_value verify)
         persist_decision=$(guard_status_value last_decision)
         [ "$persist_status" != tripped ] || persist_reason=$(guard_status_value tripped)
-        persist_line2="persist_fail_count=$(guard_status_value fail_count) persist_trip_at=2 persist_unconfirmed_count=$(guard_status_value unconfirmed_count) persist_unconfirmed_trip_at=3 persist_recent=$(guard_status_value recent) persist_probation=$(guard_status_value probation) persist_attempts_since_healthy=$(guard_status_value attempts_since_healthy) persist_previous=$(guard_status_value previous) persist_healthy_previous=$(guard_status_value healthy_previous)"
+        persist_line2="persist_fail_count=$(guard_status_value fail_count) persist_trip_at=2 persist_unconfirmed_count=$(guard_status_value unconfirmed_count) persist_unconfirmed_trip_at=off persist_recent=$(guard_status_value recent) persist_probation=$(guard_status_value probation) persist_attempts_since_healthy=$(guard_status_value attempts_since_healthy) persist_previous=$(guard_status_value previous) persist_healthy_previous=$(guard_status_value healthy_previous)"
     else
         guard_status=''
     fi
