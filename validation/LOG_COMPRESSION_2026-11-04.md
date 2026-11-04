@@ -155,6 +155,12 @@ Nothing serious was found. Five low or low-medium findings:
   works, and `tar -tvf -` from a pipe puts the size in column 3 and the path in
   the last column, as prune expects.
 
+- **`tests/packaging/test_trial_menu.py` with every shell command a BusyBox
+  1.20.2 applet under qemu** (sh, tar, awk, stat, flock, …): 126 OK.
+- **The 65 `CompressedExportTests` with that BusyBox and the cross-built ARM
+  `mx5dr-collector` as the gzip helper:** 65 OK. That helper is
+  `MX5DR_TEST_GZIP_OVERRIDE`, a qemu wrapper.
+
 ## Not run
 
 - Vehicle (no drive is requested).

@@ -1088,7 +1088,7 @@ class TrialMenuTests(unittest.TestCase):
         self.assertTrue((self.logs / 'trace.0.jsonl').exists())
 
 
-GZIP_HELPER = Path(os.environ.get('MX5DR_TEST_BUILD', Path(__file__).resolve().parents[2] / 'build')) / 'test_collector'
+GZIP_HELPER = Path(os.environ['MX5DR_TEST_GZIP_OVERRIDE']) if os.environ.get('MX5DR_TEST_GZIP_OVERRIDE') else Path(os.environ.get('MX5DR_TEST_BUILD', Path(__file__).resolve().parents[2] / 'build')) / 'test_collector'
 
 
 @unittest.skipUnless(GZIP_HELPER.exists(), 'host collector (gzip helper) not built')
