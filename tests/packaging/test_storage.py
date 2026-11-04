@@ -48,9 +48,15 @@ class StorageTests(unittest.TestCase):
             for i in range(count):
                 with (logs / f'{stream}.{i}.jsonl').open('wb') as f:
                     f.truncate(size)
+        # v1.0.6: the collector's gzip archives (2 MiB budget) count as well;
+        # an existing full archive set reuses its space the same way.
+        archive = logs / 'collector.2.jsonl.gz'
+        with archive.open('wb') as f:
+            f.truncate(2 * 1024 * 1024)
         with self.free_space(16 * 1024):
             r = self.fixture.run_script('install.sh')
         self.assertIn('remaining_log_kib=0', r.stdout)
+        self.assertEqual(archive.stat().st_size, 2 * 1024 * 1024)
         self.assertEqual((logs / 'trace.0.jsonl').stat().st_size, 40 * 1024 * 1024)
 
     def sparse(self, name, size):
@@ -67,12 +73,13 @@ class StorageTests(unittest.TestCase):
         # v1.0 stable: the persistent BETA install writes 3 x 16 MiB trace
         # (mx5dr.conf), the collector keeps 2 x 1 MiB in that profile and the
         # phone channel 2 x 1 MiB: 52 MiB of logs, not the 130 MiB one-boot
-        # bound that refused installs needlessly.
+        # bound that refused installs needlessly. v1.0.6 adds the collector's
+        # 2 MiB of gzip archives (validation/LOG_COMPRESSION_2026-11-04.md).
         with self.free_space(10 ** 7):
             beta = self.fixture.run_script('install.sh', '--mode=BETA')
-        self.assertEqual(self.field(beta.stdout, 'remaining_log_kib'), 52 * 1024)
+        self.assertEqual(self.field(beta.stdout, 'remaining_log_kib'), 54 * 1024)
         need = self.field(beta.stdout, 'required_kib')
-        self.assertEqual(need, 8192 + 64 + 1024 + 52 * 1024 + 1)
+        self.assertEqual(need, 8192 + 64 + 1024 + 54 * 1024 + 1)
         conf = (self.base / 'mx5dr.conf').read_text()
         self.assertIn('max_log_bytes=16777216\nmax_log_files=3\n', conf)
         with self.free_space(need):
@@ -80,10 +87,10 @@ class StorageTests(unittest.TestCase):
         with self.free_space(need - 1):
             r = self.fixture.run_script('install.sh', '--mode=BETA', ok=False)
         self.assertIn('Insufficient persistent space', r.stderr)
-        # One-boot trials keep their larger caps (3 x 40 MiB, 2 x 4 MiB).
+        # One-boot trials keep their larger caps (3 x 40 MiB, 2 x 4 MiB, plus 2 MiB of collector archives).
         with self.free_space(10 ** 7):
             shadow = self.fixture.run_script('install.sh', '--mode=SHADOW')
-        self.assertEqual(self.field(shadow.stdout, 'remaining_log_kib'), 130 * 1024)
+        self.assertEqual(self.field(shadow.stdout, 'remaining_log_kib'), 132 * 1024)
         with self.free_space(need):
             self.fixture.run_script('install.sh', '--mode=SHADOW', ok=False)
 

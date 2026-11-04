@@ -70,7 +70,7 @@ int main(int argc,char** argv) {
     std::string all;
     unsigned archives = 0;
     for (unsigned i = ARCHIVE_LAST; i >= 2; --i) {
-      std::string path = logs + "/collector." + std::to_string(i) + ".jsonl.gz";
+      std::string path = logs + "/collector." + fixture_number(i) + ".jsonl.gz";
       int in = open(path.c_str(), O_RDONLY);
       if (in < 0) continue;
       ++archives;
@@ -144,15 +144,27 @@ int main(int argc,char** argv) {
       journal.flush();
       assert(!journal.failed);
     }
-    unsigned long long total = 0; unsigned count = 0;
+    unsigned long long total = 0; unsigned count = 0, highest = 0;
     for (unsigned i = 2; i <= ARCHIVE_LAST; ++i) {
-      std::string path = logs + "/collector." + std::to_string(i) + ".jsonl.gz";
+      std::string path = logs + "/collector." + fixture_number(i) + ".jsonl.gz";
       struct stat st;
       if (stat(path.c_str(), &st)) continue;
-      total += (unsigned long long)st.st_size; ++count;
+      total += (unsigned long long)st.st_size; ++count; highest = i;
       assert(!unlink(path.c_str()));
     }
     assert(count >= 1 && (count == 1 || total <= 400));
+    assert(highest == count + 1);   // contiguous from collector.2: no gaps
+    {
+      // The note precedes the row that rotated, so it can never follow a stop.
+      FILE *file = fopen((logs + "/collector.0.jsonl").c_str(), "r");
+      assert(file);
+      char row[1024]; bool seen_fixture = false;
+      while (fgets(row, sizeof row, file)) {
+        if (strstr(row, "\"kind\":\"fixture\"")) seen_fixture = true;
+        if (strstr(row, "\"kind\":\"collector_archive\"")) assert(!seen_fixture);
+      }
+      fclose(file);
+    }
     archive_budget_bytes = 2097152ULL;
     assert(!unlink((logs + "/collector.0.jsonl").c_str()) && !unlink((logs + "/collector.1.jsonl").c_str()));
   }

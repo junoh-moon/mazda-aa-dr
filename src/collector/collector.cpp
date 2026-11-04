@@ -151,14 +151,22 @@ struct Journal {
     }
     snprintf(a, sizeof a, "%s/logs/collector.2.jsonl.gz", root);
     if (rename(tmp, a)) { unlink(tmp); set_note("rename", in_bytes, 0); return; }
+    // Archived: drop the plain copy now, so a power cut before the plain
+    // shift cannot archive the same rows twice at the next start.
+    unlink(plain);
     // Newest first; keep the newest always, then stop at the byte budget.
+    // From the first archive over the budget on, every older one goes, so the
+    // kept history has no gaps.
     unsigned long long total = 0;
     unsigned kept = 0;
+    bool over = false;
     for (unsigned i = 2; i <= ARCHIVE_LAST; ++i) {
       snprintf(a, sizeof a, "%s/logs/collector.%u.jsonl.gz", root, i);
       struct stat existing;
       if (lstat(a, &existing) || !S_ISREG(existing.st_mode)) continue;
-      if (i > 2 && total + (unsigned long long)existing.st_size > archive_budget_bytes) { unlink(a); continue; }
+      if (i > 2 && (over || total + (unsigned long long)existing.st_size > archive_budget_bytes)) {
+        over = true; unlink(a); continue;
+      }
       total += (unsigned long long)existing.st_size;
       ++kept;
     }
@@ -240,8 +248,21 @@ struct Journal {
       mx5::runtime::record_storage_stop(root,"collector",space);
       fail();return;
     }
-    if (!f || written + n + 1 > config.max_log_bytes)
+    if (!f || written + n + 1 > config.max_log_bytes) {
       rotate();
+      // The archive note goes first: the row that rotated may be the final
+      // collector_stop, and nothing may follow a stop.
+      if (f && !failed && note[0] && !writing_note) {
+        char pending[sizeof note];
+        memcpy(pending, note, sizeof note);
+        note[0] = 0;
+        writing_note = true;
+        line(pending);
+        writing_note = false;
+        if (!f || failed) return;
+        if (written + n + 1 > config.max_log_bytes) rotate();
+      }
+    }
     if (!f || failed)
       return;
     if (fwrite(s, 1, n, f) != n || fputc('\n', f) == EOF) {
@@ -249,14 +270,6 @@ struct Journal {
       return;
     }
     written += n + 1;
-    if (note[0]) {
-      char pending[sizeof note];
-      memcpy(pending, note, sizeof note);
-      note[0] = 0;
-      writing_note = true;
-      line(pending);
-      writing_note = false;
-    }
   }
   void flush() {
     if (f && fflush(f))

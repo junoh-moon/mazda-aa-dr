@@ -39,6 +39,8 @@ template<class F> inline bool sym(void* h,const char* name,F& f) {
 inline bool load(Api& a,const char* path="libz.so.1") {
     memset(&a,0,sizeof a);
     a.handle=dlopen(path,RTLD_NOW|RTLD_LOCAL);
+    // The 74.00.324A file itself, in case the soname link is absent.
+    if(!a.handle&&!strcmp(path,"libz.so.1"))a.handle=dlopen("/usr/lib/libz.so.1.2.5",RTLD_NOW|RTLD_LOCAL);
     if(!a.handle)return false;
     bool ok=sym(a.handle,"deflateInit2_",a.deflate_init2)&sym(a.handle,"deflate",a.deflate_step)&
             sym(a.handle,"deflateEnd",a.deflate_end)&sym(a.handle,"inflateInit2_",a.inflate_init2)&

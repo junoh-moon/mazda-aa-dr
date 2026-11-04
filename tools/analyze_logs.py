@@ -7,6 +7,8 @@ DR accuracy, or a complete vehicle session. Run --help for input syntax.
 """
 import argparse
 import bisect
+import gzip
+import io
 from collections import Counter
 import json
 import math
@@ -124,8 +126,24 @@ LIMITATIONS = [
 
 def rotation_key(name):
     p = PurePosixPath(name)
-    m = re.fullmatch(r"(trace|collector|pimu)\.(\d+)\.jsonl", p.name)
+    # collector.N.jsonl.gz: the collector's gzip archives, older than
+    # collector.1 (validation/LOG_COMPRESSION_2026-11-04.md).
+    m = re.fullmatch(r"(trace|collector|pimu)\.(\d+)\.jsonl(?:\.gz)?", p.name)
     return (str(p.parent), m[1] if m else p.name, -int(m[2]) if m else 0, p.name)
+
+
+def gunzip_bounded(fileobj, limit):
+    """Decompress a whole gzip member set; None when it exceeds limit bytes."""
+    out = bytearray()
+    with gzip.GzipFile(fileobj=fileobj) as stream:
+        while True:
+            chunk = stream.read(1 << 20)
+            if not chunk:
+                break
+            out += chunk
+            if len(out) > limit:
+                return None
+    return bytes(out)
 
 
 def trace_group(name):
@@ -963,6 +981,7 @@ class Auditor:
         self.checked = 0
         self.collector_counts = Counter()
         self.collector_boots = []
+        self.collector_archive_results = Counter()
         self.collector_stops = []
         self.storage_stops = []
         self.collector_pids = set()
@@ -1218,6 +1237,12 @@ class Auditor:
                 return False
             if self.collector_continuation(row, source):
                 self.collector_session["stop_ns"] = row["observed_at_mono_ns"]
+            return False
+        if kind == "collector_archive":
+            # Result of gzipping the previous collector.1 (LOG_COMPRESSION_2026-11-04).
+            result = row.get("result")
+            self.collector_archive_results[result if isinstance(result, str) else "invalid"] += 1
+            self.collector_continuation(row, source)
             return False
         if kind not in ("poll", "position_poll", "position_poll_error", "owner_poll", "receiver_poll"):
             self.issue("unexpected_collector_record", source, "Collector cannot emit AA hook/health records", True)
@@ -3362,7 +3387,7 @@ class Auditor:
             if path.is_symlink():
                 self.issue("unsafe_input", str(path), "Symlink inputs are refused")
             elif path.is_dir():
-                files = list(path.rglob("*.jsonl"))
+                files = list(path.rglob("*.jsonl")) + list(path.rglob("*.jsonl.gz"))
                 files += [p for p in path.rglob('*.storage.json') if p.name in STORAGE_FILES]
                 files.sort(key=lambda p: rotation_key(str(p)))
                 if not files:
@@ -3375,6 +3400,9 @@ class Auditor:
                         self.read_path(file)
             elif path.name.endswith((".tar", ".tar.gz", ".tgz")):
                 self.read_tar(path)
+            elif path.is_file() and path.name.endswith(".jsonl.gz"):
+                with path.open("rb") as raw:
+                    self.read_gzip_member(raw, str(path), ("file", *trace_group(str(path.resolve()))))
             elif path.is_file():
                 with path.open("rb") as stream:
                     self.read_stream(stream, str(path), path.stat().st_size,
@@ -3383,6 +3411,18 @@ class Auditor:
                 self.issue("input_unavailable", str(path), "Not a regular file/directory")
         except (OSError, tarfile.TarError, EOFError) as exc:
             self.issue("input_error", str(path), str(exc))
+
+    def read_gzip_member(self, raw, name, group):
+        """A collector gzip archive: decoded within the per-file budget."""
+        try:
+            data = gunzip_bounded(raw, MAX_FILE_BYTES)
+        except (OSError, EOFError) as exc:
+            self.issue("input_error", name, "gzip: %s" % exc)
+            return
+        if data is None:
+            self.issue("input_limit", name, "File/total byte budget exceeded")
+            return
+        self.read_stream(io.BytesIO(data), name, len(data), group)
 
     def read_pimu(self, stream, name):
         """Phone IMU journal (logs/pimu.N.jsonl): its own compact rows, never
@@ -3415,14 +3455,17 @@ class Auditor:
                     self.issue("duplicate_archive_member", str(path), name)
                     continue
                 names.add(name)
-                if member.isfile() and (name.endswith(".jsonl") or PurePosixPath(name).name in STORAGE_FILES):
+                if member.isfile() and (name.endswith((".jsonl", ".jsonl.gz")) or PurePosixPath(name).name in STORAGE_FILES):
                     members.append(member)
                 elif member.isfile():
                     self.ignored.append(name)
             for member in sorted(members, key=lambda m: rotation_key(m.name)):
                 with archive.extractfile(member) as stream:
-                    self.read_stream(stream, str(path) + "!" + member.name, member.size,
-                                     ("tar", str(path.resolve()), *trace_group(member.name)))
+                    group = ("tar", str(path.resolve()), *trace_group(member.name))
+                    if member.name.endswith(".jsonl.gz"):
+                        self.read_gzip_member(stream, str(path) + "!" + member.name, group)
+                    else:
+                        self.read_stream(stream, str(path) + "!" + member.name, member.size, group)
 
     def report(self):
         for session in self.sessions:
@@ -3582,7 +3625,9 @@ class Auditor:
                                    sessions=[dict(boot_id=s["boot_id"], pid=s["pid"],
                                                   start_ns=s["start_ns"], stop_ns=s["stop_ns"])
                                              for s in self.collector_sessions],
-                                   request_provenance="not_established"),
+                                   request_provenance="not_established",
+                                   **({"archive_results": dict(self.collector_archive_results)}
+                                      if self.collector_archive_results else {})),
                     owner_pid_comm=[dict(owner=k[0], pid=k[1], comm=k[2], count=v) for k, v in sorted(self.owners.items())],
                     receiver_counts=dict(self.receivers), install_counts=dict(self.installs), boots=self.boots,
                     issue_counts=dict(self.issue_counts), issues=self.issues,
