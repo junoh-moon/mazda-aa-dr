@@ -98,13 +98,13 @@ $(BUILD)/test_model_session_reset: $(ASSIST_WORKER) src/runtime/assist_worker.h 
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_reset.cpp -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/test_model_session_input: $(ASSIST_WORKER) src/runtime/assist_worker.h src/runtime/worker.h $(BUILD)/core_host.o $(NAVIGATION) $(NAV_HEADERS) src/runtime/core_bridge.cpp $(RUNTIME_SUPPORT) src/runtime/runtime.cpp src/runtime/model_session.h src/runtime/session_trace.h tests/runtime/test_model_session_input.cpp $(ADAPTER) src/runtime/loader.cpp | $(BUILD)
 	$(CXX) $(CXX_WARN) $(ASSIST_WORKER) $(RUNTIME_SUPPORT) $(LDS_SIDEBAND) $(LDS_REQUEST_SOURCE) $(LDS_ASSOCIATION) $(ADAPTER) $(NAVIGATION) src/runtime/core_bridge.cpp $(BUILD)/core_host.o src/runtime/loader.cpp tests/runtime/test_model_session_input.cpp -ldl -lpthread -lrt -lm -o $@
-COLLECTOR_HEADERS = src/collector/phone_imu.h src/collector/phone_imu_rx.h src/collector/bus_register.h src/runtime/worker_thread.h
+COLLECTOR_HEADERS = src/runtime/zlib_dyn.h src/collector/phone_imu.h src/collector/phone_imu_rx.h src/collector/bus_register.h src/runtime/worker_thread.h
 $(BUILD)/mx5dr-collector-host: src/collector/collector.cpp src/runtime/config.cpp $(COLLECTOR_HEADERS) | $(BUILD)
-	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -ldl -lpthread -lrt -o $@
 $(BUILD)/test_collector: src/collector/collector.cpp src/runtime/config.cpp $(COLLECTOR_HEADERS) | $(BUILD)
-	$(CXX) $(CXX_WARN) -DMX5_COLLECTOR_TESTING $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+	$(CXX) $(CXX_WARN) -DMX5_COLLECTOR_TESTING $(HOST_DBUS_FLAGS) $(filter-out %.h,$^) $(HOST_DBUS_LIBS) -ldl -lpthread -lrt -o $@
 $(BUILD)/test_collector_journal: tests/collector/test_journal.cpp src/collector/collector.cpp src/runtime/config.cpp $(COLLECTOR_HEADERS) | $(BUILD)
-	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) tests/collector/test_journal.cpp src/runtime/config.cpp $(HOST_DBUS_LIBS) -lpthread -lrt -o $@
+	$(CXX) $(CXX_WARN) $(HOST_DBUS_FLAGS) tests/collector/test_journal.cpp src/runtime/config.cpp $(HOST_DBUS_LIBS) -ldl -lpthread -lrt -o $@
 # Phone IMU channel (validation/PHONE_IMU_CHANNEL_2026-10-14.md): decoder and
 # budget unit checks, golden vectors, and the receiver against host PTYs, a
 # private dbus-daemon and a fake BCA (skipped without dbus-daemon).
@@ -306,7 +306,7 @@ $(BUILD)/arm/%.o: %.S
 $(BUILD)/libmx5dr.so: $(ARM_OBJECTS)
 	$(ARM_PREFIX)g++ -shared $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined,--exclude-libs,ALL -Wl,-soname,libmx5dr.so -static-libstdc++ -static-libgcc $(ARM_OBJECTS) -ldl -lpthread -lrt -lm -o $@
 $(BUILD)/mx5dr-collector: $(COLLECTOR_OBJECTS)
-	$(ARM_PREFIX)g++ $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -static-libstdc++ -static-libgcc $^ -ldbus-1 -lpthread -lrt -o $@
+	$(ARM_PREFIX)g++ $(ARM_FLAGS) -Wl,-z,relro,-z,now,-z,noexecstack,--no-undefined -static-libstdc++ -static-libgcc $^ -ldbus-1 -ldl -lpthread -lrt -o $@
 clean:
 	rm -rf $(BUILD)
 

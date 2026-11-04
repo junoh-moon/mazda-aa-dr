@@ -60,6 +60,47 @@ int main(int argc,char** argv) {
     journal.flush();
     assert(!journal.failed);
   }
+  // Archives (validation/LOG_COMPRESSION_2026-11-04.md): every overwritten
+  // collector.1 was gzipped; newest is collector.2.jsonl.gz. Decoding all
+  // archives oldest-first then .1 and .0 must give every row exactly once and
+  // in order, with collector_archive notes interleaved.
+  {
+    mx5::zlibdyn::Api z;
+    assert(mx5::zlibdyn::load(z));
+    std::string all;
+    unsigned archives = 0;
+    for (unsigned i = ARCHIVE_LAST; i >= 2; --i) {
+      std::string path = logs + "/collector." + std::to_string(i) + ".jsonl.gz";
+      int in = open(path.c_str(), O_RDONLY);
+      if (in < 0) continue;
+      ++archives;
+      char out_path[] = "/tmp/mx5dr-collector-gunzip-XXXXXX";
+      int out = mkstemp(out_path);
+      assert(out >= 0 && mx5::zlibdyn::gunzip_fd(z, in, out));
+      close(in);
+      lseek(out, 0, SEEK_SET);
+      char buf[4096]; ssize_t r;
+      while ((r = read(out, buf, sizeof buf)) > 0) all.append(buf, size_t(r));
+      close(out); unlink(out_path);
+      assert(!unlink(path.c_str()));
+    }
+    assert(archives > 10);
+    for (unsigned i = 1; i <= 1; --i) {
+      std::string path = logs + "/collector." + char('0' + i) + ".jsonl";
+      FILE *file = fopen(path.c_str(), "r");
+      assert(file);
+      char buf[4096]; size_t r;
+      while ((r = fread(buf, 1, sizeof buf, file)) > 0) all.append(buf, r);
+      fclose(file);
+    }
+    size_t fixtures = 0, notes = 0, pos = 0;
+    while ((pos = all.find("\"kind\":\"fixture\"", pos)) != std::string::npos) { ++fixtures; ++pos; }
+    pos = 0;
+    while ((pos = all.find("\"kind\":\"collector_archive\",\"result\":\"ok\"", pos)) != std::string::npos) { ++notes; ++pos; }
+    // Rows of the current collector.0 are not in the archive set.
+    assert(fixtures > 60 && fixtures <= 100);
+    assert(notes >= archives - 1);
+  }
   for (unsigned i = 0; i < 2; ++i) {
     std::string path = logs + "/collector." + char('0' + i) + ".jsonl";
     struct stat st;
@@ -72,6 +113,48 @@ int main(int argc,char** argv) {
     assert(strstr(line, "\"producer_mono_ns\":null"));
     fclose(file);
     assert(!unlink(path.c_str()));
+  }
+  // Without zlib the old two-file ring stays and no archive appears.
+  {
+    setenv("MX5_TEST_ZLIB_PATH", "/nonexistent/libz.so.1", 1);
+    {
+      Journal journal(tmp);
+      for (unsigned i = 0; i < 40; ++i) journal.line("{\"kind\":\"fixture\"}");
+      journal.flush();
+      assert(!journal.failed && journal.zlib_state < 0);
+    }
+    unsetenv("MX5_TEST_ZLIB_PATH");
+    struct stat st;
+    assert(stat((logs + "/collector.2.jsonl.gz").c_str(), &st) && errno == ENOENT);
+    FILE *file = fopen((logs + "/collector.0.jsonl").c_str(), "r");
+    assert(file);
+    char buf[8192]; size_t r = fread(buf, 1, sizeof buf - 1, file); buf[r] = 0; fclose(file);
+    file = fopen((logs + "/collector.1.jsonl").c_str(), "r");
+    assert(file);
+    char buf1[8192]; r = fread(buf1, 1, sizeof buf1 - 1, file); buf1[r] = 0; fclose(file);
+    assert(strstr(buf, "\"result\":\"unavailable\"") || strstr(buf1, "\"result\":\"unavailable\""));
+    assert(!unlink((logs + "/collector.0.jsonl").c_str()) && !unlink((logs + "/collector.1.jsonl").c_str()));
+  }
+  // Byte budget: the newest archive is always kept, older ones stop at the budget.
+  {
+    archive_budget_bytes = 400;
+    {
+      Journal journal(tmp);
+      for (unsigned i = 0; i < 100; ++i) journal.line("{\"kind\":\"fixture\"}");
+      journal.flush();
+      assert(!journal.failed);
+    }
+    unsigned long long total = 0; unsigned count = 0;
+    for (unsigned i = 2; i <= ARCHIVE_LAST; ++i) {
+      std::string path = logs + "/collector." + std::to_string(i) + ".jsonl.gz";
+      struct stat st;
+      if (stat(path.c_str(), &st)) continue;
+      total += (unsigned long long)st.st_size; ++count;
+      assert(!unlink(path.c_str()));
+    }
+    assert(count >= 1 && (count == 1 || total <= 400));
+    archive_budget_bytes = 2097152ULL;
+    assert(!unlink((logs + "/collector.0.jsonl").c_str()) && !unlink((logs + "/collector.1.jsonl").c_str()));
   }
   {
     Journal journal(tmp);
@@ -88,5 +171,5 @@ int main(int argc,char** argv) {
   }
   assert(!rmdir(logs.c_str()));
   assert(!rmdir(tmp));
-  puts("Collector journal: bounded independent rotation, unknown producer time, write failures and sanitized child environment passed");
+  puts("Collector journal: bounded independent rotation, gzip archives (order, fallback, budget), unknown producer time, write failures and sanitized child environment passed");
 }

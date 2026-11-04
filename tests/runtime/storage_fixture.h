@@ -77,6 +77,8 @@ template<class Journal> static void check_storage(const char* stream,const char*
     }
     storage_query_mode=0;
     for(unsigned i=0;i<3;++i)unlink((logs+"/"+stream+"."+char('0'+i)+".jsonl").c_str());
+    // Collector gzip archives of an overwritten .1 (LOG_COMPRESSION_2026-11-04).
+    for(unsigned i=2;i<=65;++i)unlink((logs+"/"+stream+"."+std::to_string(i)+".jsonl.gz").c_str());
     unlink(marker.c_str());
     assert(!rmdir(logs.c_str())&&!rmdir(root));
     printf("Storage %s %s: reserve, preserved capture and bounded stop evidence passed\n",stream,scenario);
@@ -105,6 +107,7 @@ template<class Journal> static void check_real_storage(const char* directory,con
     printf("Real tmpfs %s: rows_attempted=%u free_before=%llu free_after=%llu reserve=8388608\n",
            stream,count,(unsigned long long)before,(unsigned long long)after);
     for(unsigned i=0;i<3;++i)unlink((logs+"/"+stream+"."+char('0'+i)+".jsonl").c_str());
+    for(unsigned i=2;i<=65;++i)unlink((logs+"/"+stream+"."+std::to_string(i)+".jsonl.gz").c_str());
     unlink(marker.c_str());assert(!rmdir(logs.c_str())&&!rmdir(root.c_str()));
 }
 #endif

@@ -375,5 +375,43 @@ class CollectorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
+class GzipHelperTests(unittest.TestCase):
+    """--gzip/--gunzip export helper modes (validation/LOG_COMPRESSION_2026-11-04.md):
+    stdin -> stdout through the CMU's zlib, 69 when zlib is unavailable."""
+    def run_mode(self, mode, data, env=None):
+        return subprocess.run([str(COLLECTOR), mode], input=data, capture_output=True,
+                              timeout=30, env=env)
+
+    def test_round_trip_matches_python_gzip(self):
+        import gzip
+        data = (b'{"kind":"position_poll","heading":326}\n' * 20000) + os.urandom(70000)
+        packed = self.run_mode('--gzip', data)
+        self.assertEqual(packed.returncode, 0)
+        self.assertLess(len(packed.stdout), len(data) // 2)
+        self.assertEqual(gzip.decompress(packed.stdout), data)
+        unpacked = self.run_mode('--gunzip', packed.stdout)
+        self.assertEqual(unpacked.returncode, 0)
+        self.assertEqual(unpacked.stdout, data)
+        # Concatenated members decode as one stream (python gzip as producer).
+        both = gzip.compress(b'first\n') + gzip.compress(b'second\n')
+        self.assertEqual(self.run_mode('--gunzip', both).stdout, b'first\nsecond\n')
+        empty = self.run_mode('--gzip', b'')
+        self.assertEqual((empty.returncode, gzip.decompress(empty.stdout)), (0, b''))
+
+    def test_truncated_corrupt_or_unavailable(self):
+        import gzip
+        packed = gzip.compress(os.urandom(50000))
+        self.assertEqual(self.run_mode('--gunzip', packed[:-9]).returncode, 1)
+        self.assertEqual(self.run_mode('--gunzip', b'not gzip').returncode, 1)
+        self.assertEqual(self.run_mode('--gunzip', b'').returncode, 1)
+        self.assertEqual(self.run_mode('--gunzip', packed + b'junk').returncode, 1)
+        env = dict(os.environ, MX5_TEST_ZLIB_PATH='/nonexistent/libz.so.1')
+        self.assertEqual(self.run_mode('--gzip', b'x', env).returncode, 69)
+        self.assertEqual(self.run_mode('--gunzip', packed, env).returncode, 69)
+        # The mode takes no other argument and never starts collecting.
+        self.assertEqual(subprocess.run([str(COLLECTOR), '--gzip', 'extra'], capture_output=True,
+                                        timeout=5).returncode, 64)
+
+
 if __name__ == '__main__':
     unittest.main()
