@@ -1,5 +1,7 @@
 """Numeric USB workflow with real helpers and synthetic firmware fixtures."""
+import gzip
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -51,12 +53,12 @@ class TrialMenuTests(unittest.TestCase):
             (self.logs / 'capture.done').write_text(BOOT)
 
     def assert_export(self):
-        archives = list(self.usb.glob('mx5dr-logs-*.tar'))
+        archives = list(self.usb.glob('mx5dr-logs-*.tar')) + list(self.usb.glob('mx5dr-logs-*.tar.gz'))
         self.assertEqual(len(archives), 1)
         archive = archives[0]
-        checksum = archive.with_suffix('.tar.sha256').read_text().split()[0]
+        checksum = Path(str(archive) + '.sha256').read_text().split()[0]
         self.assertEqual(hashlib.sha256(archive.read_bytes()).hexdigest(), checksum)
-        with tarfile.open(archive) as tar:
+        with tarfile.open(archive, 'r:*') as tar:
             member, = [m for m in tar.getmembers()
                        if m.name.endswith('/mx5-aa-dr/logs/trace.0.jsonl')]
             self.assertEqual(tar.extractfile(member).read(),
@@ -958,7 +960,7 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('prune=done files=5', report)
         self.assertIn('prune_exit=0', report)
         self.assertIn('prune=done', result.stdout)
-        archive, = self.usb.glob('mx5dr-logs-*.tar')
+        archive, = list(self.usb.glob('mx5dr-logs-*.tar')) + list(self.usb.glob('mx5dr-logs-*.tar.gz'))
         with tarfile.open(archive) as tar:
             exported = {m.name.rsplit('/', 1)[-1] for m in tar.getmembers() if '/mx5-aa-dr/logs/' in m.name}
         for name in names:
@@ -984,7 +986,7 @@ class TrialMenuTests(unittest.TestCase):
         self.prepare_logs(acknowledged=False)
         names, _ = self.journals()
         self.menu('3\n')
-        archive, = self.usb.glob('mx5dr-logs-*.tar')
+        archive, = list(self.usb.glob('mx5dr-logs-*.tar')) + list(self.usb.glob('mx5dr-logs-*.tar.gz'))
         (self.logs / 'capture.done').write_text(BOOT)
         return names, archive
 
@@ -1116,8 +1118,8 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('finish_exit=1', report)
         self.assertIn('export_exit=0', report)
         self.assertIn('Current status is not a verdict on the retained trial', result.stdout)
-        archive, = self.usb.glob('mx5dr-logs-*.tar')
-        self.assertEqual(archive.with_suffix('.tar.sha256').read_text().split()[0],
+        archive, = list(self.usb.glob('mx5dr-logs-*.tar')) + list(self.usb.glob('mx5dr-logs-*.tar.gz'))
+        self.assertEqual(Path(str(archive) + '.sha256').read_text().split()[0],
                          hashlib.sha256(archive.read_bytes()).hexdigest())
         with tarfile.open(archive) as tar:
             member, = [m for m in tar.getmembers()
@@ -1208,7 +1210,7 @@ class TrialMenuTests(unittest.TestCase):
         self.assertIn('status_exit=1', report)
         self.assertIn('finish_exit=1', report)
         self.assertIn('export_scope=all_retained_boots', report)
-        archive, = self.usb.glob('mx5dr-logs-*.tar')
+        archive, = list(self.usb.glob('mx5dr-logs-*.tar')) + list(self.usb.glob('mx5dr-logs-*.tar.gz'))
         with tarfile.open(archive) as tar:
             member, = [m for m in tar.getmembers()
                        if m.name.endswith('/mx5-aa-dr/mx5dr.conf')]
@@ -1241,6 +1243,118 @@ class TrialMenuTests(unittest.TestCase):
         self.assertEqual(self.fixture.autostart.read_bytes(),
                          self.fixture.original_autostart)
         self.assertTrue((self.logs / 'trace.0.jsonl').exists())
+
+
+GZIP_HELPER = Path(os.environ['MX5DR_TEST_GZIP_OVERRIDE']) if os.environ.get('MX5DR_TEST_GZIP_OVERRIDE') else Path(os.environ.get('MX5DR_TEST_BUILD', Path(__file__).resolve().parents[2] / 'build')) / 'test_collector'
+
+
+@unittest.skipUnless(GZIP_HELPER.exists(), 'host collector (gzip helper) not built')
+class CompressedExportTests(TrialMenuTests):
+    """v1.0.6 (validation/LOG_COMPRESSION_2026-11-04.md): one gzip stream for the
+    export, collector gzip archives exported and pruned, bundle-identical
+    binaries recorded by checksum only, undecodable OEM gzip tails skipped.
+    Inherits every TrialMenuTests case, now run on the compressed path."""
+    def setUp(self):
+        super().setUp()
+        self.env['MX5DR_TEST_GZIP_HELPER'] = str(GZIP_HELPER)
+
+    def archive(self):
+        archive, = self.usb.glob('mx5dr-logs-*.tar.gz')
+        return archive
+
+    def members(self, archive):
+        with tarfile.open(archive, 'r:gz') as tar:
+            return {m.name: (tar.extractfile(m).read() if m.isfile() else None) for m in tar.getmembers()}
+
+    def exported_without_prune(self):
+        self.prepare_logs(acknowledged=False)
+        names, _ = self.journals()
+        self.menu('3\n')
+        archive = self.archive()
+        (self.logs / 'capture.done').write_text(BOOT)
+        return names, archive
+
+    def test_prune_refuses_a_checksum_mismatch(self):
+        names, archive = self.exported_without_prune()
+        sums = Path(str(archive) + '.sha256')
+        sums.write_text('0' * 64 + sums.read_text()[64:])
+        self.assert_nothing_deleted(self.prune(archive), names, 'checksum does not match')
+
+    def test_prune_refuses_an_archive_inside_persistent_storage(self):
+        names, archive = self.exported_without_prune()
+        inside = self.base / 'backups' / archive.name
+        shutil.copy(archive, inside)
+        shutil.copy(str(archive) + '.sha256', str(inside) + '.sha256')
+        self.assert_nothing_deleted(self.prune(inside), names, 'inside persistent storage')
+
+    def test_compressed_export_carries_archives_and_prune_deletes_them(self):
+        self.prepare_logs()
+        names, kept = self.journals()
+        archived = {'collector.2.jsonl.gz': gzip.compress(b'{"row":2}\n'),
+                    'collector.17.jsonl.gz': gzip.compress(b'{"row":17}\n')}
+        for name, data in archived.items():
+            (self.logs / name).write_bytes(data)
+        result = self.menu('3\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = self.assert_export()
+        self.assertIn('prune=done files=7', report)
+        members = self.members(self.archive())
+        logs = {k.rsplit('/', 1)[-1]: v for k, v in members.items() if '/mx5-aa-dr/logs/' in k}
+        for name, data in archived.items():
+            self.assertEqual(logs[name], data)
+            self.assertFalse((self.logs / name).exists(), name)
+        for name in names:
+            self.assertIn(name, logs)
+            self.assertFalse((self.logs / name).exists(), name)
+        for name, text in kept.items():
+            self.assertEqual((self.logs / name).read_text(), text)
+        collection, = [v for k, v in members.items() if k.endswith('/collection.txt')]
+        self.assertIn(b'archive_compression=gzip', collection)
+
+    def test_prune_refuses_an_archive_that_does_not_decompress(self):
+        names, archive = self.exported_without_prune()
+        data = archive.read_bytes()[:-40]
+        archive.write_bytes(data)
+        Path(str(archive) + '.sha256').write_text(hashlib.sha256(data).hexdigest() + '  ' + archive.name + '\n')
+        self.assert_nothing_deleted(self.prune(archive), names, 'does not decompress')
+
+    def test_bundle_identical_binaries_are_recorded_not_archived(self):
+        self.prepare_logs()
+        installed = [p for p in (self.base / 'libmx5dr.so', self.base / 'guard/mx5dr-guard',
+                                 self.base / 'tools/mx5dr-sha256', self.base / 'mx5dr-collector') if p.is_file()]
+        self.assertTrue(installed)
+        changed = installed[0]
+        changed.write_bytes(changed.read_bytes() + b'changed')
+        result = self.menu('3\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_export()
+        members = self.members(self.archive())
+        names = {k.split('/mx5-aa-dr/', 1)[-1] for k in members if '/mx5-aa-dr/' in k}
+        collection, = [v for k, v in members.items() if k.endswith('/collection.txt')]
+        self.assertIn(changed.relative_to(self.base).as_posix(), names)
+        for path in installed[1:]:
+            rel = path.relative_to(self.base).as_posix()
+            self.assertNotIn(rel, names)
+            self.assertIn(('installation.%s=bundle_copy_not_archived sha256:%s' %
+                           (rel, hashlib.sha256(path.read_bytes()).hexdigest())).encode(), collection)
+        self.assertIn(b'installation=tree_except_bundle_copies', collection)
+
+    def test_large_oem_gzip_log_is_listed_not_tail_copied(self):
+        self.prepare_logs()
+        errors = self.root / 'data_persist/log/error_logs'
+        errors.mkdir(parents=True, exist_ok=True)
+        (errors / 'log_0001.tar.gz').write_bytes(os.urandom(200000))
+        (errors / 'log_0002.tar.gz').write_bytes(gzip.compress(b'small'))
+        (errors / 'log').write_text('plain text log\n')
+        result = self.menu('3\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_export()
+        members = self.members(self.archive())
+        collection, = [v for k, v in members.items() if k.endswith('/collection.txt')]
+        self.assertIn(b'oem_logs.errors.log_0001.tar.gz=compressed_not_captured source_bytes=200000', collection)
+        self.assertFalse([k for k in members if k.endswith('log_0001.tar.gz.txt')])
+        self.assertTrue([k for k in members if k.endswith('log_0002.tar.gz.txt')])
+        self.assertTrue([k for k in members if k.endswith('errors/log.txt')])
 
 
 if __name__ == '__main__':

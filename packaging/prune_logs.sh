@@ -4,7 +4,9 @@
 # export carries only the boots after this one (owner request 2026-11-03,
 # validation/PRUNE_EXPORTED_LOGS_2026-11-03.md). Fail closed: nothing is
 # deleted unless every check passes, and then only the rotating journals
-# (trace.N.jsonl, collector.N.jsonl, pimu.N.jsonl). State files the features
+# (trace.N.jsonl, collector.N.jsonl, pimu.N.jsonl and the collector's gzip
+# archives collector.N.jsonl.gz, validation/LOG_COMPRESSION_2026-11-04.md).
+# The archive may be a plain .tar or a .tar.gz. State files the features
 # need (guard, G3 heading record, markers, installation record) stay.
 #   - this boot's writers stopped: capture.done holds the current boot ID,
 #     no collector PID marker, the collector lock is free;
@@ -12,9 +14,9 @@
 #   - every journal to delete is listed in the archive with its current size.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/common.sh"
-[ "$#" = 1 ] || fail 'Usage: sh prune_logs.sh /usb/mx5dr-logs-....tar'
+[ "$#" = 1 ] || fail 'Usage: sh prune_logs.sh /usb/mx5dr-logs-....tar[.gz]'
 archive=$1
-case "$archive" in /*.tar) ;; *) fail 'Archive must be an absolute .tar path; nothing deleted';; esac
+case "$archive" in /*.tar|/*.tar.gz) ;; *) fail 'Archive must be an absolute .tar or .tar.gz path; nothing deleted';; esac
 regular "$archive"
 regular "$archive.sha256"
 validate_persist
@@ -48,12 +50,21 @@ have=$(hash "$archive") || fail 'Cannot re-read the archive; nothing deleted'
 [ -n "$want" ] && [ "$have" = "$want" ] || fail 'Archive checksum does not match; nothing deleted'
 
 # 3. Each journal is in the archive with its current size.
-listing=$(tar -tvf "$archive") || fail 'Cannot list the archive; nothing deleted'
+case "$archive" in
+    *.tar.gz)
+        prepare_gzip_helper || fail 'Cannot read a compressed archive without the zlib helper; nothing deleted'
+        # The whole stream must decode (a cut or corrupt gzip fails here).
+        "$GZ" --gunzip < "$archive" > /dev/null || fail 'Archive does not decompress; nothing deleted'
+        listing=$("$GZ" --gunzip < "$archive" | tar -tvf -) || fail 'Cannot list the archive; nothing deleted'
+        remove_gzip_helper;;
+    *) listing=$(tar -tvf "$archive") || fail 'Cannot list the archive; nothing deleted';;
+esac
 prefix=${BASE#/}/logs/
 victims=
 count=0
 bytes=0
-for journal in "$logs"/trace.[0-9].jsonl "$logs"/collector.[0-9].jsonl "$logs"/pimu.[0-9].jsonl; do
+for journal in "$logs"/trace.[0-9].jsonl "$logs"/collector.[0-9].jsonl "$logs"/pimu.[0-9].jsonl \
+               "$logs"/collector.[0-9].jsonl.gz "$logs"/collector.[0-9][0-9].jsonl.gz; do
     [ -e "$journal" ] || [ -L "$journal" ] || continue
     [ -f "$journal" ] && [ ! -L "$journal" ] || fail "Not a regular file: ${journal##*/}; nothing deleted"
     size=$(wc -c < "$journal") || fail "Cannot read ${journal##*/}; nothing deleted"

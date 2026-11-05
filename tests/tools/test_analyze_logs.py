@@ -406,6 +406,34 @@ class AnalyzeTests(unittest.TestCase):
             older=[collector("collector_boot", observed=20)])
         self.assertEqual(report["status"], "local_checks_pass")
 
+    def test_collector_gzip_archives_are_older_rotations(self):
+        # validation/LOG_COMPRESSION_2026-11-04.md: collector.N.jsonl.gz (N>=2)
+        # precede collector.1 and .0; a cut gzip is an input error, not rows.
+        import gzip, tarfile
+        (self.root / "trace.0.jsonl").write_bytes(encode(records()))
+        (self.root / "collector.3.jsonl.gz").write_bytes(gzip.compress(encode([collector("collector_boot", observed=10)])))
+        (self.root / "collector.2.jsonl.gz").write_bytes(gzip.compress(encode([
+            collector("position_poll_error", observed=20),
+            dict(collector("collector_archive", observed=21), result="ok", in_bytes=9, out_bytes=5,
+                 archives=1, archive_bytes=5)])))
+        (self.root / "collector.1.jsonl").write_bytes(encode([collector("position_poll_error", observed=30)]))
+        (self.root / "collector.0.jsonl").write_bytes(encode([collector("collector_stop", observed=40)]))
+        report = module.analyze([self.root])
+        self.assertEqual(report["status"], "local_checks_pass", report["issues"])
+        self.assertEqual(report["collector"]["archive_results"], {"ok": 1})
+        self.assertEqual(report["files"][:2], [str(self.root / "collector.3.jsonl.gz"),
+                                               str(self.root / "collector.2.jsonl.gz")])
+        # The same files inside a compressed export archive.
+        archive = self.root / "export.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            for name in ("trace.0.jsonl", "collector.3.jsonl.gz", "collector.2.jsonl.gz",
+                         "collector.1.jsonl", "collector.0.jsonl"):
+                tar.add(self.root / name, arcname="data_persist/mx5-aa-dr/logs/" + name)
+        self.assertEqual(module.analyze([archive])["status"], "local_checks_pass")
+        (self.root / "collector.2.jsonl.gz").write_bytes(gzip.compress(b"{}\n")[:-6])
+        report = module.analyze([self.root])
+        self.assertIn("input_error", self.codes(report))
+
     def test_collector_normal_sessions_allow_pid_reuse_and_new_boot_clock(self):
         other_boot = "87654321-1234-1234-1234-123456789abc"
         report = self.audit_collector([

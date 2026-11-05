@@ -25,6 +25,10 @@ static int fixture_statvfs(const char* path,struct statvfs* out) {
     out->f_bavail=storage_available/4096;
     return 0;
 }
+// std::to_string is missing in the pinned ARM toolchain's libstdc++.
+static std::string fixture_number(unsigned n) {
+    char b[16];snprintf(b,sizeof b,"%u",n);return b;
+}
 static std::string storage_read(const std::string& path) {
     std::ifstream f(path.c_str());
     return std::string(std::istreambuf_iterator<char>(f),std::istreambuf_iterator<char>());
@@ -77,6 +81,8 @@ template<class Journal> static void check_storage(const char* stream,const char*
     }
     storage_query_mode=0;
     for(unsigned i=0;i<3;++i)unlink((logs+"/"+stream+"."+char('0'+i)+".jsonl").c_str());
+    // Collector gzip archives of an overwritten .1 (LOG_COMPRESSION_2026-11-04).
+    for(unsigned i=2;i<=65;++i)unlink((logs+"/"+stream+"."+fixture_number(i)+".jsonl.gz").c_str());
     unlink(marker.c_str());
     assert(!rmdir(logs.c_str())&&!rmdir(root));
     printf("Storage %s %s: reserve, preserved capture and bounded stop evidence passed\n",stream,scenario);
@@ -105,6 +111,7 @@ template<class Journal> static void check_real_storage(const char* directory,con
     printf("Real tmpfs %s: rows_attempted=%u free_before=%llu free_after=%llu reserve=8388608\n",
            stream,count,(unsigned long long)before,(unsigned long long)after);
     for(unsigned i=0;i<3;++i)unlink((logs+"/"+stream+"."+char('0'+i)+".jsonl").c_str());
+    for(unsigned i=2;i<=65;++i)unlink((logs+"/"+stream+"."+fixture_number(i)+".jsonl.gz").c_str());
     unlink(marker.c_str());assert(!rmdir(logs.c_str())&&!rmdir(root.c_str()));
 }
 #endif

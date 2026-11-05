@@ -299,7 +299,7 @@ finish_and_export() {
     prune_output='prune=skipped (capture finish or export incomplete; logs kept on the CMU)'
     prune_rc=skipped
     if [ "$finish_rc" = 0 ] && [ "$export_rc" = 0 ]; then
-        archive=$(printf '%s\n' "$export_output" | awk '/^\// && /\.tar$/ {a=$0} END{print a}')
+        archive=$(printf '%s\n' "$export_output" | awk '/^\// && /\.tar(\.gz)?$/ {a=$0} END{print a}')
         require_usb
         if prune_output=$(sh "$HERE/prune_logs.sh" "$archive" 2>&1); then prune_rc=0; else prune_rc=$?; fi
     fi

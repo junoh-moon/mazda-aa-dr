@@ -150,6 +150,20 @@ oem_log_directory() {
             continue
         fi
         mkdir -p "$stage/oem-logs/$log_label"
+        log_bytes=$(stat -c %s "$log_file" 2>/dev/null || echo unknown)
+        case "$log_name:$log_bytes" in
+            *.gz:unknown|*.tgz:unknown) log_bytes=999999999;;
+        esac
+        case "$log_name" in *.gz|*.tgz)
+            # The tail of a gzip/tar.gz file cannot be decoded (2026-11-04
+            # export: 15 such tails, 1.9 MB of unreadable bytes). Copy small
+            # compressed logs whole; record only the size of larger ones.
+            if [ "$log_bytes" -gt 131072 ]; then
+                printf 'oem_logs.%s.%s=compressed_not_captured source_bytes=%s\n' \
+                    "$log_label" "$log_name" "$log_bytes" >> "$report"
+                continue
+            fi;;
+        esac
         if tail -c 131072 "$log_file" > "$stage/oem-logs/$log_label/$log_name.txt" 2>/dev/null; then
             printf 'oem_logs.%s.%s=tail_captured cap_bytes=131072 source_bytes=%s\n' \
                 "$log_label" "$log_name" "$(stat -c %s "$log_file" 2>/dev/null || echo unknown)" >> "$report"
@@ -221,9 +235,46 @@ printf 'startup_diagnostics_exit=%s\n' "$diagnostics_rc" >> "$report"
 # retain actual UID/GID/mode and link types without copying the installation
 # to FAT or reading a symlink target. The USB output is outside every input.
 set -- "${stage_path#/}"
+# The product binaries are byte copies of this USB bundle (2026-11-04 export:
+# 4.5 MB of 15 MB). When an installed binary matches its bundle checksum only
+# the checksum is recorded; any other file, or a binary that differs, is
+# archived as before. Directory entries are listed one level deep so a binary
+# inside guard/ or tools/ can be left out; their own metadata is recorded.
+bundle_copy() {
+    # $1 installed path, $2 bundle name
+    [ -f "$1" ] && [ ! -L "$1" ] && [ -f "$HERE/$2" ] && [ -f "$HERE/$2.sha256" ] || return 1
+    bundle_want=$(awk 'NR==1{print $1}' "$HERE/$2.sha256") || return 1
+    bundle_have=$(hash "$1") || return 1
+    [ -n "$bundle_want" ] && [ "$bundle_have" = "$bundle_want" ] || return 1
+    printf 'installation.%s=bundle_copy_not_archived sha256:%s bytes=%s\n' "${1#"$BASE"/}" \
+        "$bundle_have" "$(stat -c %s "$1" 2>/dev/null || echo unknown)" >> "$report"
+}
 if [ "$persist_ok" = 1 ] && [ -d "$BASE" ] && [ ! -L "$BASE" ]; then
-    set -- "$@" "${BASE#/}"
-    printf 'installation=whole_tree\n' >> "$report"
+    printf 'installation=tree_except_bundle_copies\n' >> "$report"
+    printf 'installation./=%s\n' "$(stat -c '%F uid=%u gid=%g mode=%a' "$BASE" 2>/dev/null || echo unknown)" >> "$report"
+    for entry in "$BASE"/* "$BASE"/.[!.]* "$BASE"/..?*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        entry_name=${entry##*/}
+        case "$entry_name" in
+            guard|tools)
+                if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+                    printf 'installation.%s/=%s\n' "$entry_name" \
+                        "$(stat -c '%F uid=%u gid=%g mode=%a' "$entry" 2>/dev/null || echo unknown)" >> "$report"
+                    for child in "$entry"/* "$entry"/.[!.]* "$entry"/..?*; do
+                        [ -e "$child" ] || [ -L "$child" ] || continue
+                        case "$entry_name/${child##*/}" in
+                            guard/mx5dr-guard|tools/mx5dr-sha256)
+                                if bundle_copy "$child" "${child##*/}"; then continue; fi;;
+                        esac
+                        set -- "$@" "${child#/}"
+                    done
+                    continue
+                fi;;
+            libmx5dr.so|libmx5dr-vimtap.so|libmx5dr-ldstap.so|mx5dr-collector)
+                if bundle_copy "$entry" "$entry_name"; then continue; fi;;
+        esac
+        set -- "$@" "${entry#/}"
+    done
 else
     printf 'installation=missing\n' >> "$report"
     diagnostic_partial=1
@@ -252,8 +303,30 @@ for source_path in "$ROOT"/tmp/mx5dr-trial-??????; do
         printf 'active_trial=%s\n' "$source_path" >> "$report"
     fi
 done
+# One gzip stream over the whole tar (LOG_COMPRESSION_2026-11-04: about 10x
+# fewer bytes to write to the USB). Without the helper the archive stays a
+# plain .tar, as in earlier versions.
+if prepare_gzip_helper; then
+    name=$name.gz
+    [ ! -e "$name" ] && [ ! -e "$name.partial" ] || fail 'Export already exists'
+    printf 'archive_compression=gzip\n' >> "$report"
+else
+    printf 'archive_compression=none (zlib helper unavailable)\n' >> "$report"
+fi
 printf 'diagnostic_partial=%s\n' "$diagnostic_partial" >> "$report"
-if tar -cf - -C / "$@" > "$name.partial"; then tar_rc=0; else tar_rc=$?; fi
+if [ -n "$GZ" ]; then
+    # ash has no pipefail: tar's own status goes through a file.
+    tar_status=${GZ_DIR:-$stage}/tar.rc
+    # Only the status echo goes to the file; tar's archive goes down the pipe.
+    { if tar -cf - -C / "$@"; then echo 0 > "$tar_status"; else echo $? > "$tar_status"; fi; } |
+        "$GZ" --gzip > "$name.partial"
+    gz_rc=$?
+    tar_rc=$(cat "$tar_status" 2>/dev/null) || tar_rc=unknown
+    rm -f "$tar_status"
+    [ -n "$tar_rc" ] || tar_rc=unknown
+    if [ "$tar_rc" = 0 ] && [ "$gz_rc" != 0 ]; then tar_rc=gzip_$gz_rc; fi
+    remove_gzip_helper
+elif tar -cf - -C / "$@" > "$name.partial"; then tar_rc=0; else tar_rc=$?; fi
 if [ "$tar_rc" != 0 ]; then
     echo "archive_tar_exit=$tar_rc; partial archive and USB diagnostics retained: $stage_path"
     if digest=$(hash "$name.partial"); then
@@ -268,5 +341,5 @@ rm -rf "$stage"
 sync
 echo "$dest/$name"
 echo "diagnostic_partial=$diagnostic_partial (missing/truncated inputs are listed inside collection.txt)"
-echo 'Archive includes the whole installation, actual startup/SM files and bounded current-boot diagnostics. Keep it private.'
+echo 'Archive includes the installation (product binaries identical to this USB only by checksum), actual startup/SM files and bounded current-boot diagnostics. Keep it private.'
 echo 'Live writer may have rotated during export; partial final JSONL records are possible. Originals retained by this export; menu 3 may then delete the exported journals (prune_logs.sh).'

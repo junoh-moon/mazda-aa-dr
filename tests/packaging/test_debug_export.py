@@ -52,8 +52,20 @@ class DebugExportTests(unittest.TestCase):
         files += [self.fixture.autostart, self.fixture.sm, self.fixture.wcp]
         before = {p: (p.read_bytes(), p.stat().st_mode & 0o777,
                       p.stat().st_uid, p.stat().st_gid) for p in files}
+        # v1.0.6 (validation/LOG_COMPRESSION_2026-11-04.md): product binaries
+        # identical to the USB bundle are recorded by checksum, not archived.
+        bundled = {self.base / name for name in ('libmx5dr.so', 'libmx5dr-vimtap.so', 'libmx5dr-ldstap.so',
+                                                 'mx5dr-collector', 'guard/mx5dr-guard', 'tools/mx5dr-sha256')}
         with self.archive(self.run_export()) as tar:
+            report = tar.extractfile(self.member(tar, 'collection.txt')).read().decode()
+            self.assertIn('installation=tree_except_bundle_copies', report)
             for path, (data, mode, uid, gid) in before.items():
+                if path in bundled:
+                    rel = path.relative_to(self.base).as_posix()
+                    self.assertIn('installation.%s=bundle_copy_not_archived sha256:%s bytes=%d'
+                                  % (rel, hashlib.sha256(data).hexdigest(), len(data)), report)
+                    self.assertFalse([m for m in tar.getmembers() if m.name.endswith('/mx5-aa-dr/' + rel)])
+                    continue
                 member = self.member(tar, str(path.relative_to(self.root)))
                 self.assertEqual(tar.extractfile(member).read(), data)
                 self.assertEqual((member.mode, member.uid, member.gid), (mode, uid, gid))

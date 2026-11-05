@@ -4,6 +4,7 @@
 #include "../runtime/config.h"
 #include "../runtime/boot_id.h"
 #include "../runtime/storage.h"
+#include "../runtime/zlib_dyn.h"
 #include "phone_imu_rx.h"
 #include "bus_register.h"
 #include <dbus/dbus.h>
@@ -38,6 +39,21 @@ const char *bus_address = "unix:path=/tmp/dbus_service_socket";
 const char *bca_bus_address = "unix:path=/tmp/dbus_hmi_socket";
 mx5::runtime::Config config = {0, 8388608, 3, 1000, false, mx5::runtime::LOG_PROFILE_FULL};
 volatile sig_atomic_t stop_requested = 0;
+// The CMU's own zlib (validation/LOG_COMPRESSION_2026-11-04.md). Tests point
+// this at a missing file to exercise the uncompressed fallback.
+const char *zlib_path() {
+#ifdef MX5_COLLECTOR_TESTING
+  const char *p = getenv("MX5_TEST_ZLIB_PATH");
+  if (p) return p;
+#endif
+  return "libz.so.1";
+}
+// Archived collector files (LOG_COMPRESSION_2026-11-04): before collector.1
+// is overwritten by a rotation it is gzipped to collector.2.jsonl.gz; older
+// archives shift up (collector.3.jsonl.gz, ...). Bounded by count and bytes;
+// the newest archive is always kept. Without zlib the old two-file ring stays.
+const unsigned ARCHIVE_LAST = 65;               // collector.2 .. collector.65
+unsigned long long archive_budget_bytes = 2097152ULL;   // tests shrink it
 void stop_signal(int) { stop_requested = 1; }
 uint64_t clock_ns(void *) {
   struct timespec t;
@@ -82,14 +98,89 @@ struct Journal {
   FILE *f;
   size_t written;
   bool failed;
+  mx5::zlibdyn::Api zlib;
+  int zlib_state;                 // 0 not tried, 1 loaded, -1 unavailable
+  unsigned archive_kept;
+  unsigned long long archive_total;
+  char note[256];                 // collector_archive row, written after the row that rotated
+  bool writing_note;
   explicit Journal(const char *directory = ROOT)
-      : root(directory), f(0), written(0), failed(false) {}
+      : root(directory), f(0), written(0), failed(false), zlib_state(0),
+        archive_kept(0), archive_total(0), writing_note(false) {
+    memset(&zlib, 0, sizeof zlib);
+    note[0] = 0;
+  }
   ~Journal() {
     if (f)
       fclose(f);
   }
   void fail() {
     failed = true;
+  }
+  // Gzip collector.1.jsonl into the archive set. Never fatal: on any failure
+  // the plain file is simply overwritten by the rotation, as before.
+  void archive_previous() {
+    if (config.max_log_files < 2) return;
+    char plain[512], tmp[512], a[512], b[512];
+    snprintf(plain, sizeof plain, "%s/logs/collector.1.jsonl", root);
+    snprintf(tmp, sizeof tmp, "%s/logs/collector.archive.tmp", root);
+    struct stat st;
+    if (lstat(plain, &st) || !S_ISREG(st.st_mode) || st.st_size == 0) return;
+    if (!zlib_state) zlib_state = mx5::zlibdyn::load(zlib, zlib_path()) ? 1 : -1;
+    if (zlib_state < 0) { set_note("unavailable", 0, 0); return; }
+    // Worst case (incompressible) the archive is as large as its source.
+    const mx5::runtime::StorageSpace space =
+        mx5::runtime::storage_space(root, size_t(st.st_size) + 65536);
+    if (space.reason) { set_note("space", 0, 0); return; }
+    unlink(tmp);
+    int in = open(plain, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    int out = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    unsigned long long in_bytes = 0, out_bytes = 0;
+    bool ok = in >= 0 && out >= 0 &&
+              mx5::zlibdyn::gzip_fd(zlib, in, out, &in_bytes, &out_bytes) &&
+              in_bytes == (unsigned long long)st.st_size && fsync(out) == 0;
+    if (in >= 0) close(in);
+    if (out >= 0 && close(out)) ok = false;
+    if (!ok) { unlink(tmp); set_note("failed", in_bytes, 0); return; }
+    for (unsigned i = ARCHIVE_LAST; i > 2; --i) {
+      snprintf(a, sizeof a, "%s/logs/collector.%u.jsonl.gz", root, i - 1);
+      snprintf(b, sizeof b, "%s/logs/collector.%u.jsonl.gz", root, i);
+      struct stat existing;
+      if (lstat(a, &existing)) continue;
+      if (!S_ISREG(existing.st_mode) || rename(a, b)) { unlink(tmp); set_note("shift", in_bytes, 0); return; }
+    }
+    snprintf(a, sizeof a, "%s/logs/collector.2.jsonl.gz", root);
+    if (rename(tmp, a)) { unlink(tmp); set_note("rename", in_bytes, 0); return; }
+    // Archived: drop the plain copy now, so a power cut before the plain
+    // shift cannot archive the same rows twice at the next start.
+    unlink(plain);
+    // Newest first; keep the newest always, then stop at the byte budget.
+    // From the first archive over the budget on, every older one goes, so the
+    // kept history has no gaps.
+    unsigned long long total = 0;
+    unsigned kept = 0;
+    bool over = false;
+    for (unsigned i = 2; i <= ARCHIVE_LAST; ++i) {
+      snprintf(a, sizeof a, "%s/logs/collector.%u.jsonl.gz", root, i);
+      struct stat existing;
+      if (lstat(a, &existing) || !S_ISREG(existing.st_mode)) continue;
+      if (i > 2 && (over || total + (unsigned long long)existing.st_size > archive_budget_bytes)) {
+        over = true; unlink(a); continue;
+      }
+      total += (unsigned long long)existing.st_size;
+      ++kept;
+    }
+    archive_kept = kept; archive_total = total;
+    set_note("ok", in_bytes, out_bytes);
+  }
+  void set_note(const char *result, unsigned long long in_bytes, unsigned long long out_bytes) {
+    // A rotation caused by writing the note itself records no further note,
+    // so a tiny cap cannot chain rotations.
+    if (writing_note) return;
+    snprintf(note, sizeof note,
+             "{\"kind\":\"collector_archive\",\"result\":\"%s\",\"in_bytes\":%llu,"
+             "\"out_bytes\":%llu,\"archives\":%u,\"archive_bytes\":%llu}",
+             result, in_bytes, out_bytes, archive_kept, archive_total);
   }
   void rotate() {
     if (f) {
@@ -102,6 +193,7 @@ struct Journal {
         return;
       }
     }
+    archive_previous();
     char a[512], b[512];
     for (unsigned i = config.max_log_files; i > 1; --i) {
       snprintf(a, sizeof a, "%s/logs/collector.%u.jsonl", root, i - 2);
@@ -156,8 +248,21 @@ struct Journal {
       mx5::runtime::record_storage_stop(root,"collector",space);
       fail();return;
     }
-    if (!f || written + n + 1 > config.max_log_bytes)
+    if (!f || written + n + 1 > config.max_log_bytes) {
       rotate();
+      // The archive note goes first: the row that rotated may be the final
+      // collector_stop, and nothing may follow a stop.
+      if (f && !failed && note[0] && !writing_note) {
+        char pending[sizeof note];
+        memcpy(pending, note, sizeof note);
+        note[0] = 0;
+        writing_note = true;
+        line(pending);
+        writing_note = false;
+        if (!f || failed) return;
+        if (written + n + 1 > config.max_log_bytes) rotate();
+      }
+    }
     if (!f || failed)
       return;
     if (fwrite(s, 1, n, f) != n || fputc('\n', f) == EOF) {
@@ -357,6 +462,16 @@ bool set_caps(unsigned permitted, unsigned effective) {
 } // namespace
 
 int main(int argc, char **argv) {
+  // Export helper (packaging/export_logs.sh, prune_logs.sh): stdin -> stdout
+  // through the CMU's zlib. No config, bus, log or privilege change. 69: zlib
+  // unavailable (the caller keeps the uncompressed path); 1: stream failed.
+  if (argc == 2 && (!strcmp(argv[1], "--gzip") || !strcmp(argv[1], "--gunzip"))) {
+    mx5::zlibdyn::Api z;
+    if (!mx5::zlibdyn::load(z, zlib_path())) return 69;
+    const bool ok = !strcmp(argv[1], "--gzip") ? mx5::zlibdyn::gzip_fd(z, 0, 1)
+                                                : mx5::zlibdyn::gunzip_fd(z, 0, 1);
+    return ok ? 0 : 1;
+  }
   const char *root = ROOT;
   unsigned session_seconds = 28800;
   const char *pimu_proc = "/proc", *pimu_ready = "/tmp/bds_ready_flag", *pimu_pts = "/dev/pts/";

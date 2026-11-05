@@ -58,6 +58,42 @@ verify_bundle_manifest() {
     [ "$entries" -gt 0 ] || fail 'Empty bundle manifest'
 }
 regular() { [ -f "$1" ] && [ ! -L "$1" ] || fail "Not a regular non-symlink file: $1"; }
+# gzip helper (validation/LOG_COMPRESSION_2026-11-04.md): the bundle's own
+# collector in --gzip/--gunzip mode (stdin -> stdout through the CMU's zlib),
+# copied to /tmp like the hash helper because FAT USB can be noexec, and only
+# after its bundle checksum matches. Sets GZ; leaves it empty when unavailable
+# (callers then keep the plain tar). Fixtures use only an explicit host helper.
+GZ=''
+GZ_DIR=''
+prepare_gzip_helper() {
+    GZ=''
+    if [ -n "$ROOT" ]; then
+        [ -n "${MX5DR_TEST_GZIP_HELPER:-}" ] && [ -x "$MX5DR_TEST_GZIP_HELPER" ] || return 1
+        GZ=$MX5DR_TEST_GZIP_HELPER
+        return 0
+    fi
+    [ -f "$HERE/mx5dr-collector" ] && [ ! -L "$HERE/mx5dr-collector" ] &&
+        [ -f "$HERE/mx5dr-collector.sha256" ] && [ ! -L "$HERE/mx5dr-collector.sha256" ] || return 1
+    gz_want=$(awk 'NR==1{print $1}' "$HERE/mx5dr-collector.sha256") || return 1
+    gz_have=$(hash "$HERE/mx5dr-collector") || return 1
+    [ -n "$gz_want" ] && [ "$gz_have" = "$gz_want" ] || return 1
+    GZ_DIR=$(mktemp -d /tmp/mx5dr-gzip.XXXXXX) || { GZ_DIR=''; return 1; }
+    if cp "$HERE/mx5dr-collector" "$GZ_DIR/gz" && chmod 0700 "$GZ_DIR/gz" &&
+        printf 'probe' | "$GZ_DIR/gz" --gzip > /dev/null 2>&1; then
+        GZ=$GZ_DIR/gz
+        return 0
+    fi
+    remove_gzip_helper
+    return 1
+}
+remove_gzip_helper() {
+    if [ -n "$GZ_DIR" ]; then
+        rm -f "$GZ_DIR/gz" "$GZ_DIR/tar.rc"
+        rmdir "$GZ_DIR" 2>/dev/null || :
+    fi
+    GZ_DIR=''
+    GZ=''
+}
 collector_user() {
     # The shipped passwd update names UID 0 "cmu". Use its existing service
     # account for the separate collector; do not rewrite factory accounts.
@@ -74,6 +110,7 @@ cleanup() {
     rc=$?
     trap - 0
     trap '' HUP INT TERM
+    remove_gzip_helper
     # A caught signal or failed post-arm diagnostic publication must not leave
     # a live authorization. This cannot cover abrupt power loss.
     if [ "$PERSIST_PENDING" = 1 ]; then
@@ -212,7 +249,8 @@ require_trial_space() {
     # filesystem overhead. $1 is the new binary payload size; existing mapped
     # binaries may persist. The caps are the ones this installation writes to
     # mx5dr.conf (set_config) and the collector's own caps for that profile:
-    # persistent BETA 3 x 16 MiB trace, collector 2 x 1 MiB, phone channel
+    # persistent BETA 3 x 16 MiB trace, collector 2 x 1 MiB plus 2 MiB of gzip
+    # archives, phone channel
     # 2 x 1 MiB (counted although it is off by default: menu 11 can turn it on
     # without a new check); one-boot trials 3 x 40 MiB and collector 2 x 4 MiB.
     validate_persist
@@ -244,6 +282,15 @@ require_trial_space() {
             fi
             space_missing=$((space_missing + cap - bytes))
         done
+        # Collector gzip archives (LOG_COMPRESSION_2026-11-04): 2 MiB budget.
+        archive_bytes=0
+        for archive_path in "$BASE"/logs/collector.[0-9].jsonl.gz "$BASE"/logs/collector.[0-9][0-9].jsonl.gz; do
+            [ -e "$archive_path" ] || [ -L "$archive_path" ] || continue
+            regular "$archive_path"
+            archive_bytes=$((archive_bytes + $(wc -c < "$archive_path")))
+        done
+        [ "$archive_bytes" -le 2097152 ] || archive_bytes=2097152
+        space_missing=$((space_missing + 2097152 - archive_bytes))
     fi
     space_free=$((space_free + space_reclaim / 1024))
     # The BETA bundle carries the ~1 MiB ODbL tunnel database next to the
@@ -397,6 +444,11 @@ prepare_collector_storage() {
         # Validate every existing entry while holding the collector's lock,
         # before changing any owner. Never recurse into AA traces or evidence.
         collector_files='collector.lock collector.pid collector.0.jsonl collector.1.jsonl pimu.0.jsonl pimu.1.jsonl bt-fail'
+        for collector_path in "$BASE"/logs/collector.archive.tmp "$BASE"/logs/collector.[0-9].jsonl.gz \
+                              "$BASE"/logs/collector.[0-9][0-9].jsonl.gz; do
+            [ -e "$collector_path" ] || [ -L "$collector_path" ] || continue
+            collector_files="$collector_files ${collector_path##*/}"
+        done
         for collector_name in $collector_files; do
             collector_path=$BASE/logs/$collector_name
             if [ -e "$collector_path" ] || [ -L "$collector_path" ]; then
